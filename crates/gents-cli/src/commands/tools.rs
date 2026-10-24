@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -119,7 +120,10 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         let (tools_id, config) = match resolved {
             Ok(value) => value,
             Err(error) => {
-                configuration_issues.insert(agent.agent_id.clone(), format!("{error:#}"));
+                configuration_issues.insert(
+                    agent.agent_id.clone(),
+                    ErrorChain(error.as_ref()).to_string(),
+                );
                 continue;
             }
         };

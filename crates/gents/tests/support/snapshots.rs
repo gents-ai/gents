@@ -1,5 +1,6 @@
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -360,7 +361,12 @@ pub async fn fetch_message_snapshots_for_session(
             requester_did,
         )
         .await
-        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
+        .unwrap_or_else(|error| {
+            panic!(
+                "reconstruct message {header_id}: {}",
+                ErrorChain(error.as_ref())
+            )
+        });
         let role = serde_json::to_value(header.role)
             .expect("serialize message role")
             .as_str()

@@ -6,6 +6,7 @@ use gents::goal::{
     GOAL_FIELDS,
 };
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
@@ -28,7 +29,9 @@ async fn goal_show(args: GoalShowArgs) -> Result<()> {
     args.output
         .ensure_supported("goal show", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
-    print_json(&goal_show_value(&access, &node_did, &args.scope.session, Utc::now()).await?)
+    Ok(print_json(
+        &goal_show_value(&access, &node_did, &args.scope.session, Utc::now()).await?,
+    )?)
 }
 
 async fn goal_show_value(
@@ -45,7 +48,7 @@ async fn goal_show_value(
     let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
         .unwrap_or_else(|error| {
-            tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");
+            tracing::warn!(session_id, error = %format!("{}", ErrorChain(error.as_ref())), "blocked turn unreadable");
             None
         });
     value["blocked"] = serde_json::to_value(blocked)?;
@@ -56,7 +59,9 @@ async fn goal_set(args: GoalSetArgs) -> Result<()> {
     args.output
         .ensure_supported("goal set", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
-    print_json(&goal_set_value(&access, &node_did, &args).await?)
+    Ok(print_json(
+        &goal_set_value(&access, &node_did, &args).await?,
+    )?)
 }
 
 async fn goal_set_value(
@@ -100,7 +105,7 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
         &args.from,
     )
     .await?;
-    print_json(&serde_json::to_value(receipt)?)
+    Ok(print_json(&serde_json::to_value(receipt)?)?)
 }
 
 async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
@@ -128,7 +133,7 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
         &|profile| crate::commands::config::profile::bound_slots(home, graphql, &node_did, profile),
     )
     .await?;
-    print_json(&serde_json::to_value(receipt)?)
+    Ok(print_json(&serde_json::to_value(receipt)?)?)
 }
 
 async fn goal_clear(args: GoalShowArgs) -> Result<()> {
@@ -178,11 +183,11 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
             })
             .await?
     };
-    print_json(&serde_json::json!({
+    Ok(print_json(&serde_json::json!({
         "goal_id": goal.goal_id,
         "session_id": goal.session_id,
         "deleted": deleted,
-    }))
+    }))?)
 }
 
 async fn access_and_did(

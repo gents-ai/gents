@@ -1,10 +1,12 @@
 use super::*;
 use crate::support::graphql::graphql_mutation_with_variables;
+use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 
 async fn exact_request_binding(
     graphql: &str,
     request_id: &str,
-) -> Result<(String, String, Option<String>)> {
+) -> TestResult<(String, String, Option<String>)> {
     let response = graphql_query(
         graphql,
         &format!(
@@ -18,17 +20,17 @@ async fn exact_request_binding(
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("request binding query omitted rows")?;
-    anyhow::ensure!(rows.len() == 1, "request binding must resolve exactly once");
+        .ok_or("request binding query omitted rows")?;
+    assert!(rows.len() == 1, "request binding must resolve exactly once");
     let row = &rows[0];
     Ok((
         row.get("_docID")
             .and_then(Value::as_str)
-            .context("request binding missing physical ID")?
+            .ok_or("request binding missing physical ID")?
             .to_string(),
         row.get("node_did")
             .and_then(Value::as_str)
-            .context("request binding missing principal")?
+            .ok_or("request binding missing principal")?
             .to_string(),
         row.get("requester_did")
             .and_then(Value::as_str)
@@ -41,7 +43,7 @@ async fn next_session_message_sequence(
     node_did: &str,
     session_id: &str,
     request_doc_id: &str,
-) -> Result<u32> {
+) -> TestResult<u32> {
     let query = format!(
         r#"{{
             prompt: AgentMessage(
@@ -84,9 +86,15 @@ async fn next_session_message_sequence(
                 .chain(sequences("AgentToolCall", "message_sequence"))
                 .max()
                 .unwrap_or(0);
-            return u32::try_from(highest + 1).context("fixture session sequence exceeds u32");
+            return u32::try_from(highest + 1).map_err(|error| {
+                format!(
+                    "fixture session sequence exceeds u32: {}",
+                    ErrorChain(&error)
+                )
+                .into()
+            });
         }
-        anyhow::ensure!(
+        assert!(
             tokio::time::Instant::now() < deadline,
             "runtime never appended the prompt header for request {request_doc_id}"
         );
@@ -108,7 +116,7 @@ async fn seed_canonical_tool_transcript(
     arguments: &str,
     result: Option<&str>,
     created_at: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
@@ -142,7 +150,8 @@ async fn seed_canonical_tool_transcript(
         ordinal: Some(0),
         runs: vec![SegmentRun {
             stream: 0,
-            bytes: u32::try_from(arguments.len()).context("fixture arguments exceed u32")?,
+            bytes: u32::try_from(arguments.len())
+                .map_err(|error| format!("fixture arguments exceed u32: {}", ErrorChain(&error)))?,
             declaration: Some(StreamDeclaration {
                 block_index: 0,
                 part_index: 0,
@@ -223,7 +232,9 @@ async fn seed_canonical_tool_transcript(
             ordinal: Some(0),
             runs: vec![SegmentRun {
                 stream: 0,
-                bytes: u32::try_from(result.len()).context("fixture result exceeds u32")?,
+                bytes: u32::try_from(result.len()).map_err(|error| {
+                    format!("fixture result exceeds u32: {}", ErrorChain(&error))
+                })?,
                 declaration: Some(StreamDeclaration {
                     block_index: 0,
                     part_index: 0,
@@ -298,8 +309,13 @@ async fn seed_canonical_tool_transcript(
         requester_did,
     )
     .await
-    .context("seeded tool call does not reconstruct through its canonical admission")?;
-    anyhow::ensure!(
+    .map_err(|error| {
+        format!(
+            "seeded tool call does not reconstruct through its canonical admission: {}",
+            ErrorChain(error.as_ref())
+        )
+    })?;
+    assert!(
         serde_json::from_str::<Value>(&presentation.arguments)?
             == serde_json::from_str::<Value>(arguments)?
             && presentation.result.as_deref() == result,
@@ -311,7 +327,7 @@ async fn seed_canonical_tool_transcript(
 pub(super) async fn initialize_config_and_thread(
     ws: &mut ShimWebSocket,
     _home_dir: &std::path::Path,
-) -> Result<()> {
+) -> TestResult<()> {
     send_client_request(
         ws,
         codex::ClientRequest::Initialize {
@@ -348,7 +364,7 @@ pub(super) async fn initialize_config_and_thread(
 pub(super) async fn start_thread(
     ws: &mut ShimWebSocket,
     home_dir: &std::path::Path,
-) -> Result<String> {
+) -> TestResult<String> {
     send_client_request(
         ws,
         codex::ClientRequest::ThreadStart {
@@ -364,7 +380,11 @@ pub(super) async fn start_thread(
     Ok(thread_start.thread.id)
 }
 
-pub(super) async fn send_turn(ws: &mut ShimWebSocket, thread_id: &str, prompt: &str) -> Result<()> {
+pub(super) async fn send_turn(
+    ws: &mut ShimWebSocket,
+    thread_id: &str,
+    prompt: &str,
+) -> TestResult<()> {
     send_client_request(
         ws,
         codex::ClientRequest::TurnStart {
@@ -389,7 +409,7 @@ pub(super) async fn seed_blank_materialized_completion(
     request_id: &str,
     node_did: &str,
     session_id: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
@@ -405,8 +425,8 @@ pub(super) async fn seed_blank_materialized_completion(
     let blank_assistant = "\n\n\n";
     let (request_doc_id, request_node_did, requester_did) =
         exact_request_binding(graphql, request_id).await?;
-    anyhow::ensure!(request_node_did == node_did);
-    anyhow::ensure!(requester_did.as_deref() == Some(node_did));
+    assert!(request_node_did == node_did);
+    assert!(requester_did.as_deref() == Some(node_did));
     let generation = format!("codex-blank-{request_id}");
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
     let segment = OutputSegment {
@@ -496,7 +516,7 @@ pub(super) async fn seed_running_background_tool(
     request_id: &str,
     session_id: &str,
     tool_call_key: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let (request_doc_id, node_did, requester_did) =
         exact_request_binding(graphql, request_id).await?;
@@ -556,7 +576,7 @@ pub(super) async fn seed_background_completion_wake(
     identity: &dyn gents::NodeIdentity,
     agent_id: &str,
     session_id: &str,
-) -> Result<String> {
+) -> TestResult<String> {
     let node_did = identity.did();
     let source_request_id = Uuid::new_v4().to_string();
     let request_id = Uuid::new_v4().to_string();
@@ -586,7 +606,7 @@ pub(super) async fn seed_background_completion_wake(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
     gents::sign_agent_request_create(identity, &mut source).await?;
-    let source_fields = source.graphql_input_fields().map_err(anyhow::Error::msg)?;
+    let source_fields = source.graphql_input_fields()?;
     let source_response = graphql_query(
         graphql,
         &format!(
@@ -612,7 +632,7 @@ pub(super) async fn seed_background_completion_wake(
             })
         })
         .and_then(serde_json::Value::as_str)
-        .with_context(|| {
+        .ok_or_else(|| {
             format!("signed background source mutation returned no _docID: {source_response}")
         })?;
 
@@ -637,11 +657,7 @@ pub(super) async fn seed_background_completion_wake(
     wake.caused_by_parent_request_id = Some(source_request_id);
     wake.caused_by_parent_request_doc_id = Some(source_doc_id.to_string());
     gents::sign_agent_request_create(identity, &mut wake).await?;
-    graphql_query(
-        graphql,
-        &wake.graphql_mutation().map_err(anyhow::Error::msg)?,
-    )
-    .await?;
+    graphql_query(graphql, &wake.graphql_mutation()?).await?;
     Ok(request_id)
 }
 
@@ -649,7 +665,7 @@ pub(super) async fn seed_caused_running_request(
     graphql: &str,
     parent_request_id: &str,
     agent_id: &str,
-) -> Result<(String, String)> {
+) -> TestResult<(String, String)> {
     let (parent_doc_id, node_did, requester_did) =
         exact_request_binding(graphql, parent_request_id).await?;
     let request_id = Uuid::new_v4().to_string();
@@ -669,7 +685,7 @@ pub(super) async fn seed_caused_running_request(
     let parent_session_id = parent
         .pointer("/data/AgentRequest/0/session_id")
         .and_then(Value::as_str)
-        .context("parent request binding missing session")?
+        .ok_or("parent request binding missing session")?
         .to_string();
     let sequence = 1_000;
     let tool_call_id = format!("codex-agent-new-{}", Uuid::new_v4().simple());

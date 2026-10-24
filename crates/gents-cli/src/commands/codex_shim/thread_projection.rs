@@ -9,6 +9,87 @@ use super::caused_threads::{load_caused_thread, load_caused_threads_for_root_ids
 use super::host_runtime::thread_git_info;
 use super::ShimState;
 
+#[derive(Debug, thiserror::Error)]
+pub(in crate::commands::codex_shim) enum CodexShimProjectionError {
+    #[error("thread projection omitted {collection} rows")]
+    ThreadRowsMissing { collection: String },
+    #[error("usage query omitted {name} rows")]
+    UsageRowsMissing { name: String },
+    #[error(transparent)]
+    DecodeUsageRows(serde_json::Error),
+    #[error("decoding {collection} rows")]
+    DecodeRows {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("thread request head conflicts with bound session agent")]
+    ThreadHeadConflict,
+    #[error("thread head has missing or ambiguous physical request")]
+    ThreadHeadAmbiguous,
+    #[error("decode exact thread head")]
+    DecodeThreadHead {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("thread session vanished during rename")]
+    ThreadSessionVanished,
+    #[error("thread agent changed during rename")]
+    ThreadAgentChanged,
+    #[error("encoding Codex thread settings")]
+    EncodeThreadSettings(#[source] serde_json::Error),
+    #[error("ambiguous Codex root/child thread label across canonical scopes: {session_id}")]
+    AmbiguousRootChildLabel { session_id: String },
+    #[error("child session binding differs from its authorized request")]
+    ChildBindingMismatch,
+    #[error("child request has no creation timestamp")]
+    ChildMissingCreatedAt,
+    #[error("child request has an invalid creation timestamp")]
+    ChildInvalidCreatedAt {
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("committed request missing agent")]
+    CommittedRequestMissingAgent,
+    #[error("usage request missing logical ID")]
+    UsageRequestMissingLogicalId,
+    #[error("usage request missing physical ID")]
+    UsageRequestMissingPhysicalId,
+    #[error("ambiguous scoped usage request")]
+    AmbiguousScopedUsageRequest,
+    #[error("usage request is absent from exact requester scope")]
+    UsageRequestOutOfScope,
+    #[error("invalid durable Goal status")]
+    InvalidGoalStatus,
+    #[error("history request missing physical identity")]
+    HistoryRequestMissingIdentity,
+    #[error("duplicate scoped request label in history")]
+    DuplicateRequestLabel,
+    #[error("history dependent row missing request label")]
+    HistoryDependentMissingRequestLabel,
+    #[error("history dependent row missing physical request")]
+    HistoryDependentMissingPhysicalRequest,
+    #[error("history dependent row crosses physical request identity")]
+    HistoryDependentCrossesIdentity,
+    #[error("history request lacks physical identity")]
+    HistoryRequestLacksIdentity,
+    #[error("decoding canonical AgentMessage header")]
+    DecodeMessageHeader {
+        #[source]
+        source: gents::session::canonical_rows::CanonicalRowsError,
+    },
+    #[error("duplicate physical AgentMessage row in history")]
+    DuplicatePhysicalMessage,
+    #[error("canonical history header changed during exact physical reconstruction")]
+    CanonicalHeaderChanged,
+    #[error("history tool row omitted physical request")]
+    HistoryToolRowMissingRequest,
+    #[error("terminal AgentToolCall has no canonical delivery yet")]
+    TerminalToolCallUndelivered,
+    #[error("cycle in Codex steering history ancestry at request {request_id}")]
+    SteeringCycle { request_id: String },
+}
+
 mod goal;
 mod json;
 mod mutations;
@@ -212,13 +293,14 @@ pub(super) async fn list_codex_threads_for_sources(
     let root_ids = root_workspaces.keys().cloned().collect::<Vec<_>>();
     let links = load_caused_threads_for_root_ids(state, &root_ids).await?;
     for link in &links {
-        if root_workspaces.contains_key(&link.session_id) {
-            anyhow::ensure!(
-                link.node_did == state.node_did.as_ref()
-                    && link.requester_did.as_deref() == Some(state.local_requester_did()),
-                "ambiguous Codex root/child thread label across canonical scopes: {}",
-                link.session_id
-            );
+        if root_workspaces.contains_key(&link.session_id)
+            && !(link.node_did == state.node_did.as_ref()
+                && link.requester_did.as_deref() == Some(state.local_requester_did()))
+        {
+            return Err(CodexShimProjectionError::AmbiguousRootChildLabel {
+                session_id: link.session_id.clone(),
+            }
+            .into());
         }
     }
     let mut seen = RapidHashSet::<String>::new();
@@ -348,7 +430,7 @@ async fn assemble_caused_record_parts(
             let id = &link.session_id;
             let requester = link.requester_did.as_deref();
             Box::pin(async move {
-                Ok(
+                Ok::<_, anyhow::Error>(
                     gents::session::load_agent_session_row_in_txn(txn, owner, id, requester)
                         .await?
                         .map(|row| row.session),
@@ -358,17 +440,16 @@ async fn assemble_caused_record_parts(
     )
     .await?;
     if let Some(session) = &session {
-        anyhow::ensure!(
-            session.agent_id == link.agent_id,
-            "child session binding differs from its authorized request"
-        );
+        if session.agent_id != link.agent_id {
+            return Err(CodexShimProjectionError::ChildBindingMismatch.into());
+        }
     } else {
         chrono::DateTime::parse_from_rfc3339(
             link.created_at
                 .as_deref()
-                .context("child request has no creation timestamp")?,
+                .ok_or(CodexShimProjectionError::ChildMissingCreatedAt)?,
         )
-        .context("child request has an invalid creation timestamp")?;
+        .map_err(|source| CodexShimProjectionError::ChildInvalidCreatedAt { source })?;
     }
     state.set_thread_cwd(&link.session_id, cwd.clone()).await;
     Ok(CodexThreadRecord {

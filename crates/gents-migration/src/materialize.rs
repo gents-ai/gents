@@ -36,11 +36,7 @@ pub async fn materialize_collections(
     let mut failures: Vec<String> = Vec::new();
 
     for name in collections {
-        match node
-            .materialize_collection(name)
-            .await
-            .map_err(anyhow::Error::from)
-        {
+        match node.materialize_collection(name).await {
             Ok(n) => {
                 stats.documents_materialized += n;
                 debug!(collection = %name, documents = n, "materialized collection");
@@ -80,10 +76,11 @@ pub async fn materialize_collections(
     Ok(stats)
 }
 
-fn is_unique_index_violation(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().contains("violates unique index"))
+fn is_unique_index_violation(error: &defra_node::Error) -> bool {
+    std::iter::successors(Some(error as &dyn std::error::Error), |cause| {
+        cause.source()
+    })
+    .any(|cause| cause.to_string().contains("violates unique index"))
 }
 
 /// Bare `[A-Za-z0-9_]` check for GraphQL identifier positions.
@@ -97,7 +94,7 @@ fn is_safe_graphql_identifier(name: &str) -> bool {
 async fn describe_parked_unique_conflict(
     node: &EmbeddedNode,
     collection: &str,
-    error: &anyhow::Error,
+    error: &defra_node::Error,
 ) -> String {
     let mut detail = format!(
         "{collection}: eager materialization skipped ({error}); \

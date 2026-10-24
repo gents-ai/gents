@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
@@ -9,7 +10,7 @@ use gents::config_client::GraphqlEndpoint;
 use gents::plugin::approval::{self, Answer, Request};
 use tokio::sync::mpsc;
 
-use super::{approvals, GoalBackedSubmission};
+use super::{approvals, ChatError, GoalBackedSubmission};
 use crate::RequestSubmitOptions;
 
 type InputLine = io::Result<String>;
@@ -79,7 +80,7 @@ pub(super) async fn run(
                 let line = match line.context("reading chat input") {
                     Ok(line) => line,
                     Err(error) => {
-                        eprintln!("Could not read chat input: {error:#}");
+                        eprintln!("Could not read chat input: {}", ErrorChain(error.as_ref()));
                         failure = Some(error);
                         accepting = false;
                         continue;
@@ -89,7 +90,7 @@ pub(super) async fn run(
                     Ok(false) => {}
                     outcome => {
                         if let Err(error) = outcome {
-                            eprintln!("Could not record plugin approval: {error:#}");
+                            eprintln!("Could not record plugin approval: {}", ErrorChain(error.as_ref()));
                             failure = Some(error);
                         }
                         prompt(label)?;
@@ -137,7 +138,7 @@ pub(super) async fn run(
                         });
                     }
                     Err(error) => {
-                        eprintln!("Could not submit message: {error:#}");
+                        eprintln!("Could not submit message: {}", ErrorChain(error.as_ref()));
                         failure = Some(error);
                     }
                 }
@@ -146,7 +147,7 @@ pub(super) async fn run(
             completed = turns.next(), if !turns.is_empty() => {
                 if let Some((request_id, result)) = completed {
                     if let Err(error) = result {
-                        eprintln!("Request {request_id}: {error:#}");
+                        eprintln!("Request {request_id}: {}", ErrorChain(error.as_ref()));
                         failure = Some(error);
                     }
                     if accepting && approval_prompt.is_none() {
@@ -183,32 +184,32 @@ fn handle_approval_command(home: &Path, shown: &mut Option<Request>, line: &str)
         return Ok(false);
     }
     let words = line.split_whitespace().collect::<Vec<_>>();
-    anyhow::ensure!(
-        words.len() == 3 && words[0] == "/approve",
-        "use /approve <request-id> once|file|folder|deny with the displayed request ID"
-    );
+    if words.len() != 3 || words[0] != "/approve" {
+        return Err(ChatError::ApprovalCommandShape.into());
+    }
     let answer = match words[2] {
         "once" => Answer::Once,
         "file" => Answer::AlwaysPath,
         "folder" => Answer::AlwaysFolder,
         "deny" => Answer::Deny,
-        _ => anyhow::bail!("approval action must be once, file, folder, or deny"),
+        _ => return Err(ChatError::ApprovalAction.into()),
     };
-    let request = shown
-        .as_ref()
-        .context("no displayed approval is pending; wait for its request ID")?;
-    anyhow::ensure!(
-        request.id == words[1],
-        "approval ID does not match the displayed request; use /approve {} once|file|folder|deny",
-        request.id
-    );
-    anyhow::ensure!(
-        approval::pending(home)?
-            .iter()
-            .any(|pending| pending.id == request.id),
-        "approval {} is no longer pending; wait for the current request ID",
-        request.id
-    );
+    let request = shown.as_ref().ok_or(ChatError::NoDisplayedApproval)?;
+    if request.id != words[1] {
+        return Err(ChatError::ApprovalIdMismatch {
+            displayed: request.id.clone(),
+        }
+        .into());
+    }
+    if !approval::pending(home)?
+        .iter()
+        .any(|pending| pending.id == request.id)
+    {
+        return Err(ChatError::ApprovalNotPending {
+            id: request.id.clone(),
+        }
+        .into());
+    }
     approval::decide(home, &request.id, answer)?;
     *shown = None;
     Ok(true)

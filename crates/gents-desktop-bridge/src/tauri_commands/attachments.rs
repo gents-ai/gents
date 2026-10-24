@@ -8,6 +8,26 @@ use std::io::Read;
 use tauri::State;
 use tauri_plugin_fs::FsExt;
 
+#[derive(Debug, thiserror::Error)]
+enum AttachmentReadError {
+    #[error("Choose an absolute file path")]
+    RelativePath,
+    #[error("Select this file in the picker or drop it into the app before attaching it")]
+    NotSelected,
+    #[error("Choose a file, not a directory")]
+    NotAFile,
+    #[error("The file is empty")]
+    Empty,
+    #[error("Attachment exceeds 4 MiB")]
+    TooLarge,
+    #[error("Unsupported file. Choose PNG, JPEG, GIF, WebP, PDF or UTF-8 text")]
+    Unsupported,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Attachment(#[from] gents_protocol::request_input::AttachmentError),
+}
+
 #[tauri::command]
 pub async fn desktop_attachment_read<R>(
     app: tauri::AppHandle<R>,
@@ -19,19 +39,20 @@ where
     let scope = app
         .try_fs_scope()
         .ok_or_else(|| BridgeError::untyped("Native file selection is unavailable"))?;
-    tokio::task::spawn_blocking(move || -> anyhow::Result<RequestAttachment> {
+    tokio::task::spawn_blocking(move || -> Result<RequestAttachment, AttachmentReadError> {
         let path = std::path::Path::new(&path);
-        anyhow::ensure!(path.is_absolute(), "Choose an absolute file path");
+        if !path.is_absolute() {
+            return Err(AttachmentReadError::RelativePath);
+        }
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("attachment")
             .to_owned();
         let path = path.canonicalize()?;
-        anyhow::ensure!(
-            scope.is_allowed(&path),
-            "Select this file in the picker or drop it into the app before attaching it"
-        );
+        if !scope.is_allowed(&path) {
+            return Err(AttachmentReadError::NotSelected);
+        }
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -40,11 +61,17 @@ where
             options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
         }
         let file = options.open(&path)?;
-        anyhow::ensure!(file.metadata()?.is_file(), "Choose a file, not a directory");
+        if !file.metadata()?.is_file() {
+            return Err(AttachmentReadError::NotAFile);
+        }
         let mut bytes = Vec::new();
         file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        anyhow::ensure!(!bytes.is_empty(), "The file is empty");
-        anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "Attachment exceeds 4 MiB");
+        if bytes.is_empty() {
+            return Err(AttachmentReadError::Empty);
+        }
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(AttachmentReadError::TooLarge);
+        }
         let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             "image/png"
         } else if bytes.starts_with(b"\xff\xd8\xff") {
@@ -58,7 +85,7 @@ where
         } else if std::str::from_utf8(&bytes).is_ok() && !bytes.contains(&0) {
             "text/plain"
         } else {
-            anyhow::bail!("Unsupported file. Choose PNG, JPEG, GIF, WebP, PDF or UTF-8 text")
+            return Err(AttachmentReadError::Unsupported);
         };
         let attachment = RequestAttachment {
             name,

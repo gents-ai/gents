@@ -94,6 +94,7 @@ pub async fn delete_agent_context_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -118,7 +119,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -173,7 +174,7 @@ mod tests {
                 let plan = &target_plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -199,7 +200,7 @@ mod tests {
                 let plan = &remove_target;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -230,7 +231,7 @@ mod tests {
                             update: value,
                         }])?;
                         apply_desired_state_plan(txn, &plan).await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     })
                 })
                 .await?;
@@ -250,8 +251,11 @@ mod tests {
                 .await
                 .unwrap_err();
                 assert!(
-                    format!("{disable:#}").contains("must be enabled"),
-                    "{disable:#}"
+                    ErrorChain(disable.as_ref())
+                        .to_string()
+                        .contains("must be enabled"),
+                    "{}",
+                    ErrorChain(disable.as_ref())
                 );
             }
         }

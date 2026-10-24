@@ -277,7 +277,7 @@ async fn fork_in_txn(
     let headers = rows(&snapshot, "AgentMessage")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut sequences = BTreeSet::new();
     for header in &headers {
         anyhow::ensure!(

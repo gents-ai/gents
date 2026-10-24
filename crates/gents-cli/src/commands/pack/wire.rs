@@ -40,7 +40,9 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
         remove: args.remove,
         preview: args.preview,
     };
-    crate::print_json(&wire_in(&access, &owner, &home, &request).await?)
+    Ok(crate::print_json(
+        &wire_in(&access, &owner, &home, &request).await?,
+    )?)
 }
 
 /// Wires (or with `remove`, unwires) `request.plugin` over a held `access`.
@@ -131,7 +133,7 @@ pub(crate) async fn wire_in(
                     ])?;
                     apply_desired_state_plan(txn, &plan).await?;
                 }
-                Ok(report)
+                Ok::<_, anyhow::Error>(report)
             })
         })
         .await?;

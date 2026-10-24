@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
+use super::error::P2pReconcileError;
 use super::templates::{
     filter_conditions, live_filter_string_eq, to_replication_filters, FilterPredicate,
     PairingFilters,
@@ -198,7 +200,7 @@ impl EmbeddedRemoteP2pAdmin {
             },
         )
         .await
-        .map_err(|error| RemoteP2pAdminError::LocalError(format!("{error:#}")))?;
+        .map_err(|error| RemoteP2pAdminError::LocalError(ErrorChain(&error).to_string()))?;
         Ok(response
             .pointer(&format!("/data/{collection}"))
             .and_then(serde_json::Value::as_array)
@@ -262,8 +264,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     ) -> RemoteP2pAdminResult<()> {
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
-        let defra_filters =
-            to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?;
+        let defra_filters = to_replication_filters(filters)?;
         self.run(
             "add_replicator",
             p2p.add_replicator(collections.to_vec(), addr, defra_filters, Vec::new(), None),
@@ -410,18 +411,21 @@ pub(super) async fn push_documents_to_peer(
     node: &Arc<EmbeddedNode>,
     peer_id: &str,
     documents: Vec<P2pDocumentRequest>,
-) -> anyhow::Result<()> {
-    use anyhow::Context as _;
-
-    let p2p = crate::identity::node_p2p(node)
-        .context("embedded node has no P2P transport for hydration delivery")?;
+) -> Result<(), P2pReconcileError> {
+    let p2p = crate::identity::node_p2p(node).ok_or(P2pReconcileError::NoHydrationP2pTransport)?;
     timeout(
         DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
         p2p.push_documents_to_peer(peer_id, documents),
     )
     .await
-    .with_context(|| format!("push hydration documents to peer {peer_id} timed out"))?
-    .with_context(|| format!("push hydration documents to peer {peer_id}"))
+    .map_err(|source| P2pReconcileError::PushHydrationDocumentsTimedOut {
+        peer_id: peer_id.to_owned(),
+        source,
+    })?
+    .map_err(|source| P2pReconcileError::PushHydrationDocuments {
+        peer_id: peer_id.to_owned(),
+        source,
+    })
 }
 
 fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {
@@ -1386,8 +1390,9 @@ pub(super) mod tests {
                 .await
                 .unwrap_or_else(|error| {
                     panic!(
-                        "template '{}' filter set rejected by add_replicator: {error:#}",
-                        template.id
+                        "template '{}' filter set rejected by add_replicator: {}",
+                        template.id,
+                        ErrorChain(&error)
                     )
                 });
         }
@@ -2190,7 +2195,10 @@ pub(super) mod tests {
                     continue;
                 }
                 Err(error) => {
-                    panic!("reconstructing projected child result failed: {error:#}");
+                    panic!(
+                        "reconstructing projected child result failed: {}",
+                        ErrorChain(error.as_ref())
+                    );
                 }
             }
         }

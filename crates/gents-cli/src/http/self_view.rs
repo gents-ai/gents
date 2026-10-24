@@ -1,13 +1,15 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
+use gents::config_client::ConfigClientError;
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::post_graphql;
+
+type Result<T, E = SelfViewError> = std::result::Result<T, E>;
 
 const RECENT_REQUEST_SCAN: usize = 200;
 
@@ -131,7 +133,7 @@ struct CompactionRow {
 pub(crate) async fn load_self_view(
     graphql: &GraphqlEndpoint,
     node_did: &str,
-) -> Result<(Vec<SelfAgent>, ContextBudget, ContextIndicator)> {
+) -> Result<(Vec<SelfAgent>, ContextBudget, ContextIndicator), SelfViewError> {
     let response = post_graphql(graphql, &self_view_query(node_did)).await?;
     let envelope = decode::<SelfViewEnvelope>(response, "self view")?;
 
@@ -217,7 +219,24 @@ fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
     )
 }
 
-fn decode<T>(response: Value, label: &str) -> Result<T>
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SelfViewError {
+    #[error(transparent)]
+    Graphql(#[from] ConfigClientError),
+    #[error("{label} query response missing object data: {response}")]
+    MissingData {
+        label: &'static str,
+        response: Value,
+    },
+    #[error("decoding {label} query response")]
+    Decode {
+        label: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+fn decode<T>(response: Value, label: &'static str) -> Result<T, SelfViewError>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -225,8 +244,11 @@ where
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("{label} query response missing object data: {response}"))?;
-    serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
+        .ok_or_else(|| SelfViewError::MissingData {
+            label,
+            response: response.clone(),
+        })?;
+    serde_json::from_value(data).map_err(|source| SelfViewError::Decode { label, source })
 }
 
 fn build_agents(

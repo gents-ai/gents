@@ -16,6 +16,14 @@ use crate::support::{create_agent_message_in_scope, test_db};
 
 const PROFILE_SEED: i64 = 424_242;
 
+#[derive(Debug, thiserror::Error)]
+enum SeedError {
+    #[error("default inference profile is missing")]
+    MissingInferenceProfile,
+    #[error("default behavior is missing")]
+    MissingBehavior,
+}
+
 #[derive(Debug, Deserialize)]
 struct RenderedRequestRow {
     capture_scope: String,
@@ -148,11 +156,11 @@ async fn configure_seed_and_compaction(
         Box::pin(async move {
             let (_, profile) = read(txn, Collection::InferenceProfile, node_did, profile_id)
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("default inference profile is missing"))?;
+                .ok_or(SeedError::MissingInferenceProfile)?;
             let mut profile: gents::InferenceProfile = serde_json::from_value(profile)?;
             let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
+                .ok_or(SeedError::MissingBehavior)?;
             let mut behavior: gents::document_config::Agent = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id

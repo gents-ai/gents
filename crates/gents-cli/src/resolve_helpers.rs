@@ -7,6 +7,20 @@ use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg, ToolCeilingArg, ToolP
 use crate::shared::ResolvedBackendConfig;
 use crate::{normalize_optional_string, DEFAULT_INIT_ENDPOINT};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ResolveHelpersError {
+    #[error("an inference endpoint is required\nNext:\n  1. Pass it explicitly: `gents init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `gents init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `gents init`")]
+    InitEndpointRequired,
+    #[error("an inference endpoint is required\nNext:\n  1. Pass --inference-url explicitly\n  2. Or choose a preset with a default endpoint, such as --backend-preset openrouter")]
+    ConfigWriteEndpointRequired,
+    #[error("--cli-tool must be NAME=/absolute/path")]
+    CliToolArgument,
+    #[error("--tool-root is required when --tool-ceiling readwrite")]
+    ReadwriteRequiresRoot,
+    #[error("provide either --api-key or --api-key-env-var, not both")]
+    ApiKeyConflict,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BackendResolutionMode {
     Init,
@@ -25,7 +39,7 @@ pub(crate) fn resolve_backend_config_with_preset(
     let api_key = normalize_optional_string(explicit_api_key);
     let explicit_api_key_env_var = normalize_optional_string(explicit_api_key_env_var);
     if api_key.is_some() && explicit_api_key_env_var.is_some() {
-        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
+        return Err(ResolveHelpersError::ApiKeyConflict.into());
     }
 
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
@@ -62,7 +76,7 @@ fn resolve_backend_endpoint(
     explicit: Option<&str>,
     preset: Option<BackendPresetArg>,
     mode: BackendResolutionMode,
-) -> Result<String> {
+) -> Result<String, ResolveHelpersError> {
     normalize_optional_string(explicit)
         .or_else(|| preset.and_then(|candidate| candidate.default_endpoint().map(str::to_string)))
         .or_else(|| {
@@ -77,13 +91,9 @@ fn resolve_backend_endpoint(
         .or_else(|| {
             (mode == BackendResolutionMode::Init).then(|| DEFAULT_INIT_ENDPOINT.to_string())
         })
-        .ok_or_else(|| match mode {
-            BackendResolutionMode::Init => anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `gents init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `gents init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `gents init`"
-            ),
-            BackendResolutionMode::ConfigWrite => anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass --inference-url explicitly\n  2. Or choose a preset with a default endpoint, such as --backend-preset openrouter"
-            ),
+        .ok_or(match mode {
+            BackendResolutionMode::Init => ResolveHelpersError::InitEndpointRequired,
+            BackendResolutionMode::ConfigWrite => ResolveHelpersError::ConfigWriteEndpointRequired,
         })
 }
 
@@ -92,7 +102,7 @@ fn resolve_backend_provider_kind(
     preset: Option<BackendPresetArg>,
 ) -> Result<BackendProviderKind> {
     match normalize_optional_string(explicit) {
-        Some(value) => BackendProviderKind::parse_optional(Some(&value)),
+        Some(value) => Ok(BackendProviderKind::parse_optional(Some(&value))?),
         None => Ok(
             preset.map_or_else(BackendProviderKind::default, |candidate| {
                 candidate.provider_kind()
@@ -114,14 +124,14 @@ fn resolve_backend_api_key_env_var(
     })
 }
 
-pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
+pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig, ResolveHelpersError> {
     let (name, path) = value
         .split_once('=')
-        .ok_or_else(|| anyhow::anyhow!("--cli-tool must be NAME=/absolute/path"))?;
+        .ok_or(ResolveHelpersError::CliToolArgument)?;
     let name = name.trim();
     let path = path.trim();
     if name.is_empty() || path.is_empty() {
-        anyhow::bail!("--cli-tool must be NAME=/absolute/path");
+        return Err(ResolveHelpersError::CliToolArgument);
     }
 
     Ok(cli_tool(
@@ -137,14 +147,14 @@ pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
 pub(crate) fn host_tool_ceiling(
     mode: ToolCeilingArg,
     root: Option<&Path>,
-) -> Result<gents::ToolCeiling> {
+) -> Result<gents::ToolCeiling, ResolveHelpersError> {
     Ok(match (mode, root) {
         (ToolCeilingArg::MetaOnly, _) => gents::ToolCeiling::meta_only(),
         (ToolCeilingArg::Readonly, Some(root)) => gents::ToolCeiling::readonly_at(root),
         (ToolCeilingArg::Readonly, None) => gents::ToolCeiling::readonly(),
         (ToolCeilingArg::Readwrite, Some(root)) => gents::ToolCeiling::readwrite(root),
         (ToolCeilingArg::Readwrite, None) => {
-            anyhow::bail!("--tool-root is required when --tool-ceiling readwrite")
+            return Err(ResolveHelpersError::ReadwriteRequiresRoot)
         }
     })
 }

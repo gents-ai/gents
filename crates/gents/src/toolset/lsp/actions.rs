@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use anyhow::Context as _;
 use serde_json::{json, Value};
 
 use crate::tool_call_lifecycle::FailureClass;
@@ -884,8 +883,12 @@ async fn glob_action(
     {
         let display = context.display_path(&path);
         let uri = super::uri::path_to_file_uri(&path);
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading matched diagnostic file {}", path.display()))?;
+        let text = std::fs::read_to_string(&path).map_err(|source| {
+            super::LspToolError::ReadDiagnosticFile {
+                path: path.clone(),
+                source,
+            }
+        })?;
         client
             .ensure_open(&uri, &language_id(servers, &path), &text)
             .await

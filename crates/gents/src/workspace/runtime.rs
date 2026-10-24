@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_loop::tool_policy::ToolPolicyError;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::lifecycle::WorkspaceLineage;
+use crate::config_client::ConfigClientError;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, GraphqlResponseError};
+use crate::lifecycle::{LifecycleError, WorkspaceLineage};
 use crate::toolset::WorkspaceAuthority;
 use crate::watcher::AgentRequest;
 
@@ -14,19 +15,116 @@ use super::action_plan::{
     CleanupWorkspaceAction, IntegrateWorkspaceAction, SealWorkspaceAction, CAP_CLEANUP_WORKSPACE,
     CAP_INTEGRATE_WORKSPACE, CAP_SEAL_WORKSPACE,
 };
-use super::binding::{admit_workspace_binding, new_binding, release_binding, AdmitBinding};
+use super::binding::{
+    admit_workspace_binding, new_binding, release_binding, AdmitBinding, BindingError,
+};
 use super::documents::{
     workspace_cleanup_docs_mutation, workspace_integrate_docs_mutation,
-    workspace_seal_docs_mutation, IsolatedWorkspaceDoc, MemoryWorkspaceDocuments,
+    workspace_seal_docs_mutation, DocumentsError, IsolatedWorkspaceDoc, MemoryWorkspaceDocuments,
     WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePlacementDoc, WorkspaceReceiptDoc,
     LIFECYCLE_SEALED, RECEIPT_KIND_WRITER,
 };
 use super::executor::{
     clear_integrate_journal, execute_cleanup_workspace_plan, execute_integrate_workspace_plan,
     execute_seal_workspace_plan, finalize_integrate_trunk, CleanupWorkspaceOutcome,
-    HostExecutorContext, IntegrateWorkspaceOutcome, RepositoryPlacementRef, SealWorkspaceOutcome,
+    HostExecuteError, HostExecutorContext, IntegrateWorkspaceOutcome, RepositoryPlacementRef,
+    SealWorkspaceOutcome, WorkspaceExecutorError,
 };
-use super::overlay::{optional_id, IsolatedWorkspaceRecord};
+use super::overlay::{optional_id, IsolatedWorkspaceRecord, OverlayError};
+
+#[derive(Debug, thiserror::Error)]
+pub enum WorkspaceRuntimeError {
+    #[error("isolated workspace {workspace_id} not found")]
+    MissingWorkspace { workspace_id: String },
+    #[error("workspace placement {workspace_id} not found")]
+    MissingPlacement { workspace_id: String },
+    #[error("workspace stamp identity differs from resolved workspace")]
+    StampIdentityMismatch,
+    #[error("workspace stamp owner differs from resolved workspace")]
+    StampOwnerMismatch,
+    #[error("isolated workspace {workspace_id} is sealed; ReadWrite bindings are illegal")]
+    SealedReadWrite { workspace_id: String },
+    #[error("sealed workspace {workspace_id} is missing seal_hash")]
+    MissingSealHash { workspace_id: String },
+    #[error("request workspace_seal_hash {existing} does not match workspace seal_hash {hash}")]
+    SealHashMismatch { existing: String, hash: String },
+    #[error("isolated workspace {workspace_id} is ready; Integrate bindings require Sealed")]
+    ReadyIntegrate { workspace_id: String },
+    #[error("isolated workspace {workspace_id} in state {state} is not bindable for authority {authority}")]
+    NotBindable {
+        workspace_id: String,
+        state: String,
+        authority: &'static str,
+    },
+    #[error("request node no longer holds the workspace writer_principal grant")]
+    WriterGrantLost,
+    #[error("request node no longer holds the workspace integrator_principal grant")]
+    IntegratorGrantLost,
+    #[error("cleanup_workspace requires a workspace_id")]
+    CleanupRequiresWorkspaceId,
+    #[error("workspace owner is missing")]
+    MissingWorkspaceOwner,
+    #[error("workspace-bound request {workspace_id} is missing workspace_authority")]
+    MissingAuthority { workspace_id: String },
+    #[error("workspace binding request document missing")]
+    BindingRequestMissing,
+    #[error("workspace binding must match exact physical request node and lineage")]
+    BindingLineageMismatch,
+    #[error("ambiguous node-scoped IsolatedWorkspace")]
+    AmbiguousWorkspace,
+    #[error("ambiguous node-scoped WorkspacePlacement")]
+    AmbiguousPlacement,
+    #[error("repository placement missing or ambiguous for node")]
+    RepositoryAmbiguous,
+    #[error("repository placement is disabled")]
+    RepositoryDisabled,
+    #[error("{error}")]
+    Execute { error: HostExecuteError },
+    #[error("persist sealed workspace {workspace_id} receipt {receipt_id}")]
+    PersistSeal {
+        workspace_id: String,
+        receipt_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("persist integrator receipt {receipt_id} for workspace {workspace_id}")]
+    PersistIntegrate {
+        receipt_id: String,
+        workspace_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("release Integrate binding for receipt {receipt_id}")]
+    ReleaseIntegrate {
+        receipt_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("persist cleaned workspace {workspace_id}")]
+    PersistCleanup {
+        workspace_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Rows(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    Documents(#[from] DocumentsError),
+    #[error(transparent)]
+    Overlay(#[from] OverlayError),
+    #[error(transparent)]
+    Binding(#[from] BindingError),
+    #[error(transparent)]
+    Authority(#[from] ToolPolicyError),
+    #[error(transparent)]
+    Lifecycle(#[from] LifecycleError),
+    #[error(transparent)]
+    Executor(#[from] WorkspaceExecutorError),
+}
+
+type Result<T, E = WorkspaceRuntimeError> = std::result::Result<T, E>;
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     workspace_id
@@ -79,7 +177,9 @@ pub async fn stamp_workspace_lineage(
         .unwrap_or(node_did);
     let workspace = super::overlay::load_isolated_workspace_record(node, workspace_id, owner)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+        .ok_or_else(|| WorkspaceRuntimeError::MissingWorkspace {
+            workspace_id: workspace_id.to_owned(),
+        })?;
     apply_workspace_lineage_stamp(lineage, &workspace)
 }
 
@@ -87,17 +187,16 @@ pub(crate) fn apply_workspace_lineage_stamp(
     lineage: &mut WorkspaceLineage,
     workspace: &IsolatedWorkspaceRecord,
 ) -> Result<()> {
-    anyhow::ensure!(
-        lineage.workspace_id.as_deref() == Some(workspace.workspace_id.as_str()),
-        "workspace stamp identity differs from resolved workspace"
-    );
-    anyhow::ensure!(
-        lineage
-            .workspace_owner_node_did
-            .as_deref()
-            .is_none_or(|owner| owner == workspace.owner_node_did),
-        "workspace stamp owner differs from resolved workspace"
-    );
+    if lineage.workspace_id.as_deref() != Some(workspace.workspace_id.as_str()) {
+        return Err(WorkspaceRuntimeError::StampIdentityMismatch);
+    }
+    if !lineage
+        .workspace_owner_node_did
+        .as_deref()
+        .is_none_or(|owner| owner == workspace.owner_node_did)
+    {
+        return Err(WorkspaceRuntimeError::StampOwnerMismatch);
+    }
     lineage.workspace_owner_node_did = Some(workspace.owner_node_did.clone());
     let state = crate::toolset::normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
     let authority = lineage
@@ -108,16 +207,16 @@ pub(crate) fn apply_workspace_lineage_stamp(
         .map(WorkspaceAuthority::parse)
         .transpose()?;
     match (state, authority) {
-        (Some("sealed"), Some(WorkspaceAuthority::ReadWrite)) => anyhow::bail!(
-            "isolated workspace {} is sealed; ReadWrite bindings are illegal",
-            workspace.workspace_id
-        ),
+        (Some("sealed"), Some(WorkspaceAuthority::ReadWrite)) => {
+            return Err(WorkspaceRuntimeError::SealedReadWrite {
+                workspace_id: workspace.workspace_id.clone(),
+            });
+        }
         (Some("sealed"), _) => {
             let Some(hash) = optional_id(workspace.seal_hash.as_deref()) else {
-                anyhow::bail!(
-                    "sealed workspace {} is missing seal_hash",
-                    workspace.workspace_id
-                );
+                return Err(WorkspaceRuntimeError::MissingSealHash {
+                    workspace_id: workspace.workspace_id.clone(),
+                });
             };
             match lineage
                 .workspace_seal_hash
@@ -127,22 +226,29 @@ pub(crate) fn apply_workspace_lineage_stamp(
             {
                 None => lineage.workspace_seal_hash = Some(hash.to_string()),
                 Some(existing) if existing == hash => {}
-                Some(existing) => anyhow::bail!(
-                    "request workspace_seal_hash {existing} does not match workspace seal_hash {hash}"
-                ),
+                Some(existing) => {
+                    return Err(WorkspaceRuntimeError::SealHashMismatch {
+                        existing: existing.to_owned(),
+                        hash: hash.to_owned(),
+                    });
+                }
             }
         }
-        (Some("ready"), Some(WorkspaceAuthority::Integrate)) => anyhow::bail!(
-            "isolated workspace {} is ready; Integrate bindings require Sealed",
-            workspace.workspace_id
-        ),
+        (Some("ready"), Some(WorkspaceAuthority::Integrate)) => {
+            return Err(WorkspaceRuntimeError::ReadyIntegrate {
+                workspace_id: workspace.workspace_id.clone(),
+            });
+        }
         (Some("ready"), _) => {}
-        (other, Some(authority)) => anyhow::bail!(
-            "isolated workspace {} in state {} is not bindable for authority {}",
-            workspace.workspace_id,
-            other.unwrap_or(workspace.lifecycle_state.as_str()),
-            authority.as_str()
-        ),
+        (other, Some(authority)) => {
+            return Err(WorkspaceRuntimeError::NotBindable {
+                workspace_id: workspace.workspace_id.clone(),
+                state: other
+                    .unwrap_or(workspace.lifecycle_state.as_str())
+                    .to_owned(),
+                authority: authority.as_str(),
+            });
+        }
         _ => {}
     }
     Ok(())
@@ -170,15 +276,18 @@ pub async fn seal_on_writer_success(
         super::overlay::request_workspace_owner(request)?,
     )
     .await?;
-    let workspace = docs
-        .load_isolated_workspace(workspace_id)?
-        .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
-    anyhow::ensure!(
-        workspace.writer_principal.trim() == request.node_did.trim(),
-        "request node no longer holds the workspace writer_principal grant"
-    );
+    let workspace = docs.load_isolated_workspace(workspace_id)?.ok_or_else(|| {
+        WorkspaceRuntimeError::MissingWorkspace {
+            workspace_id: workspace_id.to_owned(),
+        }
+    })?;
+    if workspace.writer_principal.trim() != request.node_did.trim() {
+        return Err(WorkspaceRuntimeError::WriterGrantLost);
+    }
     docs.load_placement(workspace_id)?
-        .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
+        .ok_or_else(|| WorkspaceRuntimeError::MissingPlacement {
+            workspace_id: workspace_id.to_owned(),
+        })?;
     let repository =
         load_repository(node, &workspace.repository_id, &workspace.owner_node_did).await?;
 
@@ -203,7 +312,7 @@ pub async fn seal_on_writer_success(
             documents: &mut docs,
         };
         execute_seal_workspace_plan(&plan, &mut journal, &mut ctx)
-            .map_err(|err| anyhow::anyhow!("{err}"))?
+            .map_err(|error| WorkspaceRuntimeError::Execute { error })?
     };
     flush_seal_outcome(node, &docs, &outcome).await
 }
@@ -230,15 +339,18 @@ pub async fn integrate_on_integrator_success(
         super::overlay::request_workspace_owner(request)?,
     )
     .await?;
-    let workspace = docs
-        .load_isolated_workspace(workspace_id)?
-        .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
-    anyhow::ensure!(
-        workspace.integrator_principal.trim() == request.node_did.trim(),
-        "request node no longer holds the workspace integrator_principal grant"
-    );
+    let workspace = docs.load_isolated_workspace(workspace_id)?.ok_or_else(|| {
+        WorkspaceRuntimeError::MissingWorkspace {
+            workspace_id: workspace_id.to_owned(),
+        }
+    })?;
+    if workspace.integrator_principal.trim() != request.node_did.trim() {
+        return Err(WorkspaceRuntimeError::IntegratorGrantLost);
+    }
     docs.load_placement(workspace_id)?
-        .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
+        .ok_or_else(|| WorkspaceRuntimeError::MissingPlacement {
+            workspace_id: workspace_id.to_owned(),
+        })?;
     let repository =
         load_repository(node, &workspace.repository_id, &workspace.owner_node_did).await?;
 
@@ -265,7 +377,7 @@ pub async fn integrate_on_integrator_success(
             documents: &mut docs,
         };
         execute_integrate_workspace_plan(&plan, &mut journal, &mut ctx)
-            .map_err(|err| anyhow::anyhow!("{err}"))?
+            .map_err(|error| WorkspaceRuntimeError::Execute { error })?
     };
     flush_integrate_outcome(node, &outcome).await?;
     finalize_integrate_trunk(&trunk, outcome.pending_head_sha.as_deref())?;
@@ -286,13 +398,17 @@ pub async fn cleanup_workspace(
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
     let workspace_id = optional_id(Some(workspace_id))
-        .ok_or_else(|| anyhow::anyhow!("cleanup_workspace requires a workspace_id"))?;
+        .ok_or_else(|| WorkspaceRuntimeError::CleanupRequiresWorkspaceId)?;
     let mut docs = load_docs(node, workspace_id, node_did).await?;
-    let workspace = docs
-        .load_isolated_workspace(workspace_id)?
-        .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+    let workspace = docs.load_isolated_workspace(workspace_id)?.ok_or_else(|| {
+        WorkspaceRuntimeError::MissingWorkspace {
+            workspace_id: workspace_id.to_owned(),
+        }
+    })?;
     docs.load_placement(workspace_id)?
-        .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
+        .ok_or_else(|| WorkspaceRuntimeError::MissingPlacement {
+            workspace_id: workspace_id.to_owned(),
+        })?;
     let repository =
         load_repository(node, &workspace.repository_id, &workspace.owner_node_did).await?;
 
@@ -315,7 +431,7 @@ pub async fn cleanup_workspace(
             documents: &mut docs,
         };
         execute_cleanup_workspace_plan(&plan, &mut journal, &mut ctx)
-            .map_err(|err| anyhow::anyhow!("{err}"))?
+            .map_err(|error| WorkspaceRuntimeError::Execute { error })?
     };
     flush_cleanup_outcome(node, &docs, &outcome).await
 }
@@ -397,10 +513,14 @@ pub async fn materialize_workspace_binding(
     let workspace_owner = lineage
         .workspace_owner_node_did
         .as_deref()
-        .context("workspace owner is missing")?;
+        .ok_or(WorkspaceRuntimeError::MissingWorkspaceOwner)?;
     let authority = match lineage.workspace_authority.as_deref().map(str::trim) {
         Some(value) if !value.is_empty() => WorkspaceAuthority::parse(value)?,
-        _ => anyhow::bail!("workspace-bound request {workspace_id} is missing workspace_authority"),
+        _ => {
+            return Err(WorkspaceRuntimeError::MissingAuthority {
+                workspace_id: workspace_id.to_owned(),
+            });
+        }
     };
     let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id node_did workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash}} }}"#,
@@ -409,20 +529,22 @@ pub async fn materialize_workspace_binding(
         &response,
         "AgentRequest",
     )?
-    .context("workspace binding request document missing")?;
-    anyhow::ensure!(
-        actual.request_id == request_id
-            && actual.node_did.as_deref() == Some(principal_did)
-            && actual.workspace_id.as_deref() == Some(workspace_id)
-            && actual.workspace_owner_node_did == lineage.workspace_owner_node_did
-            && actual.workspace_authority.as_deref() == Some(authority.as_str())
-            && actual.workspace_seal_hash == lineage.workspace_seal_hash,
-        "workspace binding must match exact physical request node and lineage"
-    );
+    .ok_or(WorkspaceRuntimeError::BindingRequestMissing)?;
+    if !(actual.request_id == request_id
+        && actual.node_did.as_deref() == Some(principal_did)
+        && actual.workspace_id.as_deref() == Some(workspace_id)
+        && actual.workspace_owner_node_did == lineage.workspace_owner_node_did
+        && actual.workspace_authority.as_deref() == Some(authority.as_str())
+        && actual.workspace_seal_hash == lineage.workspace_seal_hash)
+    {
+        return Err(WorkspaceRuntimeError::BindingLineageMismatch);
+    }
     let workspace =
         super::overlay::load_isolated_workspace_record(node, workspace_id, workspace_owner)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+            .ok_or_else(|| WorkspaceRuntimeError::MissingWorkspace {
+                workspace_id: workspace_id.to_owned(),
+            })?;
     super::overlay::require_workspace_principal(&workspace, principal_did, authority)?;
     let existing =
         super::overlay::load_workspace_bindings_for(node, workspace_id, workspace_owner).await?;
@@ -458,7 +580,8 @@ pub async fn materialize_workspace_binding(
         AdmitBinding::Create { binding, release } => {
             let mut docs = release;
             docs.push(binding);
-            super::overlay::persist_workspace_binding_docs(node, &docs).await
+            super::overlay::persist_workspace_binding_docs(node, &docs).await?;
+            Ok(())
         }
     }
 }
@@ -487,6 +610,7 @@ pub async fn release_writer_binding(
         },
     )
     .await
+    .map_err(WorkspaceRuntimeError::Config)
 }
 
 /// Pending terminal paths can encounter malformed request rows. Cleanup
@@ -495,7 +619,7 @@ pub async fn release_writer_binding(
 pub(crate) async fn release_terminal_writer_binding(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &serde_json::Value,
-) -> Result<()> {
+) -> Result<(), ConfigClientError> {
     let string = |field: &str| {
         request[field]
             .as_str()
@@ -518,7 +642,7 @@ async fn release_writer_binding_in_txn(
     request_id: &str,
     workspace_id: &str,
     owner: &str,
-) -> Result<()> {
+) -> Result<(), ConfigClientError> {
     let request_doc_id = escape_graphql_string(request_doc_id);
     let request_id = escape_graphql_string(request_id);
     let workspace_id = escape_graphql_string(workspace_id);
@@ -589,7 +713,7 @@ async fn load_receipts(
     );
     let response =
         graphql_with_transaction_retry(node, &query, "load WorkspaceReceipt for seal").await?;
-    crate::graphql::rows(&response, "WorkspaceReceipt")
+    Ok(crate::graphql::rows(&response, "WorkspaceReceipt")?)
 }
 
 async fn load_isolated_workspace_doc(
@@ -612,7 +736,9 @@ async fn load_isolated_workspace_doc(
     {
         let mut found =
             crate::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
-        anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped IsolatedWorkspace");
+        if found.len() > 1 {
+            return Err(WorkspaceRuntimeError::AmbiguousWorkspace);
+        }
         Ok(found.pop())
     }
 }
@@ -637,7 +763,9 @@ async fn load_placement_doc(
     {
         let mut found =
             crate::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
-        anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped WorkspacePlacement");
+        if found.len() > 1 {
+            return Err(WorkspaceRuntimeError::AmbiguousPlacement);
+        }
         Ok(found.pop())
     }
 }
@@ -654,12 +782,13 @@ async fn load_repository(
         &response,
         "RepositoryPlacement",
     )?;
-    anyhow::ensure!(
-        found.len() == 1,
-        "repository placement missing or ambiguous for node"
-    );
+    if found.len() != 1 {
+        return Err(WorkspaceRuntimeError::RepositoryAmbiguous);
+    }
     let row = found.pop().unwrap();
-    anyhow::ensure!(row.enabled, "repository placement is disabled");
+    if !row.enabled {
+        return Err(WorkspaceRuntimeError::RepositoryDisabled);
+    }
     Ok(RepositoryPlacementRef {
         repository_id: row.repository_id,
         owner_node_did: row.node_did,
@@ -693,11 +822,10 @@ async fn flush_seal_outcome(
         &mutation,
     )
     .await
-    .with_context(|| {
-        format!(
-            "persist sealed workspace {} receipt {}",
-            outcome.workspace.workspace_id, outcome.receipt.receipt_id
-        )
+    .map_err(|source| WorkspaceRuntimeError::PersistSeal {
+        workspace_id: outcome.workspace.workspace_id.clone(),
+        receipt_id: outcome.receipt.receipt_id.clone(),
+        source,
     })?;
     Ok(())
 }
@@ -713,11 +841,10 @@ async fn flush_integrate_outcome(
         &mutation,
     )
     .await
-    .with_context(|| {
-        format!(
-            "persist integrator receipt {} for workspace {}",
-            outcome.receipt.receipt_id, outcome.workspace.workspace_id
-        )
+    .map_err(|source| WorkspaceRuntimeError::PersistIntegrate {
+        receipt_id: outcome.receipt.receipt_id.clone(),
+        workspace_id: outcome.workspace.workspace_id.clone(),
+        source,
     })?;
     Ok(())
 }
@@ -748,11 +875,9 @@ async fn release_integrate_binding(
         &mutation,
     )
     .await
-    .with_context(|| {
-        format!(
-            "release Integrate binding for receipt {}",
-            outcome.receipt.receipt_id
-        )
+    .map_err(|source| WorkspaceRuntimeError::ReleaseIntegrate {
+        receipt_id: outcome.receipt.receipt_id.clone(),
+        source,
     })?;
     Ok(())
 }
@@ -775,11 +900,9 @@ async fn flush_cleanup_outcome(
         &mutation,
     )
     .await
-    .with_context(|| {
-        format!(
-            "persist cleaned workspace {}",
-            outcome.workspace.workspace_id
-        )
+    .map_err(|source| WorkspaceRuntimeError::PersistCleanup {
+        workspace_id: outcome.workspace.workspace_id.clone(),
+        source,
     })?;
     Ok(())
 }

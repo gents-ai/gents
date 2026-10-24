@@ -115,7 +115,7 @@ impl ClientHost {
                         self.core
                             .read_inference_setup_state(&node_did)
                             .await
-                            .map_err(backend_error)?,
+                            .map_err(|error| backend_error(error.into()))?,
                     );
                 }
                 self.core
@@ -237,7 +237,7 @@ impl ClientHost {
                     false,
                 )
                 .await
-                .map_err(backend_error)?;
+                .map_err(|error| backend_error(error.into()))?;
                 if self.core.refresh_store().await.is_err() {
                     tracing::warn!("Account disconnected; its client observation is unavailable");
                 }
@@ -318,7 +318,7 @@ impl ClientHost {
                 encode(
                     settings::catalog(&self.core, &node_did)
                         .await
-                        .map_err(backend_error)?,
+                        .map_err(|error| backend_error(error.into()))?,
                 )
             }
             ClientCommand::ConfigRead {
@@ -327,7 +327,8 @@ impl ClientHost {
                 id,
             } => {
                 self.require_configured_runtime(&node_did).await?;
-                let target = settings::target(&collection).map_err(backend_error)?;
+                let target =
+                    settings::target(&collection).map_err(|error| backend_error(error.into()))?;
                 encode(
                     self.core
                         .read_config_editor(&node_did, target, &id)
@@ -343,7 +344,8 @@ impl ClientHost {
                 content,
             } => {
                 self.require_configured_runtime(&node_did).await?;
-                let target = settings::target(&collection).map_err(backend_error)?;
+                let target =
+                    settings::target(&collection).map_err(|error| backend_error(error.into()))?;
                 encode(
                     self.core
                         .save_config_editor(&node_did, target, &id, &revision, &content)
@@ -356,7 +358,7 @@ impl ClientHost {
                 encode(
                     actions::catalog(&self.core, &node_did)
                         .await
-                        .map_err(backend_error)?,
+                        .map_err(|error| backend_error(error.into()))?,
                 )
             }
             ClientCommand::StartTask {
@@ -454,7 +456,7 @@ impl ClientHost {
                 let home = match node_home {
                     Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),
                     _ => gents_desktop_core::local_runtime::default_node_home()
-                        .map_err(backend_error)?,
+                        .map_err(|error| backend_error(error.into()))?,
                 };
                 if !home.is_absolute() {
                     return Err(BridgeError::new(

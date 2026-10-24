@@ -419,7 +419,7 @@ pub struct MultiAgentToolEvent {
 pub fn build_external_adapter_projection(
     capture: &crate::external_adapter_capture::ExternalAdapterCapture,
     context: &ProjectionContext,
-) -> anyhow::Result<AdapterProjectionEnvelope> {
+) -> Result<AdapterProjectionEnvelope, crate::external_adapter_capture::AdapterCaptureError> {
     use crate::external_adapter_capture::{
         import_external_adapter_capture_to_derived_view, langgraph_state_history_projection,
     };

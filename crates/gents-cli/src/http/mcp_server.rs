@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -88,7 +89,9 @@ impl DefraQueryMcp {
                     .map_err(invalid)?;
                 return gents::self_config::list_graphs_value(&access, &did, None)
                     .await
-                    .map_err(|error| ErrorData::internal_error(format!("{error:#}"), None));
+                    .map_err(|error| {
+                        ErrorData::internal_error(format!("{}", ErrorChain(error.as_ref())), None)
+                    });
             }
             gents::self_config::GET_GRAPH_RUN_TOOL_NAME => {
                 let args =
@@ -117,7 +120,9 @@ impl DefraQueryMcp {
                 ))
             }
         };
-        let value = read.map_err(|error| ErrorData::internal_error(format!("{error:#}"), None))?;
+        let value = read.map_err(|error| {
+            ErrorData::internal_error(format!("{}", ErrorChain(error.as_ref())), None)
+        })?;
         serde_json::to_string_pretty(&value)
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }
@@ -136,7 +141,7 @@ impl DefraQueryMcp {
         };
         let access = gents::config_client::ConfigAccess::graphql(self.graphql.clone());
         let value=gents::defra_query::execute_command(&access,&params,&self.options.scope).await
-            .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
+            .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
         gents::defra_query::render_result(value)
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }
@@ -424,8 +429,9 @@ mod tests {
             let refused =
                 result_value_in_scope(&all, serde_json::from_value(view).unwrap()).unwrap_err();
             assert!(
-                format!("{refused:#}").contains("\"EvalRun\" is protected"),
-                "{refused:#}"
+                format!("{}", ErrorChain(refused.as_ref())).contains("\"EvalRun\" is protected"),
+                "{}",
+                ErrorChain(refused.as_ref())
             );
         }
     }

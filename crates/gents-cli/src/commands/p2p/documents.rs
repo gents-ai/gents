@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::error::{P2pCommandError, Result};
 use serde_json::json;
 
 use crate::cli::args::{P2pAccessArgs, P2pDocumentsMutateArgs, P2pDocumentsSyncArgs};
@@ -77,7 +77,7 @@ pub(super) async fn p2p_documents_remove(args: P2pDocumentsMutateArgs) -> Result
 pub(super) async fn p2p_documents_sync(args: P2pDocumentsSyncArgs) -> Result<()> {
     let collection = args.collection.trim().to_string();
     if collection.is_empty() {
-        anyhow::bail!("provide --collection");
+        return Err(P2pCommandError::MissingCollection);
     }
     let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;

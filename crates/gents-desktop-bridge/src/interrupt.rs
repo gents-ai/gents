@@ -4,6 +4,7 @@
 // terminality before the owner's transaction; a request that becomes terminal
 // concurrently may still be latched, which the runtime tolerates.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use gents::config_client::ConfigAccess;
@@ -42,7 +43,7 @@ async fn resolve(
     );
     let response = graphql_with_transaction_retry(core.node(), &query, "interrupt target")
         .await
-        .map_err(|error| format!("request {request_id} lookup failed: {error:#}"))?;
+        .map_err(|error| format!("request {request_id} lookup failed: {}", ErrorChain(&error)))?;
     let rows = response
         .data
         .as_ref()
@@ -115,12 +116,22 @@ pub async fn interrupt_request(
         target.requester_did.as_deref(),
     )
     .await
-    .map_err(|error| format!("interrupt of {} failed: {error:#}", req.request_id))?;
+    .map_err(|error| {
+        format!(
+            "interrupt of {} failed: {}",
+            req.request_id,
+            ErrorChain(error.as_ref())
+        )
+    })?;
     let latched =
         gents::interrupt::fetch_interrupt_requested_at_by_doc_id(core.node(), &target.doc_id)
             .await
             .map_err(|error| {
-                format!("interrupt readback of {} failed: {error:#}", req.request_id)
+                format!(
+                    "interrupt readback of {} failed: {}",
+                    req.request_id,
+                    ErrorChain(&error)
+                )
             })?;
     Ok(result(latched, false))
 }

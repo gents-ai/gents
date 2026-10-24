@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_submit_waits_for_response_by_default() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn request_submit_waits_for_response_by_default() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -57,17 +58,18 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
 
     let output = submit
         .wait_with_output()
-        .context("waiting for request submit child")?;
+        .expect("waiting for request submit child");
     if !output.status.success() {
-        bail!(
+        return Err(format!(
             "request submit failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
+        )
+        .into());
     }
 
     let parsed: Value =
-        serde_json::from_slice(&output.stdout).context("parsing request submit JSON")?;
+        serde_json::from_slice(&output.stdout).expect("parsing request submit JSON");
     assert!(
         parsed
             .get("request_id")
@@ -90,8 +92,8 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn request_submit_supports_content_file_and_output_file() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -132,13 +134,9 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             "--node-did",
             &node_did,
             "--content-file",
-            content_path
-                .to_str()
-                .ok_or_else(|| anyhow!("content path is not utf-8"))?,
+            content_path.to_str().ok_or("content path is not utf-8")?,
             "--output-file",
-            output_path
-                .to_str()
-                .ok_or_else(|| anyhow!("output path is not utf-8"))?,
+            output_path.to_str().ok_or("output path is not utf-8")?,
             "--timeout-secs",
             "20",
             "--poll-secs",
@@ -148,17 +146,18 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
 
     let output = submit
         .wait_with_output()
-        .context("waiting for request submit child")?;
+        .expect("waiting for request submit child");
     if !output.status.success() {
-        bail!(
+        return Err(format!(
             "request submit failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
+        )
+        .into());
     }
 
     let stdout_json: Value =
-        serde_json::from_slice(&output.stdout).context("parsing request submit JSON")?;
+        serde_json::from_slice(&output.stdout).expect("parsing request submit JSON");
     let file_json = read_json_file(&output_path)?;
     assert_eq!(stdout_json, file_json);
     assert_eq!(
@@ -172,8 +171,8 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn request_interrupt_waits_until_running_request_is_terminal() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -217,7 +216,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let request_id = submitted
         .get("request_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("request submit output missing request_id: {submitted}"))?
+        .ok_or_else(|| format!("request submit output missing request_id: {submitted}"))?
         .to_string();
 
     wait_for_request_lifecycle_state(
@@ -237,7 +236,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             break;
         }
         if Instant::now() >= capture_deadline {
-            bail!("hanging mock endpoint did not capture the running request");
+            return Err("hanging mock endpoint did not capture the running request".into());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -299,8 +298,8 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn request_interrupt_does_not_latch_completed_request() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -348,7 +347,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let request_id = submitted
         .get("request_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("request submit output missing request_id: {submitted}"))?
+        .ok_or_else(|| format!("request submit output missing request_id: {submitted}"))?
         .to_string();
     assert_eq!(
         submitted
@@ -424,8 +423,9 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage() -> TestResult<()>
+{
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -683,7 +683,8 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pending_message_commands_edit_reorder_and_remove_against_held_provider() -> Result<()> {
+async fn pending_message_commands_edit_reorder_and_remove_against_held_provider() -> TestResult<()>
+{
     use crate::support::mocks::fake_llm::{ChatAction, FakeLlm};
     use std::process::Child;
     use std::sync::Arc;
@@ -731,7 +732,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
             .map(|entry| entry["content"].as_str().unwrap_or_default().to_owned())
             .collect()
     }
-    fn doc_id_of(snapshot: &Value, content: &str) -> Result<String> {
+    fn doc_id_of(snapshot: &Value, content: &str) -> TestResult<String> {
         snapshot["entries"]
             .as_array()
             .into_iter()
@@ -739,10 +740,10 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
             .find(|entry| entry["content"] == content)
             .and_then(|entry| entry["request_doc_id"].as_str())
             .map(str::to_owned)
-            .with_context(|| format!("{content} is not pending: {snapshot}"))
+            .ok_or_else(|| format!("{content} is not pending: {snapshot}").into())
     }
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
     let first = "pending-cli-held-first";
@@ -802,7 +803,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
     )?;
     let session = submitted["session_id"]
         .as_str()
-        .context("request submit output missing session_id")?
+        .expect("request submit output missing session_id")
         .to_owned();
     let scope = [
         "--graphql",
@@ -822,18 +823,18 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
                 loop {
                     let snapshot = pending()?;
                     if contents(&snapshot) == expected {
-                        break Ok::<_, anyhow::Error>(snapshot);
+                        break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(snapshot);
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             })
             .await
-            .with_context(|| format!("pending queue never became {expected:?}"))?
+            .map_err(|error| format!("pending queue never became {expected:?}: {error}"))?
         }
     };
 
     let mut waiter = ChildGuard(None);
-    let result: Result<()> = async {
+    let result: TestResult<()> = async {
         tokio::time::timeout(Duration::from_secs(30), async {
             while !endpoint
                 .captured_chat_requests()
@@ -844,7 +845,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
             }
         })
         .await
-        .context("first request never reached the held provider")?;
+        .expect("first request never reached the held provider");
 
         waiter.0 = Some(spawn_cli(
             &home,
@@ -972,7 +973,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         );
         assert_eq!(contents(&unchanged), [alpha_edited, gamma]);
 
-        let child = waiter.0.as_mut().context("waiter child")?;
+        let child = waiter.0.as_mut().expect("waiter child");
         assert!(
             child.try_wait()?.is_none(),
             "submit --wait exited before the held provider was released"
@@ -983,19 +984,21 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
             while waiter.0.as_mut().unwrap().try_wait()?.is_none() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await
-        .context("submit --wait did not follow its edited message to completion")??;
+        .map_err(|error| {
+            format!("submit --wait did not follow its edited message to completion: {error}")
+        })??;
         let output = waiter.0.take().unwrap().wait_with_output()?;
-        anyhow::ensure!(
+        assert!(
             output.status.success(),
             "submit --wait failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         let waited: Value =
-            serde_json::from_slice(&output.stdout).context("parsing submit --wait output")?;
+            serde_json::from_slice(&output.stdout).expect("parsing submit --wait output");
         assert!(
             waited["output"].to_string().contains(final_reply),
             "waiter must return the output that consumed its replacement: {waited}"
@@ -1005,7 +1008,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         let continuation = captured
             .iter()
             .find(|request| has_user_text(request, gamma))
-            .context("provider never received the queued replacements")?;
+            .expect("provider never received the queued replacements");
         let messages = continuation["messages"].as_array().unwrap();
         let position = |text: &str| {
             messages
@@ -1015,7 +1018,9 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         let (Some(first_at), Some(edited_at), Some(gamma_at)) =
             (position(first), position(alpha_edited), position(gamma))
         else {
-            bail!("continuation is missing a delivered message: {continuation}");
+            return Err(
+                format!("continuation is missing a delivered message: {continuation}").into(),
+            );
         };
         assert!(first_at < edited_at && edited_at < gamma_at);
         for text in [first, alpha_edited, gamma] {

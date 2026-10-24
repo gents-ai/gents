@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -19,7 +20,7 @@ pub struct GraphPipelineToolError(anyhow::Error);
 
 impl std::fmt::Display for GraphPipelineToolError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{:#}", self.0)
+        write!(formatter, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 

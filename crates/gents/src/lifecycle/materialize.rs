@@ -11,7 +11,7 @@ pub struct EnqueuedAgentRequest {
 fn validate_trigger_lineage(
     trigger_lineage: &TriggerLineage,
     trigger_doc_id: Option<&str>,
-) -> Result<()> {
+) -> Result<(), LifecycleError> {
     validate_trigger_provenance(trigger_lineage)?;
     let trigger_kind = trigger_lineage
         .trigger_kind
@@ -21,16 +21,14 @@ fn validate_trigger_lineage(
     let trigger_doc_id = trigger_doc_id.map(str::trim);
     match (trigger_kind, trigger_doc_id) {
         (Some("event" | "schedule"), Some(value)) if !value.is_empty() => {}
-        (Some("event" | "schedule"), _) => {
-            anyhow::bail!("Automated trigger lineage requires trigger_doc_id")
-        }
-        (_, Some(_)) => anyhow::bail!("Only automated trigger lineage may carry trigger_doc_id"),
+        (Some("event" | "schedule"), _) => return Err(LifecycleError::AutomatedTriggerDocMissing),
+        (_, Some(_)) => return Err(LifecycleError::TriggerDocOnNonAutomated),
         _ => {}
     }
     Ok(())
 }
 
-fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
+fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<(), LifecycleError> {
     let trigger_kind = trigger_lineage
         .trigger_kind
         .as_deref()
@@ -39,8 +37,8 @@ fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
     let source_doc_id = trigger_lineage.source_doc_id.as_deref().map(str::trim);
     match (trigger_kind, source_doc_id) {
         (Some("event"), Some(value)) if !value.is_empty() => {}
-        (Some("event"), _) => anyhow::bail!("Event trigger lineage requires source_doc_id"),
-        (_, Some(_)) => anyhow::bail!("Only Event trigger lineage may carry source_doc_id"),
+        (Some("event"), _) => return Err(LifecycleError::EventSourceMissing),
+        (_, Some(_)) => return Err(LifecycleError::EventSourceOnNonEvent),
         _ => {}
     }
     Ok(())
@@ -170,7 +168,7 @@ async fn publish_graph_root_request(
             Box::pin(async move {
                 crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
                 let response = txn.execute(mutation).await?;
-                crate::graphql::created_doc_id(&response, "AgentRequest")
+                Ok::<_, anyhow::Error>(crate::graphql::created_doc_id(&response, "AgentRequest")?)
             })
         },
     )
@@ -228,12 +226,12 @@ pub(crate) fn pending_agent_request_spec(
     retry_key: Option<&str>,
     requester_did: Option<&str>,
     trigger_doc_id: Option<&str>,
-) -> Result<RequestSpec> {
+) -> Result<RequestSpec, LifecycleError> {
     validate_trigger_lineage(&trigger_lineage, trigger_doc_id)?;
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
     {
-        anyhow::bail!("Manual trigger enqueue must not carry trigger_id");
+        return Err(LifecycleError::ManualTriggerCarriesId);
     }
     if let Some(workspace) = workspace_lineage {
         workspace.require_authority_if_workspace_id()?;
@@ -241,13 +239,16 @@ pub(crate) fn pending_agent_request_spec(
 
     let request_id = request_id.trim();
     let session_id = session_id.trim();
-    anyhow::ensure!(!request_id.is_empty(), "request_id must be non-empty");
-    anyhow::ensure!(!session_id.is_empty(), "session_id must be non-empty");
+    if request_id.is_empty() {
+        return Err(LifecycleError::EmptyRequestId);
+    }
+    if session_id.is_empty() {
+        return Err(LifecycleError::EmptySessionId);
+    }
     let retry_key = retry_key.map(str::trim);
-    anyhow::ensure!(
-        retry_key.is_none_or(|value| !value.is_empty()),
-        "retry_key must be non-empty when supplied"
-    );
+    if retry_key.is_some_and(str::is_empty) {
+        return Err(LifecycleError::EmptyRetryKey);
+    }
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
     let content = prompt_selection.prompt.as_str();
@@ -273,14 +274,19 @@ pub(crate) fn pending_agent_request_spec(
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did)
         }
         Some("event" | "schedule") => {
-            let source = trigger_lineage.trigger_id.as_deref().ok_or_else(|| {
-                anyhow::anyhow!("runtime trigger request requires a durable trigger id")
-            })?;
+            let source = trigger_lineage
+                .trigger_id
+                .as_deref()
+                .ok_or(LifecycleError::RuntimeTriggerIdMissing)?;
             gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
                 node_did, source,
             )
         }
-        Some(kind) => anyhow::bail!("unsupported runtime request trigger kind {kind}"),
+        Some(kind) => {
+            return Err(LifecycleError::UnsupportedTriggerKind {
+                kind: kind.to_owned(),
+            })
+        }
     };
     let identity = RequestIdentity {
         requester_did: requester_did.map(str::to_owned),
@@ -381,7 +387,7 @@ pub enum RequestSigner<'a> {
 
 pub(crate) fn build_request(
     spec: RequestSpec,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+) -> gents_protocol::request_admission::AgentRequestCreate {
     let RequestSpec {
         purpose,
         identity,
@@ -461,7 +467,7 @@ pub(crate) fn build_request(
         create.retry_parent_request_doc_id = link.parent_request_doc_id;
     }
 
-    Ok(create)
+    create
 }
 
 pub(crate) async fn sign_request(
@@ -483,7 +489,7 @@ pub async fn build_signed_request(
     spec: RequestSpec,
     signer: RequestSigner<'_>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
-    let mut create = build_request(spec)?;
+    let mut create = build_request(spec);
     sign_request(&mut create, signer).await?;
     Ok(create)
 }
@@ -962,11 +968,11 @@ impl RequestLifecycle {
         &self.request
     }
 
-    pub(crate) fn execution_generation(&self) -> anyhow::Result<&str> {
+    pub(crate) fn execution_generation(&self) -> Result<&str, LifecycleError> {
         self.execution_lease
             .as_ref()
             .map(|lease| lease.generation.as_str())
-            .ok_or_else(|| anyhow::anyhow!("request has no active execution generation"))
+            .ok_or(LifecycleError::NoActiveExecutionGeneration)
     }
 
     pub fn backend_id(&self) -> &str {
@@ -980,7 +986,7 @@ impl RequestLifecycle {
 
 pub(super) struct LabeledSessionRows {
     pub(super) decoded: Vec<session::SessionOwnerRow>,
-    pub(super) undecodable: Vec<anyhow::Error>,
+    pub(super) undecodable: Vec<session::SessionError>,
 }
 
 async fn labeled_session_rows_in_txn(
@@ -1040,8 +1046,7 @@ pub(super) async fn apply_request_session_projection(
 ) -> Result<()> {
     let rows = labeled_session_rows_in_txn(txn, request).await?;
     if let Some(error) = rows.undecodable.into_iter().next() {
-        return Err(error
-            .context("AgentSession row under the claimed session label failed canonical decode"));
+        return Err(LifecycleError::SessionRowUndecodable(error).into());
     }
     if rows.decoded.len() > 1 {
         return Err(ClaimAdmissionError::SessionScopeMismatch {

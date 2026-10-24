@@ -17,6 +17,7 @@ use crate::rig_compat;
 use crate::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::message::{
     AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
@@ -58,8 +59,8 @@ pub use contract::{
     TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
-    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
-    OneShotProviderFailure,
+    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
+    OneShotNoVisibleOutput, OneShotProviderFailure,
 };
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::resolve_replay_evidence;
@@ -321,7 +322,7 @@ where
                             .await
                             .map_err(|error| {
                                 StreamingError::Completion(CompletionError::ProviderError(format!(
-                                    "capturing rendered completion request failed: {error:#}"
+                                    "capturing rendered completion request failed: {}", ErrorChain(error.as_ref())
                                 )))
                             })?;
                     }
@@ -1167,7 +1168,7 @@ where
                 if let Some(gate) = config.output_obligation_gate.as_ref() {
                     let unmet = gate.unmet().await.map_err(|error| {
                         StreamingError::Completion(CompletionError::ProviderError(format!(
-                            "checking output obligations failed: {error:#}"
+                            "checking output obligations failed: {}", ErrorChain(error.as_ref())
                         )))
                     })?;
                     if !unmet.is_empty() {
@@ -1194,7 +1195,7 @@ where
                     let (reply, decision) = tokio::sync::oneshot::channel();
                     yield LoopStreamItem::FinishOrIntake { text: turn_text.clone(), reply };
                     match decision.await.map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish acknowledgment dropped: {error}"))))?
-                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {error:#}"))))? {
+                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {}", ErrorChain(error.as_ref())))))? {
                         FinishOrIntake::Finished => {
                             yield LoopStreamItem::Final { text: turn_text.clone() };
                             break 'turns;
@@ -1240,7 +1241,8 @@ async fn receive_steering(
         })?
         .map_err(|error| {
             StreamingError::Completion(CompletionError::ProviderError(format!(
-                "steering publication failed: {error:#}"
+                "steering publication failed: {}",
+                ErrorChain(error.as_ref())
             )))
         })
 }

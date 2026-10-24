@@ -1,12 +1,42 @@
 use super::DesiredStateManifest;
 use gents::Collection;
 use serde_json::Value;
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
-pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum WriteError {
+    #[error(transparent)]
+    Plan(Box<gents::config_client::DesiredStateError>),
+    #[error(transparent)]
+    References(Box<gents::document_config::DocumentConfigError>),
+    #[error("document identity missing")]
+    DocumentIdentityMissing,
+    #[error("unique id '{id}' is not filesystem-safe")]
+    UnsafeId { id: String },
+    #[error("IDs collide at a filesystem handle in {collection}")]
+    HandleCollision { collection: Collection },
+    #[error("refusing to overwrite a symlink manifest root")]
+    SymlinkRoot,
+    #[error("manifest root is non-empty; pass --force to overwrite: {}", root.display())]
+    NonEmptyRoot { root: PathBuf },
+    #[error("refusing to overwrite {}: not a manifest root", root.display())]
+    NotManifestRoot { root: PathBuf },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+type Result<T, E = WriteError> = std::result::Result<T, E>;
+
+fn check_filesystem_safe_id(id: &str) -> Result<()> {
     if id.is_empty() || id.starts_with('.') || id.chars().any(|ch| matches!(ch, '/' | '\\' | '\0'))
     {
-        return Err(format!("unique id '{id}' is not filesystem-safe"));
+        return Err(WriteError::UnsafeId { id: id.to_owned() });
     }
     Ok(())
 }
@@ -15,18 +45,16 @@ pub(crate) fn write_manifest_root(
     root: &Path,
     manifest: &DesiredStateManifest,
     force: bool,
-) -> Result<(), String> {
-    write_root(root, manifest, force).map_err(|error| format!("{error:#}"))
-}
-
-fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyhow::Result<()> {
-    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest)?;
+) -> Result<()> {
+    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest)
+        .map_err(|error| WriteError::Plan(Box::new(error)))?;
     gents::document_config::ConfigReferences::from_documents(
         &manifest.node.node_did,
         plan.documents()
             .iter()
             .map(|doc| (doc.collection, doc.add.clone())),
-    )?;
+    )
+    .map_err(|error| WriteError::References(Box::new(error)))?;
     let mut handles = BTreeSet::new();
     for doc in plan.documents() {
         if doc.collection == Collection::Node {
@@ -34,16 +62,16 @@ fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyh
         }
         let id = doc.add[doc.collection.unique_field()]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("document identity missing"))?;
-        check_filesystem_safe_id(id).map_err(anyhow::Error::msg)?;
-        anyhow::ensure!(
-            handles.insert((doc.collection, super::document_handle(id))),
-            "IDs collide at a filesystem handle in {}",
-            doc.collection
-        );
+            .ok_or(WriteError::DocumentIdentityMissing)?;
+        check_filesystem_safe_id(id)?;
+        if !handles.insert((doc.collection, super::document_handle(id))) {
+            return Err(WriteError::HandleCollision {
+                collection: doc.collection,
+            });
+        }
     }
     let mut value = serde_json::to_value(manifest)?;
-    prepare_root(root, force).map_err(anyhow::Error::msg)?;
+    prepare_root(root, force)?;
     for (collection, field, file) in [
         (
             Collection::AgentContext,
@@ -98,37 +126,28 @@ fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyh
     Ok(())
 }
 
-fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
+fn prepare_root(root: &Path, force: bool) -> Result<()> {
     if !root.exists() {
-        return fs::create_dir_all(root).map_err(|error| error.to_string());
+        return Ok(fs::create_dir_all(root)?);
     }
-    if fs::symlink_metadata(root)
-        .map_err(|error| error.to_string())?
-        .file_type()
-        .is_symlink()
-    {
-        return Err("refusing to overwrite a symlink manifest root".into());
+    if fs::symlink_metadata(root)?.file_type().is_symlink() {
+        return Err(WriteError::SymlinkRoot);
     }
-    let empty = fs::read_dir(root)
-        .map_err(|error| error.to_string())?
-        .next()
-        .is_none();
+    let empty = fs::read_dir(root)?.next().is_none();
     if !empty {
         if !force {
-            return Err(format!(
-                "manifest root is non-empty; pass --force to overwrite: {}",
-                root.display()
-            ));
+            return Err(WriteError::NonEmptyRoot {
+                root: root.to_owned(),
+            });
         }
         if !root.join("pack_config.json").is_file() {
-            return Err(format!(
-                "refusing to overwrite {}: not a manifest root",
-                root.display()
-            ));
+            return Err(WriteError::NotManifestRoot {
+                root: root.to_owned(),
+            });
         }
-        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        fs::remove_dir_all(root)?;
     }
-    fs::create_dir_all(root).map_err(|error| error.to_string())
+    Ok(fs::create_dir_all(root)?)
 }
 
 #[cfg(test)]

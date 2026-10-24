@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -88,6 +88,147 @@ use mutation::SessionRequestFields;
 pub use position::validate_position;
 pub(crate) use position::{effective_slots, InvalidQueuePosition};
 pub use submission::prepare_user_message_input;
+
+type Result<T, E = QueueError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueueError {
+    #[error("goal continuation sequence must be positive")]
+    NonPositiveGoalContinuationSequence,
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Durable(#[from] crate::trigger_engine::durable::DurableTriggerError),
+    #[error(transparent)]
+    Input(#[from] gents_protocol::request_input::RequestInputError),
+    #[error(transparent)]
+    Watcher(#[from] crate::watcher::WatcherError),
+    #[error(transparent)]
+    PendingInputChanged(#[from] PendingInputChanged),
+    #[error(transparent)]
+    InvalidQueuePosition(#[from] InvalidQueuePosition),
+    #[error("pending AgentRequest row is missing _docID")]
+    PendingRequestMissingDocId,
+    #[error("pending input lacks physical identity")]
+    PendingInputMissingDocId,
+    #[error("claim time is not RFC 3339")]
+    ClaimTimeNotRfc3339(#[source] chrono::ParseError),
+    #[error("pending input arrival order is incomplete")]
+    PendingInputArrivalIncomplete,
+    #[error("folded input publication omitted affected rows")]
+    FoldedPublicationOmittedRows,
+    #[error("folded input publication changed multiple rows")]
+    FoldedPublicationChangedRows,
+    #[error("folded request receipt omitted request_id")]
+    FoldedReceiptMissingRequestId,
+    #[error("replayed folded publication was not consumed by its request")]
+    FoldedReplayNotConsumed,
+    #[error("decode folded requests")]
+    DecodeFoldedRequests(#[source] serde_json::Error),
+    #[error("folded request {request_id} crossed its claimed request's requester")]
+    FoldedRequesterMismatch { request_id: String },
+    #[error("folded AgentRequest row is missing _docID")]
+    FoldedRowMissingDocId,
+    #[error("folded requests of {request_id} lack a queue arrival")]
+    FoldedRequestsWithoutArrival { request_id: String },
+    #[error("folded arrival is ambiguous")]
+    FoldedArrivalAmbiguous,
+    #[error("decode pending session requests")]
+    DecodePendingRequests(#[source] serde_json::Error),
+    #[error("pending message has no physical identity")]
+    PendingMessageMissingDocId,
+    #[error("pending queue arrival is incomplete")]
+    PendingQueueArrivalIncomplete,
+    #[error("pending queue arrival changed")]
+    PendingQueueArrivalChanged,
+    #[error("pending AgentRequest query omitted rows")]
+    PendingQueryOmittedRows,
+    #[error("pending AgentRequest drain mutation omitted affected rows")]
+    DrainMutationOmittedRows,
+    #[error("pending AgentRequest drain receipt omitted _docID")]
+    DrainReceiptMissingDocId,
+    #[error("pending AgentRequest drain mutation returned unexpected rows")]
+    DrainMutationUnexpectedRows,
+    #[error("pending AgentRequest drain mutation updated another physical request")]
+    DrainMutationUpdatedAnother,
+    #[error("queue row missing physical identity")]
+    QueueRowMissingIdentity,
+    #[error("node_did is required")]
+    NodeDidRequired,
+    #[error("session_id is required")]
+    SessionIdRequired,
+    #[error("user messages require an ordinary user queue entry")]
+    UserEntryNotOrdinary,
+    #[error("session has conflicting active requests")]
+    ConflictingActiveRequests,
+    #[error("cannot enqueue same-session request: parent {request_id} has no agent_id")]
+    SameSessionParentWithoutAgent { request_id: String },
+    #[error("pending row lacks physical identity")]
+    PendingRowMissingIdentity,
+    #[error("The message queue changed. Refresh it and try again.")]
+    MessageQueueChanged,
+    #[error("Select a pending message first.")]
+    NoPendingMessageSelected,
+    #[error("Selected messages are no longer adjacent in the queue.")]
+    SelectedMessagesNotAdjacent,
+    #[error("A selected message has started or cannot be edited by this user.")]
+    SelectedMessageNotEditable,
+    #[error("Messages with different execution settings cannot be reordered together.")]
+    MixedExecutionSettings,
+    #[error("Replacement must preserve the selected message count.")]
+    ReplacementCountMismatch,
+    #[error("Replacement messages must name each selected message once.")]
+    ReplacementMessageNotSelected,
+    #[error("A message cannot be empty. Remove it instead.")]
+    EmptyReplacementMessage,
+    #[error("selected message has no physical identity")]
+    SelectedMessageMissingIdentity,
+    #[error("selected slot has no identity")]
+    SelectedSlotMissingIdentity,
+    #[error("selected slot has no queue input")]
+    SelectedSlotMissingQueue,
+    #[error("selected message has no queue input")]
+    SelectedMessageMissingQueue,
+    #[error("Steering input cannot be changed back to queued delivery.")]
+    SteeringRevertedToQueue,
+    #[error("message has no agent")]
+    MessageMissingAgent,
+    #[error("replacement identity lookup missing")]
+    ReplacementIdentityLookupMissing,
+    #[error("replacement lacks physical identity")]
+    ReplacementMissingIdentity,
+    #[error("A selected message started before this edit. Refresh the queue.")]
+    SelectedMessageStarted,
+    #[error("This message is no longer pending.")]
+    MessageNoLongerPending,
+    #[error("This message cannot be steered or is already steering.")]
+    MessageNotSteerable,
+    #[error("This message cannot pass earlier input with different execution settings.")]
+    SteerMixedExecutionSettings,
+    #[error("{reason}")]
+    RequestCreate { reason: &'static str },
+    #[error("Runtime rejected pending edit: {reason}")]
+    RuntimeRejectedEdit { reason: String },
+}
+
+impl crate::config_client::TransactionFailure for QueueError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Durable(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct EnqueuedBackgroundCompletionInput {

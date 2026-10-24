@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 
 #[derive(Deserialize)]
@@ -101,7 +102,12 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         let result = match edit {
             Ok(result) => result,
             Err(error) => {
-                assert!(case.fields.validate().is_err(), "{}: {error:#}", case.name);
+                assert!(
+                    case.fields.validate().is_err(),
+                    "{}: {}",
+                    case.name,
+                    ErrorChain(error.as_ref())
+                );
                 None
             }
         };

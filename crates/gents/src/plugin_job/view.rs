@@ -1,5 +1,6 @@
 //! A client's read of one plugin job row, through any [`ConfigAccess`].
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 
 use gents_protocol::job::{
@@ -64,7 +65,10 @@ fn malformed(message: impl std::fmt::Display) -> JobReadError {
 
 fn unavailable(error: anyhow::Error) -> JobReadError {
     JobReadError::Unavailable {
-        message: format!("{error:#}; retry when the node answers"),
+        message: format!(
+            "{}; retry when the node answers",
+            ErrorChain(error.as_ref())
+        ),
     }
 }
 
@@ -198,7 +202,7 @@ pub async fn load_job_view(
             "{{ AgentToolCall(filter: {{ {filter} }}) {{ {FIELDS} }} }}"
         ))
         .await
-        .map_err(unavailable)?;
+        .map_err(|error| unavailable(error.into()))?;
     let Some(row) = response
         .pointer("/data/AgentToolCall/0")
         .filter(|row| !row.is_null())
@@ -286,7 +290,7 @@ pub async fn list_jobs(
             clauses.join(", ")
         ))
         .await
-        .map_err(unavailable)?;
+        .map_err(|error| unavailable(error.into()))?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)

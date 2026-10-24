@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::error::{P2pCommandError, Result};
 use gents::agent::p2p_reconcile::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 use serde_json::{json, Value};
 
@@ -122,7 +122,7 @@ pub(super) async fn p2p_collections_remove(args: P2pCollectionsMutateArgs) -> Re
 pub(super) async fn p2p_collections_sync_branchable(args: P2pSyncBranchableArgs) -> Result<()> {
     let collection_id = args.collection_id.trim().to_string();
     if collection_id.is_empty() {
-        anyhow::bail!("provide --collection-id");
+        return Err(P2pCommandError::MissingCollectionId);
     }
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;

@@ -77,7 +77,7 @@ pub(crate) async fn import(args: PackImportArgs) -> Result<()> {
     .context("writing README.md")?;
 
     let check = super::check::check_dir(&out).await;
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "pack": name,
         "dir": out,
         "from": format!("{from:?}"),
@@ -85,7 +85,7 @@ pub(crate) async fn import(args: PackImportArgs) -> Result<()> {
         "needs_port": report.needs_port,
         "dropped": report.dropped,
         "check": check.problems,
-    }))
+    }))?)
 }
 
 fn is_git_url(source: &str) -> bool {
@@ -494,6 +494,7 @@ fn readme(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn write(root: &Path, path: &str, text: &str) {
         let target = root.join(path);
@@ -604,6 +605,10 @@ mod tests {
         let error = import(args(source.path(), &out.path().join("x")))
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("--from"), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref()).to_string().contains("--from"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 }

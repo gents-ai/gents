@@ -1,9 +1,19 @@
-use anyhow::{bail, Result};
-
 mod collections;
 mod concepts;
 mod indexes;
 mod lenses;
+
+type Result<T, E = HelpError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum HelpError {
+    #[error("unknown or ambiguous schema help topic; read available topics with argv:{argv}")]
+    RecoveryPath { argv: String },
+    #[error("unknown schema help path")]
+    UnknownPath,
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
 
 pub(super) const PATHS: &[&str] = &[
     "collections",
@@ -149,10 +159,9 @@ pub(super) fn page(path: &[String]) -> Result<&'static str> {
     }
     let mut next = vec!["help".to_owned()];
     next.extend(recovery_path(path));
-    bail!(
-        "unknown or ambiguous schema help topic; read available topics with argv:{}",
-        serde_json::to_string(&next)?
-    )
+    Err(HelpError::RecoveryPath {
+        argv: serde_json::to_string(&next)?,
+    })
 }
 
 fn lookup(path: &[String]) -> Result<&'static str> {
@@ -181,7 +190,7 @@ fn lookup(path: &[String]) -> Result<&'static str> {
         ["migration", "set"] => Ok(r#"migration preview set: options.config is DefraDB LensConfig: {"SourceCollectionVersionID":"SOURCE","DestinationCollectionVersionID":"DESTINATION","Lenses":[{"Module":"BASE64_WASM","Arguments":{},"Inverse":false}]}. Omit target_id. Discover exact version IDs with version list. Versions must exist and be adjacent as required by DefraDB. Modules implement the DefraDB lens WASM contract; this tool registers compiled modules, not source code. Inline Module bytes only: Path is rejected because schema access grants no file access. Review the preview and use next_call; DefraDB validates publication. Inspect version get, then activate and materialize. Additive nullable fields usually need no lens."#),
         ["view"] => Ok("view create defines a query-backed collection. Read help views for virtual and materialized views; use view create --help for query and SDL inputs."),
         ["view", "create"] => Ok("view preview create: options.query is a source selection such as WorkItem { title }; options.sdl declares the target view collection. Omit target_id. Review the preview and use next_call. DefraDB validates the query and schema. Inspect the result with collection get. Views grant no access to source documents."),
-        _ => bail!("unknown schema help path"),
+        _ => Err(HelpError::UnknownPath),
     }
 }
 

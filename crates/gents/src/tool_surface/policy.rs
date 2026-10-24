@@ -16,11 +16,13 @@ pub enum ToolPolicyVersion {
 }
 
 impl ToolPolicyVersion {
-    pub fn parse(value: Option<&str>) -> anyhow::Result<Self> {
+    pub fn parse(value: Option<&str>) -> Result<Self, super::ToolSurfaceError> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
             Some(TOOL_POLICY_V1) => Ok(Self::V1),
-            None => anyhow::bail!("tool_policy_version is required"),
-            Some(other) => anyhow::bail!("unknown tool policy version {other:?}"),
+            None => Err(super::ToolSurfaceError::ToolPolicyVersionRequired),
+            Some(other) => Err(super::ToolSurfaceError::UnknownToolPolicyVersion {
+                version: other.to_owned(),
+            }),
         }
     }
 

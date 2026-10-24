@@ -24,7 +24,7 @@ use super::protocol::{
     absolute_path, agent_message_item_with_phase, timestamp_seconds, turn_value,
 };
 use super::store::query_node_json;
-use super::thread_projection::CodexThreadRecord;
+use super::thread_projection::{CodexShimProjectionError, CodexThreadRecord};
 use super::ShimState;
 
 #[derive(Debug, Clone)]
@@ -127,18 +127,16 @@ pub(super) async fn load_thread_turns(
         .context("decoding AgentRequest history rows")?;
     let mut request_docs = BTreeMap::new();
     for request in &requests {
-        anyhow::ensure!(
-            request_docs
-                .insert(
-                    request.request_id.as_str(),
-                    request
-                        .doc_id
-                        .as_deref()
-                        .context("history request missing physical identity")?
-                )
-                .is_none(),
-            "duplicate scoped request label in history"
-        );
+        let doc_id = request
+            .doc_id
+            .as_deref()
+            .ok_or(CodexShimProjectionError::HistoryRequestMissingIdentity)?;
+        if request_docs
+            .insert(request.request_id.as_str(), doc_id)
+            .is_some()
+        {
+            return Err(CodexShimProjectionError::DuplicateRequestLabel.into());
+        }
     }
     for collection in ["AgentToolCall"] {
         for row in raw_rows(&response, collection) {
@@ -151,15 +149,14 @@ pub(super) async fn load_thread_turns(
             let logical = row
                 .get("request_id")
                 .and_then(Value::as_str)
-                .context("history dependent row missing request label")?;
+                .ok_or(CodexShimProjectionError::HistoryDependentMissingRequestLabel)?;
             let physical = row
                 .get("request_doc_id")
                 .and_then(Value::as_str)
-                .context("history dependent row missing physical request")?;
-            anyhow::ensure!(
-                request_docs.get(logical).copied() == Some(physical),
-                "history dependent row crosses physical request identity"
-            );
+                .ok_or(CodexShimProjectionError::HistoryDependentMissingPhysicalRequest)?;
+            if request_docs.get(logical).copied() != Some(physical) {
+                return Err(CodexShimProjectionError::HistoryDependentCrossesIdentity.into());
+            }
         }
     }
     let tools = decode_tool_rows(state, &response, owner, &record.session_id, requester)
@@ -219,9 +216,9 @@ async fn load_completed_compactions(
             request
                 .doc_id
                 .as_deref()
-                .context("history request lacks physical identity")
+                .ok_or(CodexShimProjectionError::HistoryRequestLacksIdentity)
         })
-        .collect::<Result<BTreeSet<_>>>()?;
+        .collect::<std::result::Result<BTreeSet<_>, _>>()?;
     if request_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -313,7 +310,7 @@ fn project_request_turns(
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
     compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
-) -> Result<Vec<codex::Turn>> {
+) -> std::result::Result<Vec<codex::Turn>, CodexShimProjectionError> {
     let requests = requests
         .into_iter()
         .filter(|request| record.is_caused() || is_codex_visible_request(request))
@@ -353,15 +350,14 @@ fn project_request_turns(
 fn steering_root_id(
     request: &AgentRequestRow,
     requests_by_id: &BTreeMap<&str, &AgentRequestRow>,
-) -> Result<String> {
+) -> std::result::Result<String, CodexShimProjectionError> {
     let mut current = request;
     let mut seen = BTreeSet::<String>::new();
     loop {
         if !seen.insert(current.request_id.clone()) {
-            anyhow::bail!(
-                "cycle in Codex steering history ancestry at request {}",
-                current.request_id
-            );
+            return Err(CodexShimProjectionError::SteeringCycle {
+                request_id: current.request_id.clone(),
+            });
         }
 
         let Some(parent_id) = steering_parent_id(current) else {
@@ -742,11 +738,10 @@ async fn decode_canonical_message_rows(
     let mut physical_ids = BTreeSet::new();
     for raw in raw_rows(response, "AgentMessage") {
         let observed = gents::session::canonical_rows::decode_transcript_message_row(&raw)
-            .context("decoding canonical AgentMessage header")?;
-        anyhow::ensure!(
-            physical_ids.insert(observed.doc_id.clone()),
-            "duplicate physical AgentMessage row in history"
-        );
+            .map_err(|source| CodexShimProjectionError::DecodeMessageHeader { source })?;
+        if !physical_ids.insert(observed.doc_id.clone()) {
+            return Err(CodexShimProjectionError::DuplicatePhysicalMessage.into());
+        }
         let (header, message) = gents::session::load_canonical_message(
             &access,
             &observed.doc_id,
@@ -755,10 +750,9 @@ async fn decode_canonical_message_rows(
         )
         .await
         .with_context(|| format!("reconstructing canonical header {}", observed.doc_id))?;
-        anyhow::ensure!(
-            header == observed.message,
-            "canonical history header changed during exact physical reconstruction"
-        );
+        if header != observed.message {
+            return Err(CodexShimProjectionError::CanonicalHeaderChanged.into());
+        }
         messages.push(MessageRow {
             doc_id: observed.doc_id,
             request_doc_id: header.request_doc_id,
@@ -798,7 +792,7 @@ async fn decode_tool_rows(
         let request_doc_id = row
             .get("request_doc_id")
             .and_then(Value::as_str)
-            .context("history tool row omitted physical request")?;
+            .ok_or(CodexShimProjectionError::HistoryToolRowMissingRequest)?;
         let progress = hydrate_gents_tool_call_progress(
             &access,
             &row,
@@ -809,7 +803,7 @@ async fn decode_tool_rows(
         )
         .await
         .with_context(|| format!("reconstructing AgentToolCall progress row: {row}"))?
-        .context("terminal AgentToolCall has no canonical delivery yet")?;
+        .ok_or(CodexShimProjectionError::TerminalToolCallUndelivered)?;
         tools.push(ToolRow {
             request_id,
             message_sequence,
@@ -820,7 +814,10 @@ async fn decode_tool_rows(
     Ok(tools)
 }
 
-fn decode_rows<T>(response: &Value, collection: &str) -> Result<Vec<T>>
+fn decode_rows<T>(
+    response: &Value,
+    collection: &str,
+) -> std::result::Result<Vec<T>, CodexShimProjectionError>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -828,7 +825,10 @@ where
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("decoding {collection} rows"))
+        .map_err(|source| CodexShimProjectionError::DecodeRows {
+            collection: collection.to_owned(),
+            source,
+        })
 }
 
 fn raw_rows(response: &Value, collection: &str) -> Vec<Value> {

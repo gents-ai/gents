@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use gents::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 
+use super::error::{P2pCommandError, Result};
 use crate::cli::args::P2pTransportArg;
 use crate::shared::{
     P2pCollectionSubscriptionRow, P2pPeerRow, P2pReplicatorOutputRow, P2pReplicatorRow,
@@ -132,7 +132,7 @@ async fn get_authorized_json<T>(graphql: &GraphqlEndpoint, url: &str) -> Result<
 where
     T: serde::de::DeserializeOwned,
 {
-    http_get_json(graphql.authorize(super::p2p_http_client()?.get(url))?).await
+    Ok(http_get_json(graphql.authorize(super::p2p_http_client()?.get(url))?).await?)
 }
 
 pub(crate) async fn fetch_live_http_p2p_status(
@@ -158,7 +158,7 @@ pub(crate) async fn fetch_live_http_p2p_status(
     let shareable_address: P2pShareableAddressResponse =
         get_authorized_json(graphql, &format!("{api_base}/p2p/shareable-address")).await?;
     let shareable_address = normalize_optional_string(shareable_address.address.as_deref())
-        .context("runtime reported an empty shareable P2P address")?;
+        .ok_or(P2pCommandError::EmptyShareableAddress)?;
     let peer_id = resolve_p2p_peer_id(
         identity
             .as_ref()
@@ -169,7 +169,7 @@ pub(crate) async fn fetch_live_http_p2p_status(
             .as_ref()
             .and_then(|state| state.p2p_peer_id.as_deref()),
     )
-    .context("runtime reported a shareable P2P address but no usable peer id")?;
+    .ok_or(P2pCommandError::NoUsablePeerId)?;
     let peer_rows: Vec<P2pPeerRow> =
         get_authorized_json(graphql, &format!("{api_base}/p2p/peers")).await?;
     let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();

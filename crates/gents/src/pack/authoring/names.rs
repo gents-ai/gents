@@ -1,3 +1,11 @@
+#[derive(Debug, thiserror::Error)]
+pub enum NamesError {
+    #[error("pack names are snake_case; use {snake:?}")]
+    NotSnakeCase { snake: String },
+}
+
+type Result<T, E = NamesError> = std::result::Result<T, E>;
+
 #[derive(Clone, Debug)]
 pub struct Names {
     pub name: String,
@@ -7,12 +15,11 @@ pub struct Names {
 }
 
 impl Names {
-    pub fn new(name: &str, namespace: &str) -> anyhow::Result<Self> {
+    pub fn new(name: &str, namespace: &str) -> Result<Self> {
         let snake = to_snake_case(name);
-        anyhow::ensure!(
-            snake == name && !name.is_empty(),
-            "pack names are snake_case; use {snake:?}"
-        );
+        if snake != name || name.is_empty() {
+            return Err(NamesError::NotSnakeCase { snake });
+        }
         Ok(Self {
             name: name.to_owned(),
             namespace: namespace.to_owned(),

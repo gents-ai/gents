@@ -1,5 +1,6 @@
 use gents::graphql::escape_graphql_string;
 use gents::write_manual_agent_request;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 
 use crate::support::{test_db, AGENT_NAME};
@@ -231,7 +232,8 @@ async fn manual_run_render_failure_materializes_no_request() {
     .expect_err("strict-undefined args reference must fail the manual write");
     assert!(
         error.to_string().contains("render"),
-        "the failure reason must name the render path: {error:#}"
+        "the failure reason must name the render path: {}",
+        ErrorChain(error.as_ref())
     );
 
     assert_eq!(

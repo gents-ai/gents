@@ -4,7 +4,7 @@
 
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
-use anyhow::{anyhow, bail, Result};
+use super::error::DocumentConfigError;
 use serde::{Deserialize, Serialize};
 
 use super::datastore_tool_surface::DatastoreToolSurfaceDocument;
@@ -25,7 +25,7 @@ pub struct MergedSurfaceTools {
 pub fn merge_datastore_tool_surfaces<'a>(
     selection: &Tools,
     surfaces: impl IntoIterator<Item = &'a DatastoreToolSurfaceDocument>,
-) -> Result<MergedSurfaceTools> {
+) -> Result<MergedSurfaceTools, DocumentConfigError> {
     let mut surface_by_id = RapidHashMap::new();
     for surface in surfaces {
         let surface_id = surface.surface_id.as_str();
@@ -36,7 +36,9 @@ pub fn merge_datastore_tool_surfaces<'a>(
             .insert((surface.node_did.as_str(), surface_id), surface)
             .is_some()
         {
-            bail!("duplicate DatastoreToolSurface {surface_id}");
+            return Err(DocumentConfigError::DuplicateDatastoreToolSurface {
+                surface_id: surface_id.to_owned(),
+            });
         }
     }
 
@@ -53,46 +55,42 @@ pub fn merge_datastore_tool_surfaces<'a>(
     for surface_id in surface_ids {
         let surface_id = surface_id.as_str();
         if surface_id.trim().is_empty() {
-            bail!(
-                "Tools {} has an empty datastore_tool_surface_ids entry",
-                selection.tools_id
-            );
+            return Err(DocumentConfigError::ToolsEmptySurfaceId {
+                tools_id: selection.tools_id.clone(),
+            });
         }
         if !linked_ids.insert(surface_id) {
-            bail!(
-                "Tools {} lists DatastoreToolSurface {} more than once",
-                selection.tools_id,
-                surface_id
-            );
+            return Err(DocumentConfigError::ToolsDuplicateSurfaceLink {
+                tools_id: selection.tools_id.clone(),
+                surface_id: surface_id.to_owned(),
+            });
         }
         let surface = surface_by_id
             .get(&(selection.node_did.as_str(), surface_id))
             .copied()
-            .ok_or_else(|| {
-                anyhow!(
-                    "Tools {} references missing same-agent DatastoreToolSurface {}",
-                    selection.tools_id,
-                    surface_id
-                )
+            .ok_or_else(|| DocumentConfigError::ToolsMissingSurface {
+                tools_id: selection.tools_id.clone(),
+                surface_id: surface_id.to_owned(),
             })?;
         if !surface.enabled {
-            bail!(
-                "Tools {} references disabled DatastoreToolSurface {}",
-                selection.tools_id,
-                surface_id
-            );
+            return Err(DocumentConfigError::ToolsDisabledSurface {
+                tools_id: selection.tools_id.clone(),
+                surface_id: surface_id.to_owned(),
+            });
         }
         for entry in surface.entries.as_deref().unwrap_or(&[]) {
-            entry.validate().map_err(|error| {
-                anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
-            })?;
+            entry
+                .validate()
+                .map_err(|error| DocumentConfigError::SurfaceEntryMalformed {
+                    surface_id: surface_id.to_owned(),
+                    error: Box::new(error),
+                })?;
             if !seen.insert(entry.tool_name().to_string()) {
-                bail!(
-                    "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for Tools {}",
-                    entry.tool_name(),
-                    surface_id,
-                    selection.tools_id
-                );
+                return Err(DocumentConfigError::DuplicateSurfaceToolName {
+                    tool_name: entry.tool_name().to_owned(),
+                    surface_id: surface_id.to_owned(),
+                    tools_id: selection.tools_id.clone(),
+                });
             }
             surface_of_tool.insert(entry.tool_name().to_string(), surface_id.to_owned());
             match entry {
@@ -201,15 +199,14 @@ impl SurfaceToolDecl {
         self.validate().is_ok()
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         match self {
             Self::Create(decl) => {
                 decl.validate()?;
                 if !decl.output_obligation_is_well_formed() {
-                    anyhow::bail!(
-                        "entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
-                        decl.tool_name,
-                    );
+                    return Err(DocumentConfigError::OutputObligationMalformed {
+                        tool_name: decl.tool_name.clone(),
+                    });
                 }
                 Ok(())
             }
@@ -319,7 +316,7 @@ pub(crate) fn validate_query_tool_declarations(
     decls: &[QueryToolDecl],
     cli_tool_names: &[String],
     additional_tool_names: &[String],
-) -> Result<()> {
+) -> Result<(), DocumentConfigError> {
     let cli_tool_names = cli_tool_names
         .iter()
         .map(|name| name.trim())
@@ -331,12 +328,12 @@ pub(crate) fn validate_query_tool_declarations(
     let mut seen_tool_names = rapidhash::RapidHashSet::default();
     for (i, decl) in decls.iter().enumerate() {
         if !decl.is_well_formed() {
-            return Err(anyhow::anyhow!(
-                "query_tools[{i}] is malformed (tool_name, collection, and at least one projection field are required): tool_name={:?}, collection={:?}, fields={}",
-                decl.tool_name,
-                decl.collection,
-                decl.fields.len()
-            ));
+            return Err(DocumentConfigError::QueryToolMalformed {
+                index: i,
+                tool_name: decl.tool_name.clone(),
+                collection: decl.collection.clone(),
+                fields: decl.fields.len(),
+            });
         }
         reject_tool_name_surface_collisions(
             "query_tools",
@@ -347,84 +344,93 @@ pub(crate) fn validate_query_tool_declarations(
             &additional_tool_names,
         )?;
         crate::graphql::validate_collection_identifier(&decl.collection).map_err(|error| {
-            anyhow::anyhow!(
-                "query_tools[{i}] (tool {:?}) has invalid collection {:?}: {error}",
-                decl.tool_name,
-                decl.collection
-            )
+            DocumentConfigError::QueryToolInvalidCollection {
+                index: i,
+                tool_name: decl.tool_name.clone(),
+                collection: decl.collection.clone(),
+                error,
+            }
         })?;
         reject_protected_collection_name(&decl.collection)?;
         let mut seen_field_names = rapidhash::RapidHashSet::default();
         for (j, field) in decl.fields.iter().enumerate() {
             crate::graphql::validate_graphql_name(field).map_err(|error| {
-                anyhow::anyhow!(
-                    "query_tools[{i}] (tool {:?}) fields[{j}] {:?} is not a GraphQL name: {error}",
-                    decl.tool_name,
-                    field
-                )
+                DocumentConfigError::QueryToolFieldNotName {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field_index: j,
+                    field: field.clone(),
+                    error,
+                }
             })?;
             if !seen_field_names.insert(field.as_str()) {
-                return Err(anyhow::anyhow!(
-                    "query_tools[{i}] (tool {:?}) has a duplicate projection field {:?}; each field must be unique",
-                    decl.tool_name,
-                    field
-                ));
+                return Err(DocumentConfigError::QueryToolDuplicateField {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field: field.clone(),
+                });
             }
         }
         let mut seen_filter_names = rapidhash::RapidHashSet::default();
         for (j, field) in decl.filter_fields.iter().enumerate() {
             if field.name.trim().is_empty() {
-                return Err(anyhow::anyhow!(
-                    "query_tools[{i}] (tool {:?}) has a filter_fields[{j}] with an empty name",
-                    decl.tool_name
-                ));
+                return Err(DocumentConfigError::QueryToolFilterBlank {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field_index: j,
+                });
             }
             crate::graphql::validate_graphql_name(&field.name).map_err(|error| {
-                anyhow::anyhow!(
-                    "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} is not a GraphQL name: {error}",
-                    decl.tool_name,
-                    field.name
-                )
+                DocumentConfigError::QueryToolFilterNotName {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field_index: j,
+                    name: field.name.clone(),
+                    error,
+                }
             })?;
             if matches!(
                 field.name.trim(),
                 "fields" | "limit" | "offset" | "order" | "field_page"
             ) {
-                return Err(anyhow::anyhow!(
-                    "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} collides with a reserved query argument",
-                    decl.tool_name,
-                    field.name.trim()
-                ));
+                return Err(DocumentConfigError::QueryToolFilterReserved {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field_index: j,
+                    name: field.name.trim().to_owned(),
+                });
             }
             if !seen_filter_names.insert(field.name.trim()) {
-                return Err(anyhow::anyhow!(
-                    "query_tools[{i}] (tool {:?}) has a duplicate filter field {:?}; each filter_fields name must be unique",
-                    decl.tool_name,
-                    field.name.trim()
-                ));
+                return Err(DocumentConfigError::QueryToolDuplicateFilter {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    name: field.name.trim().to_owned(),
+                });
             }
             if field.fill.is_some() && field.required {
-                return Err(anyhow::anyhow!(
-                    "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} is runtime-filled and cannot be required",
-                    decl.tool_name,
-                    field.name
-                ));
+                return Err(DocumentConfigError::QueryToolFilterRequiredFill {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field_index: j,
+                    name: field.name.clone(),
+                });
             }
             if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
                 crate::graphql::validate_graphql_name(source_field).map_err(|error| {
-                    anyhow::anyhow!(
-                        "query_tools[{i}] (tool {:?}) filter_fields[{j}] has invalid source_field {:?}: {error}",
-                        decl.tool_name,
-                        source_field
-                    )
+                    DocumentConfigError::QueryToolSourceField {
+                        index: i,
+                        tool_name: decl.tool_name.clone(),
+                        field_index: j,
+                        source_field: source_field.clone(),
+                        error,
+                    }
                 })?;
             }
         }
         if !seen_tool_names.insert(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "query_tools has a duplicate tool_name {:?}; each declared query tool must have a unique tool_name",
-                decl.tool_name.trim()
-            ));
+            return Err(DocumentConfigError::QueryToolDuplicateName {
+                tool_name: decl.tool_name.trim().to_owned(),
+            });
         }
     }
     Ok(())
@@ -435,7 +441,7 @@ pub(crate) fn validate_surface_tool_names(
     query_tools: &[QueryToolDecl],
     cli_tool_names: &[String],
     additional_tool_names: &[String],
-) -> Result<()> {
+) -> anyhow::Result<()> {
     validate_write_tool_declarations(write_tools, cli_tool_names, additional_tool_names)?;
     let mut extra = additional_tool_names.to_vec();
     extra.extend(write_tools.iter().map(|decl| decl.tool_name.clone()));

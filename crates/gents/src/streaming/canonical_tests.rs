@@ -1,5 +1,6 @@
 use super::*;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use gents_protocol::error_chain::ErrorChain;
 use std::{sync::Arc, time::Duration};
 
 async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -> RequestLifecycle {
@@ -131,8 +132,11 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         .await
         .expect_err("missing later payload must fail the complete selection");
     assert!(
-        format!("{error:#}").contains("not-yet-replicated-close"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("not-yet-replicated-close"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     node.shutdown().await;
 }
@@ -331,7 +335,7 @@ async fn provider_publication_request_size_benchmark() {
                     )
                     .await?;
                 }
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
@@ -416,7 +420,9 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
     )
     .await
     .expect_err("first publication must compare reconstructed and native messages");
-    assert!(format!("{error:#}").contains("first publication native message changed"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("first publication native message changed"));
     let rows = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -628,7 +634,7 @@ async fn recovery_receipt_fixture(
                     )
                     .await?
                 );
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )
@@ -906,7 +912,9 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
     )
     .await
     .expect_err("closure time must be nondecreasing against committed data");
-    assert!(format!("{error:#}").contains("closure timestamp precedes"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("closure timestamp precedes"));
     let rows = node.execute(&format!(
         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID close }} }}"#,
         crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
@@ -1269,7 +1277,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         .unwrap()
         .iter()
         .map(crate::session::canonical_rows::decode_output_segment_row)
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let close = rows.iter().find(|row| row.segment.close.is_some()).unwrap();
     assert!(
@@ -1641,8 +1649,11 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         (Ok(_), Ok(_)) => unreachable!("exactly one handle wins, asserted above"),
     };
     assert!(
-        format!("{loser_error:#}").contains("no longer pending"),
-        "the losing handle must be rejected by the physical pending-row fence: {loser_error:#}"
+        ErrorChain(loser_error.as_ref())
+            .to_string()
+            .contains("no longer pending"),
+        "the losing handle must be rejected by the physical pending-row fence: {}",
+        ErrorChain(loser_error.as_ref())
     );
     let dispatched = crate::graphql::graphql_with_transaction_retry(
         &node,

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::config_client::{
     apply_desired_state_plan, stale_expectation, ConfigAccess, DesiredStateApplyPlan,
@@ -61,7 +62,7 @@ fn drift_of(error: &anyhow::Error) -> Option<Vec<DriftedRef>> {
     if let Some(drift) = error.downcast_ref::<ClosureDrift>() {
         return Some(drift.0.clone());
     }
-    stale_expectation(error).map(|stale| {
+    stale_expectation(error.as_ref()).map(|stale| {
         stale
             .drifted
             .iter()
@@ -205,7 +206,10 @@ pub async fn promote(
         Ok(())
     });
     if let Err(error) = checked {
-        return Err(refused("rebuild_mismatch", format!("{error:#}")));
+        return Err(refused(
+            "rebuild_mismatch",
+            format!("{}", ErrorChain(error.as_ref())),
+        ));
     }
 
     let applied = access
@@ -327,9 +331,10 @@ pub async fn revert(
             tracing::warn!(job_id, by, "promoted prompt reverted; the job is closed");
             Ok(())
         }
-        Err(error) if stale_expectation(&error).is_some() => {
-            Err(refused("target_moved", format!("{error:#}")))
-        }
+        Err(error) if stale_expectation(error.as_ref()).is_some() => Err(refused(
+            "target_moved",
+            format!("{}", ErrorChain(error.as_ref())),
+        )),
         Err(error) => Err(error),
     }
 }
@@ -569,7 +574,8 @@ mod tests {
 
         harness.install(vec![operator_edit()]).await;
         let error = apply(harness.access(), &plan).await.unwrap_err();
-        let stale = stale_expectation(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let stale = stale_expectation(error.as_ref())
+            .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert!(
             stale
                 .drifted
@@ -601,7 +607,8 @@ mod tests {
         let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        let refusal = promote_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let refusal =
+            promote_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(refusal.reason, "stale_closure");
         assert!(
             refusal.detail.contains("AgentContext"),
@@ -717,7 +724,8 @@ mod tests {
         let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        let refusal = promote_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let refusal =
+            promote_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(refusal.reason, "stale_closure");
         assert!(refusal.detail.contains("Agent"), "{}", refusal.detail);
         assert_eq!(
@@ -757,7 +765,8 @@ mod tests {
         .expect("the promotion and the edit finished");
 
         let error = result.unwrap_err();
-        let refusal = promote_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let refusal =
+            promote_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(refusal.reason, "stale_closure");
         assert!(refusal.detail.contains("Tools"), "{}", refusal.detail);
         assert_eq!(

@@ -1,9 +1,9 @@
-use super::{DocumentRecord, DocumentRuntimeView};
+use super::{DocumentRecord, DocumentRuntimeView, DocumentViewError};
 use crate::collection::Collection;
 use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
 use crate::document_config::ensure_node;
 use crate::graphql::escape_graphql_string;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::de::DeserializeOwned;
@@ -12,10 +12,9 @@ pub(crate) async fn load_document_runtime_view(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<DocumentRuntimeView> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "runtime view requires an owner DID"
-    );
+    if node_did.trim().is_empty() {
+        return Err(DocumentViewError::OwnerDidRequired.into());
+    }
     ensure_node(node, node_did).await?;
     let owner = node_did.to_owned();
     let mut view = ConfigAccess::transact_local_readonly(
@@ -28,7 +27,7 @@ pub(crate) async fn load_document_runtime_view(
                 let mut principals = load_records(txn, &owner, Collection::Node).await?;
                 let principal = principals
                     .remove(&owner)
-                    .context("scoped principal is missing")?;
+                    .ok_or(DocumentViewError::ScopedPrincipalMissing)?;
                 let mut unknown_kind_backends = RapidHashMap::new();
                 let (package_artifacts, graph_digests) =
                     crate::graph_pipeline::load_runtime_graph_artifacts_in_txn(txn, &owner).await?;
@@ -130,7 +129,7 @@ pub(crate) async fn load_document_runtime_view(
                     callback_modules,
                     repository_placements,
                 );
-                Ok(view)
+                Ok::<_, anyhow::Error>(view)
             })
         },
     )
@@ -147,33 +146,41 @@ pub(crate) async fn load_document_runtime_view(
         let doc_id = credential
             .doc_id
             .clone()
-            .context("OAuthCredential missing physical ID")?;
-        anyhow::ensure!(
-            credential.node_did == node_did,
-            "OAuthCredential owner mismatch"
-        );
+            .ok_or(DocumentViewError::OAuthCredentialMissingPhysicalId)?;
+        if credential.node_did != node_did {
+            return Err(DocumentViewError::OAuthCredentialOwnerMismatch.into());
+        }
         let id = credential.credential_id.clone();
-        anyhow::ensure!(
-            view.oauth_credentials
-                .insert(
-                    id.clone(),
-                    DocumentRecord {
-                        doc_id,
-                        value: credential
-                    }
-                )
-                .is_none(),
-            "duplicate OAuthCredential {id}"
-        );
+        if view
+            .oauth_credentials
+            .insert(
+                id.clone(),
+                DocumentRecord {
+                    doc_id,
+                    value: credential,
+                },
+            )
+            .is_some()
+        {
+            return Err(DocumentViewError::DuplicateOAuthCredential { id }.into());
+        }
     }
     Ok(view)
 }
 
-pub(super) fn decode_record<T>(name: &str, id: &str, canonical: serde_json::Value) -> Result<T>
+pub(super) fn decode_record<T>(
+    name: &str,
+    id: &str,
+    canonical: serde_json::Value,
+) -> Result<T, DocumentViewError>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_value(canonical).with_context(|| format!("decoding {name} {id:?}"))
+    serde_json::from_value(canonical).map_err(|source| DocumentViewError::Decode {
+        name: name.to_owned(),
+        id: id.to_owned(),
+        source,
+    })
 }
 
 async fn load_records<T>(
@@ -209,26 +216,34 @@ where
         .get("data")
         .and_then(|data| data.get(name))
         .and_then(serde_json::Value::as_array)
-        .with_context(|| format!("{name} query did not return rows"))?;
+        .ok_or_else(|| DocumentViewError::QueryRowsMissing {
+            name: name.to_owned(),
+        })?;
     let mut result = RapidHashMap::new();
     for row in rows {
         let mut row = row.clone();
         let doc_id = row
             .as_object_mut()
-            .context("config row is not an object")?
+            .ok_or(DocumentViewError::ConfigRowNotObject)?
             .remove("_docID")
             .and_then(|id| id.as_str().map(str::to_owned))
-            .context("config row missing physical ID")?;
-        anyhow::ensure!(!doc_id.is_empty(), "config row has empty physical ID");
-        anyhow::ensure!(
-            row.get("node_did").and_then(serde_json::Value::as_str) == Some(owner),
-            "foreign {name} row escaped owner filter"
-        );
+            .ok_or(DocumentViewError::ConfigRowMissingPhysicalId)?;
+        if doc_id.is_empty() {
+            return Err(DocumentViewError::ConfigRowEmptyPhysicalId.into());
+        }
+        if row.get("node_did").and_then(serde_json::Value::as_str) != Some(owner) {
+            return Err(DocumentViewError::ForeignRowEscapedOwnerFilter {
+                name: name.to_owned(),
+            }
+            .into());
+        }
         let id = row
             .get(collection.unique_field())
             .and_then(serde_json::Value::as_str)
             .filter(|id| !id.trim().is_empty())
-            .with_context(|| format!("{name} missing logical key"))?
+            .ok_or_else(|| DocumentViewError::MissingLogicalKey {
+                name: name.to_owned(),
+            })?
             .to_owned();
         if collection == Collection::InferenceBackend {
             if let Some(kind) = crate::backend_registry::unknown_provider_kind(&row) {
@@ -242,13 +257,22 @@ where
             }
         }
         let (_, canonical) = config_projection(collection, Some(&row))?;
-        let value = decode_record(name, &id, canonical.context("missing canonical config")?)?;
-        anyhow::ensure!(
-            result
-                .insert(id.clone(), DocumentRecord { doc_id, value })
-                .is_none(),
-            "ambiguous {name} reference {id:?} for {owner:?}"
-        );
+        let value = decode_record(
+            name,
+            &id,
+            canonical.ok_or(DocumentViewError::MissingCanonicalConfig)?,
+        )?;
+        if result
+            .insert(id.clone(), DocumentRecord { doc_id, value })
+            .is_some()
+        {
+            return Err(DocumentViewError::AmbiguousReference {
+                name: name.to_owned(),
+                id,
+                owner: owner.to_owned(),
+            }
+            .into());
+        }
     }
     Ok(result)
 }

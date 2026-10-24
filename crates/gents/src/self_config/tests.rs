@@ -1,5 +1,6 @@
 use super::command::{agent_params, help_patch_contracts};
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 fn test_plugins() -> Arc<crate::plugin::executor::PluginExecutor> {
     Arc::new(crate::plugin::executor::PluginExecutor::default())
@@ -556,7 +557,11 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
         .await
         .expect_err("a second remove finds no record");
-    assert!(again.to_string().contains("is not installed"), "{again:#}");
+    assert!(
+        again.to_string().contains("is not installed"),
+        "{}",
+        ErrorChain(&again)
+    );
 }
 
 #[tokio::test]
@@ -929,8 +934,8 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
     ];
     install_argv.extend(slot);
     let error = format!(
-        "{:#}",
-        config_call(&tools, &install_argv).await.unwrap_err()
+        "{}",
+        ErrorChain(&config_call(&tools, &install_argv).await.unwrap_err())
     );
     assert!(
         error.contains("install it with `gents pack install --grant-authority`")
@@ -966,20 +971,22 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
     let (_node, _did, tools) = pack_tool("pack-job-block", plugins).await;
     let error = format!(
-        "{:#}",
-        config_call(
-            &tools,
-            &[
-                "pack",
-                "preview",
-                "install",
-                "fixture/documents_fixture",
-                "--inference-slot",
-                "worker=setup:inference",
-            ],
+        "{}",
+        ErrorChain(
+            &config_call(
+                &tools,
+                &[
+                    "pack",
+                    "preview",
+                    "install",
+                    "fixture/documents_fixture",
+                    "--inference-slot",
+                    "worker=setup:inference",
+                ],
+            )
+            .await
+            .unwrap_err()
         )
-        .await
-        .unwrap_err()
     );
     assert!(error.contains("operator install"), "{error}");
 }
@@ -1462,7 +1469,8 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     assert!(
         off.to_string()
             .contains("requires effective read authority"),
-        "{off:#}"
+        "{}",
+        ErrorChain(&off)
     );
     let pinned_off = tools
         .iter()
@@ -1481,7 +1489,8 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         pinned_off
             .to_string()
             .contains("requires effective read authority"),
-        "{pinned_off:#}"
+        "{}",
+        ErrorChain(&pinned_off)
     );
 
     let allowed_root = tempfile::tempdir().expect("allowed root");
@@ -1530,7 +1539,8 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         outside_of_ceiling
             .to_string()
             .contains("escapes operator tool root"),
-        "{outside_of_ceiling:#}"
+        "{}",
+        ErrorChain(&outside_of_ceiling)
     );
 }
 
@@ -1745,7 +1755,8 @@ async fn config_tools_cannot_self_grant_pack_install() {
         .expect_err("pack install cannot be self-granted");
     assert!(
         error.to_string().contains("cannot be self-granted"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -2099,7 +2110,7 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("MiniJinja"), "{error:#}");
+        assert!(error.contains("MiniJinja"), "{error}");
         let rows = node.execute("{ Task { task_id } }").await;
         assert!(!rows.has_errors());
         assert!(rows.data.unwrap()["Task"].as_array().unwrap().is_empty());
@@ -2168,7 +2179,7 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
         })
         .to_string();
         let error = tool.call(argv).await.unwrap_err();
-        let diagnostic = format!("{error:#}");
+        let diagnostic = ErrorChain(&error).to_string();
         assert!(
             diagnostic.contains("cannot carry the count"),
             "{diagnostic}"
@@ -2991,7 +3002,7 @@ pub(super) async fn call_config_tool(
         .expect("config registered");
     tool.call(json!({"argv": argv}).to_string())
         .await
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| ErrorChain(&error).to_string())
 }
 
 #[tokio::test]
@@ -4598,8 +4609,10 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
                         &tools_id,
                     )
                     .await?
-                    .context("persisted Tools")?;
-                    Ok(serde_json::from_value(value)?)
+                    .ok_or("persisted Tools")?;
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(serde_json::from_value(
+                        value,
+                    )?)
                 })
             })
             .await
@@ -5024,8 +5037,11 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
             for result in [preview, apply] {
                 let error = result.expect_err("account reference change must be refused");
                 assert!(
-                    format!("{error:#}").contains("OAuth account references are operator-managed"),
-                    "{error:#}"
+                    ErrorChain(error.as_ref())
+                        .to_string()
+                        .contains("OAuth account references are operator-managed"),
+                    "{}",
+                    ErrorChain(error.as_ref())
                 );
             }
         }
@@ -5171,8 +5187,11 @@ async fn assert_account_choice_refused(
     for result in [core.preview(request()).await, core.apply(request()).await] {
         let error = result.expect_err("switching to another account must be refused");
         assert!(
-            format!("{error:#}").contains("selects another"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("selects another"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 }
@@ -5382,8 +5401,11 @@ async fn agent_management_profile_pick_cannot_switch_account() {
         .await
         .expect_err("switching to another account must be refused");
         assert!(
-            format!("{error:#}").contains("selects another"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("selects another"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
@@ -5517,8 +5539,11 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
         .await
         .expect_err("inheriting another account's compaction must be refused");
         assert!(
-            format!("{error:#}").contains("selects another"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("selects another"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
@@ -6509,8 +6534,8 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     ];
     install_argv.extend(slots);
     let error = format!(
-        "{:#}",
-        config_call(&tools, &install_argv).await.unwrap_err()
+        "{}",
+        ErrorChain(&config_call(&tools, &install_argv).await.unwrap_err())
     );
     assert!(error.contains("api.example.com"), "{error}");
     assert!(
@@ -7005,7 +7030,11 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("tools update"), "{error:#}");
+    assert!(
+        error.to_string().contains("tools update"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
     let after = crate::list_agents(&node, &owner)
         .await
         .unwrap()
@@ -7154,7 +7183,8 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     .unwrap_err();
     assert!(
         error.to_string().contains("exact local node identity"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
     let committed: Value = serde_json::from_str(
@@ -7313,7 +7343,11 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
             )
             .await
             .unwrap_err();
-            assert!(error.to_string().contains(expected), "{error:#}");
+            assert!(
+                error.to_string().contains(expected),
+                "{}",
+                ErrorChain(error.as_ref())
+            );
             assert_eq!(access.execute(query).await.unwrap(), before);
         }
     }
@@ -7377,7 +7411,7 @@ fn job_guard(stored: Option<Value>, candidate: Option<Value>) -> Result<(), Stri
     let stored = job_tools("ns/runner", stored);
     let candidate = job_tools("ns/runner", candidate);
     ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &candidate)
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| gents_protocol::error_chain::ErrorChain(&error).to_string())
 }
 
 #[test]
@@ -7553,7 +7587,9 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
     let error = agent_management::model_agent_mutate(&core, identity.as_ref(), &args)
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("cannot be self-granted"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("cannot be self-granted"));
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
     let holder = core.with_held_grants(ops::OperatorGrants {
         pack_install: true,
@@ -7605,7 +7641,9 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         } else {
             core.apply(request).await
         };
-        assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
+        assert!(ErrorChain(result.unwrap_err().as_ref())
+            .to_string()
+            .contains("cannot be self-granted"));
     }
     let holder = core.with_held_grants(ops::OperatorGrants {
         pack_install: true,
@@ -7738,8 +7776,10 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
                         "setup:tools",
                     )
                     .await?
-                    .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
-                    Ok(serde_json::from_value(value)?)
+                    .ok_or("persisted Tools document disappeared")?;
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(serde_json::from_value(
+                        value,
+                    )?)
                 })
             })
             .await

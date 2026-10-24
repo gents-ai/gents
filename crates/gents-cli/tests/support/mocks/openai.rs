@@ -1,6 +1,6 @@
+use crate::support::TestResult;
 use std::sync::Arc;
 
-use anyhow::Result;
 use serde_json::Value;
 
 use super::fake_llm::{completion_text_sse, tool_call_sse, ChatAction, FakeLlm};
@@ -11,7 +11,7 @@ pub struct MockOpenAIEndpoint {
 }
 
 impl MockOpenAIEndpoint {
-    pub fn start(model_name: &str, final_token: &str) -> Result<Self> {
+    pub fn start(model_name: &str, final_token: &str) -> TestResult<Self> {
         let final_token = final_token.to_string();
         let responder = Arc::new(move |request: &Value| {
             if request_has_tool_result_message(request) {

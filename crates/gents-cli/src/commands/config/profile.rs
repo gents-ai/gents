@@ -11,9 +11,11 @@ use gents::oauth_credential::{
 };
 use serde_json::{json, Value};
 
-fn decode_profile(contents: &[u8]) -> Result<InferenceProfile> {
+use super::ConfigCommandError;
+
+fn decode_profile(contents: &[u8]) -> Result<InferenceProfile, ConfigCommandError> {
     let profile: InferenceProfile =
-        serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
+        serde_json::from_slice(contents).map_err(ConfigCommandError::DecodeInferenceProfile)?;
     profile.validate()?;
     Ok(profile)
 }
@@ -23,7 +25,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Resu
         std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?;
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    crate::print_json(
+    Ok(crate::print_json(
         &set_profile(
             &access,
             &contents,
@@ -31,7 +33,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Resu
             args.provider.as_deref(),
         )
         .await?,
-    )
+    )?)
 }
 
 pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) -> Result<()> {
@@ -57,7 +59,7 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
             .await?
         }
     };
-    crate::print_json(&output)
+    Ok(crate::print_json(&output)?)
 }
 
 pub(crate) fn bound_slots(
@@ -69,11 +71,11 @@ pub(crate) fn bound_slots(
     if graphql.is_some() {
         return Ok(Vec::new());
     }
-    gents::plugin::store::bound_to_profile(
+    Ok(gents::plugin::store::bound_to_profile(
         &crate::home_state::resolve_home_dir(home),
         node_did,
         profile_id,
-    )
+    )?)
 }
 
 async fn list_candidates(
@@ -165,7 +167,7 @@ pub(crate) async fn backend_for_account(
 ) -> Result<String> {
     let snapshot = snapshot(access, node_did).await?;
     match snapshot.pick(account, provider) {
-        Ok(summary) => account_backend(&snapshot, summary),
+        Ok(summary) => Ok(account_backend(&snapshot, summary)?),
         Err(error) => snapshot
             .backends
             .iter()
@@ -174,11 +176,14 @@ pub(crate) async fn backend_for_account(
                     && (backend.backend_id == account || backend.name == account)
             })
             .map(|backend| backend.backend_id.clone())
-            .ok_or(error),
+            .ok_or_else(|| error.into()),
     }
 }
 
-fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<String> {
+fn account_backend(
+    snapshot: &Snapshot,
+    account: &AccountSummary,
+) -> Result<String, ConfigCommandError> {
     let backends: Vec<_> = snapshot
         .backends
         .iter()
@@ -192,20 +197,18 @@ fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<Stri
         .collect();
     match backends.as_slice() {
         [one] => Ok(one.clone()),
-        [] if account.account_ref.is_some() => anyhow::bail!(
-            "account {:?} has no backend; signing in again does not restore it, so create one \
-             with `gents config backend set`",
-            account.label
-        ),
-        [] => anyhow::bail!(
-            "account {:?} has no backend; create one with `gents config backend set`",
-            account.label
-        ),
-        many => anyhow::bail!(
-            "account {:?} runs several backends: {}; name one as backend_id in the profile file",
-            account.label,
-            many.join(", ")
-        ),
+        [] if account.account_ref.is_some() => {
+            Err(ConfigCommandError::AccountNoBackendAfterSignIn {
+                label: account.label.clone(),
+            })
+        }
+        [] => Err(ConfigCommandError::AccountWithoutBackend {
+            label: account.label.clone(),
+        }),
+        many => Err(ConfigCommandError::AccountRunsSeveralBackends {
+            label: account.label.clone(),
+            backends: many.join(", "),
+        }),
     }
 }
 
@@ -264,11 +267,11 @@ pub(super) async fn profile_list(args: ConfigListArgs) -> Result<()> {
         "config profile list",
         &[OutputFormat::Table, OutputFormat::Json],
     )? {
-        OutputFormat::Json => crate::print_json(&json!({
+        OutputFormat::Json => Ok(crate::print_json(&json!({
             "collection": gents::Collection::InferenceProfile.graphql_type(),
             "count": rows.len(),
             "items": rows,
-        })),
+        }))?),
         _ => {
             print!("{}", render_profile_table(&rows));
             Ok(())
@@ -294,7 +297,7 @@ pub(super) async fn profile_show(args: ConfigShowArgs) -> Result<()> {
     if let Some(warning) = profile_effort_warning(&access, &node_did, &row).await {
         eprintln!("warning: {warning}");
     }
-    crate::print_json(&row)
+    Ok(crate::print_json(&row)?)
 }
 
 async fn profile_rows(

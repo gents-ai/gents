@@ -5,13 +5,16 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 use uuid::Uuid;
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -48,26 +51,28 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("spawning gents chat")?;
+        .map_err(|error| format!("spawning gents chat: {}", ErrorChain(&error)))?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("chat child missing stdin"))?;
+        let stdin = child.stdin.as_mut().ok_or("chat child missing stdin")?;
         stdin
             .write_all(b"Reply with exactly the configured token.\n/exit\n")
-            .context("writing interactive chat input")?;
-        stdin.flush().context("flushing interactive chat input")?;
+            .map_err(|error| format!("writing interactive chat input: {}", ErrorChain(&error)))?;
+        stdin
+            .flush()
+            .map_err(|error| format!("flushing interactive chat input: {}", ErrorChain(&error)))?;
     }
 
-    let output = child.wait_with_output().context("waiting for gents chat")?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("waiting for gents chat: {}", ErrorChain(&error)))?;
     if !output.status.success() {
-        bail!(
+        return Err(format!(
             "gents chat failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
+        )
+        .into());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -86,7 +91,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
                         && system.contains("incident triage")
                 })
         })
-        .ok_or_else(|| anyhow!("mock endpoint did not capture the user chat request"))?;
+        .ok_or("mock endpoint did not capture the user chat request")?;
     assert_eq!(
         chat_request.get("model").and_then(Value::as_str),
         Some(model_name.as_str())
@@ -104,7 +109,8 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_continues_existing_session_when_session_id_is_provided() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -157,7 +163,7 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
     let follow_up_request = captured_requests
         .iter()
         .find(|request| request_contains_role_text(request, "user", second_prompt))
-        .ok_or_else(|| anyhow!("mock endpoint did not capture the follow-up chat request"))?;
+        .ok_or("mock endpoint did not capture the follow-up chat request")?;
     assert!(
         request_contains_role_text(follow_up_request, "user", &first_prompt),
         "expected follow-up request to include prior user turn: {}",
@@ -179,7 +185,8 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -217,15 +224,11 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
         &[
             "chat",
             "--message-file",
-            message_path
-                .to_str()
-                .ok_or_else(|| anyhow!("message path is not utf-8"))?,
+            message_path.to_str().ok_or("message path is not utf-8")?,
             "--output",
             "json",
             "--output-file",
-            output_path
-                .to_str()
-                .ok_or_else(|| anyhow!("output path is not utf-8"))?,
+            output_path.to_str().ok_or("output path is not utf-8")?,
         ],
     )?;
 
@@ -254,7 +257,7 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
     let chat_request = captured_requests
         .iter()
         .find(|request| request_contains_role_text(request, "user", &message))
-        .ok_or_else(|| anyhow!("mock endpoint did not capture the message-file chat request"))?;
+        .ok_or("mock endpoint did not capture the message-file chat request")?;
     assert!(
         request_contains_role_text(chat_request, "user", &message),
         "expected request to include message file content: {}",
@@ -266,7 +269,8 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     fs::write(home_dir.join("notes.txt"), "chat-tool-token\n")?;
@@ -304,28 +308,36 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("spawning gents chat for tool transcript test")?;
+        .map_err(|error| {
+            format!(
+                "spawning gents chat for tool transcript test: {}",
+                ErrorChain(&error)
+            )
+        })?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("chat child missing stdin"))?;
+        let stdin = child.stdin.as_mut().ok_or("chat child missing stdin")?;
         stdin
             .write_all(b"Read notes.txt and reply with its token.\n/exit\n")
-            .context("writing interactive chat input")?;
-        stdin.flush().context("flushing interactive chat input")?;
+            .map_err(|error| format!("writing interactive chat input: {}", ErrorChain(&error)))?;
+        stdin
+            .flush()
+            .map_err(|error| format!("flushing interactive chat input: {}", ErrorChain(&error)))?;
     }
 
-    let output = child
-        .wait_with_output()
-        .context("waiting for gents chat tool transcript run")?;
+    let output = child.wait_with_output().map_err(|error| {
+        format!(
+            "waiting for gents chat tool transcript run: {}",
+            ErrorChain(&error)
+        )
+    })?;
     if !output.status.success() {
-        bail!(
+        return Err(format!(
             "gents chat failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
+        )
+        .into());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -351,7 +363,8 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_verbose_flag_prints_raw_tool_json() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     fs::write(home_dir.join("notes.txt"), "chat-tool-token\n")?;
@@ -390,28 +403,28 @@ async fn chat_verbose_flag_prints_raw_tool_json() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("spawning gents chat --verbose")?;
+        .map_err(|error| format!("spawning gents chat --verbose: {}", ErrorChain(&error)))?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("chat child missing stdin"))?;
+        let stdin = child.stdin.as_mut().ok_or("chat child missing stdin")?;
         stdin
             .write_all(b"Read notes.txt and reply with its token.\n/exit\n")
-            .context("writing interactive chat input")?;
-        stdin.flush().context("flushing interactive chat input")?;
+            .map_err(|error| format!("writing interactive chat input: {}", ErrorChain(&error)))?;
+        stdin
+            .flush()
+            .map_err(|error| format!("flushing interactive chat input: {}", ErrorChain(&error)))?;
     }
 
     let output = child
         .wait_with_output()
-        .context("waiting for gents chat --verbose")?;
+        .map_err(|error| format!("waiting for gents chat --verbose: {}", ErrorChain(&error)))?;
     if !output.status.success() {
-        bail!(
+        return Err(format!(
             "gents chat --verbose failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
+        )
+        .into());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -504,13 +517,7 @@ async fn interactive_input_drains_while_provider_is_held(
         }
     }
     let mut child = ChildGuard(Some(child));
-    let mut stdin = child
-        .0
-        .as_mut()
-        .unwrap()
-        .stdin
-        .take()
-        .context("chat stdin")?;
+    let mut stdin = child.0.as_mut().unwrap().stdin.take().ok_or("chat stdin")?;
     writeln!(stdin, "{first}")?;
     stdin.flush()?;
     let result: Result<()> = async {
@@ -519,7 +526,7 @@ async fn interactive_input_drains_while_provider_is_held(
                 request["messages"].as_array().is_some_and(|messages| messages.iter()
                     .any(|message| is_user_text(message, first)))
             }) { tokio::time::sleep(Duration::from_millis(25)).await; }
-        }).await.context("initial main provider request was not held")?;
+        }).await.map_err(|error| format!("initial main provider request was not held: {}", ErrorChain(&error)))?;
         let mut one_shot_child = None;
         writeln!(stdin, "{second}")?;
         stdin.flush()?;
@@ -528,13 +535,13 @@ async fn interactive_input_drains_while_provider_is_held(
             let session = tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
                     let value = graphql_query(&graphql, &session_query).await?;
-                    if let Some(row) = value["data"]["AgentRequest"].as_array().context("session rows")?
+                    if let Some(row) = value["data"]["AgentRequest"].as_array().ok_or("session rows")?
                         .iter().find(|row| row["content"] == second) {
-                        break Ok::<_, anyhow::Error>(row["session_id"].as_str().context("session ID")?.to_owned());
+                        break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(row["session_id"].as_str().ok_or("session ID")?.to_owned());
                     }
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
-            }).await.context("second input was not saved")??;
+            }).await.map_err(|error| format!("second input was not saved: {}", ErrorChain(&error)))??;
             one_shot_child = Some(ChildGuard(Some(Command::new(cli_bin())
                 .env("HOME", home.path()).env("RUST_LOG", "error")
                 .args(["chat", "--poll-secs", "1", "--session-id", &session, third])
@@ -549,23 +556,23 @@ async fn interactive_input_drains_while_provider_is_held(
         let seeded = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let value = graphql_query(&graphql, &query).await?;
-                let rows = value["data"]["AgentRequest"].as_array().context("request rows")?;
+                let rows = value["data"]["AgentRequest"].as_array().ok_or("request rows")?;
                 if [first, second, third].iter().all(|text| rows.iter().any(|row| row["content"] == *text)) {
-                    break Ok::<_, anyhow::Error>(rows.clone());
+                    break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(rows.clone());
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
-        }).await.context("interactive stdin blocked behind first response")??;
+        }).await.map_err(|error| format!("interactive stdin blocked behind first response: {}", ErrorChain(&error)))??;
         assert!(child.0.as_mut().unwrap().try_wait()?.is_none(), "chat exited before held response completed");
         assert_eq!(seeded.len(), 3, "expected exactly three normal submitted inputs");
         let parent = seeded.iter().find(|row| row["content"] == first).unwrap()["_docID"].clone();
         gate.add_permits(1);
         tokio::time::timeout(Duration::from_secs(30), async {
             while child.0.as_mut().unwrap().try_wait()?.is_none() { tokio::time::sleep(Duration::from_millis(25)).await; }
-            Ok::<_, anyhow::Error>(())
-        }).await.context("chat did not drain submitted turns")??;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        }).await.map_err(|error| format!("chat did not drain submitted turns: {}", ErrorChain(&error)))??;
         let output = child.0.take().unwrap().wait_with_output()?;
-        anyhow::ensure!(output.status.success(), "chat failed: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(output.status.success(), "chat failed: {}", String::from_utf8_lossy(&output.stderr));
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert_eq!(stdout.matches(final_reply).count(), 1, "duplicate/missing final output: {stdout}");
         if let Some(mut single) = one_shot_child {
@@ -573,15 +580,15 @@ async fn interactive_input_drains_while_provider_is_held(
                 while single.0.as_mut().unwrap().try_wait()?.is_none() {
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
-                Ok::<_, anyhow::Error>(())
-            }).await.context("one-shot folded chat did not finish")??;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            }).await.map_err(|error| format!("one-shot folded chat did not finish: {}", ErrorChain(&error)))??;
             let output = single.0.take().unwrap().wait_with_output()?;
-            anyhow::ensure!(output.status.success(), "one-shot chat failed: {}", String::from_utf8_lossy(&output.stderr));
+            assert!(output.status.success(), "one-shot chat failed: {}", String::from_utf8_lossy(&output.stderr));
             let stdout = String::from_utf8_lossy(&output.stdout);
             assert_eq!(stdout.matches(final_reply).count(), 1, "one-shot folded output missing or duplicated: {stdout}");
         }
         let value = graphql_query(&graphql, &query).await?;
-        let rows = value["data"]["AgentRequest"].as_array().context("final request rows")?;
+        let rows = value["data"]["AgentRequest"].as_array().ok_or("final request rows")?;
         for text in [second, third] {
             let matching = rows.iter().filter(|row| row["content"] == text).collect::<Vec<_>>();
             assert_eq!(matching.len(), 1, "duplicate submitted input {text}");
@@ -594,7 +601,7 @@ async fn interactive_input_drains_while_provider_is_held(
         let captured = endpoint.captured_chat_requests();
         let continuation = captured.iter().find(|request| request["messages"].as_array().is_some_and(|messages|
             messages.iter().any(|message| is_user_text(message, third))))
-            .context("provider never received queued inputs")?;
+            .ok_or("provider never received queued inputs")?;
         let messages = continuation["messages"].as_array().unwrap();
         let positions = [first, second, third].map(|text| messages.iter().position(|message|
             is_user_text(message, text)).expect("input missing from provider"));

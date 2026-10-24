@@ -1,11 +1,36 @@
-use anyhow::{ensure, Context, Result};
-use gents::config_client::config_projection;
+use gents::config_client::{config_projection, ConfigClientError, DesiredStateError};
 use gents::document_config::{Schedule, Task};
 use gents::graphql::escape_graphql_string;
 use gents::Collection;
 use gents_desktop_core::client::ClientCore;
 
 use crate::types::{ConfiguredActionKind, ConfiguredActionView};
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ActionsError {
+    #[error("Connect this local runtime before choosing its configured actions.")]
+    NotConnected,
+    #[error(transparent)]
+    Projection(#[from] DesiredStateError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Decode(#[from] serde_json::Error),
+    #[error("The action catalog returned no tasks.")]
+    MissingTasks,
+    #[error("The action catalog returned no schedules.")]
+    MissingSchedules,
+    #[error("Task catalog crossed its selected runtime scope.")]
+    TaskScope,
+    #[error("The action catalog contains duplicate task identities.")]
+    DuplicateTask,
+    #[error("Schedule catalog crossed its selected runtime scope.")]
+    ScheduleScope,
+    #[error("The action catalog contains duplicate schedule identities.")]
+    DuplicateSchedule,
+}
+
+type Result<T, E = ActionsError> = std::result::Result<T, E>;
 
 pub(super) async fn catalog(
     core: &ClientCore,
@@ -25,31 +50,29 @@ pub(super) async fn catalog(
     let access = core
         .operator_graphql(node_did)
         .map(gents::ConfigAccess::Graphql)
-        .context("Connect this local runtime before choosing its configured actions.")?;
+        .ok_or(ActionsError::NotConnected)?;
     let response = access.execute(&query).await?;
     let tasks: Vec<Task> = serde_json::from_value(
         response
             .pointer("/data/Task")
-            .context("The action catalog returned no tasks.")?
+            .ok_or(ActionsError::MissingTasks)?
             .clone(),
     )?;
     let schedules: Vec<Schedule> = serde_json::from_value(
         response
             .pointer("/data/Schedule")
-            .context("The action catalog returned no schedules.")?
+            .ok_or(ActionsError::MissingSchedules)?
             .clone(),
     )?;
     let mut identities = rapidhash::RapidHashSet::default();
     let mut actions = Vec::with_capacity(tasks.len() + schedules.len());
     for task in tasks {
-        ensure!(
-            task.node_did == node_did && !task.task_id.trim().is_empty(),
-            "Task catalog crossed its selected runtime scope."
-        );
-        ensure!(
-            identities.insert(("Task", task.task_id.clone())),
-            "The action catalog contains duplicate task identities."
-        );
+        if task.node_did != node_did || task.task_id.trim().is_empty() {
+            return Err(ActionsError::TaskScope);
+        }
+        if !identities.insert(("Task", task.task_id.clone())) {
+            return Err(ActionsError::DuplicateTask);
+        }
         if task.enabled {
             actions.push(ConfiguredActionView {
                 kind: ConfiguredActionKind::Task,
@@ -60,14 +83,12 @@ pub(super) async fn catalog(
         }
     }
     for schedule in schedules {
-        ensure!(
-            schedule.node_did == node_did && !schedule.schedule_id.trim().is_empty(),
-            "Schedule catalog crossed its selected runtime scope."
-        );
-        ensure!(
-            identities.insert(("Schedule", schedule.schedule_id.clone())),
-            "The action catalog contains duplicate schedule identities."
-        );
+        if schedule.node_did != node_did || schedule.schedule_id.trim().is_empty() {
+            return Err(ActionsError::ScheduleScope);
+        }
+        if !identities.insert(("Schedule", schedule.schedule_id.clone())) {
+            return Err(ActionsError::DuplicateSchedule);
+        }
         actions.push(ConfiguredActionView {
             kind: ConfiguredActionKind::Schedule,
             label: label(schedule.display_name, &schedule.schedule_id),

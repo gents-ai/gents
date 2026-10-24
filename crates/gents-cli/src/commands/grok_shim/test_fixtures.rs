@@ -485,7 +485,7 @@ pub(crate) async fn seed_canonical_tool_call(
                     "AgentToolCall",
                 )?;
                 if is_spawned_child {
-                    return Ok(tool_doc_id);
+                    return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(tool_doc_id);
                 }
                 let admitted_response = txn
                     .execute_with_variables(

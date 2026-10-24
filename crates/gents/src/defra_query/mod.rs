@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
@@ -50,6 +51,7 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 
 pub(crate) mod bounded;
 mod command;
+mod error;
 mod field_page;
 pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;
@@ -61,6 +63,7 @@ pub(crate) mod render;
 pub(crate) mod schema;
 
 pub use bounded::BoundedQueryTool;
+pub use error::DefraQueryFailure;
 pub use query::{
     build_query, expand_collection_scope_aliases, is_restricted_field, CollectionScope,
     DefraQueryParams, AGENT_CONFIG_QUERY_COLLECTIONS, AGENT_CONFIG_SCOPE_ALIAS, DEFAULT_LIMIT,
@@ -78,7 +81,7 @@ pub struct DefraQueryError(anyhow::Error);
 
 impl std::fmt::Display for DefraQueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -91,6 +94,12 @@ impl std::error::Error for DefraQueryError {
 impl From<anyhow::Error> for DefraQueryError {
     fn from(error: anyhow::Error) -> Self {
         Self(error)
+    }
+}
+
+impl From<DefraQueryFailure> for DefraQueryError {
+    fn from(error: DefraQueryFailure) -> Self {
+        Self(error.into())
     }
 }
 
@@ -142,8 +151,8 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
-            Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
-            Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
+            Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
+            Err(error) => Err(anyhow!("{}", json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
         }
     }
 }

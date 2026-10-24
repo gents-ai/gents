@@ -1,34 +1,33 @@
 use anyhow::{Context, Result};
 
-use super::PackManifest;
+use super::{PackError, PackManifest};
 use crate::config_client::ConfigAccess;
 use crate::document_config::PackConfig;
 use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
 
-pub fn pack_origin_tag(pack_name: &str) -> Result<String> {
-    anyhow::ensure!(
-        super::is_valid_pack_name(pack_name),
-        "pack origin requires a snake_case pack name"
-    );
+pub fn pack_origin_tag(pack_name: &str) -> Result<String, PackError> {
+    if !super::is_valid_pack_name(pack_name) {
+        return Err(PackError::OriginName);
+    }
     Ok(format!("{PACK_ORIGIN_PREFIX}{pack_name}"))
 }
 
-pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
+pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>, PackError> {
     let mut origins = tags
         .iter()
         .filter_map(|tag| tag.strip_prefix(PACK_ORIGIN_PREFIX));
     let origin = origins.next();
-    anyhow::ensure!(
-        origins.next().is_none(),
-        "configuration document carries more than one pack origin"
-    );
+    if origins.next().is_some() {
+        return Err(PackError::MultipleOrigins);
+    }
     if let Some(origin) = origin {
-        anyhow::ensure!(
-            super::is_valid_pack_name(origin),
-            "configuration document carries invalid pack origin {origin:?}"
-        );
+        if !super::is_valid_pack_name(origin) {
+            return Err(PackError::InvalidOrigin {
+                origin: origin.to_owned(),
+            });
+        }
     }
     Ok(origin)
 }
@@ -90,7 +89,7 @@ pub(crate) async fn prepare_pack_plan_in_txn(
         }
         prepared.push(document);
     }
-    crate::config_client::DesiredStateApplyPlan::new(prepared)
+    Ok(crate::config_client::DesiredStateApplyPlan::new(prepared)?)
 }
 
 pub fn pack_document_digests(
@@ -118,7 +117,9 @@ pub(crate) fn pack_artifact_document_digest(value: &serde_json::Value) -> Result
         .as_object_mut()
         .context("pack document must be an object")?
         .remove("tags");
-    crate::config_client::desired_state_document_digest(&canonical)
+    Ok(crate::config_client::desired_state_document_digest(
+        &canonical,
+    )?)
 }
 
 fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Result<()> {

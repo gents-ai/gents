@@ -2,14 +2,15 @@
 //! job row's stored result. Requests and answers are `gents_protocol::job`'s
 //! [`JobCall`] and [`RoundResult`], keyed by request id under `job_results`.
 
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use gents_protocol::job::{
-    ChildOutputRequest, ChildOutputResponse, ChildOutputSlice, JobCall, JobChildView, JobPin,
-    JobProgress, JobResultRequest, JobResultResponse, JobState, RoundResult,
+    ChildOutputRequest, ChildOutputResponse, ChildOutputSlice, JobCall, JobChildState,
+    JobChildView, JobPin, JobProgress, JobResultRequest, JobResultResponse, JobState, RoundResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -179,6 +180,22 @@ impl Session {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum JobCallError {
+    #[error("slot {slot:?} has no child; the step input's children names the slots")]
+    NoChild { slot: String },
+    #[error("slot {slot:?} has no output yet (it is {state:?}); read it once its children state is completed")]
+    NoOutput { slot: String, state: JobChildState },
+    #[error("decoding the job row")]
+    DecodeRow(#[source] serde_json::Error),
+    #[error("job row {row_doc_id} is not in this call's scope; read only the results of this session's jobs")]
+    Outside { row_doc_id: String },
+    #[error("job row {row_doc_id} belongs to another plugin; read it through that plugin")]
+    OtherPlugin { row_doc_id: String },
+    #[error("not_terminal: job row {row_doc_id} is still running; call `status` on it and read its result once it is terminal")]
+    NotTerminal { row_doc_id: String },
+}
+
 fn answer<T>(outcome: Result<T>) -> Value
 where
     T: Serialize,
@@ -186,7 +203,7 @@ where
     let round = match outcome {
         Ok(result) => RoundResult::Result { result },
         Err(error) => RoundResult::Error {
-            error: format!("{error:#}"),
+            error: format!("{}", ErrorChain(error.as_ref())),
         },
     };
     serde_json::to_value(round).expect("a round result has a JSON encoding")
@@ -228,11 +245,12 @@ async fn child_output_slots(
         .slots
         .iter()
         .map(|slot| {
-            latest.get(slot).map(|view| (slot, view)).with_context(|| {
-                format!("slot {slot:?} has no child; the step input's children names the slots")
-            })
+            latest
+                .get(slot)
+                .map(|view| (slot, view))
+                .ok_or_else(|| JobCallError::NoChild { slot: slot.clone() })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let list = graphql_string_list_literal(wanted.iter().map(|(_, view)| view.request_id.as_str()));
     let requests = access
         .execute(&format!(
@@ -262,10 +280,11 @@ async fn child_output_slots(
             .get(view.request_id.as_str())
             .and_then(|doc_id| terminals.get(*doc_id));
         let Some(CausedRequestTerminal::Completed { output }) = terminal else {
-            bail!(
-                "slot {slot:?} has no output yet (it is {:?}); read it once its children state is completed",
-                view.state
-            );
+            return Err(JobCallError::NoOutput {
+                slot: slot.clone(),
+                state: view.state,
+            }
+            .into());
         };
         let (text, truncated) = page(output, request.offset, cap);
         slots.insert(
@@ -322,10 +341,8 @@ pub async fn result(
     max_bytes: usize,
 ) -> Result<JobResultResponse> {
     let row_doc_id = request.row_doc_id.as_str();
-    let outside = || {
-        anyhow::anyhow!(
-            "job row {row_doc_id} is not in this call's scope; read only the results of this session's jobs"
-        )
+    let outside = || JobCallError::Outside {
+        row_doc_id: row_doc_id.to_owned(),
     };
     let response = ConfigAccess::local(caller.node.clone())
         .execute(&format!(
@@ -337,7 +354,7 @@ pub async fn result(
         .pointer("/data/AgentToolCall/0")
         .ok_or_else(outside)?
         .clone();
-    let row: Row = serde_json::from_value(row).context("decoding the job row")?;
+    let row: Row = serde_json::from_value(row).map_err(JobCallError::DecodeRow)?;
     let owner = ProcessControlScope {
         request_id: String::new(),
         session_id: row.session_id,
@@ -356,14 +373,18 @@ pub async fn result(
         .is_some_and(|pin| pin.plugin_ref == coordinate);
     if !result_read(&caller.scope, &owner, same_plugin, terminal) {
         if !result_read(&caller.scope, &owner, true, true) {
-            return Err(outside());
+            return Err(outside().into());
         }
         if !same_plugin {
-            bail!("job row {row_doc_id} belongs to another plugin; read it through that plugin");
+            return Err(JobCallError::OtherPlugin {
+                row_doc_id: row_doc_id.to_owned(),
+            }
+            .into());
         }
-        bail!(
-            "not_terminal: job row {row_doc_id} is still running; call `status` on it and read its result once it is terminal"
-        );
+        return Err(JobCallError::NotTerminal {
+            row_doc_id: row_doc_id.to_owned(),
+        }
+        .into());
     }
     let limit = usize::try_from(request.limit)
         .unwrap_or(usize::MAX)
@@ -378,7 +399,7 @@ pub async fn result(
     )
     .await?
     else {
-        return Err(outside());
+        return Err(outside().into());
     };
     Ok(JobResultResponse {
         row_doc_id: row_doc_id.to_owned(),

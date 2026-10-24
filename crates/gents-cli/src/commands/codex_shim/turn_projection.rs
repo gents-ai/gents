@@ -140,7 +140,7 @@ impl<'a> TurnProjection<'a> {
         }
 
         self.active_reasoning_text.push_str(delta);
-        send_notification(
+        Ok(send_notification(
             outbound,
             self.state,
             codex::ServerNotification::ReasoningTextDelta(codex::ReasoningTextDeltaNotification {
@@ -151,7 +151,7 @@ impl<'a> TurnProjection<'a> {
                 content_index: 0,
             }),
         )
-        .await
+        .await?)
     }
 
     pub(super) fn resume_reasoning(&mut self, item_id: String, text: &str) {
@@ -271,7 +271,7 @@ impl<'a> TurnProjection<'a> {
 
         self.active_agent_text.push_str(delta);
         self.rendered_agent_text.push_str(delta);
-        send_notification(
+        Ok(send_notification(
             outbound,
             self.state,
             codex::ServerNotification::AgentMessageDelta(codex::AgentMessageDeltaNotification {
@@ -281,7 +281,7 @@ impl<'a> TurnProjection<'a> {
                 delta: delta.to_string(),
             }),
         )
-        .await
+        .await?)
     }
 
     pub(super) fn resume_agent_message(&mut self, item_id: String, text: &str) {
@@ -324,7 +324,7 @@ impl<'a> TurnProjection<'a> {
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
             .await?;
-        send_notification(
+        Ok(send_notification(
             outbound,
             self.state,
             codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
@@ -334,7 +334,7 @@ impl<'a> TurnProjection<'a> {
                 started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
-        .await
+        .await?)
     }
 
     async fn send_tool_completed(
@@ -368,7 +368,7 @@ impl<'a> TurnProjection<'a> {
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
             .await?;
-        send_notification(
+        Ok(send_notification(
             outbound,
             self.state,
             codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
@@ -378,7 +378,7 @@ impl<'a> TurnProjection<'a> {
                 started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
-        .await
+        .await?)
     }
 
     async fn send_command_execution_completed(
@@ -429,7 +429,7 @@ impl<'a> TurnProjection<'a> {
         };
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
             .await?;
-        send_notification(
+        Ok(send_notification(
             outbound,
             self.state,
             codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
@@ -439,7 +439,7 @@ impl<'a> TurnProjection<'a> {
                 started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
-        .await
+        .await?)
     }
 
     async fn send_file_change_completed(
@@ -493,7 +493,7 @@ impl<'a> TurnProjection<'a> {
                 completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             })
         };
-        send_notification(outbound, self.state, notification).await
+        Ok(send_notification(outbound, self.state, notification).await?)
     }
 
     pub(super) async fn send_tool_projection_update(
@@ -660,7 +660,7 @@ impl<'a> TurnProjection<'a> {
         } else {
             None
         };
-        send_notification(
+        Ok(send_notification(
             outbound,
             self.state,
             codex::ServerNotification::TurnCompleted(codex::TurnCompletedNotification {
@@ -675,7 +675,7 @@ impl<'a> TurnProjection<'a> {
                 ),
             }),
         )
-        .await
+        .await?)
     }
 
     pub(super) fn active_agent_text(&self) -> &str {

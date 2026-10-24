@@ -2,7 +2,6 @@
 //! This exercises the database directly, not the canonical writer's replay
 //! policy: a duplicate create is an error.
 
-use anyhow::{ensure, Context, Result};
 use gents::defra_node::{EmbeddedNode, QueryRequest, QueryResponse};
 use gents::session::canonical_rows::{
     decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -13,6 +12,8 @@ use gents_protocol::output::{
     SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
 };
 use std::sync::Arc;
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 fn segment(payload: &str) -> OutputSegment {
     OutputSegment {
@@ -61,12 +62,12 @@ fn created_id(response: &QueryResponse) -> Result<Option<String>> {
         return Ok(None);
     }
     let row = gents::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
-        .context("successful create omitted its row")?;
+        .ok_or("successful create omitted its row")?;
     Ok(Some(
         row.get("_docID")
             .and_then(serde_json::Value::as_str)
             .filter(|id| !id.is_empty())
-            .context("successful create omitted _docID")?
+            .ok_or("successful create omitted _docID")?
             .to_owned(),
     ))
 }
@@ -77,13 +78,13 @@ async fn rows(node: &EmbeddedNode) -> Result<Vec<(String, OutputSegment)>> {
             "query {{ AgentOutputSegment {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"
         ))
         .await;
-    ensure!(!response.has_errors(), "row query: {:?}", response.errors);
-    let data = response.data.context("row query omitted data")?;
+    assert!(!response.has_errors(), "row query: {:?}", response.errors);
+    let data = response.data.ok_or("row query omitted data")?;
     data["AgentOutputSegment"]
         .as_array()
-        .context("row query omitted AgentOutputSegment array")?
+        .ok_or("row query omitted AgentOutputSegment array")?
         .iter()
-        .map(|value| {
+        .map(|value| -> Result<(String, OutputSegment)> {
             let row = decode_output_segment_row(value)?;
             Ok((row.doc_id, row.segment))
         })
@@ -110,52 +111,52 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
     tracing::info!(?first_id, ?second_id, first_errors = ?first.errors, second_errors = ?second.errors,
         "concurrent identical canonical genesis creates");
     let persisted = rows(&node).await?;
-    ensure!(
+    assert!(
         persisted.len() == 1,
         "identical genesis produced {persisted:?}"
     );
-    ensure!(
+    assert!(
         persisted[0].1 == original,
         "original fact changed: {persisted:?}"
     );
-    ensure!(
+    assert!(
         first_id.as_ref() == Some(&persisted[0].0)
             || second_id.as_ref() == Some(&persisted[0].0),
         "neither create acknowledged the persisted ID: first={first_id:?}, second={second_id:?}, persisted={persisted:?}"
     );
-    ensure!(
+    assert!(
         first_id.is_none() || second_id.is_none() || first_id == second_id,
         "identical genesis yielded different acknowledged IDs: {first_id:?}, {second_id:?}"
     );
 
     let replay = create(&node, &original).await;
-    ensure!(
+    assert!(
         replay.has_errors(),
         "duplicate create unexpectedly succeeded: {replay:?}"
     );
-    ensure!(
+    assert!(
         rows(&node).await? == persisted,
         "duplicate changed the original row"
     );
 
     let changed = segment("changed");
     let changed_response = create(&node, &changed).await;
-    ensure!(
+    assert!(
         !changed_response.has_errors(),
         "changed genesis create failed: {:?}",
         changed_response.errors
     );
-    let changed_id = created_id(&changed_response)?.context("changed create had no ID")?;
-    ensure!(
+    let changed_id = created_id(&changed_response)?.ok_or("changed create had no ID")?;
+    assert!(
         changed_id != persisted[0].0,
         "changed genesis reused the original ID"
     );
     let after_change = rows(&node).await?;
-    ensure!(
+    assert!(
         after_change.len() == 2,
         "changed genesis did not add a row: {after_change:?}"
     );
-    ensure!(
+    assert!(
         after_change.contains(&persisted[0]) && after_change.contains(&(changed_id, changed)),
         "changed genesis overwrote or altered a physical row: {after_change:?}"
     );
@@ -180,7 +181,7 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
                     stream: 0,
                 },
             );
-            ensure!(
+            assert!(
                 matches!(result, Err(ReconstructionError::ConflictingClosures { .. })),
                 "physical closure twins must not select a winner: {result:?}"
             );

@@ -41,6 +41,7 @@ serde_json.workspace = true
 rapidhash = { workspace = true }
 tauri = { version = "2", features = [], optional = true }
 tauri-plugin-fs = { version = "2", optional = true }
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing.workspace = true

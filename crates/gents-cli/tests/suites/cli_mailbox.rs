@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-mailbox-cli-{}", Uuid::new_v4().simple());
@@ -48,10 +49,10 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
     );
     let created = graphql_query(&graphql, &mutation).await?;
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
-        .with_context(|| format!("created mailbox doc id: {created}"))?;
+        .map_err(|error| format!("created mailbox doc id: {created}: {error}"))?;
 
     let listed = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
-    let rows = listed.as_array().context("mailbox list array")?;
+    let rows = listed.as_array().expect("mailbox list array");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["title"], Value::String("CLI attention".into()));
     assert_eq!(rows[0]["requester_did"], Value::String(node_did));

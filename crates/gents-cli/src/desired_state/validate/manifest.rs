@@ -1,18 +1,22 @@
 use super::super::DesiredStateManifest;
 use super::{automation, projection, tooling};
+use gents_protocol::error_chain::ErrorChain;
 
 pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
-    let plan =
-        gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest).and_then(|plan| {
-            gents::document_config::ConfigReferences::from_documents(
-                &manifest.node.node_did,
-                plan.documents()
-                    .iter()
-                    .map(|doc| (doc.collection, doc.add.clone())),
-            )
-        });
-    if let Err(error) = plan {
-        errors.push(format!("{error:#}"));
+    let plan = match gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest) {
+        Ok(plan) => plan,
+        Err(error) => {
+            errors.push(format!("{}", ErrorChain(&error)));
+            return;
+        }
+    };
+    if let Err(error) = gents::document_config::ConfigReferences::from_documents(
+        &manifest.node.node_did,
+        plan.documents()
+            .iter()
+            .map(|doc| (doc.collection, doc.add.clone())),
+    ) {
+        errors.push(format!("{}", ErrorChain(&error)));
         return;
     }
     tooling::validate_surfaces(manifest, errors);

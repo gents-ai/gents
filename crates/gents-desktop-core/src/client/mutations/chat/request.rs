@@ -1,7 +1,8 @@
-use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use gents::config_client::{
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, IdempotentTransactionRetry,
+};
 use gents::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
 use gents::skills::prompt_slash_skill_selection;
 use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};
@@ -15,8 +16,131 @@ use uuid::Uuid;
 
 use crate::client::store::ClientStore;
 
-use super::super::graphql::{escape_graphql_string, normalize_optional_string, normalize_required};
+use super::super::graphql::{
+    escape_graphql_string, normalize_optional_string, normalize_required, GraphqlError,
+};
 use super::binding::resolve_agent_binding;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ChatMutationError {
+    #[error(transparent)]
+    Graphql(#[from] GraphqlError),
+    #[error("content must not be empty")]
+    EmptyContent,
+    #[error("AgentSession session agent mismatch: existing={existing} requested={requested}")]
+    AgentMismatch { existing: String, requested: String },
+    #[error("no agent is bound to this session and Node {node_did} has no default_agent_id")]
+    NoAgentBound { node_did: String },
+    #[error("session {session_id} not found")]
+    SessionNotFound { session_id: String },
+    #[error("{reason}")]
+    CreateMutation { reason: &'static str },
+    #[error("retry parent request must have a lifecycle_state")]
+    RetryParentLifecycleMissing,
+    #[error("retry parent request must be failed, got lifecycle_state={lifecycle_state}")]
+    RetryParentNotFailed {
+        lifecycle_state: RequestLifecycleState,
+    },
+    #[error(
+        "client retry parent request must be interactive, got execution_origin={execution_origin}"
+    )]
+    RetryParentNotInteractive { execution_origin: String },
+    #[error("retry parent request exhausted retry budget: retry_count={retry_count} max_retries={max_retries}")]
+    RetryBudgetExhausted { retry_count: i64, max_retries: i64 },
+    #[error("retry parent request has invalid deadline {deadline:?}")]
+    InvalidDeadline {
+        deadline: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("retry parent request deadline is closed: deadline={deadline}")]
+    RetryDeadlineClosed { deadline: String },
+    #[error("retry parent request has invalid created_at {created_at:?}")]
+    InvalidCreatedAt {
+        created_at: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error(transparent)]
+    Client(#[from] ConfigClientError),
+    #[error("mailbox cause query returned no row array")]
+    MailboxRowsMissing,
+    #[error("mailbox submission cause must identify exactly one item")]
+    MailboxCauseNotOne,
+    #[error("mailbox submission cause is owned by another requester")]
+    MailboxCauseRequesterMismatch,
+    #[error("mailbox submission cause is no longer open")]
+    MailboxCauseNotOpen,
+    #[error("mailbox submission cause does not open a compose surface")]
+    MailboxCauseNotComposeSurface,
+    #[error("mailbox submission route does not match the target agent")]
+    MailboxRouteAgentMismatch,
+    #[error("mailbox submission route does not match the target session")]
+    MailboxRouteSessionMismatch,
+    #[error("retry parent request must have a node_did")]
+    RetryParentNodeDidMissing,
+    #[error("retry parent request must have a session_id")]
+    RetryParentSessionIdMissing,
+    #[error("retry parent request must have content")]
+    RetryParentContentMissing,
+    #[error("retry parent request must have an execution_origin")]
+    RetryParentExecutionOriginMissing,
+    #[error("retry parent request not found")]
+    RetryParentNotFound,
+    #[error("retry parent request_id is ambiguous across {count} documents")]
+    RetryParentAmbiguous { count: usize },
+    #[error("retry parent request absent")]
+    RetryParentAbsent,
+    #[error("retry parent request has no _docID")]
+    RetryParentDocIdMissing,
+    #[error("decoding retry parent request")]
+    RetryParentDecode(#[source] serde_json::Error),
+    #[error("retry parent request must be latest for session {session_id}, got latest_request_id={latest_request_id}")]
+    RetryParentNotLatest {
+        session_id: String,
+        latest_request_id: String,
+    },
+    #[error("retry parent session has no request")]
+    RetryParentSessionHasNoRequest,
+    #[error("retry new request id already exists: request_id={request_id}")]
+    RetryRequestIdExists { request_id: String },
+    #[error("retry successor has no request_id")]
+    RetrySuccessorRequestIdMissing,
+    #[error("retry successor has no session_id")]
+    RetrySuccessorSessionIdMissing,
+    #[error("retry successor has no node_did")]
+    RetrySuccessorNodeDidMissing,
+    #[error("fetch_request({request_id})")]
+    FetchRequest {
+        request_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("fetch_retry_lineage({request_id})")]
+    FetchRetryLineage {
+        request_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("request {request_id} not found")]
+    RequestNotFound { request_id: String },
+    #[error("decoding AgentRequest {request_id}")]
+    DecodeRequest {
+        request_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("request {request_id} is not a stale terminal (lifecycle_state={lifecycle_state}, failure_reason={failure_reason})")]
+    RequestNotStaleTerminal {
+        request_id: String,
+        lifecycle_state: String,
+        failure_reason: String,
+    },
+    #[error("stale request has no node_did")]
+    StaleRequestNodeDidMissing,
+    #[error("stale request has no content")]
+    StaleRequestContentMissing,
+}
 
 /// The durable submission receipt. Replica observation may still be pending;
 /// callers must not replay the mutation when a subsequent refresh fails.
@@ -38,11 +162,13 @@ pub struct SubmitRequestOptions {
     pub retry_key: Option<String>,
 }
 
-fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Result<&'a str> {
-    anyhow::ensure!(
-        input.has_authored_input(content),
-        "content must not be empty"
-    );
+fn normalize_authored_content<'a>(
+    input: &RequestInput,
+    content: &'a str,
+) -> Result<&'a str, ChatMutationError> {
+    if !input.has_authored_input(content) {
+        return Err(ChatMutationError::EmptyContent);
+    }
     Ok(content.trim())
 }
 
@@ -62,7 +188,7 @@ pub async fn submit_request(
     content: &str,
     agent_id: Option<&str>,
     options: SubmitRequestOptions,
-) -> Result<SubmittedRequest> {
+) -> anyhow::Result<SubmittedRequest> {
     let (result, create) = prepare_request_submission(
         node,
         store,
@@ -84,14 +210,10 @@ pub async fn submit_request(
     let pending = receipt::UnresolvedSubmission::new(create, result)?;
     receipt::journal::save(node, &pending).await?;
     let result = receipt::commit_signed_submission(access, pending.clone()).await;
-    if !result
-        .as_ref()
-        .err()
-        .is_some_and(|error| error.is::<receipt::SubmissionOutcomeUnknown>())
-    {
+    if !matches!(result, Err(receipt::ReceiptError::OutcomeUnknown(_))) {
         receipt::journal::forget(node, &pending.request_id).await;
     }
-    result
+    Ok(result?)
 }
 
 #[cfg(test)]
@@ -110,7 +232,7 @@ pub async fn submit_goal_backed_request(
     mut options: SubmitRequestOptions,
     objective: &str,
     token_budget: Option<i64>,
-) -> Result<SubmittedRequest> {
+) -> anyhow::Result<SubmittedRequest> {
     if options.retry_key.is_none() {
         options.retry_key = Some(format!(
             "desktop-goal-request:{}",
@@ -155,7 +277,7 @@ pub async fn submit_task_request(
     content: &str,
     agent_id: Option<&str>,
     mut options: SubmitRequestOptions,
-) -> Result<SubmittedRequest> {
+) -> anyhow::Result<SubmittedRequest> {
     options.retry_key = Some(fire.fire_key.clone());
     let (result, create) = prepare_request_submission(
         node,
@@ -192,7 +314,7 @@ pub(crate) async fn prepare_request_submission(
     agent_id: Option<&str>,
     options: SubmitRequestOptions,
     request_id: Option<&str>,
-) -> Result<(
+) -> anyhow::Result<(
     SubmittedRequest,
     gents_protocol::request_admission::AgentRequestCreate,
 )> {
@@ -200,7 +322,7 @@ pub(crate) async fn prepare_request_submission(
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_authored_content(&options.input, content)?.to_owned();
-    let (content, options) = prepare_prompt_submission(&content, options)?;
+    let (content, options) = prepare_prompt_submission(&content, options);
     let request_id = request_id
         .map(str::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -295,7 +417,7 @@ async fn validate_mailbox_submission_cause(
     node_did: &str,
     agent_id: &str,
     session_id: &str,
-) -> Result<()> {
+) -> Result<(), ChatMutationError> {
     let query = format!(
         r#"query {{
             MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -315,23 +437,23 @@ async fn validate_mailbox_submission_cause(
         .as_ref()
         .and_then(|data| data.get("MailboxItem"))
         .and_then(Value::as_array)
-        .context("mailbox cause query returned no row array")?;
+        .ok_or(ChatMutationError::MailboxRowsMissing)?;
     if rows.len() != 1 {
-        bail!("mailbox submission cause must identify exactly one item");
+        return Err(ChatMutationError::MailboxCauseNotOne);
     }
     let row = &rows[0];
     let field = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or("");
     if field("requester_did") != requester_did {
-        bail!("mailbox submission cause is owned by another requester");
+        return Err(ChatMutationError::MailboxCauseRequesterMismatch);
     }
     if field("status") != "open" {
-        bail!("mailbox submission cause is no longer open");
+        return Err(ChatMutationError::MailboxCauseNotOpen);
     }
     if !matches!(field("action"), "start_request" | "write_document") {
-        bail!("mailbox submission cause does not open a compose surface");
+        return Err(ChatMutationError::MailboxCauseNotComposeSurface);
     }
     if field("target_node_did") != node_did || field("target_agent_id") != agent_id {
-        bail!("mailbox submission route does not match the target agent");
+        return Err(ChatMutationError::MailboxRouteAgentMismatch);
     }
     if let Some(expected_session) = row
         .get("session_id")
@@ -340,7 +462,7 @@ async fn validate_mailbox_submission_cause(
         .filter(|value| !value.is_empty())
     {
         if expected_session != session_id {
-            bail!("mailbox submission route does not match the target session");
+            return Err(ChatMutationError::MailboxRouteSessionMismatch);
         }
     }
     Ok(())
@@ -349,14 +471,14 @@ async fn validate_mailbox_submission_cause(
 fn prepare_prompt_submission(
     content: &str,
     mut options: SubmitRequestOptions,
-) -> Result<(String, SubmitRequestOptions)> {
+) -> (String, SubmitRequestOptions) {
     let selection = prompt_slash_skill_selection(content);
     if selection.selected_skill_ids.is_empty() {
-        return Ok((content.to_string(), options));
+        return (content.to_string(), options);
     }
 
     options.input.selected_skill_ids = selection.selected_skill_ids;
-    Ok((selection.prompt, options))
+    (selection.prompt, options)
 }
 
 pub async fn retry_request(
@@ -366,7 +488,7 @@ pub async fn retry_request(
     requester_did: &str,
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-) -> Result<SubmittedRequest> {
+) -> anyhow::Result<SubmittedRequest> {
     retry_request_with_request_id(
         node,
         store,
@@ -387,7 +509,7 @@ async fn retry_request_with_request_id(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     request_id: String,
-) -> Result<SubmittedRequest> {
+) -> anyhow::Result<SubmittedRequest> {
     let request_id = normalize_required("new_request_id", &request_id)?.to_string();
     let parent_request_id = normalize_required("request_id", &parent.request_id)?;
     let node_did = normalize_required(
@@ -395,7 +517,7 @@ async fn retry_request_with_request_id(
         parent
             .node_did
             .as_deref()
-            .context("retry parent request must have a node_did")?,
+            .ok_or(ChatMutationError::RetryParentNodeDidMissing)?,
     )?;
     let requester_did = normalize_required("requester_did", requester_did)?;
 
@@ -438,7 +560,7 @@ async fn retry_request_in_txn(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     candidate_request_id: &str,
-) -> Result<SubmittedRequest> {
+) -> anyhow::Result<SubmittedRequest> {
     let (parent_doc_id, parent) =
         load_retry_parent_in_txn(txn, parent_request_id, node_did, requester_did).await?;
     let retry_key = retry_successor_key(&parent_doc_id);
@@ -450,7 +572,7 @@ async fn retry_request_in_txn(
         parent
             .session_id
             .as_deref()
-            .context("retry parent request must have a session_id")?,
+            .ok_or(ChatMutationError::RetryParentSessionIdMissing)?,
     )?;
     let input = parent
         .input
@@ -462,14 +584,14 @@ async fn retry_request_in_txn(
         parent
             .content
             .as_deref()
-            .context("retry parent request must have content")?,
+            .ok_or(ChatMutationError::RetryParentContentMissing)?,
     )?;
     let execution_origin = normalize_required(
         "execution_origin",
         parent
             .execution_origin
             .as_deref()
-            .context("retry parent request must have an execution_origin")?,
+            .ok_or(ChatMutationError::RetryParentExecutionOriginMissing)?,
     )?;
     let retry_count = parent.retry_count.unwrap_or_default() + 1;
     let max_retries = parent
@@ -480,9 +602,11 @@ async fn retry_request_in_txn(
     let effective_latest_request_id =
         latest_interactive_request_in_txn(txn, parent_session_id, node_did, requester_did).await?;
     if effective_latest_request_id != parent_request_id {
-        bail!(
-            "retry parent request must be latest for session {parent_session_id}, got latest_request_id={effective_latest_request_id}"
-        );
+        return Err(ChatMutationError::RetryParentNotLatest {
+            session_id: parent_session_id.to_string(),
+            latest_request_id: effective_latest_request_id,
+        }
+        .into());
     }
     ensure_retry_candidate_is_fresh_in_txn(txn, parent_session_id, candidate_request_id).await?;
 
@@ -520,8 +644,12 @@ async fn retry_request_in_txn(
         RequestSigner::Identity(signer),
     )
     .await?;
-    txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
+    txn.execute(
+        &create
+            .graphql_mutation()
+            .map_err(|reason| ChatMutationError::CreateMutation { reason })?,
+    )
+    .await?;
 
     Ok(SubmittedRequest {
         request_id: candidate_request_id.to_string(),
@@ -538,7 +666,7 @@ fn retry_successor_key(parent_request_doc_id: &str) -> String {
 async fn load_retry_successor_in_txn(
     txn: &ConfigApplyTxn<'_>,
     retry_key: &str,
-) -> Result<Option<SubmittedRequest>> {
+) -> Result<Option<SubmittedRequest>, ChatMutationError> {
     let retry_key = escape_graphql_string(retry_key);
     let query = format!(
         r#"{{
@@ -566,17 +694,17 @@ async fn load_retry_successor_in_txn(
         request_id: row
             .get("request_id")
             .and_then(Value::as_str)
-            .context("retry successor has no request_id")?
+            .ok_or(ChatMutationError::RetrySuccessorRequestIdMissing)?
             .to_string(),
         session_id: row
             .get("session_id")
             .and_then(Value::as_str)
-            .context("retry successor has no session_id")?
+            .ok_or(ChatMutationError::RetrySuccessorSessionIdMissing)?
             .to_string(),
         node_did: row
             .get("node_did")
             .and_then(Value::as_str)
-            .context("retry successor has no node_did")?
+            .ok_or(ChatMutationError::RetrySuccessorNodeDidMissing)?
             .to_string(),
         agent_id: row
             .get("agent_id")
@@ -591,7 +719,7 @@ async fn load_retry_parent_in_txn(
     parent_request_id: &str,
     node_did: &str,
     requester_did: &str,
-) -> Result<(String, AgentRequestRow)> {
+) -> Result<(String, AgentRequestRow), ChatMutationError> {
     let parent_request_id = escape_graphql_string(parent_request_id);
     let node_did = escape_graphql_string(node_did);
     let requester_did = escape_graphql_string(requester_did);
@@ -644,20 +772,20 @@ async fn load_retry_parent_in_txn(
         .cloned()
         .unwrap_or_default();
     match rows.len() {
-        0 => bail!("retry parent request not found"),
+        0 => return Err(ChatMutationError::RetryParentNotFound),
         1 => {}
-        count => bail!("retry parent request_id is ambiguous across {count} documents"),
+        count => return Err(ChatMutationError::RetryParentAmbiguous { count }),
     }
     let row = rows
         .into_iter()
         .next()
-        .context("retry parent request absent")?;
+        .ok_or(ChatMutationError::RetryParentAbsent)?;
     let doc_id = row
         .get("_docID")
         .and_then(Value::as_str)
-        .context("retry parent request has no _docID")?
+        .ok_or(ChatMutationError::RetryParentDocIdMissing)?
         .to_string();
-    let request = serde_json::from_value(row).context("decoding retry parent request")?;
+    let request = serde_json::from_value(row).map_err(ChatMutationError::RetryParentDecode)?;
     Ok((doc_id, request))
 }
 
@@ -666,7 +794,7 @@ async fn latest_interactive_request_in_txn(
     session_id: &str,
     node_did: &str,
     requester_did: &str,
-) -> Result<String> {
+) -> Result<String, ChatMutationError> {
     let node = escape_graphql_string(node_did);
     let requester = escape_graphql_string(requester_did);
     let session = escape_graphql_string(session_id);
@@ -693,14 +821,14 @@ async fn latest_interactive_request_in_txn(
         .and_then(|row| row.get("request_id"))
         .and_then(Value::as_str)
         .map(str::to_string)
-        .context("retry parent session has no request")
+        .ok_or(ChatMutationError::RetryParentSessionHasNoRequest)
 }
 
 async fn ensure_retry_candidate_is_fresh_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_id: &str,
     candidate_request_id: &str,
-) -> Result<()> {
+) -> Result<(), ChatMutationError> {
     let session_id = escape_graphql_string(session_id);
     let candidate_request_id = escape_graphql_string(candidate_request_id);
     let query = format!(
@@ -721,7 +849,9 @@ async fn ensure_retry_candidate_is_fresh_in_txn(
         .and_then(Value::as_array)
         .is_some_and(|rows| !rows.is_empty());
     if exists {
-        bail!("retry new request id already exists: request_id={candidate_request_id}");
+        return Err(ChatMutationError::RetryRequestIdExists {
+            request_id: candidate_request_id,
+        });
     }
     Ok(())
 }
@@ -731,36 +861,39 @@ fn ensure_retry_parent_eligible(
     parent_retry_count: i64,
     max_retries: i64,
     execution_origin: &str,
-) -> Result<()> {
+) -> Result<(), ChatMutationError> {
     // The Lean `.released` admission predicate is not persisted on
     // `AgentRequestRow`; it is represented here by requiring the parent to be
     // terminal failed.
     let lifecycle_state = parent
         .lifecycle_state
-        .context("retry parent request must have a lifecycle_state")?;
+        .ok_or(ChatMutationError::RetryParentLifecycleMissing)?;
 
     if lifecycle_state != RequestLifecycleState::Failed {
-        bail!("retry parent request must be failed, got lifecycle_state={lifecycle_state}");
+        return Err(ChatMutationError::RetryParentNotFailed { lifecycle_state });
     }
     if execution_origin != "interactive" {
-        bail!(
-            "client retry parent request must be interactive, got execution_origin={execution_origin}"
-        );
+        return Err(ChatMutationError::RetryParentNotInteractive {
+            execution_origin: execution_origin.to_owned(),
+        });
     }
     if parent_retry_count >= max_retries {
-        bail!(
-            "retry parent request exhausted retry budget: retry_count={parent_retry_count} max_retries={max_retries}"
-        );
+        return Err(ChatMutationError::RetryBudgetExhausted {
+            retry_count: parent_retry_count,
+            max_retries,
+        });
     }
     if let Some(deadline) = normalize_optional_string(parent.deadline.as_deref()) {
-        let deadline = DateTime::parse_from_rfc3339(deadline)
-            .with_context(|| format!("retry parent request has invalid deadline {deadline:?}"))?
+        let parsed = DateTime::parse_from_rfc3339(deadline)
+            .map_err(|source| ChatMutationError::InvalidDeadline {
+                deadline: deadline.to_owned(),
+                source,
+            })?
             .with_timezone(&Utc);
-        if Utc::now() > deadline {
-            bail!(
-                "retry parent request deadline is closed: deadline={}",
-                deadline.to_rfc3339()
-            );
+        if Utc::now() > parsed {
+            return Err(ChatMutationError::RetryDeadlineClosed {
+                deadline: parsed.to_rfc3339(),
+            });
         }
     }
 
@@ -839,27 +972,33 @@ pub async fn resend_request(
     requester_did: &str,
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-) -> Result<SubmittedRequest> {
+) -> anyhow::Result<SubmittedRequest> {
     let stale = fetch_request_view(node, stale_request_id, node_did, requester_did).await?;
     if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
         || stale.failure_reason.as_deref() != Some("Stale")
     {
-        anyhow::bail!(
-            "request {stale_request_id} is not a stale terminal (lifecycle_state={}, failure_reason={})",
-            stale
+        return Err(ChatMutationError::RequestNotStaleTerminal {
+            request_id: stale_request_id.to_string(),
+            lifecycle_state: stale
                 .lifecycle_state
-                .map_or("<missing>", RequestLifecycleState::as_str),
-            stale.failure_reason.as_deref().unwrap_or("<missing>")
-        );
+                .map_or("<missing>", RequestLifecycleState::as_str)
+                .to_string(),
+            failure_reason: stale
+                .failure_reason
+                .as_deref()
+                .unwrap_or("<missing>")
+                .to_string(),
+        }
+        .into());
     }
     let stale_node_did = stale
         .node_did
         .as_deref()
-        .context("stale request has no node_did")?;
+        .ok_or(ChatMutationError::StaleRequestNodeDidMissing)?;
     let stale_content = stale
         .content
         .as_deref()
-        .context("stale request has no content")?;
+        .ok_or(ChatMutationError::StaleRequestContentMissing)?;
     let retry_session_id = Uuid::new_v4().to_string();
     submit_request(
         node,
@@ -889,7 +1028,7 @@ async fn fetch_request_view(
     request_id: &str,
     node_did: &str,
     requester_did: &str,
-) -> Result<AgentRequestRow> {
+) -> Result<AgentRequestRow, ChatMutationError> {
     let escaped = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
     let requester_did = escape_graphql_string(requester_did);
@@ -915,16 +1054,23 @@ async fn fetch_request_view(
     );
     let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_request")
         .await
-        .with_context(|| format!("fetch_request({request_id})"))?;
+        .map_err(|source| ChatMutationError::FetchRequest {
+            request_id: request_id.to_string(),
+            source,
+        })?;
     let row = resp
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    serde_json::from_value(row.clone())
-        .with_context(|| format!("decoding AgentRequest {request_id}"))
+        .ok_or_else(|| ChatMutationError::RequestNotFound {
+            request_id: request_id.to_string(),
+        })?;
+    serde_json::from_value(row.clone()).map_err(|source| ChatMutationError::DecodeRequest {
+        request_id: request_id.to_string(),
+        source,
+    })
 }
 
 struct RetryLineage {
@@ -938,7 +1084,7 @@ async fn fetch_retry_lineage(
     request_id: &str,
     node_did: &str,
     requester_did: &str,
-) -> Result<RetryLineage> {
+) -> Result<RetryLineage, ChatMutationError> {
     let escaped = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
     let requester_did = escape_graphql_string(requester_did);
@@ -960,7 +1106,10 @@ async fn fetch_retry_lineage(
     );
     let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_retry_lineage")
         .await
-        .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
+        .map_err(|source| ChatMutationError::FetchRetryLineage {
+            request_id: request_id.to_string(),
+            source,
+        })?;
     let rows = resp
         .data
         .as_ref()
@@ -969,19 +1118,19 @@ async fn fetch_retry_lineage(
         .cloned()
         .unwrap_or_default();
     match rows.len() {
-        0 => bail!("retry parent request not found"),
+        0 => return Err(ChatMutationError::RetryParentNotFound),
         1 => {}
-        count => bail!("retry parent request_id is ambiguous across {count} documents"),
+        count => return Err(ChatMutationError::RetryParentAmbiguous { count }),
     }
     let row = rows
         .into_iter()
         .next()
-        .context("retry parent request absent")?;
+        .ok_or(ChatMutationError::RetryParentAbsent)?;
     Ok(RetryLineage {
         doc_id: row
             .get("_docID")
             .and_then(Value::as_str)
-            .context("retry parent request has no _docID")?
+            .ok_or(ChatMutationError::RetryParentDocIdMissing)?
             .to_string(),
         retry_root_request: normalize_optional_string(
             row.get("retry_root_request").and_then(Value::as_str),
@@ -992,7 +1141,9 @@ async fn fetch_retry_lineage(
     })
 }
 
-fn canonical_request_created_at_after(parent_created_at: Option<&str>) -> Result<String> {
+fn canonical_request_created_at_after(
+    parent_created_at: Option<&str>,
+) -> Result<String, ChatMutationError> {
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now = DateTime::parse_from_rfc3339(&now)
         .expect("UTC RFC3339 seconds formatter must parse")
@@ -1000,8 +1151,9 @@ fn canonical_request_created_at_after(parent_created_at: Option<&str>) -> Result
     let created_at = match normalize_optional_string(parent_created_at) {
         Some(parent_created_at) => {
             let parent = DateTime::parse_from_rfc3339(parent_created_at)
-                .with_context(|| {
-                    format!("retry parent request has invalid created_at {parent_created_at:?}")
+                .map_err(|source| ChatMutationError::InvalidCreatedAt {
+                    created_at: parent_created_at.to_owned(),
+                    source,
                 })?
                 .with_timezone(&Utc);
             now.max(parent + chrono::Duration::seconds(1))
@@ -1022,5 +1174,5 @@ pub(crate) mod receipt;
 
 pub use receipt::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionOutcomeUnknown, UnresolvedSubmission,
+    ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
 };

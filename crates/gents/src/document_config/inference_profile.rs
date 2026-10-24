@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
+use super::error::DocumentConfigError;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// Complete selectable inference preset; multiple profiles may select different
@@ -74,12 +75,14 @@ impl InferenceProfile {
         violations
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
         if violations.is_empty() {
             Ok(())
         } else {
-            anyhow::bail!(violations.join("; "))
+            Err(DocumentConfigError::InferenceProfileViolations {
+                violations: violations.join("; "),
+            })
         }
     }
 }
@@ -157,26 +160,24 @@ pub async fn list_inference_profile_records(
         .as_ref()
         .and_then(|data| data.get("InferenceProfile"))
         .and_then(serde_json::Value::as_array)
-        .context("missing canonical configuration rows")?
+        .ok_or(DocumentConfigError::InferenceProfileRowsMissing)?
         .clone();
     let mut seen = rapidhash::RapidHashSet::default();
     rows.into_iter()
         .map(|mut row| {
             let doc_id = row
                 .as_object_mut()
-                .context("configuration row must be an object")?
+                .ok_or(DocumentConfigError::ConfigurationRowNotObject)?
                 .remove("_docID")
                 .and_then(|value| value.as_str().map(str::to_owned))
-                .context("configuration row missing physical ID")?;
+                .ok_or(DocumentConfigError::ConfigurationRowMissingPhysicalId)?;
             let document: InferenceProfile = serde_json::from_value(row)?;
-            anyhow::ensure!(
-                document.node_did == node_did,
-                "foreign InferenceProfile row"
-            );
-            anyhow::ensure!(
-                seen.insert(document.profile_id.clone()),
-                "duplicate scoped InferenceProfile ID"
-            );
+            if document.node_did != node_did {
+                return Err(DocumentConfigError::ForeignInferenceProfileRow.into());
+            }
+            if !seen.insert(document.profile_id.clone()) {
+                return Err(DocumentConfigError::DuplicateScopedInferenceProfile.into());
+            }
             Ok((doc_id, document))
         })
         .collect()

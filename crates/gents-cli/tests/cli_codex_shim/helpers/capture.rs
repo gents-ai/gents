@@ -1,4 +1,6 @@
 use super::*;
+use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Debug)]
 pub(super) struct TurnCapture {
@@ -22,12 +24,12 @@ pub(super) enum TurnStreamEvent {
 
 pub(super) async fn read_turn_to_completion(
     ws: &mut ShimWebSocket,
-) -> Result<(String, codex::Turn)> {
+) -> TestResult<(String, codex::Turn)> {
     let capture = read_turn_capture(ws).await?;
     Ok((capture.text, capture.turn))
 }
 
-pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapture> {
+pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> TestResult<TurnCapture> {
     let mut text = String::new();
     let mut completed_user_inputs = Vec::new();
     let mut started_tools = Vec::new();
@@ -93,10 +95,14 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+                return Err(
+                    format!("Codex shim emitted JSON-RPC error: {}", error.error.message).into(),
+                );
             }
             codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
+                return Err(
+                    format!("Codex shim sent unexpected server request: {request:?}").into(),
+                );
             }
             codex::JSONRPCMessage::Response(_) => {}
         }
@@ -187,7 +193,7 @@ pub(super) async fn wait_for_request_input(
     graphql: &str,
     node_did: &str,
     content: &str,
-) -> Result<(String, String, gents_protocol::request_input::RequestInput)> {
+) -> TestResult<(String, String, gents_protocol::request_input::RequestInput)> {
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
         let query = format!(
@@ -213,58 +219,82 @@ pub(super) async fn wait_for_request_input(
             let request_id = row
                 .get("request_id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("AgentRequest row missing request_id: {row}"))?;
+                .ok_or_else(|| format!("AgentRequest row missing request_id: {row}"))?;
             let session_id = row
                 .get("session_id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("AgentRequest row missing session_id: {row}"))?;
+                .ok_or_else(|| format!("AgentRequest row missing session_id: {row}"))?;
             let input = serde_json::from_value::<gents_protocol::request_input::RequestInput>(
                 row.get("input")
                     .cloned()
-                    .ok_or_else(|| anyhow!("AgentRequest row missing input: {row}"))?,
+                    .ok_or_else(|| format!("AgentRequest row missing input: {row}"))?,
             )
-            .context("decoding canonical AgentRequest input")?;
+            .map_err(|error| {
+                format!(
+                    "decoding canonical AgentRequest input: {}",
+                    ErrorChain(&error)
+                )
+            })?;
             return Ok((request_id.to_string(), session_id.to_string(), input));
         }
 
         if std::time::Instant::now() >= deadline {
-            bail!("timed out waiting for AgentRequest input for {node_did}");
+            return Err(format!("timed out waiting for AgentRequest input for {node_did}").into());
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
-pub(super) async fn read_jsonrpc(ws: &mut ShimWebSocket) -> Result<codex::JSONRPCMessage> {
+pub(super) async fn read_jsonrpc(ws: &mut ShimWebSocket) -> TestResult<codex::JSONRPCMessage> {
     loop {
         let frame = tokio::time::timeout(Duration::from_secs(60), ws.next())
             .await
-            .context("timed out waiting for Codex shim websocket message")?
-            .ok_or_else(|| anyhow!("Codex shim websocket closed"))?
-            .context("reading Codex shim websocket message")?;
+            .map_err(|error| {
+                format!(
+                    "timed out waiting for Codex shim websocket message: {}",
+                    ErrorChain(&error)
+                )
+            })?
+            .ok_or_else(|| "Codex shim websocket closed".to_string())?
+            .map_err(|error| {
+                format!(
+                    "reading Codex shim websocket message: {}",
+                    ErrorChain(&error)
+                )
+            })?;
         let text = match frame {
             WsMessage::Text(text) => text,
             WsMessage::Binary(bytes) => String::from_utf8(bytes.to_vec())
-                .context("decoding binary websocket payload as UTF-8")?
+                .map_err(|error| {
+                    format!(
+                        "decoding binary websocket payload as UTF-8: {}",
+                        ErrorChain(&error)
+                    )
+                })?
                 .into(),
             WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
-            WsMessage::Close(close) => bail!("Codex shim websocket closed: {close:?}"),
-            WsMessage::Frame(_) => bail!("unexpected raw websocket frame"),
+            WsMessage::Close(close) => {
+                return Err(format!("Codex shim websocket closed: {close:?}").into())
+            }
+            WsMessage::Frame(_) => return Err("unexpected raw websocket frame".to_string().into()),
         };
-        return serde_json::from_str(&text)
-            .with_context(|| format!("decoding JSON-RPC message: {text}"));
+        return serde_json::from_str(&text).map_err(|error| {
+            format!("decoding JSON-RPC message: {text}: {}", ErrorChain(&error)).into()
+        });
     }
 }
 
 pub(super) fn server_notification_from_jsonrpc(
     notification: codex::JSONRPCNotification,
-) -> Result<codex::ServerNotification> {
-    serde_json::from_value(serde_json::to_value(notification)?)
-        .context("decoding Codex server notification")
+) -> TestResult<codex::ServerNotification> {
+    serde_json::from_value(serde_json::to_value(notification)?).map_err(|error| {
+        format!("decoding Codex server notification: {}", ErrorChain(&error)).into()
+    })
 }
 
 pub(super) async fn read_token_usage_notification(
     ws: &mut ShimWebSocket,
-) -> Result<codex::ThreadTokenUsage> {
+) -> TestResult<codex::ThreadTokenUsage> {
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
@@ -275,10 +305,14 @@ pub(super) async fn read_token_usage_notification(
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+                return Err(
+                    format!("Codex shim emitted JSON-RPC error: {}", error.error.message).into(),
+                );
             }
             codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
+                return Err(
+                    format!("Codex shim sent unexpected server request: {request:?}").into(),
+                );
             }
             codex::JSONRPCMessage::Response(_) => {}
         }

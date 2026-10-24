@@ -17,6 +17,14 @@ use crate::lifecycle::{
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
 use crate::trigger_engine::{MaterializerHandle, TriggerKind};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MaterializerError {
+    #[error("resolving agent for task {task_id}: {reason}")]
+    ResolveAgent { task_id: String, reason: String },
+    #[error("agent {agent_id} has no backend binding; scheduled fires require a backend")]
+    AgentBackendMissing { agent_id: String },
+}
+
 pub(crate) struct ProductionMaterializer {
     node: Arc<EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -40,24 +48,27 @@ impl ProductionMaterializer {
             .context("runtime node DID is not ACP-addressable")
     }
 
-    fn resolve_agent(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
+    fn resolve_agent(
+        &self,
+        task: &ResolvedTask,
+    ) -> std::result::Result<(String, String, u64, String), MaterializerError> {
         let snapshot = self.snapshot_rx.borrow().clone();
         let agent = snapshot.agent(&task.agent_id).ok_or_else(|| {
             let reason = snapshot
                 .unavailable_public_message(&task.agent_id)
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| format!("agent {} is not loaded", task.agent_id));
-            anyhow!("resolving agent for task {}: {reason}", task.task_id)
+            MaterializerError::ResolveAgent {
+                task_id: task.task_id.clone(),
+                reason,
+            }
         })?;
         let backend_id = agent
             .backend_id
             .as_deref()
             .map(str::to_owned)
-            .ok_or_else(|| {
-                anyhow!(
-                    "agent {} has no backend binding; scheduled fires require a backend",
-                    agent.agent_id
-                )
+            .ok_or_else(|| MaterializerError::AgentBackendMissing {
+                agent_id: agent.agent_id.clone(),
             })?;
         Ok((
             agent.agent_id.clone(),
@@ -315,7 +326,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         root_request_doc_id: None,
                     }
                 });
-                let create = crate::lifecycle::materialize::build_request(spec)?;
+                let create = crate::lifecycle::materialize::build_request(spec);
                 let admission = crate::lifecycle::write_trigger_delivery(
                     &node,
                     runtime_actor,

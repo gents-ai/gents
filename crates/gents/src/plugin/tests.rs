@@ -1,5 +1,6 @@
 use super::*;
 use crate::pack_archive::pack_dir;
+use gents_protocol::error_chain::ErrorChain;
 
 fn wat(src: &str) -> Vec<u8> {
     wat::parse_str(src).expect("WAT parses")
@@ -498,7 +499,7 @@ fn a_ruby_source_plugin_is_refused_at_admission_not_silently_run() {
 
     let error = PluginRunner::compile(&afb_bytes, &plugin)
         .expect_err("a ruby-source plugin must never be admitted");
-    let message = format!("{error:#}");
+    let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
     assert!(message.contains("rb_plugin"), "{message}");
     assert!(message.contains("stdin"), "{message}");
     assert!(message.contains("fuel"), "{message}");
@@ -736,7 +737,13 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         ..Default::default()
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
-    assert!(format!("{error:#}").contains("broken"), "{error:#}");
+    assert!(
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .contains("broken"),
+        "{}",
+        ErrorChain(&error)
+    );
 }
 
 #[test]
@@ -871,7 +878,7 @@ fn job_block_on_a_plugin_without_job_true_is_refused() {
             .err()
             .expect("a job block needs a plugin that declares job dispatch");
     assert_eq!(
-        format!("{error:#}"),
+        format!("{}", ErrorChain(error.as_ref())),
         "plugin team/plugin does not declare job dispatch; install a pack whose plugin sets `job: true`"
     );
 }

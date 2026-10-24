@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context as _;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
@@ -23,6 +22,62 @@ use crate::tool_surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };
 use crate::trigger_engine::manual_source::ManualTriggerHandle;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentError {
+    #[error("Gents runtime requires an EmbeddedNode configured with a node signing DID")]
+    NodeSigningDidRequired,
+    #[error("resolved document runtime snapshot is missing its node owner")]
+    NodeOwnerMissing,
+    #[error("runtime was not constructed from documents")]
+    NotConstructedFromDocuments,
+    #[error("enrollment authority is unavailable")]
+    EnrollmentAuthorityUnavailable,
+    #[error("enrollment authority is not running")]
+    EnrollmentAuthorityNotRunning,
+    #[error("{field_name} must be positive; got {value}")]
+    NonPositiveDuration {
+        field_name: &'static str,
+        value: i64,
+    },
+    #[error("{field_name} value {value} is out of range")]
+    DurationOutOfRange {
+        field_name: &'static str,
+        value: i64,
+    },
+    #[error("stream liveness must be shorter than request deadline")]
+    LivenessNotShorterThanDeadline,
+    #[error("configured max_total_tokens must be positive")]
+    MaxTotalTokensNotPositive,
+    #[error(transparent)]
+    TokenLimit(#[from] std::num::TryFromIntError),
+    #[error("Gents builder is missing node")]
+    BuilderMissingNode,
+    #[error("Gents builder is missing identity")]
+    BuilderMissingIdentity,
+    #[error("Gents builder requires at least one agent")]
+    BuilderWithoutAgents,
+    #[error("default agent {agent_id} is not present in builder agents")]
+    DefaultAgentNotPresent { agent_id: String },
+    #[error("duplicate agent names in builder: {names}")]
+    DuplicateAgentNames { names: String },
+    #[error("agent '{agent_id}' build failed: {error}")]
+    AgentBuildFailed { agent_id: String, error: String },
+    #[error("agent '{name}' is missing backend_id")]
+    AgentMissingBackendId { name: String },
+    #[error("agent '{name}' references missing backend {backend_id}")]
+    BackendReferenceMissing { name: String, backend_id: String },
+    #[error("backend {backend_id} disappeared during assembly")]
+    BackendDisappeared { backend_id: String },
+    #[error("agent '{name}' backend {backend_id} is unavailable (enabled={enabled} probe_status={probe_status} measured_unhealthy={measured_unhealthy})")]
+    AgentBackendUnavailable {
+        name: String,
+        backend_id: String,
+        enabled: String,
+        probe_status: String,
+        measured_unhealthy: String,
+    },
+}
 
 mod builder;
 pub mod completion_retry;
@@ -250,9 +305,7 @@ impl Gents {
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
         if node.node_identity_did().is_none() {
-            anyhow::bail!(
-                "Gents runtime requires an EmbeddedNode configured with a node signing DID"
-            );
+            return Err(AgentError::NodeSigningDidRequired.into());
         }
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
@@ -271,7 +324,7 @@ impl Gents {
         let runtime_node = resolved_snapshot
             .node
             .clone()
-            .context("resolved document runtime snapshot is missing its node owner")?;
+            .ok_or(AgentError::NodeOwnerMissing)?;
         let default_agent_id = runtime_node.default_agent_id.clone();
         let mut agents = resolved_snapshot
             .agents
@@ -396,7 +449,7 @@ impl Gents {
         let context = self
             .document_runtime_context
             .as_ref()
-            .context("runtime was not constructed from documents")?;
+            .ok_or(AgentError::NotConstructedFromDocuments)?;
         Ok(resolve_document_runtime_snapshot(&self.node, context)
             .await?
             .configuration_fingerprint())
@@ -424,9 +477,9 @@ impl Gents {
         let authority = self
             .enrollment_authority
             .read()
-            .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))?
+            .map_err(|_| AgentError::EnrollmentAuthorityUnavailable)?
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("enrollment authority is not running"))?;
+            .ok_or(AgentError::EnrollmentAuthorityNotRunning)?;
         authority
             .client_observation_authorized(member_did, self.node_did())
             .await
@@ -489,10 +542,9 @@ pub(crate) fn agent_config_from_documents(
         "stream_liveness_timeout_secs",
         DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
     )?;
-    anyhow::ensure!(
-        liveness_secs < deadline_duration_secs,
-        "stream liveness must be shorter than request deadline"
-    );
+    if liveness_secs >= deadline_duration_secs {
+        return Err(AgentError::LivenessNotShorterThanDeadline.into());
+    }
     let provider_idle_secs = positive_duration_secs_or_default(
         execution.provider_idle_timeout_secs,
         "provider_idle_timeout_secs",
@@ -501,8 +553,10 @@ pub(crate) fn agent_config_from_documents(
     let max_total_tokens = execution
         .max_total_tokens
         .map(|limit| {
-            anyhow::ensure!(limit > 0, "configured max_total_tokens must be positive");
-            Ok::<_, anyhow::Error>(u64::try_from(limit)?)
+            if limit <= 0 {
+                return Err(AgentError::MaxTotalTokensNotPositive);
+            }
+            Ok::<_, AgentError>(u64::try_from(limit)?)
         })
         .transpose()?;
     if let Some(config) = &compaction {
@@ -556,14 +610,15 @@ pub(crate) fn agent_config_from_documents(
 
 fn positive_duration_secs_or_default(
     value: Option<i64>,
-    field_name: &str,
+    field_name: &'static str,
     default_secs: u64,
-) -> anyhow::Result<u64> {
+) -> Result<u64, AgentError> {
     match value {
         None => Ok(default_secs),
-        Some(value) if value > 0 => u64::try_from(value)
-            .map_err(|_| anyhow::anyhow!("{field_name} value {value} is out of range")),
-        Some(value) => anyhow::bail!("{field_name} must be positive; got {value}"),
+        Some(value) if value > 0 => {
+            u64::try_from(value).map_err(|_| AgentError::DurationOutOfRange { field_name, value })
+        }
+        Some(value) => Err(AgentError::NonPositiveDuration { field_name, value }),
     }
 }
 

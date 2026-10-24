@@ -470,7 +470,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
 
 #[test]
 fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
-    use crate::error::{BridgeError, BridgeErrorCode};
+    use crate::error::BridgeErrorCode;
 
     let lookup = || super::super::SelectedRequestLookup {
         query: String::new(),
@@ -481,10 +481,10 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
     let error = lookup()
         .decode(&absent, "did:test:agent", "session", None)
         .unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<BridgeError>().map(|error| error.code),
-        Some(BridgeErrorCode::ProjectionPending)
-    );
+    assert!(matches!(
+        &error,
+        ClientQueryError::ProjectionPending(bridge) if bridge.code == BridgeErrorCode::ProjectionPending
+    ));
 
     let row = serde_json::json!({
         "_docID": "canonical-doc", "request_id": "canonical-request",
@@ -506,16 +506,17 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
             .decode(&data, "did:test:agent", "session", None)
             .unwrap_err();
         assert!(
-            error.downcast_ref::<BridgeError>().is_none(),
+            !matches!(error, ClientQueryError::ProjectionPending(_)),
             "{field} must fail rather than wait: {error}"
         );
     }
     let duplicated = serde_json::json!({"AgentRequest": [row.clone(), row.clone()]});
-    assert!(lookup()
-        .decode(&duplicated, "did:test:agent", "session", None)
-        .unwrap_err()
-        .downcast_ref::<BridgeError>()
-        .is_none());
+    assert!(!matches!(
+        lookup()
+            .decode(&duplicated, "did:test:agent", "session", None)
+            .unwrap_err(),
+        ClientQueryError::ProjectionPending(_)
+    ));
     let arrived = serde_json::json!({"AgentRequest": [row]});
     let rows = lookup()
         .decode(&arrived, "did:test:agent", "session", None)
@@ -527,7 +528,7 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
 
 #[test]
 fn selected_request_lookup_keeps_unobserved_rows_pending() {
-    use crate::error::{BridgeError, BridgeErrorCode};
+    use crate::error::BridgeErrorCode;
 
     let data = serde_json::json!({ "AgentRequest": [] });
     let lookup = super::super::SelectedRequestLookup {
@@ -538,10 +539,10 @@ fn selected_request_lookup_keeps_unobserved_rows_pending() {
     let error = lookup
         .decode(&data, "did:test:agent", "session", None)
         .expect_err("unobserved request is pending");
-    assert_eq!(
-        error.downcast_ref::<BridgeError>().map(|error| error.code),
-        Some(BridgeErrorCode::ProjectionPending)
-    );
+    assert!(matches!(
+        &error,
+        ClientQueryError::ProjectionPending(bridge) if bridge.code == BridgeErrorCode::ProjectionPending
+    ));
 
     let head = super::super::SelectedRequestLookup {
         query: String::new(),
@@ -551,10 +552,10 @@ fn selected_request_lookup_keeps_unobserved_rows_pending() {
     let error = head
         .decode(&data, "did:test:agent", "session", None)
         .expect_err("unobserved canonical head is pending");
-    assert_eq!(
-        error.downcast_ref::<BridgeError>().map(|error| error.code),
-        Some(BridgeErrorCode::ProjectionPending)
-    );
+    assert!(matches!(
+        &error,
+        ClientQueryError::ProjectionPending(bridge) if bridge.code == BridgeErrorCode::ProjectionPending
+    ));
 }
 
 #[test]
@@ -586,7 +587,7 @@ fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
     let error = lookup
         .decode(&data, "did:test:agent", "session", None)
         .expect_err("malformed rows are invalid rather than pending");
-    assert!(error.downcast_ref::<crate::error::BridgeError>().is_none());
+    assert!(!matches!(error, ClientQueryError::ProjectionPending(_)));
 }
 
 #[tokio::test]

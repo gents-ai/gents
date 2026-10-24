@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_fs_routes_are_unsupported() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -55,7 +55,7 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -140,9 +140,9 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
+async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> TestResult<()> {
     require_command("git")?;
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -195,7 +195,7 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;

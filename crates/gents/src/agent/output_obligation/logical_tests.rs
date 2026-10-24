@@ -3,6 +3,7 @@ use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -420,10 +421,15 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                 Err(error) => {
                     assert!(
                         !case["authenticated_child"].as_bool().unwrap(),
-                        "{}: unexpected ancestry error {error:#}",
-                        case["name"]
+                        "{}: unexpected ancestry error {}",
+                        case["name"],
+                        ErrorChain(error.as_ref())
                     );
-                    assert!(error.to_string().contains("parent is absent"), "{error:#}");
+                    assert!(
+                        error.to_string().contains("parent is absent"),
+                        "{}",
+                        ErrorChain(error.as_ref())
+                    );
                     "reject"
                 }
                 Ok(None) => "complete",
@@ -431,10 +437,15 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     Err(error) => {
                         assert!(
                             !case["count_valid"].as_bool().unwrap(),
-                            "{}: unexpected gate error {error:#}",
-                            case["name"]
+                            "{}: unexpected gate error {}",
+                            case["name"],
+                            ErrorChain(error.as_ref())
                         );
-                        assert!(error.to_string().contains("disagree"), "{error:#}");
+                        assert!(
+                            error.to_string().contains("disagree"),
+                            "{}",
+                            ErrorChain(error.as_ref())
+                        );
                         "reject"
                     }
                     Ok(unmet) if unmet.is_empty() => "complete",
@@ -525,7 +536,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             .expect_err("a malformed durable count must fail the gate closed");
         assert!(
             error.to_string().contains("expected_count_field"),
-            "{reason}: unexpected error {error:#}"
+            "{reason}: unexpected error {}",
+            ErrorChain(error.as_ref())
         );
         node.shutdown().await;
     }
@@ -634,11 +646,13 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         .expect_err("conflicting declared counts must fail the gate closed");
     assert!(
         error.to_string().contains("disagree"),
-        "the per-tool count conflict must be detected as a disagreement: {error:#}"
+        "the per-tool count conflict must be detected as a disagreement: {}",
+        ErrorChain(error.as_ref())
     );
     assert!(
         !error.to_string().contains("unique physical tool binding"),
-        "two same-tool writes must resolve individually, not surface as name ambiguity: {error:#}"
+        "two same-tool writes must resolve individually, not surface as name ambiguity: {}",
+        ErrorChain(error.as_ref())
     );
     node.shutdown().await;
 }

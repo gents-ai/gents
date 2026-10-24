@@ -2,11 +2,30 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
 use gents::plugin::approval;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
+
+#[derive(Debug, thiserror::Error)]
+enum ApprovalsWatchError {
+    #[error(transparent)]
+    Approval(#[from] approval::PluginApprovalError),
+    #[error(transparent)]
+    Notify(#[from] notify::Error),
+    #[error(transparent)]
+    Clock(#[from] std::time::SystemTimeError),
+    #[error("resolving the approval home")]
+    ResolveHome(#[source] std::io::Error),
+    #[error("approval queue has no parent")]
+    QueueParent,
+    #[error("workspace permission preferences must be a regular file")]
+    PreferencesNotRegular,
+    #[error("inspecting workspace permission preferences")]
+    InspectPreferences(#[source] std::io::Error),
+}
+
+type Result<T, E = ApprovalsWatchError> = std::result::Result<T, E>;
 
 pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -133,7 +152,9 @@ struct QueueWatch {
 impl QueueWatch {
     fn start(home: &Path, changes: mpsc::Sender<()>) -> Result<Self> {
         approval::prepare_listener(home)?;
-        let parent = home.canonicalize().context("resolving the approval home")?;
+        let parent = home
+            .canonicalize()
+            .map_err(ApprovalsWatchError::ResolveHome)?;
         let queues = approval::queue_dirs(&parent);
         let watched_queues = queues.clone();
         let preferences = approval::workspace::preferences_file(&parent);
@@ -158,7 +179,7 @@ impl QueueWatch {
         })?;
         // Keep watching the parent across queue removal or atomic replacement.
         watcher.watch(
-            queues[0].parent().context("approval queue has no parent")?,
+            queues[0].parent().ok_or(ApprovalsWatchError::QueueParent)?,
             RecursiveMode::NonRecursive,
         )?;
         for queue in &queues {
@@ -176,15 +197,14 @@ impl QueueWatch {
     fn watch_preferences(&mut self) -> Result<()> {
         match std::fs::symlink_metadata(&self.preferences) {
             Ok(metadata) => {
-                anyhow::ensure!(
-                    metadata.file_type().is_file(),
-                    "workspace permission preferences must be a regular file"
-                );
+                if !metadata.file_type().is_file() {
+                    return Err(ApprovalsWatchError::PreferencesNotRegular);
+                }
                 self.watcher
                     .watch(&self.preferences, RecursiveMode::NonRecursive)?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("inspecting workspace permission preferences"),
+            Err(error) => return Err(ApprovalsWatchError::InspectPreferences(error)),
         }
         Ok(())
     }
@@ -193,7 +213,7 @@ impl QueueWatch {
         approval::prepare_listener(home)?;
         let root = self.queues[0]
             .parent()
-            .context("approval queue has no parent")?;
+            .ok_or(ApprovalsWatchError::QueueParent)?;
         let _ = self.watcher.unwatch(root);
         self.watcher.watch(root, RecursiveMode::NonRecursive)?;
         for queue in &self.queues {

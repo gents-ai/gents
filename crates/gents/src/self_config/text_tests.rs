@@ -1,5 +1,6 @@
 use super::tests::{build_agent_node, call_config_tool, config, node_identity};
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
 
@@ -10,7 +11,7 @@ async fn call(tools: &Tools, args: Value) -> Result<Value, String> {
         .expect("config registered");
     match tool.call(args.to_string()).await {
         Ok(text) => Ok(serde_json::from_str(&text).unwrap_or(Value::String(text))),
-        Err(error) => Err(format!("{error:#}")),
+        Err(error) => Err(ErrorChain(&error).to_string()),
     }
 }
 

@@ -3,6 +3,7 @@ use crate::graph_pipeline::logical_invocation_contract_tests::{
     execute, prepare_signed_child, signed_invocation_fixture,
 };
 use crate::graph_pipeline::runtime::graph_test_owner;
+use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 
 fn assert_created_request(response: &Value) {
@@ -143,8 +144,10 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
                     };
                     if let Err(error) = result {
                         assert_ne!(
-                            before.update_generation, observed.update_generation,
-                            "unexpected owner error: {error:#}"
+                            before.update_generation,
+                            observed.update_generation,
+                            "unexpected owner error: {}",
+                            ErrorChain(error.as_ref())
                         );
                     }
                 }
@@ -189,7 +192,8 @@ async fn publication_fence_rejects_a_revision_it_is_not_pinned_to() {
         error
             .to_string()
             .contains("revision does not match the pinned run"),
-        "unexpected denial: {error:#}"
+        "unexpected denial: {}",
+        ErrorChain(&error)
     );
     txn.discard().await.unwrap();
     let after = load_graph_run_view(&node, graph_test_owner(), &run.run_id)

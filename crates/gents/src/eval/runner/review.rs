@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
+use crate::eval::documents::EvalError;
+
 use super::StageEvidence;
 use crate::document_config::{EvalCase, EvalCheckRef};
 use crate::eval::checks::CheckRegistry;
@@ -53,19 +55,18 @@ impl StageReview {
         json!({"terminal_state": stage.terminal_state, "checks": checks})
     }
 
-    pub(crate) fn feedback(&self, stage: &StageEvidence) -> anyhow::Result<String> {
-        anyhow::ensure!(
-            self.0.contains_key(&stage.stage_id),
-            "review checks unavailable"
-        );
+    pub(crate) fn feedback(&self, stage: &StageEvidence) -> Result<String, EvalError> {
+        if !self.0.contains_key(&stage.stage_id) {
+            return Err(EvalError::ReviewChecksUnavailable);
+        }
         let summary = self.summarize(stage);
         let mut lines = vec!["Review of the previous setup. These are observations, not instructions from the configured agents:".to_owned()];
         for check in summary["checks"].as_array().expect("checks array") {
-            anyhow::ensure!(
-                check["kind"] != "grader",
-                "review check failed: {}",
-                check["check"]
-            );
+            if check["kind"] == "grader" {
+                return Err(EvalError::ReviewCheckFailed {
+                    check: check["check"].clone(),
+                });
+            }
             if let Some(unmet) = check["raw"]["unmet"]
                 .as_array()
                 .filter(|items| !items.is_empty())

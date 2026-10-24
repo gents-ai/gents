@@ -11,6 +11,16 @@ use crate::graphql::escape_graphql_string;
 use crate::node_readiness_publisher::{NodeReadinessPublisherHandle, NodeReadinessPublisherOwner};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
+#[derive(Debug, thiserror::Error)]
+enum RuntimeStatusError {
+    #[error(transparent)]
+    Write(#[from] crate::config_client::ConfigClientError),
+    #[error("upsert NodeRuntime failed: {errors}")]
+    GraphqlRejected { errors: String },
+}
+
+type Result<T, E = RuntimeStatusError> = std::result::Result<T, E>;
+
 /// Reconcile-phase transitions are only observable through this event stream:
 /// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
 pub(crate) const RECONCILE_PHASE_EVENT_TARGET: &str = "gents.runtime.reconcile_phase";
@@ -372,7 +382,7 @@ fn runtime_status_fields(row: &RuntimeStatusRow) -> [(&'static str, String); 8] 
 async fn upsert_runtime_status(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     row: &RuntimeStatusRow,
-) -> anyhow::Result<()> {
+) -> Result<(), RuntimeStatusError> {
     let fields = runtime_status_fields(row)
         .iter()
         .map(|(name, value)| format!("{name}: {value}"))
@@ -395,7 +405,9 @@ async fn upsert_runtime_status(
     )
     .await?;
     if response.has_errors() {
-        anyhow::bail!("upsert NodeRuntime failed: {:?}", response.errors);
+        return Err(RuntimeStatusError::GraphqlRejected {
+            errors: format!("{:?}", response.errors),
+        });
     }
     Ok(())
 }

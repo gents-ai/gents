@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +21,46 @@ use crate::truncation::TruncationLimits;
 pub(crate) mod persistence;
 #[cfg(test)]
 mod tests;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HookError {
+    #[error("duplicate accepted tool binding for internal call {internal_call_id}")]
+    DuplicateAcceptedToolBinding { internal_call_id: String },
+    #[error("active request changed while resolving document provenance")]
+    ActiveRequestChanged,
+    #[error("active request is missing its physical document id")]
+    ActiveRequestMissingDocId,
+    #[error("decode background row count")]
+    DecodeBackgroundRowCount(#[source] serde_json::Error),
+    #[error("session hook missing session id")]
+    MissingSessionId,
+    #[error("tool call is missing its active request id")]
+    MissingActiveRequestId,
+    #[error("tool call is missing its active request document id")]
+    MissingActiveRequestDocId,
+    #[error("tool call is missing its request deadline")]
+    MissingRequestDeadline,
+    #[error("plugin effect dispatch does not match its admitted input")]
+    PluginEffectDispatchMismatch,
+    #[error(
+        "tool dispatch lacks StreamProcessor native identity for internal call {internal_call_id}"
+    )]
+    DispatchMissingStreamIdentity { internal_call_id: String },
+    #[error(
+        "tool dispatch lacks registered provider tool id for internal call {internal_call_id}"
+    )]
+    DispatchMissingProviderToolId { internal_call_id: String },
+    #[error("dispatch provider call id does not match StreamProcessor identity")]
+    DispatchProviderCallIdMismatch,
+    #[error("accepted dispatch requires a physical request binding")]
+    DispatchMissingRequestBinding,
+    #[error("tool dispatch lacks its provider-published AcceptedToolCall binding")]
+    DispatchMissingAcceptedBinding,
+    #[error("accepted tool binding does not match registered provider dispatch identity")]
+    AcceptedBindingMismatch,
+    #[error(transparent)]
+    ToolCallLifecycle(#[from] crate::tool_call_lifecycle::ToolCallLifecycleError),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FailurePolicy {
@@ -208,7 +249,10 @@ impl BackgroundExecutionRegistry {
 
     pub(crate) fn try_process_record_list(
         &self,
-    ) -> anyhow::Result<Vec<crate::managed_exec::ownership::ProcessRecord>> {
+    ) -> Result<
+        Vec<crate::managed_exec::ownership::ProcessRecord>,
+        crate::managed_exec::ownership::ManagedExecError,
+    > {
         self.process_records.try_list()
     }
 
@@ -531,13 +575,14 @@ impl DefraSessionHook {
     pub(crate) async fn adopt_accepted_tool_calls(
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), HookError> {
         let mut pending = self.accepted_tool_calls.lock().await;
         for (internal_id, call) in calls {
-            anyhow::ensure!(
-                pending.insert(internal_id.clone(), call).is_none(),
-                "duplicate accepted tool binding for internal call {internal_id}"
-            );
+            if pending.insert(internal_id.clone(), call).is_some() {
+                return Err(HookError::DuplicateAcceptedToolBinding {
+                    internal_call_id: internal_id,
+                });
+            }
         }
         Ok(())
     }
@@ -553,18 +598,18 @@ impl DefraSessionHook {
         args: &str,
         deadline_at: DateTime<Utc>,
         await_mode: AwaitMode,
-    ) -> anyhow::Result<ToolCallLifecycle> {
+    ) -> Result<ToolCallLifecycle, HookError> {
         if let Some((lifecycle, recorded_arguments)) =
             self.effect_tool_calls.lock().await.remove(internal_call_id)
         {
-            anyhow::ensure!(
-                provider_call_id.is_none()
-                    && lifecycle.tool_name() == tool_name
-                    && lifecycle.request_id() == request_id
-                    && lifecycle.session_id() == session_id
-                    && recorded_arguments == args,
-                "plugin effect dispatch does not match its admitted input"
-            );
+            if !(provider_call_id.is_none()
+                && lifecycle.tool_name() == tool_name
+                && lifecycle.request_id() == request_id
+                && lifecycle.session_id() == session_id
+                && recorded_arguments == args)
+            {
+                return Err(HookError::PluginEffectDispatchMismatch);
+            }
             return Ok(lifecycle);
         }
         let registered = self
@@ -574,47 +619,39 @@ impl DefraSessionHook {
             .tool_result_identities
             .get(internal_call_id)
             .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tool dispatch lacks StreamProcessor native identity for internal call {internal_call_id}"
-                )
+            .ok_or_else(|| HookError::DispatchMissingStreamIdentity {
+                internal_call_id: internal_call_id.to_owned(),
             })?;
-        let native_id = registered.result_id.ok_or_else(|| {
-            anyhow::anyhow!(
-                "tool dispatch lacks registered provider tool id for internal call {internal_call_id}"
-            )
-        })?;
+        let native_id =
+            registered
+                .result_id
+                .ok_or_else(|| HookError::DispatchMissingProviderToolId {
+                    internal_call_id: internal_call_id.to_owned(),
+                })?;
         if let Some(provider_call_id) = provider_call_id {
-            anyhow::ensure!(
-                Some(provider_call_id) == registered.call_id.as_deref(),
-                "dispatch provider call id does not match StreamProcessor identity"
-            );
+            if Some(provider_call_id) != registered.call_id.as_deref() {
+                return Err(HookError::DispatchProviderCallIdMismatch);
+            }
         }
 
         let request_doc_id = self
             .active_request_doc_id_for(request_id)
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("accepted dispatch requires a physical request binding")
-            })?;
+            .ok_or(HookError::DispatchMissingRequestBinding)?;
         let accepted = self
             .accepted_tool_calls
             .lock()
             .await
             .remove(internal_call_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tool dispatch lacks its provider-published AcceptedToolCall binding"
-                )
-            })?;
-        anyhow::ensure!(
-            accepted.id == native_id
-                && accepted.call_id == registered.call_id
-                && accepted.request_doc_id == request_doc_id
-                && accepted.session_id == session_id
-                && accepted.tool_name == tool_name,
-            "accepted tool binding does not match registered provider dispatch identity"
-        );
+            .ok_or(HookError::DispatchMissingAcceptedBinding)?;
+        if !(accepted.id == native_id
+            && accepted.call_id == registered.call_id
+            && accepted.request_doc_id == request_doc_id
+            && accepted.session_id == session_id
+            && accepted.tool_name == tool_name)
+        {
+            return Err(HookError::AcceptedBindingMismatch);
+        }
         let selected = self
             .remote_tools
             .as_ref()
@@ -872,18 +909,21 @@ impl DefraSessionHook {
         self.state.lock().await.current_request_doc_id.clone()
     }
 
-    async fn active_request_doc_id_for(&self, request_id: &str) -> anyhow::Result<Option<String>> {
+    async fn active_request_doc_id_for(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<String>, HookError> {
         if request_id.trim().is_empty() {
             return Ok(None);
         }
         let state = self.state.lock().await;
         if state.current_request_id.as_deref() != Some(request_id) {
-            anyhow::bail!("active request changed while resolving document provenance");
+            return Err(HookError::ActiveRequestChanged);
         }
         let doc_id = state
             .current_request_doc_id
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("active request is missing its physical document id"))?;
+            .ok_or(HookError::ActiveRequestMissingDocId)?;
         Ok(Some(doc_id))
     }
 
@@ -1084,7 +1124,7 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
     ) -> anyhow::Result<()> {
-        DefraSessionHook::adopt_accepted_tool_calls(self, calls).await
+        Ok(DefraSessionHook::adopt_accepted_tool_calls(self, calls).await?)
     }
 }
 
@@ -1116,7 +1156,9 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         let mut child = parent
             .admit_plugin_effect(ordinal, tool_name, arguments)
             .await
-            .map_err(|error| format!("cannot admit plugin effect: {error:#}"))?;
+            .map_err(|error| {
+                format!("cannot admit plugin effect: {}", ErrorChain(error.as_ref()))
+            })?;
         let internal_id = child.plugin_effect_internal_id().to_owned();
         if !crate::plugin::tool_calls::supported(
             tool_name,
@@ -1135,7 +1177,12 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                     &reason,
                 )
                 .await
-                .map_err(|error| format!("cannot persist plugin effect refusal: {error:#}"))?;
+                .map_err(|error| {
+                    format!(
+                        "cannot persist plugin effect refusal: {}",
+                        ErrorChain(error.as_ref())
+                    )
+                })?;
             return Err(reason);
         }
         let mut pending = self.effect_tool_calls.lock().await;
@@ -1221,7 +1268,12 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         if result.is_ok() {
             self.effect_lifecycles.lock().await.remove(internal_id);
         }
-        result.map_err(|error| format!("cannot settle plugin effect: {error:#}"))
+        result.map_err(|error| {
+            format!(
+                "cannot settle plugin effect: {}",
+                ErrorChain(error.as_ref())
+            )
+        })
     }
 
     async fn pending_steering_inputs(

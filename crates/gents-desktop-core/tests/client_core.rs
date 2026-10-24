@@ -1,7 +1,7 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 use gents::NodeIdentity as _;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PrincipalIdentity};
 use gents_protocol::session_hydration::{
@@ -10,6 +10,8 @@ use gents_protocol::session_hydration::{
 use p2p::iroh::parse_public_peer_addr;
 use tokio::time::{sleep, Instant};
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 async fn signed_empty_hydration_receipt(
     core: &ClientCore,
     request_key: &str,
@@ -17,7 +19,7 @@ async fn signed_empty_hydration_receipt(
     session_id: &str,
     status: &str,
     detail: &str,
-) -> Result<(String, String, String)> {
+) -> TestResult<(String, String, String)> {
     let mut receipt = SessionHydrationReceipt {
         version: SESSION_HYDRATION_RECEIPT_VERSION,
         request_key: request_key.to_string(),
@@ -43,7 +45,7 @@ async fn signed_empty_hydration_receipt(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn identity_persistence_round_trip() -> Result<()> {
+async fn identity_persistence_round_trip() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
 
@@ -56,7 +58,7 @@ async fn identity_persistence_round_trip() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_core_persists_managed_server_peer_through_watched_owner() -> Result<()> {
+async fn live_core_persists_managed_server_peer_through_watched_owner() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
@@ -84,7 +86,7 @@ async fn live_core_persists_managed_server_peer_through_watched_owner() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Result<()> {
+async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> TestResult<()> {
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -138,7 +140,7 @@ async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Res
     let input = core
         .prepare_user_message_input(node_did, "hosted-session", Default::default())
         .await?;
-    let queue = input.queue.context("prepared user queue")?;
+    let queue = input.queue.ok_or("prepared user queue")?;
     assert_eq!(
         queue.queued_after_request_id.as_deref(),
         Some("hosted-head")
@@ -152,7 +154,7 @@ async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Result<()> {
+async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
@@ -177,8 +179,11 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
         .await
         .expect_err("an unavailable managed operator endpoint must fail closed");
     assert!(
-        format!("{error:#}").contains("127.0.0.1:1"),
-        "the managed endpoint error must stay visible: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("127.0.0.1:1"),
+        "the managed endpoint error must stay visible: {}",
+        ErrorChain(error.as_ref())
     );
 
     let response = core
@@ -209,7 +214,7 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn client_core_starts_and_registers_schemas() -> Result<()> {
+async fn client_core_starts_and_registers_schemas() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
@@ -225,7 +230,8 @@ async fn client_core_starts_and_registers_schemas() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn initial_session_hydration_starts_when_local_transcript_rows_already_exist() -> Result<()> {
+async fn initial_session_hydration_starts_when_local_transcript_rows_already_exist(
+) -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
@@ -298,7 +304,7 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
         .as_ref()
         .and_then(|data| data.get("SessionHydrationRequest"))
         .and_then(serde_json::Value::as_array)
-        .context("SessionHydrationRequest rows")?;
+        .ok_or("SessionHydrationRequest rows")?;
     assert_eq!(
         rows.len(),
         1,
@@ -314,7 +320,8 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn initial_session_hydration_waits_for_existing_or_terminal_session_evidence() -> Result<()> {
+async fn initial_session_hydration_waits_for_existing_or_terminal_session_evidence(
+) -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
@@ -374,7 +381,7 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<()> {
+async fn durable_served_hydration_row_drives_exact_session_progress() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
@@ -434,7 +441,7 @@ async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
+async fn forged_terminal_hydration_receipt_fails_closed() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
@@ -487,8 +494,11 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
         .await
         .expect_err("tampered terminal receipt must not produce hydration progress");
     assert!(
-        format!("{error:#}").contains("signature verification failed"),
-        "unexpected fail-closed reason: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("signature verification failed"),
+        "unexpected fail-closed reason: {}",
+        ErrorChain(error.as_ref())
     );
 
     Arc::new(core).shutdown().await?;
@@ -496,7 +506,8 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn passive_hydration_observation_preserves_rejection_until_explicit_retry() -> Result<()> {
+async fn passive_hydration_observation_preserves_rejection_until_explicit_retry() -> TestResult<()>
+{
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core = ClientCore::start_with_paths_and_options(
@@ -670,7 +681,10 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     Ok(())
 }
 
-async fn hydration_request_status(core: &ClientCore, request_key: &str) -> Result<Option<String>> {
+async fn hydration_request_status(
+    core: &ClientCore,
+    request_key: &str,
+) -> TestResult<Option<String>> {
     let response = core
         .node()
         .execute(&format!(
@@ -695,13 +709,13 @@ async fn hydration_request_status(core: &ClientCore, request_key: &str) -> Resul
         .map(str::to_string))
 }
 
-async fn persist_local_route(core: &ClientCore, node_did: &str) -> Result<()> {
+async fn persist_local_route(core: &ClientCore, node_did: &str) -> TestResult<()> {
     core.add_local_standard_peer_for_test(node_did).await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_client_cores_connect_over_iroh() -> Result<()> {
+async fn two_client_cores_connect_over_iroh() -> TestResult<()> {
     let tempdir_a = tempfile::tempdir()?;
     let tempdir_b = tempfile::tempdir()?;
     let core_a = ClientCore::start_with_paths_and_options(
@@ -722,7 +736,7 @@ async fn two_client_cores_connect_over_iroh() -> Result<()> {
         .p2p()
         .connect_peer(&addr_a)
         .await
-        .context("connecting core_b to core_a")?;
+        .map_err(|error| format!("connecting core_b to core_a: {error}"))?;
 
     wait_for_connected_peer(&core_b, &peer_a).await?;
     Arc::new(core_b).shutdown().await?;
@@ -730,7 +744,7 @@ async fn two_client_cores_connect_over_iroh() -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> Result<String> {
+async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> TestResult<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let addrs = core.p2p().listen_addresses().await?;
@@ -741,13 +755,13 @@ async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> Result<String> {
             return Ok(addr);
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for desktop listen address");
+            return Err("timed out waiting for desktop listen address".into());
         }
         sleep(Duration::from_millis(100)).await;
     }
 }
 
-async fn wait_for_connected_peer(core: &ClientCore, peer_id: &str) -> Result<()> {
+async fn wait_for_connected_peer(core: &ClientCore, peer_id: &str) -> TestResult<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let peers = core.p2p().connected_peers().await?;
@@ -759,7 +773,7 @@ async fn wait_for_connected_peer(core: &ClientCore, peer_id: &str) -> Result<()>
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for peer connection to {peer_id}");
+            return Err(format!("timed out waiting for peer connection to {peer_id}").into());
         }
         sleep(Duration::from_millis(100)).await;
     }

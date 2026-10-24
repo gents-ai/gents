@@ -1,8 +1,8 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::config_client::{ConfigClientError, GraphqlEndpoint};
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
@@ -10,6 +10,20 @@ use gents_protocol::row::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PrometheusError {
+    #[error(transparent)]
+    Graphql(#[from] ConfigClientError),
+    #[error("decoding inference metrics query response")]
+    DecodeInferenceMetrics(#[source] serde_json::Error),
+    #[error("decoding runtime HTTP query response")]
+    DecodeRuntimeHttp(#[source] serde_json::Error),
+    #[error("decoding liveness activity response")]
+    DecodeLivenessActivity(#[source] serde_json::Error),
+}
+
+type Result<T, E = PrometheusError> = std::result::Result<T, E>;
 
 use crate::http::liveness::{
     compute_request_liveness_summary, owns_liveness_row, with_active_native_executors,
@@ -990,7 +1004,7 @@ async fn load_inference_metrics_page(
         .get("data")
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
-    serde_json::from_value(data).context("decoding inference metrics query response")
+    serde_json::from_value(data).map_err(PrometheusError::DecodeInferenceMetrics)
 }
 
 /// `ended_at` is stored as RFC 3339 UTC text. The bound keeps whole seconds
@@ -1321,7 +1335,7 @@ pub(crate) async fn load_metrics_core_data(
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
     let envelope: MetricsQueryEnvelope =
-        serde_json::from_value(data).context("decoding runtime HTTP query response")?;
+        serde_json::from_value(data).map_err(PrometheusError::DecodeRuntimeHttp)?;
     Ok(MetricsCoreData {
         envelope,
         local_node_did: local_node_did.to_string(),
@@ -1385,7 +1399,7 @@ async fn load_liveness_activity(
             Ok(Ok(rows)) => activity.extend(rows),
             Ok(Err(error)) => tracing::warn!(
                 request_count = chunk.len(),
-                error = format!("{error:#}"),
+                error = format!("{}", ErrorChain(&error)),
                 "liveness activity read failed; progress falls back to claimed_at"
             ),
             Err(_) => {
@@ -1412,7 +1426,7 @@ async fn load_liveness_activity_chunk(
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
     let pages: BTreeMap<String, Vec<LivenessActivityRow>> =
-        serde_json::from_value(data).context("decoding liveness activity response")?;
+        serde_json::from_value(data).map_err(PrometheusError::DecodeLivenessActivity)?;
     Ok(pages.into_values().flatten().collect())
 }
 

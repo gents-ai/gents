@@ -1,12 +1,13 @@
 use crate::support::*;
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 use std::fs;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[test]
-fn schema_apply_registers_sdl_and_additive_patch_idempotently() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn schema_apply_registers_sdl_and_additive_patch_idempotently() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let schema_dir = tempdir.path().join("schemas");
     fs::create_dir_all(&home_dir)?;
@@ -81,8 +82,8 @@ type ActionRequest {
 }
 
 #[tokio::test]
-async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upgrade() -> Result<()>
-{
+async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upgrade(
+) -> TestResult<()> {
     let bundled = [
         (
             "MaintenanceReport",
@@ -107,7 +108,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             let schema_dir = tempdir.path().join("schemas");
             fs::create_dir_all(&home_dir)?;
             fs::create_dir_all(&schema_dir)?;
-            let home_arg = agent_home.to_str().context("agent home utf8")?;
+            let home_arg = agent_home.to_str().expect("agent home utf8");
             let init = run_init_json(
                 &home_dir,
                 &[
@@ -132,7 +133,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                     &[
                         "schema",
                         "apply",
-                        old_path.to_str().context("schema path utf8")?,
+                        old_path.to_str().expect("schema path utf8"),
                         "--home",
                         home_arg,
                     ],
@@ -140,7 +141,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             }
             fs::write(schema_dir.join("collection.graphql"), sdl)?;
             fs::write(schema_dir.join("owned_files.patch.json"), patch)?;
-            let schema_arg = schema_dir.to_str().context("schema root utf8")?;
+            let schema_arg = schema_dir.to_str().expect("schema root utf8");
             let first = run_cli_json(
                 &home_dir,
                 &["schema", "apply", schema_arg, "--home", home_arg],
@@ -172,7 +173,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             let key_path = init
                 .get("key_path")
                 .and_then(Value::as_str)
-                .context("init key path")?;
+                .expect("init key path");
             let _identity = gents::KeyIdentity::load_or_create(key_path, None)?;
             let data = agent_home.join("data");
             let node = gents::store_key::open_home_store_key(&agent_home, &data)
@@ -196,7 +197,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 create.errors
             );
             let doc_id = gents_protocol::graphql::extract_mutation_doc_id(
-                &serde_json::json!({"data": create.data.context("create data")?}),
+                &serde_json::json!({"data": create.data.expect("create data")}),
                 collection,
             )?;
             let changed = node.execute(&format!(
@@ -215,7 +216,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 .await;
             assert!(!after.has_errors(), "{:?}", after.errors);
             assert_eq!(
-                after.data.context("read data")?[collection][0]["owned_files"],
+                after.data.expect("read data")[collection][0]["owned_files"],
                 owned
             );
             node.shutdown().await;

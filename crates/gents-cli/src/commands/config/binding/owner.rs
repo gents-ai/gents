@@ -1,8 +1,11 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
 use gents::{document_config::PackConfig, Collection};
 use serde_json::Value;
+
+use crate::commands::config::ConfigCommandError;
+
+type Result<T, E = ConfigCommandError> = std::result::Result<T, E>;
 
 fn document_roots() -> impl Iterator<Item = &'static str> {
     Collection::ALL
@@ -19,7 +22,7 @@ pub(super) fn manifest_node_dids(config: &PackConfig) -> Result<BTreeSet<String>
             owners.insert(
                 row["node_did"]
                     .as_str()
-                    .context("config owner missing")?
+                    .ok_or(ConfigCommandError::ConfigOwnerMissing)?
                     .to_owned(),
             );
         }
@@ -38,10 +41,10 @@ pub(super) fn enforce_manifest_rebind_safety(
         .filter(|did| did != target_did)
         .collect::<Vec<_>>();
     if !concrete_mismatches.is_empty() && !force_rebind_concrete_did {
-        anyhow::bail!(
-            "manifest contains concrete node DID(s) that do not match resolved runtime DID {target_did}: {}; pass --force-rebind-concrete-did to rebind them",
-            concrete_mismatches.join(", ")
-        );
+        return Err(ConfigCommandError::ConcreteNodeDidMismatch {
+            target_did: target_did.to_owned(),
+            dids: concrete_mismatches.join(", "),
+        });
     }
     Ok(())
 }
@@ -50,7 +53,9 @@ pub(super) fn enforce_manifest_rebind_safety(
 /// all nested host data. This is an operator-requested config rewrite, not a
 /// recursive replacement of DIDs or a change to graph caller permissions.
 pub(super) fn rebind_manifest_node_did(config: &mut PackConfig, target: &str) -> Result<()> {
-    anyhow::ensure!(!target.trim().is_empty(), "target owner must not be blank");
+    if target.trim().is_empty() {
+        return Err(ConfigCommandError::RebindTargetBlank);
+    }
     let source_owners = manifest_node_dids(config)?;
     let mut value = serde_json::to_value(&*config)?;
     value["node"]["node_did"] = Value::String(target.to_owned());

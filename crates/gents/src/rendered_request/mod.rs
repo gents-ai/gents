@@ -18,6 +18,180 @@ pub use gents_loop::rendered_request::{
 pub(crate) use sink::defra_rendered_request_capture_factory;
 pub use sink::DefraRenderedRequestSink;
 
+use gents_protocol::error_chain::ErrorChain;
+use serde_json::Value;
+
+use crate::config_client::{ConfigClientError, TransactionFailure};
+pub use encoding::{CapturePayloadKind, EncodingError};
+
+type Result<T, E = RenderedRequestError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RenderedRequestError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Commits(#[from] commits::CommitsError),
+    #[error(transparent)]
+    Encoding(#[from] EncodingError),
+    #[error(transparent)]
+    CanonicalJson(#[from] gents_loop::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    CaptureStore(CaptureStoreReadError),
+    #[error("shared JSON is not a pinned manifest tree")]
+    SharedJsonNotTree,
+    #[error("reading witnessed rendered-request base returned an unexpected shape")]
+    DeltaBaseShape,
+    #[error("rendered-request delta base did not resolve uniquely")]
+    DeltaBaseAmbiguous,
+    #[error("rendered-request delta base lacks field commit")]
+    DeltaBaseUncommitted,
+    #[error("rendered-request delta base cache was not populated")]
+    DeltaBaseCacheMissing,
+    #[error("rendered-request delta base changed {name} scope")]
+    DeltaBaseScopeChanged { name: &'static str },
+    #[error("rendered-request delta base lacks capture_version")]
+    DeltaBaseMissingVersion,
+    #[error("rendered-request delta base lacks encoded field")]
+    DeltaBaseMissingEncoded,
+    #[error("rendered-request delta base depth witness is inconsistent")]
+    DeltaBaseDepthInconsistent,
+    #[error("capture manifest exhausted resolution fuel")]
+    ManifestFuelExhausted,
+    #[error("capture manifest leaf count mismatch")]
+    ManifestLeafCountMismatch,
+    #[error("capture manifest names {blocks} blocks, above the {limit} the reader resolves")]
+    ManifestBlockCount { blocks: usize, limit: usize },
+    #[error("reading capture manifest blocks returned an unexpected shape")]
+    BlocksShape,
+    #[error("capture manifest block row lacks _docID")]
+    BlockRowMissingDocId,
+    #[error("capture manifest block row lacks payload")]
+    BlockRowMissingPayload,
+    #[error("capture manifest block {doc_id} stores byte_len {stored}, manifest pins {pinned}")]
+    ManifestBlockByteLen {
+        doc_id: String,
+        stored: u64,
+        pinned: u64,
+    },
+    #[error(
+        "capture manifest block {doc_id} stores a payload that does not hash to its content key"
+    )]
+    ManifestBlockContentKey { doc_id: String },
+    #[error("capture manifest block {doc_id} lacks a payload field commit")]
+    ManifestBlockMissingCommit { doc_id: String },
+    #[error("capture pair omitted request body")]
+    PairMissingRequest,
+    #[error("capture pair omitted provenance payload")]
+    PairMissingProvenance,
+    #[error("reading RenderedRequest by capture key returned no data")]
+    LookupNoData,
+    #[error("reading RenderedRequest by capture key returned an unexpected shape")]
+    LookupShape,
+    #[error("capture key {capture_key} matched {count} RenderedRequest rows; the unique index is not enforcing")]
+    CaptureKeyAmbiguous { capture_key: String, count: usize },
+    #[error("AgentRequest {request_doc_id} capture has no claimed DefraDB commit CID")]
+    ClaimedRequestWithoutCommit { request_doc_id: String },
+    #[error("creating RenderedRequest returned no document; the capture is not durable")]
+    RenderedRequestNotDurable,
+    #[error("encoding context accounting")]
+    EncodeContextAccounting(#[source] serde_json::Error),
+    #[error("reading joined InferenceCall returned an unexpected shape")]
+    InferenceCallShape,
+    #[error("rendered request admission call {call_id} matched {count} InferenceCall rows")]
+    InferenceCallRowCount { call_id: String, count: usize },
+    #[error("decoding stored InferenceCall context_accounting_json")]
+    DecodeStoredAccounting(#[source] serde_json::Error),
+    #[error("decoding incoming InferenceCall context_accounting_json")]
+    DecodeIncomingAccounting(#[source] serde_json::Error),
+    #[error("InferenceCall {call_id} already carries different context accounting")]
+    InferenceCallAccountingConflict { call_id: String },
+    #[error("joined InferenceCall lacks physical identity")]
+    InferenceCallMissingDocId,
+    #[error("updating InferenceCall context accounting returned no document")]
+    InferenceCallUpdateNotDurable,
+    #[error(
+        "cannot write rendered-request capture version {version}; writer supports version {writer}"
+    )]
+    UnsupportedCaptureVersion { version: u32, writer: u32 },
+    #[error("encoding rendered-request request_json")]
+    EncodeRequestLayout(#[source] EncodingError),
+    #[error("encoding rendered-request provenance payload")]
+    EncodeProvenanceLayout(#[source] EncodingError),
+    #[error("encoding rendered-request provenance_json")]
+    EncodeProvenanceJson(#[source] gents_loop::rendered_request::RenderedRequestError),
+    #[error("rendered-request integrity violation: capture key {capture_key} already names a different canonical capture fact; a capture key is never rebound")]
+    IntegrityViolation { capture_key: String },
+    #[error("stored RenderedRequest lacks a numeric capture_version")]
+    StoredMissingVersion,
+    #[error("stored RenderedRequest provenance_json was not a string")]
+    StoredProvenanceNotString,
+    #[error("stored RenderedRequest request_json was not a string")]
+    StoredRequestNotString,
+    #[error("legacy provenance lacks assembly_trace")]
+    LegacyProvenanceMissingTrace,
+    #[error("missing decoded capture pair")]
+    MissingDecodedPair,
+    #[error("decoding stored provenance manifest: {error}")]
+    DecodeProvenanceManifest {
+        error: gents_protocol::rendered_request::ProvenanceParseError,
+    },
+    #[error("unsupported provenance manifest version {manifest_version}")]
+    UnsupportedProvenanceVersion { manifest_version: u32 },
+    #[error("stored RenderedRequest fact was not an object")]
+    StoredNotObject,
+    #[error("encoding rendered-request source")]
+    EncodeSource(#[source] serde_json::Error),
+    #[error("reading stored capture blocks returned an unexpected shape")]
+    StoredBlocksShape,
+    #[error("stored capture block row lacks content_key")]
+    StoredBlockMissingContentKey,
+    #[error("stored capture block row lacks _docID")]
+    StoredBlockMissingDocId,
+    #[error(
+        "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries"
+    )]
+    BlockNotUtf8(#[source] std::str::Utf8Error),
+    #[error("creating capture blocks returned no documents")]
+    CreateBlocksNoDocuments,
+    #[error("capture block create omitted documents")]
+    CreateBlocksOmitted,
+    #[error("created capture block lacks content_key")]
+    CreatedBlockMissingContentKey,
+    #[error("created capture block lacks _docID")]
+    CreatedBlockMissingDocId,
+    #[error("capture block create returned an unexpected key")]
+    CreateBlocksUnexpectedKey,
+    #[error("capture block create repeated a key")]
+    CreateBlocksRepeatedKey,
+    #[error("capture block {doc_id} lacks a payload field commit")]
+    PinnedBlockMissingCommit { doc_id: String },
+    #[error("capture block was not pinned")]
+    BlockNotPinned,
+    #[error("capture block length overflow")]
+    BlockLengthOverflow(#[source] std::num::TryFromIntError),
+    #[error("capture manifest exceeds leaf bound")]
+    ManifestLeafBound,
+    #[error("capture manifest exceeds maximum height")]
+    ManifestHeightExceeded,
+}
+
+impl TransactionFailure for RenderedRequestError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Commits(
+                commits::CommitsError::Read { source, .. }
+                | commits::CommitsError::BatchRead(source)
+                | commits::CommitsError::Execute(source),
+            ) => Some(source),
+            _ => None,
+        }
+    }
+}
+
 /// The kind guard keeps the task-local admission join honest if a caller wires
 /// the wrong capture scope. One-shot captures never join because no admission
 /// scope exists there.
@@ -115,8 +289,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CaptureBaseReader for FailingStore {
-        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
-            anyhow::bail!("store unavailable")
+        async fn execute_capture_query(&self, _query: &str) -> Result<Value, ConfigClientError> {
+            Err(ConfigClientError::QueryDocumentRequired)
         }
     }
 
@@ -129,15 +303,16 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CaptureBaseReader for CountingBase {
-        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
+        async fn execute_capture_query(&self, _query: &str) -> Result<Value, ConfigClientError> {
             self.reads
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let value =
                 serde_json::json!({"model":"m", "stream":false, "padding":"x".repeat(4096)});
             let encoded = encoding::encode_container(
-                &encoding::encode_full(&value)?,
-                &encoding::encode_full(&serde_json::json!({}))?,
-            )?;
+                &encoding::encode_full(&value).unwrap(),
+                &encoding::encode_full(&serde_json::json!({})).unwrap(),
+            )
+            .unwrap();
             Ok(serde_json::json!({"data":{"RenderedRequest":[{
                 "capture_version":2, "node_did":"did:test", "requester_did":"",
                 "session_id":"session", "source":"openai_responses", "capture_scope":"inference.1",
@@ -195,7 +370,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CaptureBaseReader for MissingBase {
-        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
+        async fn execute_capture_query(&self, _query: &str) -> Result<Value, ConfigClientError> {
             Ok(serde_json::json!({"data": {"RenderedRequest": []}}))
         }
     }
@@ -327,19 +502,13 @@ mod tests {
             decode_capture_json_from(&FailingStore, 2, &stored, CapturePayloadKind::RequestBody)
                 .await
                 .expect_err("a failed store read cannot decode");
-        assert!(
-            store.downcast_ref::<CaptureStoreReadError>().is_some(),
-            "{store:#}"
-        );
+        assert!(is_capture_store_read(&store), "{}", ErrorChain(&store));
 
         let missing =
             decode_capture_json_from(&MissingBase, 2, &stored, CapturePayloadKind::RequestBody)
                 .await
                 .expect_err("a missing base cannot decode");
-        assert!(
-            missing.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "{missing:#}"
-        );
+        assert!(!is_capture_store_read(&missing), "{}", ErrorChain(&missing));
     }
 
     fn capture_text(len: usize) -> String {
@@ -439,9 +608,9 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CaptureBaseReader for ManifestStore {
-        async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+        async fn execute_capture_query(&self, query: &str) -> Result<Value, ConfigClientError> {
             if self.fail_queries {
-                anyhow::bail!("store unavailable");
+                return Err(ConfigClientError::QueryDocumentRequired);
             }
             let aliases = commit_query_aliases(query);
             if !aliases.is_empty() {
@@ -496,10 +665,7 @@ mod tests {
             decode_capture_json_from(&failing, version, &stored, CapturePayloadKind::RequestBody)
                 .await
                 .expect_err("a failed store read cannot decode");
-        assert!(
-            error.downcast_ref::<CaptureStoreReadError>().is_some(),
-            "{error:#}"
-        );
+        assert!(is_capture_store_read(&error), "{}", ErrorChain(&error));
 
         let cases: [(&str, BTreeMap<usize, BlockAnswer>); 3] = [
             ("an absent block document", BTreeMap::from([(0usize, None)])),
@@ -523,8 +689,9 @@ mod tests {
                     .err()
                     .unwrap_or_else(|| panic!("{label} must fail closed"));
             assert!(
-                error.downcast_ref::<CaptureStoreReadError>().is_none(),
-                "{label} is a verification failure, not a store failure: {error:#}"
+                !is_capture_store_read(&error),
+                "{label} is a verification failure, not a store failure: {}",
+                ErrorChain(&error)
             );
         }
 
@@ -548,7 +715,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CaptureBaseReader for MisreferencingBlockStore {
-        async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+        async fn execute_capture_query(&self, query: &str) -> Result<Value, ConfigClientError> {
             let aliases = commit_query_aliases(query);
             if !aliases.is_empty() {
                 return Ok(commit_response(aliases, |doc_id| {
@@ -635,14 +802,16 @@ mod tests {
         .await
         .expect_err("the misreferencing turn must fail closed");
         assert!(
-            error.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "a misreferenced block is a verification failure, not a store failure: {error:#}"
+            !is_capture_store_read(&error),
+            "a misreferenced block is a verification failure, not a store failure: {}",
+            ErrorChain(&error)
         );
         assert!(
             error
                 .to_string()
                 .contains("does not hash to its content key"),
-            "{error:#}"
+            "{}",
+            ErrorChain(&error)
         );
 
         let replayed = decode_capture_json_from_cached(
@@ -668,8 +837,9 @@ mod tests {
         .await
         .expect_err("a manifest naming an absent document must fail closed");
         assert!(
-            error.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "an absent block is a verification failure, not a store failure: {error:#}"
+            !is_capture_store_read(&error),
+            "an absent block is a verification failure, not a store failure: {}",
+            ErrorChain(&error)
         );
     }
 
@@ -750,39 +920,50 @@ mod tests {
     }
 }
 
-use anyhow::{Context, Result};
-pub use encoding::CapturePayloadKind;
-use serde_json::Value;
-
-pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<Value> {
+pub fn decode_inline_capture_json(
+    capture_version: u32,
+    stored: &str,
+) -> std::result::Result<Value, EncodingError> {
     encoding::resolve_capture_with(
         capture_version,
         stored,
         CapturePayloadKind::RequestBody,
-        |_| anyhow::bail!("capture delta requires base resolution"),
-        |_| anyhow::bail!("capture manifest requires block resolution"),
+        |_| Err(EncodingError::DeltaRequiresBase),
+        |_| Err(EncodingError::ManifestRequiresBlocks),
     )
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("reading a rendered-request capture dependency from the store: {0:#}")]
-pub struct CaptureStoreReadError(pub anyhow::Error);
+#[error("reading a rendered-request capture dependency from the store: {}", ErrorChain(.0))]
+pub struct CaptureStoreReadError(pub commits::CommitsError);
+
+/// Whether `error`'s chain holds a store read failure, which must fail the
+/// request rather than mark one capture unverifiable.
+pub fn is_capture_store_read(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
+        cause.is::<CaptureStoreReadError>()
+            || matches!(
+                cause.downcast_ref::<RenderedRequestError>(),
+                Some(RenderedRequestError::CaptureStore(_))
+            )
+    })
+}
 
 #[async_trait::async_trait]
 pub(crate) trait CaptureBaseReader {
-    async fn execute_capture_query(&self, query: &str) -> Result<Value>;
+    async fn execute_capture_query(&self, query: &str) -> Result<Value, ConfigClientError>;
 }
 
 #[async_trait::async_trait]
 impl CaptureBaseReader for crate::config_client::ConfigAccess {
-    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value, ConfigClientError> {
         self.execute(query).await
     }
 }
 
 #[async_trait::async_trait]
 impl CaptureBaseReader for defra_node::EmbeddedNode {
-    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value, ConfigClientError> {
         let response = crate::graphql::graphql_with_transaction_retry(
             self,
             query,
@@ -817,21 +998,20 @@ pub(crate) async fn load_shared_json(
         return Ok(stored.to_owned());
     }
     let encoding::DecodedRecord::Tree(tree) = encoding::decode_record(stored)? else {
-        anyhow::bail!("shared JSON is not a pinned manifest tree");
+        return Err(RenderedRequestError::SharedJsonNotTree);
     };
     read_manifest_tree(node, &tree, &mut cache.blocks).await?;
     let value = encoding::resolve_tree(tree, |entry| {
         let block = cache
             .blocks
             .get(&entry.doc_id)
-            .context("shared JSON block was not read")?;
-        anyhow::ensure!(
-            block.content_key == entry.content_key,
-            "shared JSON block content key mismatch"
-        );
+            .ok_or(EncodingError::SharedBlockNotRead)?;
+        if block.content_key != entry.content_key {
+            return Err(EncodingError::SharedBlockKeyMismatch);
+        }
         Ok((block.bytes.clone(), block.field_commit_cid.clone()))
     })?;
-    canonical_json_string(&value)
+    Ok(canonical_json_string(&value)?)
 }
 
 async fn decode_capture_json_from_cached<R>(
@@ -871,20 +1051,24 @@ where
                     let response = reader
                         .execute_capture_query(&query)
                         .await
-                        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+                        .map_err(|error| {
+                            RenderedRequestError::CaptureStore(CaptureStoreReadError(
+                                commits::CommitsError::Execute(error),
+                            ))
+                        })?;
                     let rows = response
                         .get("data")
                         .and_then(|data| data.get("RenderedRequest"))
                         .and_then(Value::as_array)
-                        .context(
-                            "reading witnessed rendered-request base returned an unexpected shape",
-                        )?;
+                        .ok_or(RenderedRequestError::DeltaBaseShape)?;
                     let [row] = rows.as_slice() else {
-                        anyhow::bail!("rendered-request delta base did not resolve uniquely");
+                        return Err(RenderedRequestError::DeltaBaseAmbiguous);
                     };
                     let actual = commits::select_field_commit(&response, "request_json")
-                        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
-                        .context("rendered-request delta base lacks field commit")?
+                        .map_err(|error| {
+                            RenderedRequestError::CaptureStore(CaptureStoreReadError(error))
+                        })?
+                        .ok_or(RenderedRequestError::DeltaBaseUncommitted)?
                         .cid;
                     cache
                         .bases
@@ -893,7 +1077,7 @@ where
                 let (row, actual) = cache
                     .bases
                     .get(&base.doc_id)
-                    .context("rendered-request delta base cache was not populated")?;
+                    .ok_or(RenderedRequestError::DeltaBaseCacheMissing)?;
                 for (name, expected) in [
                     ("node_did", base.node_did.as_str()),
                     ("requester_did", base.requester_did.as_str()),
@@ -901,25 +1085,23 @@ where
                     ("source", base.source.as_str()),
                     ("capture_scope", base.capture_scope.as_str()),
                 ] {
-                    anyhow::ensure!(
-                        row.get(name).and_then(Value::as_str) == Some(expected),
-                        "rendered-request delta base changed {name} scope"
-                    );
+                    if row.get(name).and_then(Value::as_str) != Some(expected) {
+                        return Err(RenderedRequestError::DeltaBaseScopeChanged { name });
+                    }
                 }
                 let version = row
                     .get("capture_version")
                     .and_then(Value::as_u64)
                     .and_then(|value| u32::try_from(value).ok())
-                    .context("rendered-request delta base lacks capture_version")?;
+                    .ok_or(RenderedRequestError::DeltaBaseMissingVersion)?;
                 let encoded = row
                     .get("request_json")
                     .and_then(Value::as_str)
-                    .context("rendered-request delta base lacks encoded field")?
+                    .ok_or(RenderedRequestError::DeltaBaseMissingEncoded)?
                     .to_owned();
-                anyhow::ensure!(
-                    encoding::capture_record_depth(version, &encoded, kind)? == base.depth,
-                    "rendered-request delta base depth witness is inconsistent"
-                );
+                if encoding::capture_record_depth(version, &encoded, kind)? != base.depth {
+                    return Err(RenderedRequestError::DeltaBaseDepthInconsistent);
+                }
                 bases.insert(
                     (base.doc_id.clone(), base.field_commit_cid.clone()),
                     (version, encoded.clone(), actual.clone()),
@@ -929,28 +1111,28 @@ where
             }
         }
     }
-    encoding::resolve_capture_with(
+    Ok(encoding::resolve_capture_with(
         capture_version,
         stored,
         kind,
         |base| {
             bases
                 .remove(&(base.doc_id.clone(), base.field_commit_cid.clone()))
-                .context("capture delta chain exceeds maximum depth or contains a cycle")
+                .ok_or(EncodingError::DeltaBaseNotPreloaded)
         },
         |entry| {
             let block = cache
                 .blocks
                 .get(&entry.doc_id)
-                .context("capture manifest block was not read")?;
-            anyhow::ensure!(
-                block.content_key == entry.content_key,
-                "capture manifest block {} was read under another content key",
-                entry.doc_id
-            );
+                .ok_or(EncodingError::ManifestBlockNotRead)?;
+            if block.content_key != entry.content_key {
+                return Err(EncodingError::BlockReadUnderOtherKey {
+                    doc_id: entry.doc_id.clone(),
+                });
+            }
             Ok((block.bytes.clone(), block.field_commit_cid.clone()))
         },
-    )
+    )?)
 }
 
 async fn read_manifest_tree<R>(
@@ -977,36 +1159,33 @@ where
     let mut entries = vec![tree.root.clone()];
     let mut remaining = encoding::TREE_RESOLUTION_FUEL;
     for _ in 0..tree.height {
-        anyhow::ensure!(
-            entries.len() <= remaining,
-            "capture manifest exhausted resolution fuel"
-        );
+        if entries.len() > remaining {
+            return Err(RenderedRequestError::ManifestFuelExhausted);
+        }
         remaining -= entries.len();
         read_manifest_blocks(reader, &entries, cache).await?;
         entries = manifest_children_cached(&entries, cache)?;
     }
-    anyhow::ensure!(
-        entries.len() == tree.leaves && entries.len() <= remaining,
-        "capture manifest leaf count mismatch"
-    );
+    if entries.len() != tree.leaves || entries.len() > remaining {
+        return Err(RenderedRequestError::ManifestLeafCountMismatch);
+    }
     Ok(entries)
 }
 
 fn manifest_children_cached(
     entries: &[encoding::ManifestEntry],
     cache: &std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<Vec<encoding::ManifestEntry>> {
+) -> std::result::Result<Vec<encoding::ManifestEntry>, EncodingError> {
     let mut children = Vec::new();
     for entry in entries {
         let block = cache
             .get(&entry.doc_id)
-            .context("capture manifest node is missing")?;
+            .ok_or(EncodingError::ManifestNodeMissing)?;
         encoding::verify_manifest_block(entry, &block.bytes, &block.field_commit_cid)?;
         children.extend(encoding::manifest_children(&block.bytes)?);
-        anyhow::ensure!(
-            children.len() <= encoding::MAX_MANIFEST_BLOCKS,
-            "capture manifest exceeds leaf bound"
-        );
+        if children.len() > encoding::MAX_MANIFEST_BLOCKS {
+            return Err(EncodingError::ManifestLeafBound);
+        }
     }
     Ok(children)
 }
@@ -1019,12 +1198,12 @@ async fn read_manifest_blocks<R>(
 where
     R: CaptureBaseReader + Sync,
 {
-    anyhow::ensure!(
-        entries.len() <= encoding::MAX_MANIFEST_BLOCKS,
-        "capture manifest names {} blocks, above the {} the reader resolves",
-        entries.len(),
-        encoding::MAX_MANIFEST_BLOCKS
-    );
+    if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
+        return Err(RenderedRequestError::ManifestBlockCount {
+            blocks: entries.len(),
+            limit: encoding::MAX_MANIFEST_BLOCKS,
+        });
+    }
     let mut unread = std::collections::BTreeMap::new();
     for entry in entries {
         if !cache.contains_key(&entry.doc_id) {
@@ -1047,38 +1226,43 @@ where
     let response = reader
         .execute_capture_query(&query)
         .await
-        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+        .map_err(|error| {
+            RenderedRequestError::CaptureStore(CaptureStoreReadError(
+                commits::CommitsError::Execute(error),
+            ))
+        })?;
     let rows = response
         .get("data")
         .and_then(|data| data.get("RenderedRequestBlock"))
         .and_then(Value::as_array)
-        .context("reading capture manifest blocks returned an unexpected shape")?;
+        .ok_or(RenderedRequestError::BlocksShape)?;
     let mut found = Vec::new();
     for row in rows {
         let doc_id = row
             .get("_docID")
             .and_then(Value::as_str)
-            .context("capture manifest block row lacks _docID")?;
+            .ok_or(RenderedRequestError::BlockRowMissingDocId)?;
         let Some(entry) = unread.remove(doc_id) else {
             continue;
         };
         let payload = row
             .get("payload")
             .and_then(Value::as_str)
-            .context("capture manifest block row lacks payload")?;
+            .ok_or(RenderedRequestError::BlockRowMissingPayload)?;
         if let Some(byte_len) = row.get("byte_len").and_then(Value::as_u64) {
-            anyhow::ensure!(
-                byte_len == entry.byte_len,
-                "capture manifest block {} stores byte_len {byte_len}, manifest pins {}",
-                entry.doc_id,
-                entry.byte_len
-            );
+            if byte_len != entry.byte_len {
+                return Err(RenderedRequestError::ManifestBlockByteLen {
+                    doc_id: entry.doc_id.clone(),
+                    stored: byte_len,
+                    pinned: entry.byte_len,
+                });
+            }
         }
-        anyhow::ensure!(
-            encoding::block_content_key(payload.as_bytes()) == entry.content_key,
-            "capture manifest block {} stores a payload that does not hash to its content key",
-            entry.doc_id
-        );
+        if encoding::block_content_key(payload.as_bytes()) != entry.content_key {
+            return Err(RenderedRequestError::ManifestBlockContentKey {
+                doc_id: entry.doc_id.clone(),
+            });
+        }
         found.push((entry, payload.as_bytes().to_vec()));
     }
     let found_doc_ids = found
@@ -1086,16 +1270,16 @@ where
         .map(|(entry, _)| entry.doc_id.clone())
         .collect::<Vec<_>>();
     let witnesses = commits::field_commits(&found_doc_ids, "payload", |query| async move {
-        reader.execute_capture_query(&query).await
+        reader
+            .execute_capture_query(&query)
+            .await
+            .map_err(commits::CommitsError::Execute)
     })
     .await
-    .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+    .map_err(|error| RenderedRequestError::CaptureStore(CaptureStoreReadError(error)))?;
     for ((entry, bytes), commit) in found.into_iter().zip(witnesses) {
-        let commit = commit.with_context(|| {
-            format!(
-                "capture manifest block {} lacks a payload field commit",
-                entry.doc_id
-            )
+        let commit = commit.ok_or_else(|| RenderedRequestError::ManifestBlockMissingCommit {
+            doc_id: entry.doc_id.clone(),
         })?;
         cache.insert(
             entry.doc_id.clone(),
@@ -1201,13 +1385,13 @@ where
 async fn preload_isolate_verification_failures<R>(
     reader: &R,
     manifests: &[Vec<encoding::ManifestEntry>],
-    error: anyhow::Error,
+    error: RenderedRequestError,
     cache: &mut CaptureReadCache,
 ) -> Result<()>
 where
     R: CaptureBaseReader + Sync,
 {
-    if error.downcast_ref::<CaptureStoreReadError>().is_some() {
+    if matches!(error, RenderedRequestError::CaptureStore(_)) {
         return Err(error);
     }
     for entries in manifests {
@@ -1215,7 +1399,7 @@ where
             continue;
         }
         if let Err(error) = read_manifest_blocks(reader, entries, &mut cache.blocks).await {
-            if error.downcast_ref::<CaptureStoreReadError>().is_some() {
+            if matches!(error, RenderedRequestError::CaptureStore(_)) {
                 return Err(error);
             }
         }
@@ -1295,8 +1479,8 @@ where
     let (request, provenance) =
         decode_capture_pair_selected_from(reader, capture_version, stored, true, true).await?;
     Ok((
-        request.context("capture pair omitted request body")?,
-        provenance.context("capture pair omitted provenance payload")?,
+        request.ok_or(RenderedRequestError::PairMissingRequest)?,
+        provenance.ok_or(RenderedRequestError::PairMissingProvenance)?,
     ))
 }
 

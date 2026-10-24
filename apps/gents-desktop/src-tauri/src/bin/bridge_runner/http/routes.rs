@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use chrono::Utc;
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{HttpRequestData, HttpResponse};
@@ -119,6 +120,32 @@ struct VersionResponse {
     version: u64,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum RouteError {
+    #[error("{context}")]
+    Decode {
+        context: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("test fixture route requires GENTS_TAURI_LIVE=1")]
+    FixtureDisabled,
+    #[error("live bridge runner has no deployment")]
+    NoDeployment,
+    #[error("desktop has no shareable address for route drift")]
+    NoShareableAddress,
+    #[error("saved peer {peer_id} was not found")]
+    SavedPeerNotFound { peer_id: String },
+    #[error("session hydration retry requires a node")]
+    HydrationNodeMissing,
+    #[error("requestId is required")]
+    RequestIdRequired,
+    #[error("{message}")]
+    DesktopCommand { message: String },
+}
+
 pub(super) async fn handle_request(
     fixture: &Arc<LiveBridgeFixture>,
     request: HttpRequestData,
@@ -134,7 +161,7 @@ pub(super) async fn handle_request(
                 .client
                 .as_ref()
                 .and_then(|client| client.deployments.first())
-                .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
+                .ok_or(RouteError::NoDeployment)?;
             let server = fixture.remote_core();
             let identity: Arc<dyn gents::NodeIdentity> = Arc::new(server.node_identity().clone());
             let network = gents_desktop_bridge::enrollment::ensure_enrollment_network(
@@ -190,8 +217,7 @@ pub(super) async fn handle_request(
             )?;
             let result =
                 discover_inference_models_for_core(request, Some(fixture.desktop_core().as_ref()))
-                    .await
-                    .map_err(|error| anyhow!("{error}"))?;
+                    .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/inference/model/recommendation") => {
@@ -199,8 +225,7 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding inference recommendation request",
             )?;
-            let result =
-                inference_model_recommendation(request).map_err(|error| anyhow!("{error}"))?;
+            let result = inference_model_recommendation(request)?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/inference/backend/recommendation") => {
@@ -208,8 +233,7 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding backend recommendation request",
             )?;
-            let result =
-                inference_backend_recommendation(request).map_err(|error| anyhow!("{error}"))?;
+            let result = inference_backend_recommendation(request)?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/init") => Ok(HttpResponse::json_ok(serde_json::to_string(
@@ -227,8 +251,8 @@ pub(super) async fn handle_request(
             .to_string(),
         )),
         ("POST", "/desktop/selected-node") => {
-            let request = serde_json::from_str::<SelectedNodeRequest>(&request.body)
-                .context("decoding selected node request")?;
+            let request =
+                decode::<SelectedNodeRequest>(&request.body, "decoding selected node request")?;
             let did = request
                 .node_did
                 .map(|value| value.trim().to_string())
@@ -271,7 +295,7 @@ pub(super) async fn handle_request(
                 .p2p()
                 .shareable_address()
                 .await?
-                .context("desktop has no shareable address for route drift")?;
+                .ok_or(RouteError::NoShareableAddress)?;
             fixture
                 .remote_core()
                 .p2p()
@@ -303,7 +327,9 @@ pub(super) async fn handle_request(
                 .into_iter()
                 .find(|record| record.peer_id == request.peer_id)
                 .map(|record| record.addr)
-                .with_context(|| format!("saved peer {} was not found", request.peer_id))?;
+                .ok_or_else(|| RouteError::SavedPeerNotFound {
+                    peer_id: request.peer_id.clone(),
+                })?;
             let payload = fetch_runtime_connection_payload(&address).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))
         }
@@ -323,11 +349,13 @@ pub(super) async fn handle_request(
         }
         ("POST", "/desktop/p2p/repair") => {
             repair_p2p(fixture.desktop_core().as_ref(), Duration::from_millis(250)).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/session/snapshot") => {
-            let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
-                .context("decoding session snapshot request")?;
+            let request = decode::<SessionSnapshotRequest>(
+                &request.body,
+                "decoding session snapshot request",
+            )?;
             let snapshot = build_desktop_session_snapshot(
                 fixture,
                 request.node_did.as_deref(),
@@ -340,8 +368,8 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("POST", "/desktop/session/rows") => {
-            let request = serde_json::from_str::<SessionRowsRequest>(&request.body)
-                .context("decoding session rows request")?;
+            let request =
+                decode::<SessionRowsRequest>(&request.body, "decoding session rows request")?;
             let rows = session_rows(
                 fixture.desktop_core(),
                 request.session_id,
@@ -353,8 +381,10 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/session/live-delta") => {
-            let request = serde_json::from_str::<SessionLiveDeltaRequest>(&request.body)
-                .context("decoding session live delta request")?;
+            let request = decode::<SessionLiveDeltaRequest>(
+                &request.body,
+                "decoding session live delta request",
+            )?;
             let delta = build_session_live_delta(
                 fixture.desktop_core().as_ref(),
                 &request.session_id,
@@ -370,8 +400,10 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))
         }
         ("POST", "/desktop/session/hydration/retry") => {
-            let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
-                .context("decoding session hydration retry request")?;
+            let request = decode::<SessionSnapshotRequest>(
+                &request.body,
+                "decoding session hydration retry request",
+            )?;
             let node_did = request.node_did.or_else(|| {
                 fixture
                     .desktop_core()
@@ -384,7 +416,7 @@ pub(super) async fn handle_request(
             });
             let node_did = node_did
                 .as_deref()
-                .ok_or_else(|| anyhow!("session hydration retry requires a node"))?;
+                .ok_or(RouteError::HydrationNodeMissing)?;
             fixture
                 .desktop_core()
                 .retry_session_hydration(&request.session_id, node_did)
@@ -392,12 +424,14 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok("null".to_string()))
         }
         ("POST", "/desktop/request/diagnostics") => {
-            let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
-                .context("decoding request diagnostics request")?;
+            let request = decode::<SessionSnapshotRequest>(
+                &request.body,
+                "decoding request diagnostics request",
+            )?;
             let request_id = request
                 .request_id
                 .as_deref()
-                .ok_or_else(|| anyhow!("requestId is required"))?;
+                .ok_or(RouteError::RequestIdRequired)?;
             let diagnostics =
                 build_request_diagnostics_bundle(fixture, &request.session_id, request_id).await;
             Ok(HttpResponse::json_ok(serde_json::to_string(&diagnostics)?))
@@ -410,7 +444,7 @@ pub(super) async fn handle_request(
             let request_id = request
                 .request_id
                 .as_deref()
-                .ok_or_else(|| anyhow!("requestId is required"))?;
+                .ok_or(RouteError::RequestIdRequired)?;
             let result = retained_provider_reasoning(
                 fixture.remote_core().as_ref(),
                 fixture.node_did(),
@@ -436,7 +470,7 @@ pub(super) async fn handle_request(
             )?;
             let view = session_provenance_request(fixture.desktop_core(), request)
                 .await
-                .map_err(|e| anyhow!("{e}"))?;
+                .map_err(|message| RouteError::DesktopCommand { message })?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&view)?))
         }
         ("GET", "/desktop/backend-health") => {
@@ -491,18 +525,18 @@ pub(super) async fn handle_request(
                 "decoding node config save request",
             )?;
             save_node_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/node/default-agent") => {
             let request =
                 decode::<DefaultAgentSetRequest>(&request.body, "decoding default agent request")?;
             set_default_agent(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/agent/save") => {
             let request = decode::<AgentSaveRequest>(&request.body, "decoding agent save request")?;
             save_agent_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         // Test-only: write on the remote core so the desktop-snapshot read
         // exercises the real P2P propagation path (cross-node witness).
@@ -565,8 +599,11 @@ pub(super) async fn handle_request(
             require_live_fixture()?;
             let request =
                 decode::<ReplicatorRequest>(&request.body, "decoding P2P replicator install")?;
-            let filters = serde_json::from_value(request.filters)
-                .context("decoding P2P replication filters")?;
+            let filters =
+                serde_json::from_value(request.filters).map_err(|source| RouteError::Decode {
+                    context: "decoding P2P replication filters",
+                    source,
+                })?;
             fixture
                 .remote_core()
                 .p2p()
@@ -624,7 +661,7 @@ pub(super) async fn handle_request(
             let request =
                 decode::<BackendSaveRequest>(&request.body, "decoding backend save request")?;
             save_backend_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/inference-profile/save") => {
             let request = decode::<InferenceProfileSaveRequest>(
@@ -632,19 +669,19 @@ pub(super) async fn handle_request(
                 "decoding inference profile save request",
             )?;
             save_inference_profile_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/tools/save") => {
             let request =
                 decode::<ToolsSaveRequest>(&request.body, "decoding tool selection save request")?;
             save_tools_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/tools/delete") => {
             let request =
                 decode::<ToolsDeleteRequest>(&request.body, "decoding tools delete request")?;
             delete_tools_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/tool-service/save") => {
             let request = decode::<ToolServiceSaveRequest>(
@@ -652,7 +689,7 @@ pub(super) async fn handle_request(
                 "decoding tool service save request",
             )?;
             save_tool_service_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/tool-service/test") => {
             let request = decode::<ToolServiceTestRequest>(
@@ -672,7 +709,7 @@ pub(super) async fn handle_request(
                 request,
             )
             .await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/config/components/patch") => {
             let request = decode::<gents_desktop_bridge::types::ConfigComponentsPatchRequest>(
@@ -684,24 +721,24 @@ pub(super) async fn handle_request(
                 request,
             )
             .await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/task/save") => {
             let request = decode::<TaskSaveRequest>(&request.body, "decoding task save request")?;
             save_task_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/schedule/save") => {
             let request =
                 decode::<ScheduleSaveRequest>(&request.body, "decoding schedule save request")?;
             save_schedule_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/schedule/delete") => {
             let request =
                 decode::<ScheduleDeleteRequest>(&request.body, "decoding schedule delete request")?;
             delete_schedule_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/schedule/run") => {
             let request =
@@ -715,7 +752,7 @@ pub(super) async fn handle_request(
                 "decoding event source save request",
             )?;
             save_event_source_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/event-source/delete") => {
             let request = decode::<EventSourceDeleteRequest>(
@@ -723,19 +760,19 @@ pub(super) async fn handle_request(
                 "decoding event source delete request",
             )?;
             delete_event_source_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/trigger/save") => {
             let request =
                 decode::<TriggerSaveRequest>(&request.body, "decoding trigger save request")?;
             save_trigger_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/trigger/delete") => {
             let request =
                 decode::<TriggerDeleteRequest>(&request.body, "decoding trigger delete request")?;
             delete_trigger_config(fixture.desktop_core().as_ref(), request).await?;
-            snapshot_response(fixture).await
+            Ok(snapshot_response(fixture).await?)
         }
         ("POST", "/desktop/task/run") => {
             let request = decode::<TaskRunRequest>(&request.body, "decoding task run request")?;
@@ -746,9 +783,8 @@ pub(super) async fn handle_request(
             let background: gents_desktop_bridge::types::DesktopBackgroundToolRequest =
                 decode(&request.body, "decoding background tool request")?;
             let core = fixture.desktop_core();
-            let result = gents_desktop_bridge::commands::background_tool(core.as_ref(), background)
-                .await
-                .map_err(|error| anyhow!("{error}"))?;
+            let result =
+                gents_desktop_bridge::commands::background_tool(core.as_ref(), background).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/interrupt/request") => {
@@ -756,7 +792,7 @@ pub(super) async fn handle_request(
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;
             let result = interrupt_request(fixture.desktop_core(), &request)
                 .await
-                .map_err(|e| anyhow!("{e}"))?;
+                .map_err(|message| RouteError::DesktopCommand { message })?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         _ => Ok(HttpResponse::json_error("404 Not Found", "not found")),
@@ -825,7 +861,7 @@ async fn retained_provider_reasoning(
     let rows = values
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut sources = Vec::new();
     for row in &rows {
         if matches!(&row.segment.source, OutputSource::ProviderTurn { .. })
@@ -900,7 +936,7 @@ async fn operations_snapshot_response(
         .collect();
     let tool_call_rows = fetch_background_tool_calls(&core)
         .await
-        .map_err(|error| anyhow!("failed to query AgentToolCall: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("failed to query AgentToolCall: {error}"))?;
     let liveness = RuntimeLivenessView {
         expired_processing_count: 0,
         requests: Vec::new(),
@@ -945,7 +981,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
     let response =
         gents::graphql::graphql_with_transaction_retry(core.node(), query, "AgentToolCall query")
             .await
-            .map_err(|error| format!("{error:#}"))?;
+            .map_err(|error| ErrorChain(&error).to_string())?;
 
     let data = response
         .data
@@ -1007,21 +1043,21 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
         .collect())
 }
 
-fn decode<T>(body: &str, context: &str) -> Result<T>
+fn decode<T>(body: &str, context: &'static str) -> Result<T, RouteError>
 where
     T: serde::de::DeserializeOwned,
 {
-    serde_json::from_str::<T>(body).context(context.to_string())
+    serde_json::from_str::<T>(body).map_err(|source| RouteError::Decode { context, source })
 }
 
-fn require_live_fixture() -> Result<()> {
+fn require_live_fixture() -> Result<(), RouteError> {
     if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
-        anyhow::bail!("test fixture route requires GENTS_TAURI_LIVE=1");
+        return Err(RouteError::FixtureDisabled);
     }
     Ok(())
 }
 
-async fn snapshot_response(fixture: &Arc<LiveBridgeFixture>) -> Result<HttpResponse> {
+async fn snapshot_response(fixture: &Arc<LiveBridgeFixture>) -> Result<HttpResponse, RouteError> {
     let snapshot = build_desktop_client_snapshot(fixture).await;
     Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
 }

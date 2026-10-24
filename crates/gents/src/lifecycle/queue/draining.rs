@@ -72,10 +72,9 @@ async fn drain_pending_session_requests_where_in_txn(
 
     let response = txn.execute(&query).await?;
     let pending = &response["data"]["AgentRequest"];
-    anyhow::ensure!(
-        pending.is_array(),
-        "pending AgentRequest query omitted rows"
-    );
+    if !pending.is_array() {
+        return Err(QueueError::PendingQueryOmittedRows);
+    }
     let rows: Vec<AgentRequestRow> = serde_json::from_value(pending.clone())?;
 
     let escaped_reason = escape_graphql_string(reason);
@@ -85,7 +84,7 @@ async fn drain_pending_session_requests_where_in_txn(
         let doc_id = row
             .doc_id
             .as_deref()
-            .context("pending AgentRequest row is missing _docID")?;
+            .ok_or(QueueError::PendingRequestMissingDocId)?;
         let escaped_doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
@@ -107,27 +106,26 @@ async fn drain_pending_session_requests_where_in_txn(
         let response = txn.execute(&mutation).await?;
         let updated = response["data"]
             .get("update_AgentRequest")
-            .context("pending AgentRequest drain mutation omitted affected rows")?;
+            .ok_or(QueueError::DrainMutationOmittedRows)?;
         let affected = match updated {
             Value::Null => None,
             Value::Array(rows) if rows.is_empty() => None,
             Value::Array(rows) if rows.len() == 1 => Some(
                 rows[0]["_docID"]
                     .as_str()
-                    .context("pending AgentRequest drain receipt omitted _docID")?,
+                    .ok_or(QueueError::DrainReceiptMissingDocId)?,
             ),
             Value::Object(_) => Some(
                 updated["_docID"]
                     .as_str()
-                    .context("pending AgentRequest drain receipt omitted _docID")?,
+                    .ok_or(QueueError::DrainReceiptMissingDocId)?,
             ),
-            _ => anyhow::bail!("pending AgentRequest drain mutation returned unexpected rows"),
+            _ => return Err(QueueError::DrainMutationUnexpectedRows),
         };
         if let Some(affected) = affected {
-            anyhow::ensure!(
-                affected == doc_id,
-                "pending AgentRequest drain mutation updated another physical request"
-            );
+            if affected != doc_id {
+                return Err(QueueError::DrainMutationUpdatedAnother);
+            }
             crate::trigger_engine::durable::publish_request_outcome(
                 txn,
                 node_did,

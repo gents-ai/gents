@@ -1,28 +1,67 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+#[derive(Debug, thiserror::Error)]
+pub enum PackAssetError {
+    #[error("refusing to read pack asset {path:?}")]
+    Refused { path: String },
+    #[error("canonicalizing pack directory {}", path.display())]
+    CanonicalizeRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("resolving pack asset {path:?}")]
+    Resolve {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("refusing to read pack asset {path:?} outside {}", root.display())]
+    OutsideRoot { path: String, root: PathBuf },
+    #[error("opening pack asset {path:?}")]
+    Open {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Metadata(std::io::Error),
+    #[error("pack asset {path:?} is not a regular file")]
+    NotRegularFile { path: String },
+}
 
-pub(crate) fn open_pack_asset(root: &Path, path: &str) -> Result<std::fs::File> {
-    ensure!(
-        is_distributable_asset(path) && has_canonical_asset_spelling(path),
-        "refusing to read pack asset {path:?}"
-    );
-    let root = std::fs::canonicalize(root)
-        .with_context(|| format!("canonicalizing pack directory {}", root.display()))?;
+pub(crate) fn open_pack_asset(root: &Path, path: &str) -> Result<std::fs::File, PackAssetError> {
+    if !(is_distributable_asset(path) && has_canonical_asset_spelling(path)) {
+        return Err(PackAssetError::Refused {
+            path: path.to_owned(),
+        });
+    }
+    let root = std::fs::canonicalize(root).map_err(|source| PackAssetError::CanonicalizeRoot {
+        path: root.to_path_buf(),
+        source,
+    })?;
     let source = root.join(path);
     let resolved: PathBuf =
-        std::fs::canonicalize(&source).with_context(|| format!("resolving pack asset {path:?}"))?;
-    ensure!(
-        resolved.starts_with(&root),
-        "refusing to read pack asset {path:?} outside {}",
-        root.display()
-    );
-    let file =
-        std::fs::File::open(&resolved).with_context(|| format!("opening pack asset {path:?}"))?;
-    ensure!(
-        file.metadata()?.is_file(),
-        "pack asset {path:?} is not a regular file"
-    );
+        std::fs::canonicalize(&source).map_err(|source| PackAssetError::Resolve {
+            path: path.to_owned(),
+            source,
+        })?;
+    if !resolved.starts_with(&root) {
+        return Err(PackAssetError::OutsideRoot {
+            path: path.to_owned(),
+            root,
+        });
+    }
+    let file = std::fs::File::open(&resolved).map_err(|source| PackAssetError::Open {
+        path: path.to_owned(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(PackAssetError::Metadata)?;
+    if !metadata.is_file() {
+        return Err(PackAssetError::NotRegularFile {
+            path: path.to_owned(),
+        });
+    }
     Ok(file)
 }
 

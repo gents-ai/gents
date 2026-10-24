@@ -31,7 +31,7 @@ pub async fn reconcile_coalesced_pending_request(
     node_did: &str,
     source: QueueSource,
     key: &str,
-) -> Result<Option<EnqueuedAgentRequest>> {
+) -> anyhow::Result<Option<EnqueuedAgentRequest>> {
     reconcile_coalesced_pending_request_for(node, session_id, node_did, source, key, None).await
 }
 
@@ -42,7 +42,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
     source: QueueSource,
     key: &str,
     anchor_doc: Option<&str>,
-) -> Result<Option<EnqueuedAgentRequest>> {
+) -> anyhow::Result<Option<EnqueuedAgentRequest>> {
     let matching =
         matching_coalesced_pending_requests(node, session_id, node_did, source, key, anchor_doc)
             .await?;
@@ -82,7 +82,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
                                     .context("duplicate wake has no physical identity")?,
                             )?
                         {
-                            return Ok(());
+                            return Ok::<_, anyhow::Error>(());
                         }
                     }
                     let response = txn.execute_local_response(mutation).await?;
@@ -155,7 +155,7 @@ async fn matching_coalesced_pending_requests(
     source: QueueSource,
     key: &str,
     anchor_doc: Option<&str>,
-) -> Result<Vec<AgentRequestRow>> {
+) -> anyhow::Result<Vec<AgentRequestRow>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
@@ -225,10 +225,10 @@ pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<Enq
 }
 
 pub(super) fn parent_agent_id(parent: &AgentRequest) -> Result<String> {
-    anyhow::ensure!(
-        !parent.agent_id.trim().is_empty(),
-        "cannot enqueue same-session request: parent {} has no agent_id",
-        parent.request_id
-    );
+    if parent.agent_id.trim().is_empty() {
+        return Err(QueueError::SameSessionParentWithoutAgent {
+            request_id: parent.request_id.clone(),
+        });
+    }
     Ok(parent.agent_id.clone())
 }

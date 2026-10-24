@@ -1,10 +1,23 @@
 use std::sync::OnceLock;
 
-use anyhow::Result;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::backend_registry::{BackendFields, InferenceBackend, HEALTHY_PROBE_STATUS};
+use crate::backend_registry::{
+    BackendFields, BackendRegistryError, InferenceBackend, HEALTHY_PROBE_STATUS,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BackendAdmissionConfigError {
+    #[error(transparent)]
+    Backend(#[from] BackendRegistryError),
+    #[error("backend observation does not match configuration reference")]
+    ObservationMismatch,
+    #[error(transparent)]
+    Capacity(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    Fingerprint(#[from] serde_json::Error),
+}
 
 const BACKEND_CONFIG_FINGERPRINT_TAG: &str = "gents-backend-admission-config-v1";
 const BACKEND_CONNECTION_FINGERPRINT_TAG: &str = "gents-backend-connection-v1";
@@ -70,12 +83,11 @@ impl BackendAdmissionConfig {
     pub(crate) fn from_backend(
         backend: &InferenceBackend,
         observation: &crate::document_config::InferenceBackendObservation,
-    ) -> Result<Self> {
+    ) -> Result<Self, BackendAdmissionConfigError> {
         backend.validate()?;
-        anyhow::ensure!(
-            backend.backend_id == observation.backend_id,
-            "backend observation does not match configuration reference"
-        );
+        if backend.backend_id != observation.backend_id {
+            return Err(BackendAdmissionConfigError::ObservationMismatch);
+        }
         let max_concurrent = usize::try_from(backend.effective_max_concurrent())?;
         let max_queue_depth = usize::try_from(backend.effective_max_queue_depth())?;
         // The observation must come from the same owner-scoped document lookup.

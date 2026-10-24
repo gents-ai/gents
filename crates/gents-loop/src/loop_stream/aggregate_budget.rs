@@ -41,8 +41,10 @@ pub struct AggregateTokenLedger {
 
 pub const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str = "aggregate_token_budget_exhausted: ";
 
-pub fn aggregate_token_budget_exhaustion_message(error: &anyhow::Error) -> Option<String> {
-    error.chain().find_map(|cause| {
+pub fn aggregate_token_budget_exhaustion_message(
+    error: &(dyn std::error::Error + 'static),
+) -> Option<String> {
+    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
         let reason = cause
             .downcast_ref::<crate::error::LoopStreamError>()?
             .provider_message()?;

@@ -242,7 +242,11 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
-        other => bail!("fetch_doc_patch: unknown collection {other}"),
+        other => {
+            return Err(ClientQueryError::UnknownPatchCollection {
+                collection: other.to_owned(),
+            })
+        }
     }
     rows.context_source_node_dids = rows
         .contexts

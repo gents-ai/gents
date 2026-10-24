@@ -1,6 +1,5 @@
 use rapidhash::RapidHashMap;
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
@@ -8,6 +7,20 @@ use crate::graphql::escape_graphql_string;
 use super::action_plan::{CreationPolicy, WorkspaceAdapterKind};
 use super::executor::RepositoryPlacementRef;
 use super::LogicalWorkspaceIdentity;
+
+#[derive(Debug, thiserror::Error)]
+pub enum DocumentsError {
+    #[error("{message}")]
+    StoreRejected { message: String },
+}
+
+type Result<T, E = DocumentsError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RepositoryPlacementError {
+    #[error("repository path is not valid UTF-8")]
+    HostPathNotUtf8,
+}
 
 pub(crate) const ADAPTER_VERSION: &str = "gents-workspace-adapter/1";
 pub(crate) const LIFECYCLE_READY: &str = "ready";
@@ -255,12 +268,12 @@ pub fn workspace_placement_upsert_mutation(
 pub fn repository_placement_upsert_mutation(
     placement: &RepositoryPlacementRef,
     updated_at: &str,
-) -> Result<String> {
+) -> Result<String, RepositoryPlacementError> {
     let enabled = if placement.enabled { "true" } else { "false" };
     let host_path = placement
         .host_path
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("repository path is not valid UTF-8"))?;
+        .ok_or(RepositoryPlacementError::HostPathNotUtf8)?;
     Ok(format!(
         r#"mutation {{
             upsert_RepositoryPlacement(

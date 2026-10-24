@@ -193,7 +193,10 @@ async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> 
         ),
     )
     .await?;
-    crate::graphql::created_doc_id(&response, "FileImageHydrationRequest")
+    Ok(crate::graphql::created_doc_id(
+        &response,
+        "FileImageHydrationRequest",
+    )?)
 }
 
 async fn receipt_row(
@@ -418,7 +421,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         source_node.clone(), &mut request, source.did(), 0, "write_file", "recorded-image-fence-write",
         json!({"path":"recorded.txt","content":"recorded after\n","overwrite":true,"raw_json":true}),
         AwaitMode::Foreground, true,
-    ).await?;
+    ).await.map_err(anyhow::Error::from_boxed)?;
     let physical = tool.doc_id().context("accepted physical tool")?.to_owned();
     let workspace = directory.path().join("workspace");
     std::fs::create_dir(&workspace)?;

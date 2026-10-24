@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::plugin_job::keys::{job_session_id, job_spawn_key};
 use gents::session::canonical_rows::{
@@ -30,6 +29,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 /// A home served by `gents server`, with the identity its job rows belong to.
 pub(crate) struct ServedHome {
     _tempdir: tempfile::TempDir,
@@ -42,15 +43,15 @@ pub(crate) struct ServedHome {
 }
 
 impl ServedHome {
-    pub(crate) async fn start() -> Result<Self> {
+    pub(crate) async fn start() -> TestResult<Self> {
         Self::start_with(Arc::new(|_: &Value| ChatAction::Hang), false).await
     }
 
     /// Serves a node whose provider is the scripted `responder`. `job_fixture`
     /// makes bash read-write and installs and wires the job fixture pack with
     /// the trusted-pack job block before the server starts.
-    pub(crate) async fn start_with(responder: Responder, job_fixture: bool) -> Result<Self> {
-        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    pub(crate) async fn start_with(responder: Responder, job_fixture: bool) -> TestResult<Self> {
+        let tempdir = tempfile::tempdir().expect("creating tempdir");
         let home = tempdir.path().join("home");
         fs::create_dir_all(&home)?;
         let model_name = format!("mock-job-cli-{}", Uuid::new_v4().simple());
@@ -75,7 +76,7 @@ impl ServedHome {
         let node_did = node_did_from_init(&init)?;
         let agent_id = init["default_agent_id"]
             .as_str()
-            .context("init output missing default_agent_id")?
+            .expect("init output missing default_agent_id")
             .to_owned();
         if job_fixture {
             let pack = tempdir.path().join("job_plugin_fixture");
@@ -103,7 +104,7 @@ impl ServedHome {
                     }],
                 }),
             )?;
-            let pack_arg = pack.to_str().context("pack path is not UTF-8")?;
+            let pack_arg = pack.to_str().expect("pack path is not UTF-8");
             run_cli_json(
                 &home,
                 &[
@@ -138,7 +139,7 @@ impl ServedHome {
     }
 
     /// `gents job <args>` against this node: (exit code, stdout, stderr).
-    pub(crate) fn job(&self, args: &[&str]) -> Result<(Option<i32>, String, String)> {
+    pub(crate) fn job(&self, args: &[&str]) -> TestResult<(Option<i32>, String, String)> {
         let mut full = vec!["job"];
         full.extend_from_slice(args);
         full.extend(["--graphql", &self.graphql]);
@@ -146,7 +147,7 @@ impl ServedHome {
     }
 
     /// `gents goal <args>` against this node.
-    pub(crate) fn goal(&self, args: &[&str]) -> Result<Value> {
+    pub(crate) fn goal(&self, args: &[&str]) -> TestResult<Value> {
         let mut full = vec!["goal"];
         full.extend_from_slice(args);
         full.extend(["--graphql", &self.graphql]);
@@ -154,14 +155,14 @@ impl ServedHome {
     }
 }
 
-fn run_job(cwd: &Path, args: &[&str]) -> Result<(Option<i32>, String, String)> {
+fn run_job(cwd: &Path, args: &[&str]) -> TestResult<(Option<i32>, String, String)> {
     let output = Command::new(cli_bin())
         .env("HOME", cwd)
         .env("RUST_LOG", "error")
         .current_dir(cwd)
         .args(args)
         .output()
-        .with_context(|| format!("running gents {}", args.join(" ")))?;
+        .map_err(|error| format!("running gents {}: {error}", args.join(" ")))?;
     Ok((
         output.status.code(),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -184,7 +185,7 @@ pub(crate) async fn seed_job(
     lifecycle: &str,
     state: JobState,
     pause_reason: Option<JobPauseReason>,
-) -> Result<String> {
+) -> TestResult<String> {
     let key = format!("{session}:{call}");
     let mut pin = JobPin {
         script_id: "fixture-script".into(),
@@ -274,7 +275,7 @@ pub(crate) async fn seed_child(
     node_did: &str,
     row_doc_id: &str,
     slot: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "{request}", purpose: "normal", node_did: "{node_did}",
@@ -302,7 +303,7 @@ pub(crate) async fn seed_admission(
     session: &str,
     row_doc_id: &str,
     call: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let arguments = "{}";
     let generation = format!("cli-job-fixture:{request_doc_id}");
     let created_at = "2026-06-01T10:00:00Z";
@@ -396,7 +397,7 @@ pub(crate) async fn seed_receipt(
     session: &str,
     row_doc_id: &str,
     call: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let text = "started";
     let created_at = "2026-06-01T10:00:01Z";
     let key = format!("{session}:background-receipt:{row_doc_id}");
@@ -474,7 +475,7 @@ pub(crate) async fn seed_receipt(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
+async fn served_node_lists_shows_and_watches_ended_jobs() -> TestResult<()> {
     let served = ServedHome::start().await?;
     let (access, did) = (served.access(), served.node_did.as_str());
     let done = seed_job(
@@ -519,7 +520,7 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
     let listed: Value = serde_json::from_str(&stdout)?;
     let mut addresses: Vec<&str> = listed
         .as_array()
-        .context("list prints an array")?
+        .expect("list prints an array")
         .iter()
         .filter_map(|view| view["address"].as_str())
         .collect();
@@ -571,8 +572,8 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let node_home = tempdir.path().join("node-home");
     let init = run_init_json(
         tempdir.path(),
@@ -581,7 +582,7 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
             "--node-name",
             "cli-job-offline",
             "--home",
-            node_home.to_str().context("node home utf8")?,
+            node_home.to_str().expect("node home utf8"),
         ],
     )?;
     let did = node_did_from_init(&init)?;
@@ -607,9 +608,7 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
             gents::RequestSigner::RegisteredTarget,
         )
         .await?;
-        let mutation = create
-            .graphql_mutation()
-            .map_err(|error| anyhow::anyhow!(error))?;
+        let mutation = create.graphql_mutation()?;
         let request = graphql_mutation_with_variables(&access, &mutation, &json!({})).await?;
         let request_doc_id =
             gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
@@ -653,7 +652,7 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
         )
         .await?;
     }
-    let home = node_home.to_str().context("node home utf8")?;
+    let home = node_home.to_str().expect("node home utf8");
 
     let (code, _, stderr) = run_job(
         tempdir.path(),
@@ -721,7 +720,7 @@ fn calls_tool(request: &Value, name: &str) -> bool {
         .any(|call| call["function"]["name"] == name)
 }
 
-async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
+async fn children_of(graphql: &str, request_id: &str) -> TestResult<Vec<Value>> {
     let response = graphql_query(
         graphql,
         &format!(
@@ -740,14 +739,14 @@ async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
     Ok(response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("children of the held request")?
+        .expect("children of the held request")
         .clone())
 }
 
 /// A Goal-held Task does not continue while a job it watches runs: the
 /// background-completion delivery, not a goal child, carries it on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_held_task_defers_while_job_runs() -> Result<()> {
+async fn goal_held_task_defers_while_job_runs() -> TestResult<()> {
     const LAUNCH: &str = "launch the fixture job";
     const CHILD: &str = "goal job child a";
     const PREDECESSOR: &str = "ready the goal session";
@@ -905,7 +904,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         .home
         .join(".gents")
         .to_str()
-        .context("gents home is not UTF-8")?
+        .expect("gents home is not UTF-8")
         .to_owned();
     *node.lock().unwrap() = Some((h, g.clone(), served.agent_id.clone()));
 
@@ -940,7 +939,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     let job_call_id = job_rows
         .pointer("/data/AgentToolCall/0/tool_call_id")
         .and_then(Value::as_str)
-        .with_context(|| format!("job row: {job_rows}"))?;
+        .ok_or_else(|| format!("job row: {job_rows}"))?;
     *watch_address.lock().unwrap() = format!("{s_job}:{job_call_id}");
 
     // Hold the Goal on the job.
@@ -965,7 +964,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     )?;
     let predecessor = predecessor_receipt["request_id"]
         .as_str()
-        .context("predecessor request id")?
+        .expect("predecessor request id")
         .to_owned();
     served.goal(&[
         "set",
@@ -988,11 +987,11 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     assert_eq!(resumed["created"], true, "{resumed}");
     let held = resumed["request_id"]
         .as_str()
-        .context("held request id")?
+        .expect("held request id")
         .to_owned();
     let opening_doc = resumed["doc_id"]
         .as_str()
-        .context("Goal opening request document")?;
+        .expect("Goal opening request document");
     let binding = graphql_query(
         &g,
         &format!(
@@ -1027,7 +1026,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     assert_eq!(goal["status"], "active", "{goal}");
     let seq0 = goal["continuation_sequence"]
         .as_u64()
-        .context("continuation_sequence")?;
+        .expect("continuation_sequence");
 
     // The intentional wait: the held turn's bounded wait times out while the job runs.
     wait_for_request_lifecycle_state(&g, &held, &["completed"], Duration::from_secs(60)).await?;
@@ -1072,7 +1071,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     );
     let delivery_id = delivery["request_id"]
         .as_str()
-        .context("delivery request id")?;
+        .expect("delivery request id");
     assert!(
         delivery_id.starts_with("background-completion-"),
         "{delivery}"

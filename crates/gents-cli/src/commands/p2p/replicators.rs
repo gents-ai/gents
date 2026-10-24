@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use super::error::{P2pCommandError, Result};
 use gents::agent::p2p_reconcile::templates::{
     combine_filters, equality_filter, to_replication_filters, PairingFilters,
 };
@@ -13,6 +13,22 @@ use super::output::{
     fetch_live_http_p2p_status, flatten_p2p_fields, load_collection_name_by_id, p2p_replicator_rows,
 };
 use super::p2p_http_client;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReplicatorFilterError {
+    #[error(
+        "invalid --filter {raw:?}: expected format `<collection>:<field>=<value>` (missing ':')"
+    )]
+    MissingCollectionSeparator { raw: String },
+    #[error("invalid --filter {raw:?}: expected format `<collection>:<field>=<value>` (missing '=' after field name)")]
+    MissingValueSeparator { raw: String },
+    #[error("invalid --filter {raw:?}: collection name must not be empty")]
+    EmptyCollection { raw: String },
+    #[error("invalid --filter {raw:?}: field name must not be empty")]
+    EmptyField { raw: String },
+    #[error("invalid --filter {raw:?}: filter value must not be empty")]
+    EmptyValue { raw: String },
+}
 
 pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
@@ -37,12 +53,12 @@ pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
 
 pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()> {
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    let filters = parse_replicator_filters(&args.filters)
-        .context("parsing --filter arguments for p2p admin replicators add")?;
+    let filters =
+        parse_replicator_filters(&args.filters).map_err(P2pCommandError::ReplicatorFilter)?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    let wire_filters = to_replication_filters(&filters).map_err(anyhow::Error::msg)?;
+    let wire_filters = to_replication_filters(&filters)?;
     let request = P2pReplicatorRequest {
         collections: collections.clone(),
         addresses: vec![args.peer.clone()],
@@ -85,32 +101,28 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     Ok(())
 }
 
-pub(super) fn parse_replicator_filters(filters: &[String]) -> Result<PairingFilters> {
+pub(super) fn parse_replicator_filters(
+    filters: &[String],
+) -> std::result::Result<PairingFilters, ReplicatorFilterError> {
     let mut map = PairingFilters::new();
     for raw in filters {
-        let (collection, rest) = raw.split_once(':').with_context(|| {
-            format!(
-                "invalid --filter {raw:?}: expected format \
-                 `<collection>:<field>=<value>` (missing ':')"
-            )
+        let (collection, rest) = raw.split_once(':').ok_or_else(|| {
+            ReplicatorFilterError::MissingCollectionSeparator { raw: raw.clone() }
         })?;
-        let (field, value) = rest.split_once('=').with_context(|| {
-            format!(
-                "invalid --filter {raw:?}: expected format \
-                 `<collection>:<field>=<value>` (missing '=' after field name)"
-            )
-        })?;
+        let (field, value) = rest
+            .split_once('=')
+            .ok_or_else(|| ReplicatorFilterError::MissingValueSeparator { raw: raw.clone() })?;
         let collection = collection.trim();
         let field = field.trim();
         let value = value.trim();
         if collection.is_empty() {
-            anyhow::bail!("invalid --filter {raw:?}: collection name must not be empty");
+            return Err(ReplicatorFilterError::EmptyCollection { raw: raw.clone() });
         }
         if field.is_empty() {
-            anyhow::bail!("invalid --filter {raw:?}: field name must not be empty");
+            return Err(ReplicatorFilterError::EmptyField { raw: raw.clone() });
         }
         if value.is_empty() {
-            anyhow::bail!("invalid --filter {raw:?}: filter value must not be empty");
+            return Err(ReplicatorFilterError::EmptyValue { raw: raw.clone() });
         }
         let predicate = equality_filter(field, value);
         match map.remove(collection) {

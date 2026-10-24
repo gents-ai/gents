@@ -4,7 +4,7 @@ use super::sessions::{
     SESSION_SCOPE_FIELDS,
 };
 use super::*;
-use anyhow::Context;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 
 const REQUEST_FACT_SESSION_BATCH_SIZE: usize =
@@ -130,7 +130,7 @@ async fn load_request_facts_in_txn(
         requester_scope,
     ));
     let response = txn.execute(&query).await?;
-    decode_request_facts(&response)
+    Ok(decode_request_facts(&response)?)
 }
 
 fn request_fact_query(filter: &str) -> String {
@@ -144,66 +144,49 @@ fn request_fact_query(filter: &str) -> String {
     )
 }
 
-fn decode_request_facts(response: &serde_json::Value) -> Result<Vec<SessionRequestFact>> {
+fn request_text<'a>(
+    row: &'a serde_json::Value,
+    field: &'static str,
+) -> Result<&'a str, SessionError> {
+    row.get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or(SessionError::RequestRowOmitted { field })
+}
+
+fn decode_request_facts(
+    response: &serde_json::Value,
+) -> Result<Vec<SessionRequestFact>, SessionError> {
     let rows = response
         .get("data")
         .and_then(|data| data.get("AgentRequest"))
-        .context("request facts query omitted AgentRequest rows")?
+        .ok_or(SessionError::RequestFactsOmitted)?
         .as_array()
-        .context("decoding request fact rows")?;
+        .ok_or(SessionError::RequestFactsNotArray)?;
     rows.iter()
         .map(|row| {
-            chrono::DateTime::parse_from_rfc3339(
-                row.get("created_at")
-                    .and_then(serde_json::Value::as_str)
-                    .context("request row omitted created_at")?,
-            )
-            .context("invalid request created_at")?;
+            chrono::DateTime::parse_from_rfc3339(request_text(row, "created_at")?)
+                .map_err(SessionError::InvalidRequestCreatedAt)?;
             Ok(SessionRequestFact {
-                node_did: row
-                    .get("node_did")
-                    .and_then(serde_json::Value::as_str)
-                    .context("request row omitted node_did")?
-                    .to_string(),
-                session_id: row
-                    .get("session_id")
-                    .and_then(serde_json::Value::as_str)
-                    .context("request row omitted session_id")?
-                    .to_string(),
+                node_did: request_text(row, "node_did")?.to_string(),
+                session_id: request_text(row, "session_id")?.to_string(),
                 requester_did: row
                     .get("requester_did")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
-                agent_id: row
-                    .get("agent_id")
-                    .and_then(serde_json::Value::as_str)
-                    .context("request row omitted agent_id")?
-                    .to_string(),
-                created_at: row
-                    .get("created_at")
-                    .and_then(serde_json::Value::as_str)
-                    .context("request row omitted created_at")?
-                    .to_string(),
+                agent_id: request_text(row, "agent_id")?.to_string(),
+                created_at: request_text(row, "created_at")?.to_string(),
                 hop: row
                     .get("request_hop")
                     .and_then(serde_json::Value::as_u64)
                     .and_then(|hop| u32::try_from(hop).ok())
                     .unwrap_or(0),
                 observed: gents_protocol::session::SessionRequestObservation {
-                    request_doc_id: row
-                        .get("_docID")
-                        .and_then(serde_json::Value::as_str)
-                        .context("request row omitted _docID")?
-                        .to_string(),
-                    request_id: row
-                        .get("request_id")
-                        .and_then(serde_json::Value::as_str)
-                        .context("request row omitted request_id")?
-                        .to_string(),
+                    request_doc_id: request_text(row, "_docID")?.to_string(),
+                    request_id: request_text(row, "request_id")?.to_string(),
                     lifecycle_state: serde_json::from_value(
                         row.get("lifecycle_state").cloned().unwrap_or_default(),
                     )
-                    .context("decoding request lifecycle_state")?,
+                    .map_err(SessionError::DecodeLifecycleState)?,
                 },
             })
         })
@@ -266,7 +249,7 @@ pub async fn load_latest_request_in_txn(
     requester_scope: Option<Option<&str>>,
 ) -> Result<Option<SessionRequestFact>> {
     let rows = load_request_facts_in_txn(txn, node_did, session_id, requester_scope).await?;
-    latest_request_fact(rows)
+    Ok(latest_request_fact(rows)?)
 }
 
 pub(crate) async fn load_latest_requests_in_txn(
@@ -301,14 +284,15 @@ pub(crate) async fn load_latest_requests_in_txn(
     Ok(latest_by_session)
 }
 
-fn latest_request_fact(rows: Vec<SessionRequestFact>) -> Result<Option<SessionRequestFact>> {
+fn latest_request_fact(
+    rows: Vec<SessionRequestFact>,
+) -> Result<Option<SessionRequestFact>, SessionError> {
     let mut identities = std::collections::BTreeSet::new();
     let mut latest = None;
     for row in rows {
-        anyhow::ensure!(
-            identities.insert(row.observed.request_id.clone()),
-            "request-head selection found duplicate logical request roots"
-        );
+        if !identities.insert(row.observed.request_id.clone()) {
+            return Err(SessionError::DuplicateRequestRoot);
+        }
         if latest
             .as_ref()
             .is_none_or(|old| request_fact_newer(&row, old))
@@ -345,14 +329,14 @@ where
 fn validate_incoming_scope(
     session: &gents_protocol::session::AgentSession,
     incoming: &SessionRequestFact,
-) -> Result<()> {
-    anyhow::ensure!(
-        incoming.node_did == session.node_did
-            && incoming.session_id == session.session_id
-            && incoming.agent_id == session.agent_id
-            && incoming.requester_did == session.requester_did,
-        "incoming request does not match the session owner/session/requester/agent scope"
-    );
+) -> Result<(), SessionError> {
+    if incoming.node_did != session.node_did
+        || incoming.session_id != session.session_id
+        || incoming.agent_id != session.agent_id
+        || incoming.requester_did != session.requester_did
+    {
+        return Err(SessionError::IncomingScopeMismatch);
+    }
     Ok(())
 }
 
@@ -686,7 +670,7 @@ pub(crate) async fn load_recent_titles_for_agent(
     let mut sessions: Vec<gents_protocol::session::AgentSession> = rows
         .iter()
         .map(|row| decode_session_row(row).map(|row| row.session))
-        .collect::<Result<_>>()?;
+        .collect::<Result<_, SessionError>>()?;
     sessions.sort_by(|a, b| {
         let key = |session: &gents_protocol::session::AgentSession| {
             let time = session
@@ -792,7 +776,7 @@ mod observation_refresh_tests {
                 let exact = load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:requester"))).await?.unwrap();
                 assert_eq!(exact, all);
                 assert!(load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:absent"))).await?.is_none());
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             }),
         ).await.unwrap();
     }
@@ -890,7 +874,7 @@ mod observation_refresh_tests {
                     )
                     .await?;
                     assert_eq!(exact_requester[&session_ids[0]].observed.request_id, "remote-head");
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )
@@ -1010,7 +994,7 @@ mod observation_refresh_tests {
                 ).await?.unwrap().session;
                 assert_eq!(session.observation.unwrap().latest_request.unwrap().lifecycle_state,
                     RequestLifecycleState::Completed);
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             }),
         ).await.unwrap();
     }

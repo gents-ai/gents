@@ -3,7 +3,15 @@ use crate::config_client::ConfigRead;
 
 #[derive(Debug, thiserror::Error)]
 #[error("replacement request does not own its queue position")]
-pub(crate) struct InvalidQueuePosition;
+pub struct InvalidQueuePosition;
+
+fn ensure_position(holds: bool) -> Result<()> {
+    if holds {
+        Ok(())
+    } else {
+        Err(InvalidQueuePosition.into())
+    }
+}
 
 pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) -> Result<()> {
     let Some(position) = row
@@ -15,24 +23,23 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
         return Ok(());
     };
     let expected_slot = position.slot_request_doc_id.clone();
-    anyhow::ensure!(!expected_slot.is_empty(), InvalidQueuePosition);
+    ensure_position(!expected_slot.is_empty())?;
     let mut current = row.clone();
     let mut visited = rapidhash::RapidHashSet::default();
     loop {
         let current_id = current.doc_id.as_deref().ok_or(InvalidQueuePosition)?;
-        anyhow::ensure!(visited.insert(current_id.to_owned()), InvalidQueuePosition);
+        ensure_position(visited.insert(current_id.to_owned()))?;
         let input = current.input.as_ref().ok_or(InvalidQueuePosition)?;
         let queue = input.queue.as_ref().ok_or(InvalidQueuePosition)?;
         let Some(position) = queue.position.as_ref() else {
-            anyhow::ensure!(current_id == expected_slot, InvalidQueuePosition);
+            ensure_position(current_id == expected_slot)?;
             return Ok(());
         };
-        anyhow::ensure!(
+        ensure_position(
             position.slot_request_doc_id == expected_slot
                 && !position.replaces_request_doc_id.is_empty()
                 && !visited.contains(&position.replaces_request_doc_id),
-            InvalidQueuePosition
-        );
+        )?;
         let response = read
             .execute_read(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
@@ -51,7 +58,7 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
             .map_err(|_| InvalidQueuePosition)?;
         let old_input = previous.input.as_ref().ok_or(InvalidQueuePosition)?;
         let old_queue = old_input.queue.as_ref().ok_or(InvalidQueuePosition)?;
-        anyhow::ensure!(
+        ensure_position(
             previous.doc_id.as_deref() == Some(position.replaces_request_doc_id.as_str())
                 && previous.lifecycle_state == Some(RequestLifecycleState::Superseded)
                 && previous.superseded_by_request_doc_id == current.doc_id
@@ -73,10 +80,9 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
                 && queue.policy == QueuePolicy::Append
                 && super::management::replacement_delivery_allowed(
                     old_queue.delivery,
-                    queue.delivery
+                    queue.delivery,
                 ),
-            InvalidQueuePosition
-        );
+        )?;
         current = previous.clone();
     }
 }
@@ -104,7 +110,7 @@ pub(crate) async fn effective_slots(
         let id = row
             .doc_id
             .clone()
-            .context("queue row missing physical identity")?;
+            .ok_or(QueueError::QueueRowMissingIdentity)?;
         let slot = match validate_position(txn, &row).await {
             Ok(()) => row
                 .input
@@ -113,7 +119,7 @@ pub(crate) async fn effective_slots(
                 .and_then(|queue| queue.position.as_ref())
                 .map(|position| position.slot_request_doc_id.clone())
                 .unwrap_or_else(|| id.clone()),
-            Err(error) if error.is::<InvalidQueuePosition>() => id.clone(),
+            Err(QueueError::InvalidQueuePosition(_)) => id.clone(),
             Err(error) => return Err(error),
         };
         result.push((id, slot));

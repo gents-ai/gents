@@ -3,7 +3,7 @@ use crate::support::*;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use axum::body::Bytes;
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode};
@@ -27,7 +27,7 @@ struct StallingProxyState {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -91,9 +91,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         pre_apply.insert(*c, count_collection_rows(&graphql, c).await?);
     }
 
-    let root_str = root
-        .to_str()
-        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let root_str = root.to_str().ok_or("manifest root path is not UTF-8")?;
 
     let (proxy_graphql, mutation_staged, proxy) =
         start_stalling_transaction_proxy(&graphql).await?;
@@ -112,28 +110,26 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .context("spawning gents config apply through transaction proxy")?;
+        .expect("spawning gents config apply through transaction proxy");
 
     let staged_permit = tokio::time::timeout(TRANSACTION_STAGE_DEADLINE, mutation_staged.acquire())
         .await
-        .context("config apply did not stage a transactional mutation")?
-        .context("transaction proxy closed before staging a mutation")?;
+        .expect("config apply did not stage a transactional mutation")
+        .expect("transaction proxy closed before staging a mutation");
     staged_permit.forget();
     if let Some(status) = cli
         .try_wait()
-        .context("checking config apply before SIGKILL")?
+        .expect("checking config apply before SIGKILL")
     {
         let output = cli
             .wait_with_output()
-            .context("capturing config apply that exited before SIGKILL")?;
-        return Err(anyhow!(
-            "config apply exited before the rollback probe could kill an active transaction ({status})\nstdout:\n{}\nstderr:\n{}",
+            .expect("capturing config apply that exited before SIGKILL");
+        return Err(format!("config apply exited before the rollback probe could kill an active transaction ({status})\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        ));
+            String::from_utf8_lossy(&output.stderr),).into());
     }
-    cli.kill().context("SIGKILL CLI")?;
-    cli.wait().context("reap CLI")?;
+    cli.kill().expect("SIGKILL CLI");
+    cli.wait().expect("reap CLI");
     proxy.abort();
 
     let deadline = Instant::now() + TX_RECLAIM_DEADLINE;
@@ -155,10 +151,11 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
                     (pre != now).then(|| format!("{c}: pre={pre} now={now}"))
                 })
                 .collect();
-            return Err(anyhow!(
+            return Err(format!(
                 "after SIGKILL, DB shows post-apply drift: {}",
                 drift.join(", ")
-            ));
+            )
+            .into());
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -171,7 +168,7 @@ async fn start_stalling_transaction_proxy(
     std::sync::Arc<Semaphore>,
     tokio::task::JoinHandle<()>,
 )> {
-    let mut origin = url::Url::parse(graphql).context("parsing GraphQL endpoint")?;
+    let mut origin = url::Url::parse(graphql).expect("parsing GraphQL endpoint");
     origin.set_path("");
     origin.set_query(None);
     origin.set_fragment(None);
@@ -186,13 +183,13 @@ async fn start_stalling_transaction_proxy(
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
-        .context("binding transaction proxy")?;
-    let address = listener.local_addr().context("transaction proxy address")?;
+        .expect("binding transaction proxy");
+    let address = listener.local_addr().expect("transaction proxy address");
     let server = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
     let path = url::Url::parse(graphql)
-        .context("parsing GraphQL endpoint path")?
+        .expect("parsing GraphQL endpoint path")
         .path()
         .to_owned();
     Ok((format!("http://{address}{path}"), mutation_staged, server))

@@ -1,6 +1,6 @@
 use defra_node::EmbeddedNode;
 
-use crate::admission::{InferenceCall, InferenceCallRecoveryReport};
+use crate::admission::{InferenceCall, InferenceCallRecoveryReport, InferenceRecoveryError};
 use crate::lifecycle::{RecoveryReport, RequestLifecycle};
 use crate::tool_call_lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
 
@@ -8,7 +8,7 @@ use crate::tool_call_lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
 pub struct StartupRecoveryOutcome {
     pub tool_calls: anyhow::Result<ToolCallRecoveryReport>,
     pub requests: anyhow::Result<RecoveryReport>,
-    pub inference_calls: anyhow::Result<InferenceCallRecoveryReport>,
+    pub inference_calls: Result<InferenceCallRecoveryReport, InferenceRecoveryError>,
     pub task_hooks: anyhow::Result<usize>,
 }
 

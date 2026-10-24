@@ -2,9 +2,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
 use crypto::Key;
 use identity::RawIdentity;
+
+use super::IdentityError;
+
+type Result<T, E = IdentityError> = std::result::Result<T, E>;
 
 /// Refused, never repaired: a key others could read may already be exposed.
 /// Typed so hosts can route the refusal instead of matching its message.
@@ -19,8 +22,9 @@ pub struct InsecureKeyPermissions {
 /// The opened inode must be a regular file inaccessible to group and other
 /// users; a symlink is never followed.
 pub fn load_file_identity(path: &Path) -> Result<RawIdentity> {
-    read_existing(path)?
-        .ok_or_else(|| anyhow::anyhow!("identity key does not exist at {}", path.display()))
+    read_existing(path)?.ok_or_else(|| IdentityError::KeyMissing {
+        path: path.to_path_buf(),
+    })
 }
 
 /// Creates the identity only when no key exists. Concurrent creators all
@@ -30,12 +34,15 @@ pub fn load_or_create_file_identity(path: &Path) -> Result<RawIdentity> {
         return Ok(identity);
     }
 
-    let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
+    let private_key = crypto::generate_ed25519()?;
     let bytes = private_key.raw();
     match publish_private_key_file(path, bytes) {
-        Ok(true) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, bytes)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("constructing identity from {}", path.display())),
+        Ok(true) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, bytes).map_err(|source| {
+            IdentityError::ConstructIdentity {
+                path: path.to_path_buf(),
+                source,
+            }
+        }),
         Ok(false) => load_file_identity(path),
         Err(error) => Err(error),
     }
@@ -50,22 +57,34 @@ pub(crate) fn publish_private_key_file(path: &Path, bytes: &[u8]) -> Result<bool
         create_private_parent(parent)?;
     }
     let mut staged = tempfile::NamedTempFile::new_in(parent.unwrap_or_else(|| Path::new(".")))
-        .with_context(|| format!("staging key for {}", path.display()))?;
+        .map_err(|source| IdentityError::StageKey {
+            path: path.to_path_buf(),
+            source,
+        })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         staged
             .as_file()
             .set_permissions(fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("securing staged key for {}", path.display()))?;
+            .map_err(|source| IdentityError::SecureStagedKey {
+                path: path.to_path_buf(),
+                source,
+            })?;
     }
     staged
         .write_all(bytes)
-        .with_context(|| format!("writing staged key for {}", path.display()))?;
+        .map_err(|source| IdentityError::WriteStagedKey {
+            path: path.to_path_buf(),
+            source,
+        })?;
     staged
         .as_file()
         .sync_all()
-        .with_context(|| format!("syncing staged key for {}", path.display()))?;
+        .map_err(|source| IdentityError::SyncStagedKey {
+            path: path.to_path_buf(),
+            source,
+        })?;
 
     match staged.persist_noclobber(path) {
         Ok(_) => {
@@ -74,9 +93,10 @@ pub(crate) fn publish_private_key_file(path: &Path, bytes: &[u8]) -> Result<bool
             Ok(true)
         }
         Err(error) if error.error.kind() == ErrorKind::AlreadyExists => Ok(false),
-        Err(error) => {
-            Err(error.error).with_context(|| format!("persisting key to {}", path.display()))
-        }
+        Err(error) => Err(IdentityError::PersistKey {
+            path: path.to_path_buf(),
+            source: error.error,
+        }),
     }
 }
 
@@ -85,9 +105,11 @@ fn read_existing(path: &Path) -> Result<Option<RawIdentity>> {
         return Ok(None);
     };
     RawIdentity::from_bytes(crypto::KeyType::Ed25519, &bytes)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("loading identity from {}", path.display()))
         .map(Some)
+        .map_err(|source| IdentityError::LoadIdentity {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 /// Reads an owner-only key file without following a symlink; `None` when
@@ -103,32 +125,44 @@ pub(crate) fn read_private_key_file(path: &Path) -> Result<Option<Vec<u8>>> {
     let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("opening key {}", path.display())),
+        Err(source) => {
+            return Err(IdentityError::OpenKey {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
     };
     validate_opened_key(&file, path)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
-        .with_context(|| format!("reading key {}", path.display()))?;
+        .map_err(|source| IdentityError::ReadKey {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok(Some(bytes))
 }
 
 fn validate_opened_key(file: &File, path: &Path) -> Result<()> {
     let metadata = file
         .metadata()
-        .with_context(|| format!("inspecting key {}", path.display()))?;
+        .map_err(|source| IdentityError::InspectKey {
+            path: path.to_path_buf(),
+            source,
+        })?;
     if !metadata.file_type().is_file() {
-        bail!("key {} is not a regular file", path.display());
+        return Err(IdentityError::KeyNotRegular {
+            path: path.to_path_buf(),
+        });
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = metadata.permissions().mode();
         if mode & 0o077 != 0 {
-            return Err(InsecureKeyPermissions {
+            return Err(IdentityError::InsecureKey(InsecureKeyPermissions {
                 path: path.to_path_buf(),
                 mode: mode & 0o777,
-            }
-            .into());
+            }));
         }
     }
     Ok(())
@@ -146,7 +180,10 @@ fn create_private_parent(parent: &Path) -> Result<()> {
         .recursive(true)
         .mode(0o700)
         .create(parent)
-        .with_context(|| format!("creating key directory {}", parent.display()))?;
+        .map_err(|source| IdentityError::CreateKeyDirectory {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     for created in missing {
         let containing = created
             .parent()
@@ -159,8 +196,10 @@ fn create_private_parent(parent: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn create_private_parent(parent: &Path) -> Result<()> {
-    fs::create_dir_all(parent)
-        .with_context(|| format!("creating key directory {}", parent.display()))
+    fs::create_dir_all(parent).map_err(|source| IdentityError::CreateKeyDirectory {
+        path: parent.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(test)]
@@ -262,14 +301,15 @@ mod tests {
 
         fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
         let error = load_or_create_file_identity(&target).unwrap_err();
-        assert!(format!("{error:#}").contains("insecure permissions"));
-        assert_eq!(
-            error.downcast_ref::<InsecureKeyPermissions>(),
-            Some(&InsecureKeyPermissions {
-                path: target.clone(),
-                mode: 0o644
-            })
-        );
+        assert!(error.to_string().contains("insecure permissions"));
+        assert!(matches!(
+            &error,
+            IdentityError::InsecureKey(key)
+                if *key == InsecureKeyPermissions {
+                    path: target.clone(),
+                    mode: 0o644
+                }
+        ));
         assert!(load_file_identity(&target).is_err());
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,

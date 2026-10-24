@@ -284,7 +284,7 @@ pub async fn prepare_document_pack_install(
             let authored = super::super::load_pack_config(
                 archive.manifest(),
                 &options,
-                &|path| archive.asset(path).map(<[u8]>::to_vec),
+                &|path| Ok(archive.asset(path).map(<[u8]>::to_vec)?),
                 environment,
             )?;
             let config = super::super::bind_pack_install_config(
@@ -379,12 +379,12 @@ pub async fn install_prepared_document_pack(
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
     for plugin in &archive.manifest().metadata.plugins {
-        plugin_data_unique_keys(archive.manifest(), plugin, &|path| archive.asset(path))?;
+        plugin_data_unique_keys(archive.manifest(), plugin, &|path| Ok(archive.asset(path)?))?;
     }
     for dependency in dependency_archives {
         for plugin in &dependency.manifest().metadata.plugins {
             plugin_data_unique_keys(dependency.manifest(), plugin, &|path| {
-                dependency.asset(path)
+                Ok(dependency.asset(path)?)
             })?;
         }
     }
@@ -445,7 +445,7 @@ pub async fn install_prepared_document_pack(
                     &package.manifest,
                     &package.package_digest,
                     &bindings.inference_slots,
-                    &|path| package.asset(path),
+                    &|path| package.asset(path).map_err(anyhow::Error::from),
                     grant_authority,
                 )?;
                 let identity =
@@ -535,7 +535,7 @@ pub async fn install_prepared_document_pack(
         archive.manifest(),
         archive.digest(),
         &prepared.inference.bindings,
-        &|path| archive.asset(path),
+        &|path| Ok(archive.asset(path)?),
         grant_authority,
     )?;
     let mut identity = PackIdentity::new(archive.manifest(), archive.digest(), plugins);

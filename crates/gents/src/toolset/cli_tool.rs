@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use rapidhash::RapidHashMap;
 
 use crate::llm::tool::BoxFuture;
@@ -5,7 +7,7 @@ use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{ToolDyn, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
-use anyhow::{bail, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 
 use super::args::CliToolArgs;
 use super::shared::{
@@ -13,6 +15,24 @@ use super::shared::{
     ToolError as LocalToolError,
 };
 use super::CliToolConfig;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CliToolError {
+    #[error("argv for tool '{tool}' does not match any approved prefix policy")]
+    ArgvNotApproved { tool: String },
+    #[error("working directory for tool '{tool}' is not a directory: {}", path.display())]
+    WorkingDirectoryNotDirectory { tool: String, path: PathBuf },
+    #[error("determining current working directory")]
+    CurrentDir(#[source] std::io::Error),
+    #[error("resolving CLI working directory")]
+    ResolveWorkingDir(#[source] std::io::Error),
+    #[error("CLI executable path is not valid UTF-8")]
+    ExecutablePathNotUtf8,
+    #[error("{error}")]
+    SpawnFailed { error: String },
+    #[error("encoding CLI tool output")]
+    EncodeOutput(#[source] serde_json::Error),
+}
 
 #[derive(Clone)]
 pub(super) struct CliTool {
@@ -77,12 +97,12 @@ fn admit_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<(), Loca
     validate_argv_policy(config, argv).map_err(|error| {
         LocalToolError::reported_failure(
             crate::tool_call_lifecycle::FailureClass::PolicyDenied,
-            format!("{error:#}"),
+            ErrorChain(&error).to_string(),
         )
     })
 }
 
-fn validate_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<()> {
+fn validate_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<(), CliToolError> {
     if config.allowed_argv_prefixes.is_empty() {
         return Ok(());
     }
@@ -98,10 +118,9 @@ fn validate_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    bail!(
-        "argv for tool '{}' does not match any approved prefix policy",
-        config.name
-    )
+    Err(CliToolError::ArgvNotApproved {
+        tool: config.name.clone(),
+    })
 }
 
 fn cli_tool_environment(config: &CliToolConfig) -> RapidHashMap<String, String> {
@@ -137,24 +156,23 @@ async fn run_cli_command(
     let cwd = match config.working_dir.as_ref() {
         Some(path) => {
             if !path.is_dir() {
-                return Err(anyhow::anyhow!(
-                    "working directory for tool '{}' is not a directory: {}",
-                    config.name,
-                    path.display()
-                )
+                return Err(CliToolError::WorkingDirectoryNotDirectory {
+                    tool: config.name.clone(),
+                    path: path.clone(),
+                }
                 .into());
             }
             path.clone()
         }
-        None => std::env::current_dir().context("determining current working directory")?,
+        None => std::env::current_dir().map_err(CliToolError::CurrentDir)?,
     }
     .canonicalize()
-    .context("resolving CLI working directory")?;
+    .map_err(CliToolError::ResolveWorkingDir)?;
 
     let command = config
         .binary_path
         .to_str()
-        .context("CLI executable path is not valid UTF-8")?;
+        .ok_or(CliToolError::ExecutablePathNotUtf8)?;
     let launch_argv =
         prepare_declared_cli_command(&cwd, command, argv, &config.allowed_argv_prefixes).await?;
 
@@ -204,7 +222,9 @@ async fn render_cli_outcome(
             stderr,
             Some("command cancelled by the owning request".to_owned()),
         ),
-        ManagedExecOutcome::SpawnFailed { error } => return Err(anyhow::anyhow!(error).into()),
+        ManagedExecOutcome::SpawnFailed { error } => {
+            return Err(CliToolError::SpawnFailed { error }.into())
+        }
     };
 
     let stdout_raw = String::from_utf8_lossy(&stdout_bytes);
@@ -248,7 +268,7 @@ async fn render_cli_outcome(
     );
     let expected = match terminal_cause {
         Some(_) => rendered.clone(),
-        None => serde_json::to_string(&rendered).context("encoding CLI tool output")?,
+        None => serde_json::to_string(&rendered).map_err(CliToolError::EncodeOutput)?,
     };
     if let Some(writer) = live_output {
         writer

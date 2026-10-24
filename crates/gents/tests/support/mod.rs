@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::graphql::escape_graphql_string;
 use gents::{watcher::AgentRequest, NodeIdentity};
 use serde::Deserialize;
+
+pub type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub mod accepted_turn;
 pub mod conformance_consumers;
@@ -60,13 +61,13 @@ impl TestDb {
         self.home.path()
     }
 
-    pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
+    pub async fn simulate_process_crash(&mut self) -> TestResult {
         let before = self.process_generation;
         let stand_in = Arc::new(
             EmbeddedNode::builder()
                 .build()
                 .await
-                .map_err(|e| anyhow::anyhow!("simulate_process_crash: stand-in node: {e}"))?,
+                .map_err(|e| format!("simulate_process_crash: stand-in node: {e}"))?,
         );
         drop(std::mem::replace(&mut self.node, stand_in));
         self.home.reopen().await?;
@@ -947,7 +948,7 @@ where
 pub async fn begin_owned_execution(
     lifecycle: &mut gents::RequestLifecycle,
     node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
-) -> anyhow::Result<String> {
+) -> TestResult<String> {
     let writer = gents::DefraStreamWriter::new(
         node.clone(),
         &lifecycle.request().node_did,
@@ -961,20 +962,20 @@ pub async fn complete_pending_request_with_canonical_output(
     db: &TestDb,
     row: gents_protocol::row::AgentRequestRow,
     text: &str,
-) -> anyhow::Result<String> {
+) -> TestResult<String> {
     let agent_id = row
         .agent_id
         .clone()
-        .context("completion fixture request omitted agent")?;
+        .ok_or("completion fixture request omitted agent")?;
     let prompt = row
         .content
         .clone()
-        .context("completion fixture request omitted prompt")?;
+        .ok_or("completion fixture request omitted prompt")?;
     let session_id = row
         .session_id
         .clone()
-        .context("completion fixture request omitted session")?;
-    anyhow::ensure!(
+        .ok_or("completion fixture request omitted session")?;
+    assert!(
         row.node_did.as_deref() == Some(db.node_identity.did()),
         "completion fixture request is not owned by the fixture runtime identity"
     );
@@ -1010,7 +1011,7 @@ pub async fn complete_pending_request_with_canonical_output(
             r#"mutation {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, input: {{ title: {title} }}) {{ _docID }} }}"#
         ))
         .await;
-    anyhow::ensure!(
+    assert!(
         !title_response.has_errors(),
         "prepopulating completion fixture title failed: {:?}",
         title_response.errors
@@ -1038,7 +1039,7 @@ pub async fn complete_pending_request_with_canonical_output(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ terminal_output }} }}"#
         ))
         .await;
-    anyhow::ensure!(
+    assert!(
         !response.has_errors(),
         "reading completed fixture output failed: {:?}",
         response.errors
@@ -1052,7 +1053,7 @@ pub async fn complete_pending_request_with_canonical_output(
         Some(gents_protocol::output::TerminalOutput::Message { message_doc_id }) => {
             Ok(message_doc_id)
         }
-        other => anyhow::bail!("completion fixture selected no assistant message: {other:?}"),
+        other => Err(format!("completion fixture selected no assistant message: {other:?}").into()),
     }
 }
 

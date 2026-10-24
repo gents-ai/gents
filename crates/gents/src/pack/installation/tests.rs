@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use super::*;
@@ -227,7 +228,7 @@ async fn an_edited_document_stops_an_upgrade_by_name() {
     let error = install(&access, "2", &v2, DriftPolicy::Refuse)
         .await
         .unwrap_err();
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(error.as_ref()));
     assert!(message.contains("Tools/alpha"), "{message}");
     assert!(!message.contains("Tools/beta"), "{message}");
 
@@ -307,8 +308,9 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .await
         .unwrap_err();
     assert!(
-        format!("{refused:#}").contains("gents plugin remove"),
-        "{refused:#}"
+        format!("{}", ErrorChain(refused.as_ref())).contains("gents plugin remove"),
+        "{}",
+        ErrorChain(refused.as_ref())
     );
 
     record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
@@ -448,8 +450,9 @@ async fn a_malformed_plugins_field_fails_loudly_instead_of_reading_as_empty() {
     .await
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("malformed plugins field"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("malformed plugins field"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -469,8 +472,9 @@ async fn list_installed_packs_fails_loudly_on_a_malformed_record() {
 
     let error = list_installed_packs(&access, OWNER).await.unwrap_err();
     assert!(
-        format!("{error:#}").contains("malformed version field"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("malformed version field"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -492,8 +496,9 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("malformed digest field"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("malformed digest field"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -530,8 +535,9 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("has more than one installation record"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("has more than one installation record"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -639,7 +645,11 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     )
     .await
     .unwrap_err();
-    assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
+    assert!(
+        format!("{}", ErrorChain(error.as_ref())).contains("acme/demo"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
 
     let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
@@ -1008,7 +1018,7 @@ fn install_fixture_plugins_into(
         home,
         archive.manifest(),
         archive.digest(),
-        |path| archive.asset(path),
+        |path| Ok(archive.asset(path)?),
         false,
     )
 }
@@ -1027,7 +1037,10 @@ fn install_fixture_plugins(
 }
 
 fn refusal(result: Result<Vec<crate::plugin::store::InstalledPlugin>>) -> String {
-    format!("{:#}", result.expect_err("the install must be refused"))
+    format!(
+        "{}",
+        ErrorChain(result.expect_err("the install must be refused").as_ref())
+    )
 }
 
 #[test]
@@ -1400,7 +1413,8 @@ fn engine_admission(job: serde_json::Value, via: crate::pack::InstalledVia) -> R
         "acme/engine",
         &[("acme/engine".into(), &own), ("acme/base".into(), &base)],
         via,
-    )
+    )?;
+    Ok(())
 }
 
 fn operator_refusal(job: serde_json::Value) {
@@ -1842,7 +1856,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
     .await
     .err()
     .expect("the dependency is refused");
-    format!("{error:#}")
+    format!("{}", ErrorChain(error.as_ref()))
 }
 
 const DEPENDENCY_NEXT_STEP: &str = "install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`";

@@ -25,6 +25,8 @@ pub use evidence::{
 };
 pub use store::{load_report, load_report_among, load_runs, run_header};
 
+use crate::eval::documents::EvalError;
+
 /// Documents a report cannot be built or compared from, and why.
 #[derive(Debug)]
 pub struct ReportRefused(pub String);
@@ -37,10 +39,17 @@ impl std::fmt::Display for ReportRefused {
 
 impl std::error::Error for ReportRefused {}
 
-pub fn report_refused(error: &anyhow::Error) -> Option<&ReportRefused> {
-    error.downcast_ref::<ReportRefused>()
+pub fn report_refused<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a ReportRefused> {
+    std::iter::successors(Some(error), |error| error.source()).find_map(|error| {
+        match error.downcast_ref::<EvalError>() {
+            Some(EvalError::ReportRefused(found)) => Some(found),
+            _ => error.downcast_ref::<ReportRefused>(),
+        }
+    })
 }
 
-pub(crate) fn refused(reason: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::from(ReportRefused(reason.into()))
+pub(crate) fn refused(reason: impl Into<String>) -> EvalError {
+    EvalError::ReportRefused(ReportRefused(reason.into()))
 }

@@ -812,7 +812,7 @@ const OAUTH_ROW_READERS: &[&str] = &[
 #[rustfmt::skip]
 const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/accounts.rs", 2),
-    ("crates/gents/src/agent/document_view/load.rs", 1),
+    ("crates/gents/src/agent/document_view/load.rs", 2),
     ("crates/gents/src/agent/document_view/mod.rs", 1),
 ];
 
@@ -1565,4 +1565,825 @@ fn ambient_context_counts_statics_outside_test_items() {
     )
     .expect("parse snippet");
     assert_eq!(ambient_context_sites(&syntax), 3);
+}
+
+/// Files that still name `anyhow`. Errors are module-owned `thiserror` enums,
+/// matching DefraDB; this covers tests too and the list only shrinks.
+#[rustfmt::skip]
+const ANYHOW_ALLOWLIST: &[&str] = &[
+    "apps/gents-desktop/src-tauri/src/bin/bridge_runner.rs",
+    "apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs",
+    "apps/gents-desktop/src-tauri/src/bridge/windows.rs",
+    "apps/gents-desktop/src-tauri/src/runner/live_fixture.rs",
+    "apps/gents-desktop/src-tauri/src/runner/live_fixture/agent.rs",
+    "apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs",
+    "apps/gents-desktop/src-tauri/src/runner/live_fixture/replication.rs",
+    "crates/gents-cli/src/caused_sessions.rs",
+    "crates/gents-cli/src/commands/accounts.rs",
+    "crates/gents-cli/src/commands/afterburner_build.rs",
+    "crates/gents-cli/src/commands/background.rs",
+    "crates/gents-cli/src/commands/chain/key.rs",
+    "crates/gents-cli/src/commands/chain/mod.rs",
+    "crates/gents-cli/src/commands/chain/query.rs",
+    "crates/gents-cli/src/commands/chat/interactive.rs",
+    "crates/gents-cli/src/commands/chat/mod.rs",
+    "crates/gents-cli/src/commands/chat/streaming.rs",
+    "crates/gents-cli/src/commands/claude_login.rs",
+    "crates/gents-cli/src/commands/cloud.rs",
+    "crates/gents-cli/src/commands/codex_auth_probe.rs",
+    "crates/gents-cli/src/commands/codex_login.rs",
+    "crates/gents-cli/src/commands/codex_shim/background.rs",
+    "crates/gents-cli/src/commands/codex_shim/bound_behavior.rs",
+    "crates/gents-cli/src/commands/codex_shim/caused_threads.rs",
+    "crates/gents-cli/src/commands/codex_shim/child_stream.rs",
+    "crates/gents-cli/src/commands/codex_shim/continuation_stream.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers/background.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers/basic.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers/host.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers/models.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers/skills.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers/thread.rs",
+    "crates/gents-cli/src/commands/codex_shim/handlers/turns.rs",
+    "crates/gents-cli/src/commands/codex_shim/history_projection.rs",
+    "crates/gents-cli/src/commands/codex_shim/progress.rs",
+    "crates/gents-cli/src/commands/codex_shim/server.rs",
+    "crates/gents-cli/src/commands/codex_shim/thread_projection.rs",
+    "crates/gents-cli/src/commands/codex_shim/thread_projection/goal.rs",
+    "crates/gents-cli/src/commands/codex_shim/thread_projection/mutations.rs",
+    "crates/gents-cli/src/commands/codex_shim/thread_projection/storage.rs",
+    "crates/gents-cli/src/commands/codex_shim/thread_routes.rs",
+    "crates/gents-cli/src/commands/codex_shim/turn_projection.rs",
+    "crates/gents-cli/src/commands/codex_shim/turn.rs",
+    "crates/gents-cli/src/commands/codex_shim/turn/active.rs",
+    "crates/gents-cli/src/commands/codex_shim/turn/stream.rs",
+    "crates/gents-cli/src/commands/codex_shim/turn/submission.rs",
+    "crates/gents-cli/src/commands/config/apply.rs",
+    "crates/gents-cli/src/commands/config/backend.rs",
+    "crates/gents-cli/src/commands/config/behavior.rs",
+    "crates/gents-cli/src/commands/config/binding.rs",
+    "crates/gents-cli/src/commands/config/crud.rs",
+    "crates/gents-cli/src/commands/config/diff.rs",
+    "crates/gents-cli/src/commands/config/export.rs",
+    "crates/gents-cli/src/commands/config/mod.rs",
+    "crates/gents-cli/src/commands/config/profile.rs",
+    "crates/gents-cli/src/commands/config/skill.rs",
+    "crates/gents-cli/src/commands/config/task_run.rs",
+    "crates/gents-cli/src/commands/config/tools.rs",
+    "crates/gents-cli/src/commands/config/validate.rs",
+    "crates/gents-cli/src/commands/config/workspace_root.rs",
+    "crates/gents-cli/src/commands/desktop.rs",
+    "crates/gents-cli/src/commands/diagnose/backends.rs",
+    "crates/gents-cli/src/commands/diagnose/mod.rs",
+    "crates/gents-cli/src/commands/document.rs",
+    "crates/gents-cli/src/commands/eval/batch.rs",
+    "crates/gents-cli/src/commands/eval/compare.rs",
+    "crates/gents-cli/src/commands/eval/init/dossier.rs",
+    "crates/gents-cli/src/commands/eval/init/mod.rs",
+    "crates/gents-cli/src/commands/eval/init/pilot.rs",
+    "crates/gents-cli/src/commands/eval/init/readiness.rs",
+    "crates/gents-cli/src/commands/eval/init/turn.rs",
+    "crates/gents-cli/src/commands/eval/init/write.rs",
+    "crates/gents-cli/src/commands/eval/init/write/recovery.rs",
+    "crates/gents-cli/src/commands/eval/inspect.rs",
+    "crates/gents-cli/src/commands/eval/manage.rs",
+    "crates/gents-cli/src/commands/eval/mod.rs",
+    "crates/gents-cli/src/commands/eval/run.rs",
+    "crates/gents-cli/src/commands/eval/testing.rs",
+    "crates/gents-cli/src/commands/eval/watch.rs",
+    "crates/gents-cli/src/commands/goal.rs",
+    "crates/gents-cli/src/commands/graph.rs",
+    "crates/gents-cli/src/commands/grok_auth_probe.rs",
+    "crates/gents-cli/src/commands/grok_login.rs",
+    "crates/gents-cli/src/commands/grok_shim.rs",
+    "crates/gents-cli/src/commands/grok_shim/acp.rs",
+    "crates/gents-cli/src/commands/grok_shim/binding.rs",
+    "crates/gents-cli/src/commands/grok_shim/goals.rs",
+    "crates/gents-cli/src/commands/grok_shim/graph_runs.rs",
+    "crates/gents-cli/src/commands/grok_shim/job_runs.rs",
+    "crates/gents-cli/src/commands/grok_shim/observation_cursor.rs",
+    "crates/gents-cli/src/commands/grok_shim/projection.rs",
+    "crates/gents-cli/src/commands/grok_shim/projection/caused_sessions.rs",
+    "crates/gents-cli/src/commands/grok_shim/projection/context.rs",
+    "crates/gents-cli/src/commands/grok_shim/projection/messages.rs",
+    "crates/gents-cli/src/commands/grok_shim/projection/tools.rs",
+    "crates/gents-cli/src/commands/grok_shim/server.rs",
+    "crates/gents-cli/src/commands/grok_shim/session_record.rs",
+    "crates/gents-cli/src/commands/grok_shim/sessions.rs",
+    "crates/gents-cli/src/commands/grok_shim/task_control.rs",
+    "crates/gents-cli/src/commands/grok_shim/turn.rs",
+    "crates/gents-cli/src/commands/grok_shim/usage.rs",
+    "crates/gents-cli/src/commands/grok_shim/workflow_catalog.rs",
+    "crates/gents-cli/src/commands/grok_shim/workflow_command.rs",
+    "crates/gents-cli/src/commands/inference_binding.rs",
+    "crates/gents-cli/src/commands/init.rs",
+    "crates/gents-cli/src/commands/job.rs",
+    "crates/gents-cli/src/commands/mailbox.rs",
+    "crates/gents-cli/src/commands/mcp.rs",
+    "crates/gents-cli/src/commands/optimization/behavior_proposer.rs",
+    "crates/gents-cli/src/commands/optimization/mod.rs",
+    "crates/gents-cli/src/commands/optimization/testing.rs",
+    "crates/gents-cli/src/commands/p2p/enrollment_admin.rs",
+    "crates/gents-cli/src/commands/p2p/mod.rs",
+    "crates/gents-cli/src/commands/p2p/network.rs",
+    "crates/gents-cli/src/commands/p2p/pairings.rs",
+    "crates/gents-cli/src/commands/pack/account.rs",
+    "crates/gents-cli/src/commands/pack/build.rs",
+    "crates/gents-cli/src/commands/pack/cache.rs",
+    "crates/gents-cli/src/commands/pack/check.rs",
+    "crates/gents-cli/src/commands/pack/edit.rs",
+    "crates/gents-cli/src/commands/pack/import.rs",
+    "crates/gents-cli/src/commands/pack/inspect.rs",
+    "crates/gents-cli/src/commands/pack/mod.rs",
+    "crates/gents-cli/src/commands/pack/registry.rs",
+    "crates/gents-cli/src/commands/pack/remove.rs",
+    "crates/gents-cli/src/commands/pack/remove/tests.rs",
+    "crates/gents-cli/src/commands/pack/scaffold.rs",
+    "crates/gents-cli/src/commands/pack/scenario.rs",
+    "crates/gents-cli/src/commands/pack/scenario/prepare.rs",
+    "crates/gents-cli/src/commands/pack/test.rs",
+    "crates/gents-cli/src/commands/pack/update.rs",
+    "crates/gents-cli/src/commands/pack/wire.rs",
+    "crates/gents-cli/src/commands/plugin/bind.rs",
+    "crates/gents-cli/src/commands/plugin/build.rs",
+    "crates/gents-cli/src/commands/plugin/install.rs",
+    "crates/gents-cli/src/commands/plugin/mod.rs",
+    "crates/gents-cli/src/commands/plugin/run.rs",
+    "crates/gents-cli/src/commands/provision.rs",
+    "crates/gents-cli/src/commands/query.rs",
+    "crates/gents-cli/src/commands/request.rs",
+    "crates/gents-cli/src/commands/reset.rs",
+    "crates/gents-cli/src/commands/response.rs",
+    "crates/gents-cli/src/commands/schema.rs",
+    "crates/gents-cli/src/commands/serve.rs",
+    "crates/gents-cli/src/commands/session.rs",
+    "crates/gents-cli/src/commands/task.rs",
+    "crates/gents-cli/src/commands/tools.rs",
+    "crates/gents-cli/src/commands/trace.rs",
+    "crates/gents-cli/src/commands/trace/projection_acp.rs",
+    "crates/gents-cli/src/commands/ux.rs",
+    "crates/gents-cli/src/commands/write.rs",
+    "crates/gents-cli/src/config_bundle.rs",
+    "crates/gents-cli/src/config_import.rs",
+    "crates/gents-cli/src/config_import/transaction_tests.rs",
+    "crates/gents-cli/src/desired_state/diff.rs",
+    "crates/gents-cli/src/desired_state/load.rs",
+    "crates/gents-cli/src/desired_state/prune.rs",
+    "crates/gents-cli/src/desired_state/validate/live.rs",
+    "crates/gents-cli/src/desired_state/validate/storage.rs",
+    "crates/gents-cli/src/http/enrollment.rs",
+    "crates/gents-cli/src/http/mcp_server.rs",
+    "crates/gents-cli/src/http/sessions.rs",
+    "crates/gents-cli/src/lib.rs",
+    "crates/gents-cli/src/packs.rs",
+    "crates/gents-cli/src/request_helpers.rs",
+    "crates/gents-cli/src/resolve_helpers.rs",
+    "crates/gents-cli/src/server_host.rs",
+    "crates/gents-client-host/src/editor_store.rs",
+    "crates/gents-client-host/src/main.rs",
+    "crates/gents-client-host/src/native.rs",
+    "crates/gents-desktop-bridge/src/accounts.rs",
+    "crates/gents-desktop-bridge/src/accounts/login.rs",
+    "crates/gents-desktop-bridge/src/commands/background.rs",
+    "crates/gents-desktop-bridge/src/commands/chat_resolve.rs",
+    "crates/gents-desktop-bridge/src/commands/chat.rs",
+    "crates/gents-desktop-bridge/src/commands/config.rs",
+    "crates/gents-desktop-bridge/src/commands/goal.rs",
+    "crates/gents-desktop-bridge/src/commands/mailbox.rs",
+    "crates/gents-desktop-bridge/src/commands/mcp_health.rs",
+    "crates/gents-desktop-bridge/src/commands/peer.rs",
+    "crates/gents-desktop-bridge/src/commands/task.rs",
+    "crates/gents-desktop-bridge/src/commands/tool_service.rs",
+    "crates/gents-desktop-bridge/src/host.rs",
+    "crates/gents-desktop-bridge/src/host/connection.rs",
+    "crates/gents-desktop-bridge/src/host/local.rs",
+    "crates/gents-desktop-bridge/src/host/local/unix.rs",
+    "crates/gents-desktop-bridge/src/host/local/windows.rs",
+    "crates/gents-desktop-bridge/src/host/service.rs",
+    "crates/gents-desktop-bridge/src/host/speech.rs",
+    "crates/gents-desktop-bridge/src/provenance.rs",
+    "crates/gents-desktop-bridge/src/snapshot/session/live_delta.rs",
+    "crates/gents-desktop-bridge/src/snapshot/session/request_context.rs",
+    "crates/gents-desktop-bridge/src/tauri_commands/inference_setup.rs",
+    "crates/gents-desktop-bridge/src/tauri_commands/lifecycle.rs",
+    "crates/gents-desktop-bridge/src/tauri_commands/managed_server.rs",
+    "crates/gents-desktop-bridge/src/tauri_commands/operations.rs",
+    "crates/gents-desktop-bridge/src/tauri_commands/packs.rs",
+    "crates/gents-desktop-bridge/src/tauri_commands/ux_plugins.rs",
+    "crates/gents-desktop-core/src/client/core.rs",
+    "crates/gents-desktop-core/src/client/core/bootstrap.rs",
+    "crates/gents-desktop-core/src/client/core/enrollment.rs",
+    "crates/gents-desktop-core/src/client/core/file_review.rs",
+    "crates/gents-desktop-core/src/client/core/goal.rs",
+    "crates/gents-desktop-core/src/client/core/route_manager.rs",
+    "crates/gents-desktop-core/src/client/core/sync_state.rs",
+    "crates/gents-desktop-core/src/client/core/writes.rs",
+    "crates/gents-desktop-core/src/client/core/writes/pending_submissions.rs",
+    "crates/gents-desktop-core/src/client/mutations/chat/request.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/behavior.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/inference.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/mod.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/principal.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/principal/editor.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/profile.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/skill.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/task.rs",
+    "crates/gents-desktop-core/src/client/mutations/manage/tools.rs",
+    "crates/gents-desktop-core/src/client/principal_identity.rs",
+    "crates/gents-desktop-core/src/home_reset.rs",
+    "crates/gents-loop/src/compaction.rs",
+    "crates/gents-loop/src/end_to_end_test.rs",
+    "crates/gents-loop/src/live_output.rs",
+    "crates/gents-loop/src/loop_stream.rs",
+    "crates/gents-loop/src/loop_stream/contract.rs",
+    "crates/gents-loop/src/loop_stream/one_shot.rs",
+    "crates/gents-loop/src/loop_stream/request_assembly.rs",
+    "crates/gents-loop/src/output_obligation.rs",
+    "crates/gents-loop/src/provider_audit.rs",
+    "crates/gents-loop/src/rendered_request.rs",
+    "crates/gents-loop/src/rendered_request/scope.rs",
+    "crates/gents-loop/src/rendered_request/transport.rs",
+    "crates/gents-loop/src/request_lifecycle.rs",
+    "crates/gents-loop/src/session_hook.rs",
+    "crates/gents-loop/src/stream_processor.rs",
+    "crates/gents-loop/src/stream_writer.rs",
+    "crates/gents/examples/serve_default_agent.rs",
+    "crates/gents/src/agent.rs",
+    "crates/gents/src/agent/builder.rs",
+    "crates/gents/src/agent/daemon.rs",
+    "crates/gents/src/agent/daemon/auxiliary_tasks.rs",
+    "crates/gents/src/agent/daemon/inference.rs",
+    "crates/gents/src/agent/daemon/pre_inference_interrupt_tests.rs",
+    "crates/gents/src/agent/daemon/request.rs",
+    "crates/gents/src/agent/daemon/title.rs",
+    "crates/gents/src/agent/daemon/title/owned_tests.rs",
+    "crates/gents/src/agent/daemon/title/review.rs",
+    "crates/gents/src/agent/daemon/title/review/task.rs",
+    "crates/gents/src/agent/daemon/wake_input.rs",
+    "crates/gents/src/agent/directory_projection.rs",
+    "crates/gents/src/agent/document_view/load.rs",
+    "crates/gents/src/agent/document_view/mod.rs",
+    "crates/gents/src/agent/document_view/snapshot.rs",
+    "crates/gents/src/agent/loop_stream/tests/budgeting.rs",
+    "crates/gents/src/agent/loop_stream/tests/capture.rs",
+    "crates/gents/src/agent/output_obligation.rs",
+    "crates/gents/src/agent/p2p_reconcile/endpoint.rs",
+    "crates/gents/src/agent/p2p_reconcile/engine.rs",
+    "crates/gents/src/agent/p2p_reconcile/engine/reconcile.rs",
+    "crates/gents/src/agent/p2p_reconcile/engine/store.rs",
+    "crates/gents/src/agent/p2p_reconcile/engine/sweep.rs",
+    "crates/gents/src/agent/p2p_reconcile/engine/tests.rs",
+    "crates/gents/src/agent/p2p_reconcile/engine/tests/support.rs",
+    "crates/gents/src/agent/p2p_reconcile/enrollment_candidate.rs",
+    "crates/gents/src/agent/p2p_reconcile/enrollment_offer.rs",
+    "crates/gents/src/agent/p2p_reconcile/enrollment_reconcile.rs",
+    "crates/gents/src/agent/p2p_reconcile/enrollment_store.rs",
+    "crates/gents/src/agent/p2p_reconcile/registry.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_command_authority.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_commands.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_goal_control.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/file_images.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/file_images/tests.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/file_images/tests/live.rs",
+    "crates/gents/src/agent/p2p_reconcile/session_input_edit.rs",
+    "crates/gents/src/agent/p2p_reconcile/templates.rs",
+    "crates/gents/src/agent/principal_assembly.rs",
+    "crates/gents/src/agent/reconcile.rs",
+    "crates/gents/src/agent/reconcile/slot.rs",
+    "crates/gents/src/agent/reconcile/tests.rs",
+    "crates/gents/src/agent/runtime/context.rs",
+    "crates/gents/src/agent/runtime/control_watcher.rs",
+    "crates/gents/src/agent/runtime/router.rs",
+    "crates/gents/src/agent/runtime/startup.rs",
+    "crates/gents/src/agent/runtime/tests/control_watcher.rs",
+    "crates/gents/src/agent/runtime/tests/router.rs",
+    "crates/gents/src/agent/runtime/tests/startup_recovery.rs",
+    "crates/gents/src/agent/runtime/tests/support.rs",
+    "crates/gents/src/agent/supervision.rs",
+    "crates/gents/src/agent/tests/document_loading.rs",
+    "crates/gents/src/application_write/mod.rs",
+    "crates/gents/src/application_write/plugin_writes.rs",
+    "crates/gents/src/backend_registry.rs",
+    "crates/gents/src/backend_registry/tests.rs",
+    "crates/gents/src/background_completion_diagnostics.rs",
+    "crates/gents/src/background_completion.rs",
+    "crates/gents/src/background_completion/notification_delivery.rs",
+    "crates/gents/src/background_completion/observer.rs",
+    "crates/gents/src/background_completion/side_effects.rs",
+    "crates/gents/src/background_tools.rs",
+    "crates/gents/src/background_tools/final_output.rs",
+    "crates/gents/src/blocked_turn.rs",
+    "crates/gents/src/callback/claim.rs",
+    "crates/gents/src/callback/documents.rs",
+    "crates/gents/src/callback/mod.rs",
+    "crates/gents/src/callback/plugin.rs",
+    "crates/gents/src/callback/run.rs",
+    "crates/gents/src/callback/scan.rs",
+    "crates/gents/src/callback/workers.rs",
+    "crates/gents/src/chatgpt_codex.rs",
+    "crates/gents/src/compaction.rs",
+    "crates/gents/src/completion_factory.rs",
+    "crates/gents/src/config_client/agent_behavior.rs",
+    "crates/gents/src/config_client/desired_state.rs",
+    "crates/gents/src/config_client/event_source_cursor.rs",
+    "crates/gents/src/config_client/inference_backend.rs",
+    "crates/gents/src/config_client/inference_profile.rs",
+    "crates/gents/src/config_client/profile_switch.rs",
+    "crates/gents/src/config_client/retry.rs",
+    "crates/gents/src/config_client/schema_install.rs",
+    "crates/gents/src/config_client/schema_management.rs",
+    "crates/gents/src/config_client/tools.rs",
+    "crates/gents/src/defra_query/bounded.rs",
+    "crates/gents/src/defra_query/command.rs",
+    "crates/gents/src/defra_query/mod.rs",
+    "crates/gents/src/defra_query/native_filter.rs",
+    "crates/gents/src/defra_write/mod.rs",
+    "crates/gents/src/document_config/behavior.rs",
+    "crates/gents/src/document_config/chain_key_binding.rs",
+    "crates/gents/src/document_config/context.rs",
+    "crates/gents/src/document_config/datastore_tool_surface.rs",
+    "crates/gents/src/document_config/eth_tool.rs",
+    "crates/gents/src/document_config/eth_validation_tests.rs",
+    "crates/gents/src/document_config/event_trigger.rs",
+    "crates/gents/src/document_config/inference_profile.rs",
+    "crates/gents/src/document_config/mod.rs",
+    "crates/gents/src/document_config/principal.rs",
+    "crates/gents/src/document_config/references.rs",
+    "crates/gents/src/document_config/surface_tool.rs",
+    "crates/gents/src/document_config/tests.rs",
+    "crates/gents/src/document_config/tools.rs",
+    "crates/gents/src/document_config/write_tool.rs",
+    "crates/gents/src/eth/call_tool.rs",
+    "crates/gents/src/eval/documents.rs",
+    "crates/gents/src/eval/report/build.rs",
+    "crates/gents/src/eval/report/evidence.rs",
+    "crates/gents/src/eval/report/store.rs",
+    "crates/gents/src/eval/runner/embedded/executor.rs",
+    "crates/gents/src/eval/runner/embedded/home.rs",
+    "crates/gents/src/eval/runner/embedded/inspect.rs",
+    "crates/gents/src/eval/runner/embedded/live.rs",
+    "crates/gents/src/eval/runner/embedded/observe.rs",
+    "crates/gents/src/eval/runner/freeze.rs",
+    "crates/gents/src/eval/runner/mod.rs",
+    "crates/gents/src/eval/runner/record.rs",
+    "crates/gents/src/goal.rs",
+    "crates/gents/src/goal/claimed_publication.rs",
+    "crates/gents/src/goal/claimed_publication/wait_observation.rs",
+    "crates/gents/src/goal/client_control.rs",
+    "crates/gents/src/goal/client_submission.rs",
+    "crates/gents/src/goal/first_request_binding.rs",
+    "crates/gents/src/goal/first_request_binding/contract_tests.rs",
+    "crates/gents/src/goal/history.rs",
+    "crates/gents/src/goal/observation.rs",
+    "crates/gents/src/goal/operator_resume.rs",
+    "crates/gents/src/goal/request_assignment.rs",
+    "crates/gents/src/goal/request_head.rs",
+    "crates/gents/src/goal/tool_context.rs",
+    "crates/gents/src/graph_package/catalog.rs",
+    "crates/gents/src/graph_package/entry.rs",
+    "crates/gents/src/graph_package/install.rs",
+    "crates/gents/src/graph_pipeline/logical_invocation.rs",
+    "crates/gents/src/graph_pipeline/run.rs",
+    "crates/gents/src/graph_pipeline/runtime.rs",
+    "crates/gents/src/graph_pipeline/tools.rs",
+    "crates/gents/src/graph_pipeline/workspace_lineage.rs",
+    "crates/gents/src/health_checker.rs",
+    "crates/gents/src/hook.rs",
+    "crates/gents/src/hook/persistence/background_control.rs",
+    "crates/gents/src/hook/persistence/background_tools.rs",
+    "crates/gents/src/hook/persistence/foreground_handoff.rs",
+    "crates/gents/src/hook/persistence/goal_tools.rs",
+    "crates/gents/src/hook/persistence/helpers.rs",
+    "crates/gents/src/hook/persistence/prompt_hook.rs",
+    "crates/gents/src/hook/persistence/session_message.rs",
+    "crates/gents/src/hook/tests.rs",
+    "crates/gents/src/hook/tests/goal_context.rs",
+    "crates/gents/src/identity.rs",
+    "crates/gents/src/interrupt.rs",
+    "crates/gents/src/interrupt/queue_tests.rs",
+    "crates/gents/src/lean_vocab_test/canonical_execution/native_adapter.rs",
+    "crates/gents/src/lib.rs",
+    "crates/gents/src/lifecycle.rs",
+    "crates/gents/src/lifecycle/background_wake_recovery.rs",
+    "crates/gents/src/lifecycle/canonical_recovery.rs",
+    "crates/gents/src/lifecycle/claim.rs",
+    "crates/gents/src/lifecycle/execution_lease.rs",
+    "crates/gents/src/lifecycle/manual.rs",
+    "crates/gents/src/lifecycle/materialize.rs",
+    "crates/gents/src/lifecycle/query.rs",
+    "crates/gents/src/lifecycle/queue.rs",
+    "crates/gents/src/lifecycle/queue/atomic_inputs.rs",
+    "crates/gents/src/lifecycle/queue/coalescing.rs",
+    "crates/gents/src/lifecycle/queue/edit_submission.rs",
+    "crates/gents/src/lifecycle/queue/enqueue.rs",
+    "crates/gents/src/lifecycle/queue/folding.rs",
+    "crates/gents/src/lifecycle/queue/intake.rs",
+    "crates/gents/src/lifecycle/queue/management.rs",
+    "crates/gents/src/lifecycle/queue/mutation.rs",
+    "crates/gents/src/lifecycle/recovery.rs",
+    "crates/gents/src/lifecycle/terminal_tools.rs",
+    "crates/gents/src/llm/backend_client.rs",
+    "crates/gents/src/mailbox.rs",
+    "crates/gents/src/mailbox/domain.rs",
+    "crates/gents/src/mailbox/notification.rs",
+    "crates/gents/src/mailbox/reply_tests.rs",
+    "crates/gents/src/mailbox/reply.rs",
+    "crates/gents/src/meta_tools.rs",
+    "crates/gents/src/meta_tools/call.rs",
+    "crates/gents/src/meta_tools/shared.rs",
+    "crates/gents/src/node_readiness_publisher.rs",
+    "crates/gents/src/node_readiness_publisher/tests.rs",
+    "crates/gents/src/oauth_credential.rs",
+    "crates/gents/src/oneshot.rs",
+    "crates/gents/src/optimization/driver.rs",
+    "crates/gents/src/optimization/driver/matrix.rs",
+    "crates/gents/src/optimization/gate.rs",
+    "crates/gents/src/optimization/job.rs",
+    "crates/gents/src/optimization/promote.rs",
+    "crates/gents/src/optimization/proposer.rs",
+    "crates/gents/src/optimization/references.rs",
+    "crates/gents/src/optimization/show.rs",
+    "crates/gents/src/optimization/subject.rs",
+    "crates/gents/src/optimization/target.rs",
+    "crates/gents/src/p2p_observability.rs",
+    "crates/gents/src/p2p_tool.rs",
+    "crates/gents/src/pack_archive.rs",
+    "crates/gents/src/pack_archive/format.rs",
+    "crates/gents/src/pack_registry.rs",
+    "crates/gents/src/pack_resolve.rs",
+    "crates/gents/src/pack_store.rs",
+    "crates/gents/src/pack.rs",
+    "crates/gents/src/pack/authoring/build.rs",
+    "crates/gents/src/pack/authoring/check.rs",
+    "crates/gents/src/pack/authoring/inspect.rs",
+    "crates/gents/src/pack/authoring/scaffold.rs",
+    "crates/gents/src/pack/authoring/test.rs",
+    "crates/gents/src/pack/home_install.rs",
+    "crates/gents/src/pack/inference.rs",
+    "crates/gents/src/pack/installation.rs",
+    "crates/gents/src/pack/installation/dependencies.rs",
+    "crates/gents/src/pack/installation/documents.rs",
+    "crates/gents/src/pack/installation/graph.rs",
+    "crates/gents/src/pack/loader.rs",
+    "crates/gents/src/pack/loader/tests.rs",
+    "crates/gents/src/pack/local.rs",
+    "crates/gents/src/pack/materialize.rs",
+    "crates/gents/src/pack/plugin_lifecycle.rs",
+    "crates/gents/src/pack/provenance.rs",
+    "crates/gents/src/pack/publication_contract_tests.rs",
+    "crates/gents/src/periodic_recovery.rs",
+    "crates/gents/src/plugin_job/ancestry.rs",
+    "crates/gents/src/plugin_job/control.rs",
+    "crates/gents/src/plugin_job/dispatch.rs",
+    "crates/gents/src/plugin_job/driver.rs",
+    "crates/gents/src/plugin_job/effects.rs",
+    "crates/gents/src/plugin_job/input.rs",
+    "crates/gents/src/plugin_job/origin.rs",
+    "crates/gents/src/plugin_job/records.rs",
+    "crates/gents/src/plugin_job/recovery.rs",
+    "crates/gents/src/plugin_job/view.rs",
+    "crates/gents/src/plugin/approval/workspace/context.rs",
+    "crates/gents/src/plugin/catalog.rs",
+    "crates/gents/src/plugin/data.rs",
+    "crates/gents/src/plugin/executor.rs",
+    "crates/gents/src/plugin/http_calls.rs",
+    "crates/gents/src/plugin/install.rs",
+    "crates/gents/src/plugin/job_calls.rs",
+    "crates/gents/src/plugin/model_calls_tests.rs",
+    "crates/gents/src/plugin/model_calls.rs",
+    "crates/gents/src/plugin/mounts.rs",
+    "crates/gents/src/plugin/service.rs",
+    "crates/gents/src/plugin/tool.rs",
+    "crates/gents/src/registry.rs",
+    "crates/gents/src/rendered_request/sink.rs",
+    "crates/gents/src/request_admission.rs",
+    "crates/gents/src/request_binding.rs",
+    "crates/gents/src/run_timeline_fetch.rs",
+    "crates/gents/src/run_timeline_fetch/context_loaders.rs",
+    "crates/gents/src/run_timeline_fetch/event_loaders.rs",
+    "crates/gents/src/run_timeline_fetch/query_helpers.rs",
+    "crates/gents/src/run_timeline_fetch/request_loaders.rs",
+    "crates/gents/src/runtime_status.rs",
+    "crates/gents/src/schema_tool/mod.rs",
+    "crates/gents/src/self_config/agent_management.rs",
+    "crates/gents/src/self_config/command.rs",
+    "crates/gents/src/self_config/command/authoring.rs",
+    "crates/gents/src/self_config/command/crud.rs",
+    "crates/gents/src/self_config/command/datastore.rs",
+    "crates/gents/src/self_config/command/discovery.rs",
+    "crates/gents/src/self_config/command/skill.rs",
+    "crates/gents/src/self_config/mod.rs",
+    "crates/gents/src/self_config/ops.rs",
+    "crates/gents/src/self_config/pack_plugins.rs",
+    "crates/gents/src/self_config/read.rs",
+    "crates/gents/src/session_message.rs",
+    "crates/gents/src/session_message/discovery.rs",
+    "crates/gents/src/session_message/inspection.rs",
+    "crates/gents/src/session/compaction_entries.rs",
+    "crates/gents/src/session/control.rs",
+    "crates/gents/src/session/fork.rs",
+    "crates/gents/src/session/history.rs",
+    "crates/gents/src/session/observations.rs",
+    "crates/gents/src/session/output_replay_tests.rs",
+    "crates/gents/src/session/output.rs",
+    "crates/gents/src/session/request_output.rs",
+    "crates/gents/src/skills/import.rs",
+    "crates/gents/src/startup_recovery.rs",
+    "crates/gents/src/storage_backend.rs",
+    "crates/gents/src/store_key.rs",
+    "crates/gents/src/store_key/upgrade.rs",
+    "crates/gents/src/store_key/upgrade/tests.rs",
+    "crates/gents/src/streaming.rs",
+    "crates/gents/src/streaming/auxiliary.rs",
+    "crates/gents/src/streaming/canonical_tests.rs",
+    "crates/gents/src/streaming/canonical.rs",
+    "crates/gents/src/task_hooks.rs",
+    "crates/gents/src/task_hooks/records.rs",
+    "crates/gents/src/tool_call_lifecycle/delivery.rs",
+    "crates/gents/src/tool_call_lifecycle/file_review_access.rs",
+    "crates/gents/src/tool_call_lifecycle/plugin_effect.rs",
+    "crates/gents/src/tool_call_lifecycle/query.rs",
+    "crates/gents/src/tool_call_lifecycle/query/accepted.rs",
+    "crates/gents/src/tool_call_lifecycle/query/result.rs",
+    "crates/gents/src/tool_call_lifecycle/recovery.rs",
+    "crates/gents/src/tool_call_lifecycle/transition.rs",
+    "crates/gents/src/tool_call_lifecycle/transition/cancel.rs",
+    "crates/gents/src/tool_control.rs",
+    "crates/gents/src/tool_surface/behavior_config.rs",
+    "crates/gents/src/tool_surface/build.rs",
+    "crates/gents/src/tool_surface/mod.rs",
+    "crates/gents/src/tool_surface/output_budget.rs",
+    "crates/gents/src/tool_surface/root_admission.rs",
+    "crates/gents/src/tool_surface/selection.rs",
+    "crates/gents/src/toolset.rs",
+    "crates/gents/src/toolset/context_budget.rs",
+    "crates/gents/src/toolset/file_tools/change_capture.rs",
+    "crates/gents/src/toolset/memory.rs",
+    "crates/gents/src/toolset/session_history.rs",
+    "crates/gents/src/toolset/session_history/context_details.rs",
+    "crates/gents/src/toolset/session_history/discovery.rs",
+    "crates/gents/src/toolset/title_audit_usage.rs",
+    "crates/gents/src/trace_export.rs",
+    "crates/gents/src/trigger_engine/durable.rs",
+    "crates/gents/src/trigger_engine/durable/recovery.rs",
+    "crates/gents/src/trigger_engine/event_source.rs",
+    "crates/gents/src/trigger_engine/event_source/durable.rs",
+    "crates/gents/src/trigger_engine/goal_source.rs",
+    "crates/gents/src/trigger_engine/mod.rs",
+    "crates/gents/src/trigger_engine/production_materializer.rs",
+    "crates/gents/src/trigger_engine/subscription_source.rs",
+    "crates/gents/src/trigger_engine/tests/event_source/unacknowledged.rs",
+    "crates/gents/src/trigger_engine/tests/mod.rs",
+    "crates/gents/src/usage_observation.rs",
+    "crates/gents/src/ux_data.rs",
+    "crates/gents/src/ux_plugin.rs",
+    "crates/gents/src/watcher.rs",
+    "crates/gents/src/watcher/query.rs",
+    "crates/gents/src/workspace/overlay.rs",
+    "crates/gents/src/xai_grok_oauth.rs",
+    "crates/gents/tests/e2e_triggers/workspace_change_unit_cycle.rs",
+    "crates/gents/tests/e2e_triggers/write_tool_trigger_e2e.rs",
+    "crates/gents/tests/support/accepted_turn.rs",
+    "crates/gents/tests/support/fixtures.rs",
+    "crates/gents/tests/support/identity_stubs.rs",
+    "crates/gents/tests/support/interrupt.rs",
+    "crates/gents/tests/support/live_inference.rs",
+    "crates/gents/tests/support/snapshots.rs",
+];
+
+/// Workspace members whose manifests still depend on `anyhow`; "Cargo.toml"
+/// is the workspace dependency table. The list only shrinks.
+#[rustfmt::skip]
+const ANYHOW_MANIFEST_ALLOWLIST: &[&str] = &[
+    "Cargo.toml",
+    "apps/gents-desktop/src-tauri",
+    "crates/gents",
+    "crates/gents-cli",
+    "crates/gents-client-host",
+    "crates/gents-desktop-bridge",
+    "crates/gents-desktop-core",
+    "crates/gents-loop",
+];
+
+#[derive(Default)]
+struct AnyhowVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for AnyhowVisitor {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if path
+            .segments
+            .iter()
+            .any(|segment| segment.ident == "anyhow")
+        {
+            self.sites += 1;
+        }
+        visit::visit_path(self, path);
+    }
+
+    fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
+        let named = match tree {
+            syn::UseTree::Path(syn::UsePath { ident, .. })
+            | syn::UseTree::Name(syn::UseName { ident })
+            | syn::UseTree::Rename(syn::UseRename { ident, .. }) => ident == "anyhow",
+            _ => false,
+        };
+        if named {
+            self.sites += 1;
+        }
+        visit::visit_use_tree(self, tree);
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        if item.ident == "anyhow" {
+            self.sites += 1;
+        }
+        visit::visit_item_extern_crate(self, item);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let tokens = syn::buffer::TokenBuffer::new2(invocation.tokens.clone());
+        if tokens_name_anyhow(tokens.begin()) {
+            self.sites += 1;
+        }
+        visit::visit_macro(self, invocation);
+    }
+
+    fn visit_meta_list(&mut self, list: &'ast syn::MetaList) {
+        let tokens = syn::buffer::TokenBuffer::new2(list.tokens.clone());
+        if tokens_name_anyhow(tokens.begin()) {
+            self.sites += 1;
+        }
+        visit::visit_meta_list(self, list);
+    }
+}
+
+/// Macro and attribute tokens are not parsed, so any `anyhow` identifier in
+/// them counts: `use anyhow as e;` inside a macro would otherwise hide every
+/// later use behind the alias.
+fn tokens_name_anyhow(mut cursor: syn::buffer::Cursor) -> bool {
+    while !cursor.eof() {
+        if let Some((inside, _, _, next)) = cursor.any_group() {
+            if tokens_name_anyhow(inside) {
+                return true;
+            }
+            cursor = next;
+        } else if let Some((ident, next)) = cursor.ident() {
+            if ident == "anyhow" {
+                return true;
+            }
+            cursor = next;
+        } else if let Some((_, next)) = cursor.token_tree() {
+            cursor = next;
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+fn anyhow_sites(syntax: &syn::File) -> usize {
+    let mut visitor = AnyhowVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+fn ratchet_violations(
+    actual: &BTreeSet<String>,
+    allowlist: &[&str],
+    added: &str,
+    removed: &str,
+) -> Vec<String> {
+    let allowed = allowlist
+        .iter()
+        .map(|path| path.to_string())
+        .collect::<BTreeSet<_>>();
+    let mut violations = actual
+        .difference(&allowed)
+        .map(|path| format!("{path}: {added}"))
+        .collect::<Vec<_>>();
+    violations.extend(
+        allowed
+            .difference(actual)
+            .map(|path| format!("{path}: {removed}")),
+    );
+    violations
+}
+
+/// Errors are typed `thiserror` enums owned by the module that originates
+/// them, matching DefraDB; no file may start naming `anyhow`.
+#[test]
+fn errors_use_thiserror() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for directory in ["crates", "apps"] {
+        all_rust_sources(&root.join(directory), &mut sources);
+    }
+    let actual = sources
+        .into_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            (anyhow_sites(&syntax) > 0).then(|| {
+                path.strip_prefix(&root)
+                    .expect("source under repo root")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    let violations = ratchet_violations(
+        &actual,
+        ANYHOW_ALLOWLIST,
+        "names anyhow; return a module-owned thiserror enum",
+        "no longer names anyhow; remove its allowlist entry",
+    );
+    assert!(
+        violations.is_empty(),
+        "thiserror ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn anyhow_dependencies_only_shrink() {
+    let root = repo_root();
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let names_anyhow = |table: Option<&toml::Value>| {
+        table.and_then(toml::Value::as_table).is_some_and(|table| {
+            table.iter().any(|(key, specification)| {
+                key == "anyhow"
+                    || specification.get("package").and_then(toml::Value::as_str) == Some("anyhow")
+            })
+        })
+    };
+    let mut actual = BTreeSet::new();
+    if names_anyhow(workspace["workspace"].get("dependencies")) {
+        actual.insert("Cargo.toml".to_string());
+    }
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let member = member.as_str().expect("member path");
+        let manifest = toml_file(&root.join(member).join("Cargo.toml"));
+        let mut sections = vec![&manifest];
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            sections.extend(targets.values().filter_map(toml::Value::as_table));
+        }
+        let depends = sections.into_iter().any(|section| {
+            ["dependencies", "dev-dependencies", "build-dependencies"]
+                .into_iter()
+                .any(|kind| names_anyhow(section.get(kind)))
+        });
+        if depends {
+            actual.insert(member.to_string());
+        }
+    }
+    let violations = ratchet_violations(
+        &actual,
+        ANYHOW_MANIFEST_ALLOWLIST,
+        "depends on anyhow; use thiserror",
+        "no longer depends on anyhow; remove its allowlist entry",
+    );
+    assert!(
+        violations.is_empty(),
+        "anyhow dependency ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn thiserror_fence_counts_anyhow_names() {
+    for (source, sites) in [
+        ("use anyhow::Result;", 1),
+        ("use anyhow::{bail, Context};", 1),
+        ("fn f() -> anyhow::Result<()> { Ok(()) }", 1),
+        ("fn f() { anyhow::bail!(\"x\"); }", 1),
+        ("fn f() { let e = anyhow!(\"x\"); }", 1),
+        (
+            "fn f() { assert!(matches!(g(), Err(e) if e.is::<anyhow::Error>())); }",
+            1,
+        ),
+        ("extern crate anyhow;", 1),
+        (
+            "#[derive(thiserror::Error)] enum E { #[error(\"anyhow\")] A }",
+            0,
+        ),
+        ("fn f() { let anyhow = 1; }", 0),
+        ("macro_rules! m { () => { use anyhow as eh; } }", 1),
+        ("macro_rules! m { () => { extern crate anyhow; } }", 1),
+        (
+            "fn f() { tokio::select! { _ = g() => { use anyhow as eh; } } }",
+            1,
+        ),
+        ("#[attr(anyhow::Error)] fn f() {}", 1),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(anyhow_sites(&syntax), sites, "{source}");
+    }
 }

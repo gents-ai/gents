@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use gents::graphql::escape_graphql_string;
@@ -510,7 +511,7 @@ async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
     let ForkError::ForkCopyFailed(cause) = missing else {
         panic!("missing closure must reject the copy step: {missing:?}");
     };
-    let missing_detail = format!("{cause:#}");
+    let missing_detail = ErrorChain(cause.as_ref()).to_string();
     assert!(
         missing_detail.contains("unresolved closing segment missing-close"),
         "fixture's only defect must be its missing closure: {missing_detail}"

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashSetExt, RapidHashSet};
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -935,7 +936,7 @@ where
     let body = build_messages_body(model, request).map_err(|error| {
         CompletionError::RequestError(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("Claude Messages body: {error:#}"),
+            format!("Claude Messages body: {}", ErrorChain(&error)),
         )))
     })?;
     let body_bytes = serde_json::to_vec(&body).map_err(|error| {

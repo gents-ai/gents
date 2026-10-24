@@ -1,4 +1,5 @@
-use anyhow::{ensure, Context, Result};
+pub type TestError = Box<dyn std::error::Error + Send + Sync>;
+pub type TestResult<T = ()> = Result<T, TestError>;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::host::protocol;
@@ -17,20 +18,20 @@ pub struct Attachment {
     output: FramedRead<ChildStdout, LengthDelimitedCodec>,
 }
 
-pub fn native_binary(name: &str) -> Result<PathBuf> {
+pub fn native_binary(name: &str) -> TestResult<PathBuf> {
     let directory = match std::env::var_os("GENTS_NATIVE_TEST_BIN_DIR") {
         Some(directory) => PathBuf::from(directory),
         None => Path::new(env!("CARGO_BIN_EXE_gents-client-host"))
             .parent()
-            .context("native binary directory")?
+            .ok_or("native binary directory")?
             .to_owned(),
     };
-    ensure!(
+    assert!(
         directory.is_absolute(),
         "GENTS_NATIVE_TEST_BIN_DIR must be absolute"
     );
     let binary = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    ensure!(
+    assert!(
         binary.is_file(),
         "native test binary is missing: {}",
         binary.display()

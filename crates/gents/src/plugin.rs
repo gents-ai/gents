@@ -4,12 +4,68 @@ use std::time::Instant;
 use afterburner::afb_run::{run_afb_bytes, AfbRunOutcome, AfbRunRequest};
 use afterburner::wasi::embedder_vm::NanMode;
 use afterburner_core::manifold::{EnvAccess, FsAccess, ListenAccess, NetAccess};
-use anyhow::{Context, Result};
-
 use gents_protocol::job::{AssetMount, ASSET_MOUNTS_INPUT_KEY, PROJECT_MOUNT_CLASS};
 use gents_protocol::plugin::PluginFilesystemScope;
 
 use crate::pack::{BindAccess, PackPlugin};
+
+type Result<T, E = PluginError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginError {
+    #[error("plugin {name:?}'s artifact is not a readable .afb: {error}")]
+    ArtifactUnreadable {
+        name: String,
+        error: afterburner_afb::AfbError,
+    },
+    #[error("plugin {name:?} declares a manifold that is not one")]
+    InvalidManifold {
+        name: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("plugin {name:?} cannot be admitted: this artifact would run without every declared bound enforced ({reason})")]
+    Unbounded { name: String, reason: String },
+    #[error("plugin {name:?} declares bind_dir, but its dispatch path cannot enforce a {kind} filesystem grant, so a caller-bound directory would not actually be contained")]
+    BindDirUnenforced { name: String, kind: &'static str },
+    #[error("plugin {name:?} declares asset_mounts, but its dispatch path cannot enforce a read-only filesystem grant, so mounted assets would not actually be contained")]
+    AssetMountsUnenforced { name: String },
+    #[error(
+        "plugin {name:?} arguments must be a JSON object to receive {ASSET_MOUNTS_INPUT_KEY:?}"
+    )]
+    ReceiveNotObject { name: String },
+    #[error("plugin {name:?} cannot mount assets into a read-write call: this call writes; run it without mounted workflows")]
+    MountReadWrite { name: String },
+    #[error("plugin {name:?} does not declare bind_dir; it cannot be bound to a directory")]
+    NoBindDir { name: String },
+    #[error("plugin {name:?} needs {} access for this call, but {} is only allowed {}", needed.as_str(), path.display(), allowed.as_str())]
+    BindAccessDenied {
+        name: String,
+        needed: BindAccess,
+        path: PathBuf,
+        allowed: BindAccess,
+    },
+    #[error("plugin {name:?} arguments must be a JSON object to bind {field:?}")]
+    BindNotObject { name: String, field: String },
+    #[error("bound path {} is not valid UTF-8", path.display())]
+    BoundPathNotUtf8 { path: PathBuf },
+    #[error("encoding plugin arguments as canonical JSON")]
+    EncodeArguments(#[source] serde_json::Error),
+    #[error("plugin {name:?} failed to start")]
+    Start {
+        name: String,
+        #[source]
+        source: afterburner_core::AfterburnerError,
+    },
+    #[error(transparent)]
+    Trap(#[from] GuestTrap),
+    #[error(transparent)]
+    Allowed(#[from] crate::plugin::allowed::PluginAllowedError),
+    #[error(transparent)]
+    Bound(#[from] bound::BoundDirError),
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+}
 
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
@@ -150,27 +206,26 @@ impl PluginRunner {
         ceiling: &Manifold,
     ) -> Result<Self> {
         let afb = afterburner_afb::Afb::from_bytes(afb_bytes).map_err(|error| {
-            anyhow::anyhow!(
-                "plugin {:?}'s artifact is not a readable .afb: {error}",
-                plugin.name
-            )
+            PluginError::ArtifactUnreadable {
+                name: plugin.name.clone(),
+                error,
+            }
         })?;
         let declared: Manifold = match &plugin.manifold {
-            Some(value) => serde_json::from_value(value.clone()).with_context(|| {
-                format!(
-                    "plugin {:?} declares a manifold that is not one",
-                    plugin.name
-                )
+            Some(value) => serde_json::from_value(value.clone()).map_err(|source| {
+                PluginError::InvalidManifold {
+                    name: plugin.name.clone(),
+                    source,
+                }
             })?,
             None => Manifold::sealed(),
         };
         let manifold = narrow_manifold(&declared, ceiling);
         if let Some(reason) = unbounded_dispatch_reason(&afb, &manifold) {
-            anyhow::bail!(
-                "plugin {:?} cannot be admitted: this artifact would run without every declared \
-                 bound enforced ({reason})",
-                plugin.name
-            );
+            return Err(PluginError::Unbounded {
+                name: plugin.name.clone(),
+                reason,
+            });
         }
         if let Some(binding) = &plugin.bind_dir {
             let supported = afterburner::afb_run::bounds_for(&afb);
@@ -180,22 +235,22 @@ impl PluginRunner {
                 (reads, supported.manifold_fs_ro, "read-only"),
                 (writes, supported.manifold_fs_rw, "read-write"),
             ] {
-                anyhow::ensure!(
-                    !needed || enforced,
-                    "plugin {:?} declares bind_dir, but its dispatch path cannot enforce a \
-                     {kind} filesystem grant, so a caller-bound directory would not actually be \
-                     contained",
-                    plugin.name
-                );
+                if needed && !enforced {
+                    return Err(PluginError::BindDirUnenforced {
+                        name: plugin.name.clone(),
+                        kind,
+                    });
+                }
             }
         }
 
-        anyhow::ensure!(
-            plugin.asset_mounts.is_empty() || afterburner::afb_run::bounds_for(&afb).manifold_fs_ro,
-            "plugin {:?} declares asset_mounts, but its dispatch path cannot enforce a read-only \
-             filesystem grant, so mounted assets would not actually be contained",
-            plugin.name
-        );
+        if !(plugin.asset_mounts.is_empty()
+            || afterburner::afb_run::bounds_for(&afb).manifold_fs_ro)
+        {
+            return Err(PluginError::AssetMountsUnenforced {
+                name: plugin.name.clone(),
+            });
+        }
 
         Ok(Self {
             afb_bytes: afb_bytes.to_vec(),
@@ -254,12 +309,12 @@ impl PluginRunner {
             if arguments.is_null() {
                 arguments = serde_json::Value::Object(serde_json::Map::new());
             }
-            let object = arguments.as_object_mut().with_context(|| {
-                format!(
-                    "plugin {:?} arguments must be a JSON object to receive {ASSET_MOUNTS_INPUT_KEY:?}",
-                    self.plugin.name
-                )
-            })?;
+            let object =
+                arguments
+                    .as_object_mut()
+                    .ok_or_else(|| PluginError::ReceiveNotObject {
+                        name: self.plugin.name.clone(),
+                    })?;
             object.insert(
                 ASSET_MOUNTS_INPUT_KEY.to_owned(),
                 serde_json::to_value(mounts)?,
@@ -284,12 +339,11 @@ impl PluginRunner {
                 .map(|mount| (mount.clone(), std::path::Path::new(&mount.path).is_dir()))
                 .collect::<Vec<_>>(),
         );
-        anyhow::ensure!(
-            resolution.admitted,
-            "plugin {:?} cannot mount assets into a read-write call: this call writes; run it \
-             without mounted workflows",
-            self.plugin.name
-        );
+        if !resolution.admitted {
+            return Err(PluginError::MountReadWrite {
+                name: self.plugin.name.clone(),
+            });
+        }
         let mut mounted = 0;
         let mut project_tier = false;
         for (mount, access) in mounts.iter().zip(&resolution.access) {
@@ -321,47 +375,52 @@ impl PluginRunner {
         arguments: &serde_json::Value,
         bound: &BoundDir,
     ) -> Result<(serde_json::Value, Manifold)> {
-        let bind_dir = self.plugin.bind_dir.as_ref().with_context(|| {
-            format!(
-                "plugin {:?} does not declare bind_dir; it cannot be bound to a directory",
-                self.plugin.name
-            )
-        })?;
+        let bind_dir = self
+            .plugin
+            .bind_dir
+            .as_ref()
+            .ok_or_else(|| PluginError::NoBindDir {
+                name: self.plugin.name.clone(),
+            })?;
         let access = bind_dir.call_access(arguments);
-        anyhow::ensure!(
-            bound.access() >= access,
-            "plugin {:?} needs {} access for this call, but {} is only allowed {}",
-            self.plugin.name,
-            access.as_str(),
-            bound.path().display(),
-            bound.access().as_str()
-        );
+        if bound.access() < access {
+            return Err(PluginError::BindAccessDenied {
+                name: self.plugin.name.clone(),
+                needed: access,
+                path: bound.path().to_path_buf(),
+                allowed: bound.access(),
+            });
+        }
         bound.recheck()?;
-        let canonical = bound.target().to_str().with_context(|| {
-            format!("bound path {} is not valid UTF-8", bound.target().display())
-        })?;
+        let canonical = bound
+            .target()
+            .to_str()
+            .ok_or_else(|| PluginError::BoundPathNotUtf8 {
+                path: bound.target().to_path_buf(),
+            })?;
         let mut arguments = if arguments.is_null() {
             serde_json::Value::Object(serde_json::Map::new())
         } else {
             arguments.clone()
         };
-        let object = arguments.as_object_mut().with_context(|| {
-            format!(
-                "plugin {:?} arguments must be a JSON object to bind {:?}",
-                self.plugin.name, bind_dir.input_field
-            )
-        })?;
+        let object = arguments
+            .as_object_mut()
+            .ok_or_else(|| PluginError::BindNotObject {
+                name: self.plugin.name.clone(),
+                field: bind_dir.input_field.clone(),
+            })?;
         object.insert(
             bind_dir.input_field.clone(),
             serde_json::Value::String(canonical.to_owned()),
         );
         if let Some(field) = &bind_dir.original_field {
-            let original = bound.original().to_str().with_context(|| {
-                format!(
-                    "bound path {} is not valid UTF-8",
-                    bound.original().display()
-                )
-            })?;
+            let original =
+                bound
+                    .original()
+                    .to_str()
+                    .ok_or_else(|| PluginError::BoundPathNotUtf8 {
+                        path: bound.original().to_path_buf(),
+                    })?;
             object.insert(
                 field.clone(),
                 serde_json::Value::String(original.to_owned()),
@@ -400,21 +459,20 @@ impl PluginRunner {
         for root in roots {
             if root.is_dir() {
                 allowed::ensure_mount_safe(root)?;
-            } else {
-                anyhow::ensure!(
-                    !allowed::is_protected(root),
-                    "Runtime permission files cannot be shared with a plugin."
-                );
+            } else if allowed::is_protected(root) {
+                return Err(crate::plugin::allowed::PluginAllowedError::Protected.into());
             }
         }
 
-        let stdin =
-            serde_json::to_vec(arguments).context("encoding plugin arguments as canonical JSON")?;
+        let stdin = serde_json::to_vec(arguments).map_err(PluginError::EncodeArguments)?;
         let request = plugin_run_request(stdin, manifold, budget);
 
         let started = Instant::now();
-        let output = run_afb_bytes(&self.afb_bytes, request)
-            .with_context(|| format!("plugin {:?} failed to start", self.plugin.name))?;
+        let output =
+            run_afb_bytes(&self.afb_bytes, request).map_err(|source| PluginError::Start {
+                name: self.plugin.name.clone(),
+                source,
+            })?;
         let wall_ms = elapsed_ms(started);
 
         match output.outcome {
@@ -461,11 +519,10 @@ impl PluginRunner {
                         wall_ms,
                     })
                 } else {
-                    Err(GuestTrap {
+                    Err(PluginError::Trap(GuestTrap {
                         plugin: self.plugin.name.clone(),
                         message,
-                    }
-                    .into())
+                    }))
                 }
             }
             AfbRunOutcome::Exited(code) => Ok(outcome_from_exit(

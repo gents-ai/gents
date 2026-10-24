@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use anyhow::Result;
+use crate::plugin::approval::PluginApprovalError;
+
+type Result<T, E = PluginApprovalError> = std::result::Result<T, E>;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 
 use anyhow::Result;
@@ -87,7 +88,7 @@ pub(crate) async fn validate_manifest_against_live(
             for (trigger, task) in &joined {
                 match gents::config_client::event_trigger_document_field_names(trigger, task) {
                     Ok(names) if !names.is_empty() => walks_templates = true,
-                    Err(error) => errors.push(format!("{error:#}")),
+                    Err(error) => errors.push(format!("{}", ErrorChain(error.as_ref()))),
                     Ok(_) => {}
                 }
             }
@@ -132,7 +133,7 @@ pub(crate) async fn validate_manifest_against_live(
             if let Err(error) = gents::config_client::validate_event_trigger_document_fields(
                 trigger, task, source, &declared,
             ) {
-                errors.push(format!("{error:#}"));
+                errors.push(format!("{}", ErrorChain(&error)));
             }
         }
     }
@@ -144,7 +145,8 @@ pub(crate) async fn validate_manifest_against_live(
 mod tests {
     use std::sync::Arc;
 
-    use anyhow::Result;
+    type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     use defra_node::EmbeddedNode;
     use serde_json::json;
 

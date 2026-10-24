@@ -84,7 +84,7 @@ pub async fn desktop_init_local_standard(
             .unwrap_or_else(|| "Forge".to_string()),
     })
     .await
-    .map_err(BridgeError::classify_transport_error)
+    .map_err(|error| BridgeError::classify_transport_error(&error))
 }
 
 fn ensure_client_stopped_for_init(client_is_running: bool) -> Result<(), BridgeError> {
@@ -685,7 +685,9 @@ async fn bounded_client_start<T>(
             delivered = &mut delivered => {
                 return match delivered {
                     Ok((Ok(core), lifecycle)) => Ok((core, lifecycle)),
-                    Ok((Err(error), _)) => Err(classify_client_start_error(&error, node_data_dir)),
+                    Ok((Err(error), _)) => {
+                        Err(classify_client_start_error(error.as_ref(), node_data_dir))
+                    }
                     Err(_) => Err((
                         BridgeError::new(
                             BridgeErrorCode::ClientStartFailed,
@@ -717,16 +719,35 @@ async fn bounded_client_start<T>(
 }
 
 fn classify_client_start_error(
-    error: &anyhow::Error,
+    error: &(dyn std::error::Error + 'static),
     node_data_dir: &std::path::Path,
 ) -> ClientStartFailure {
-    match gents::storage_backend::incompatible_store(error, node_data_dir) {
+    let store = gents::storage_backend::incompatible_store(error, node_data_dir).or_else(|| {
+        principal_identity_key_error(error)
+            .and_then(|key| gents::storage_backend::incompatible_store(key, node_data_dir))
+    });
+    match store {
         Some(store) => (
             BridgeError::new(BridgeErrorCode::IncompatibleLocalStore, store.to_string()),
             Some(store),
         ),
         None => (BridgeError::untyped(error.to_string()), None),
     }
+}
+
+/// `PrincipalIdentityError::IdentityKey` is transparent, so `source()` skips
+/// the `IdentityError` the store classifier recognizes; match it explicitly.
+fn principal_identity_key_error<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a (dyn std::error::Error + 'static)> {
+    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
+        match cause.downcast_ref::<gents_desktop_core::client::PrincipalIdentityError>() {
+            Some(gents_desktop_core::client::PrincipalIdentityError::IdentityKey(key)) => {
+                Some(key as &(dyn std::error::Error + 'static))
+            }
+            _ => None,
+        }
+    })
 }
 
 #[tauri::command]
@@ -893,7 +914,7 @@ mod tests {
             versions: "bafy-old".into(),
         })
         .context("ensure_migrations");
-        let (error, store) = classify_client_start_error(&refused, node);
+        let (error, store) = classify_client_start_error(refused.as_ref(), node);
         assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
         assert!(
             error.message.contains("/tmp/desktop/node"),
@@ -906,7 +927,7 @@ mod tests {
         );
 
         let (error, store) =
-            classify_client_start_error(&anyhow::anyhow!("peer directory is locked"), node);
+            classify_client_start_error(anyhow::anyhow!("peer directory is locked").as_ref(), node);
         assert_eq!(error.code, BridgeErrorCode::Unknown);
         assert!(store.is_none());
     }

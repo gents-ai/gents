@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use crate::plugin::approval::PluginApprovalError;
+
+type Result<T, E = PluginApprovalError> = std::result::Result<T, E>;
 
 use super::{context, BindingAction};
 use crate::toolset::{CommandExecutionMode, CommandExecutionPolicy};

@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -60,6 +60,35 @@ struct ChatToolProgressMarker {
 /// The exact `_docID` request read carries no `order`: DefraDB plans an
 /// ordered read as an index scan and applies `limit` before the `_docID`
 /// filter, so later rows in the collection would hide this request.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum StreamError {
+    #[error("chat request query omitted rows")]
+    QueryOmittedRows,
+    #[error("committed chat physical request missing or ambiguous")]
+    RequestRowMissing,
+    #[error("decoding chat progress AgentRequest row")]
+    DecodeRequestRow(#[source] serde_json::Error),
+    #[error("chat request scope differs from committed receipt")]
+    RequestScopeMismatch,
+    #[error("terminal chat request lost its row before exact selection")]
+    TerminalRowLost,
+    #[error("terminal chat request output observation is missing")]
+    TerminalOutputMissing,
+    #[error("timed out waiting for {wait} after {timeout_secs}s of inactivity\n{hint}")]
+    IdleTimeout {
+        wait: String,
+        timeout_secs: u64,
+        hint: String,
+    },
+    #[error("canonical terminal output for request {request_id} is {state}")]
+    TerminalOutputUnusable {
+        request_id: String,
+        state: &'static str,
+    },
+    #[error("canonical terminal output for request {request_id} resolved only to retained partial diagnostics")]
+    RetainedPartialOnly { request_id: String },
+}
+
 pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
     let request_doc_id = &request.request_doc_id;
     let scope = gents::session::session_scope_filter(
@@ -303,27 +332,26 @@ pub(crate) async fn stream_turn_progress(
         let rows = response
             .pointer("/data/AgentRequest")
             .and_then(Value::as_array)
-            .context("chat request query omitted rows")?;
-        anyhow::ensure!(
-            rows.len() == 1,
-            "committed chat physical request missing or ambiguous"
-        );
+            .ok_or(StreamError::QueryOmittedRows)?;
+        if rows.len() != 1 {
+            return Err(StreamError::RequestRowMissing.into());
+        }
         let request_row = rows.first().cloned();
         let request = request_row
             .as_ref()
             .map(|row| {
                 serde_json::from_value::<AgentRequestRow>(row.clone())
-                    .context("decoding chat progress AgentRequest row")
+                    .map_err(StreamError::DecodeRequestRow)
             })
             .transpose()?;
 
         if let Some(request) = request.as_ref() {
-            anyhow::ensure!(
-                request.node_did.as_deref() == Some(submitted.node_did.as_str())
-                    && request.requester_did == submitted.requester_did
-                    && request.session_id.as_deref() == Some(submitted.session_id.as_str()),
-                "chat request scope differs from committed receipt"
-            );
+            if !(request.node_did.as_deref() == Some(submitted.node_did.as_str())
+                && request.requester_did == submitted.requester_did
+                && request.session_id.as_deref() == Some(submitted.session_id.as_str()))
+            {
+                return Err(StreamError::RequestScopeMismatch.into());
+            }
         }
 
         let folded = request
@@ -430,12 +458,12 @@ pub(crate) async fn stream_turn_progress(
 
         if terminal_tool_dependency_pending {
             if last_progress_at.elapsed() >= idle_timeout {
-                anyhow::bail!(
-                    "timed out waiting for canonical tool output for request {} after {}s of inactivity\n{}",
-                    submitted.request_id,
+                return Err(StreamError::IdleTimeout {
+                    wait: format!("canonical tool output for request {}", submitted.request_id),
                     timeout_secs,
-                    request_diagnostic_hint(&submitted.request_id)
-                );
+                    hint: request_diagnostic_hint(&submitted.request_id),
+                }
+                .into());
             }
             tokio::time::sleep(Duration::from_secs(poll_secs)).await;
             continue;
@@ -462,49 +490,57 @@ pub(crate) async fn stream_turn_progress(
 
         let terminal_by_request = lifecycle_state.is_some_and(RequestLifecycleState::is_terminal);
         if terminal_by_request {
-            let request = request
-                .as_ref()
-                .context("terminal chat request lost its row before exact selection")?;
+            let request = request.as_ref().ok_or(StreamError::TerminalRowLost)?;
             let output = observed_output
                 .take()
-                .context("terminal chat request output observation is missing")?;
+                .ok_or(StreamError::TerminalOutputMissing)?;
             match output {
                 gents::session::CanonicalRequestOutput::Loading => {
                     if last_progress_at.elapsed() >= idle_timeout {
-                        anyhow::bail!(
-                            "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
-                            submitted.request_id,
+                        return Err(StreamError::IdleTimeout {
+                            wait: format!("materialized AgentMessage {}", submitted.request_id),
                             timeout_secs,
-                            request_diagnostic_hint(&submitted.request_id)
-                        );
+                            hint: request_diagnostic_hint(&submitted.request_id),
+                        }
+                        .into());
                     }
                     tokio::time::sleep(Duration::from_secs(poll_secs)).await;
                     continue;
                 }
                 gents::session::CanonicalRequestOutput::Denied => {
-                    anyhow::bail!(
-                        "canonical terminal output for request {} is denied",
-                        submitted.request_id
-                    )
+                    return Err(StreamError::TerminalOutputUnusable {
+                        request_id: submitted.request_id.clone(),
+                        state: "denied",
+                    }
+                    .into());
                 }
-                gents::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
-                    "canonical terminal output for request {} is conflicted",
-                    submitted.request_id
-                ),
+                gents::session::CanonicalRequestOutput::Conflicted => {
+                    return Err(StreamError::TerminalOutputUnusable {
+                        request_id: submitted.request_id.clone(),
+                        state: "conflicted",
+                    }
+                    .into());
+                }
                 gents::session::CanonicalRequestOutput::Invalid => {
-                    anyhow::bail!(
-                        "canonical terminal output for request {} is invalid",
-                        submitted.request_id
-                    )
+                    return Err(StreamError::TerminalOutputUnusable {
+                        request_id: submitted.request_id.clone(),
+                        state: "invalid",
+                    }
+                    .into());
                 }
-                gents::session::CanonicalRequestOutput::Retracted => anyhow::bail!(
-                    "canonical terminal output for request {} is retracted",
-                    submitted.request_id
-                ),
-                gents::session::CanonicalRequestOutput::RetainedPartial(_) => anyhow::bail!(
-                    "canonical terminal output for request {} resolved only to retained partial diagnostics",
-                    submitted.request_id
-                ),
+                gents::session::CanonicalRequestOutput::Retracted => {
+                    return Err(StreamError::TerminalOutputUnusable {
+                        request_id: submitted.request_id.clone(),
+                        state: "retracted",
+                    }
+                    .into());
+                }
+                gents::session::CanonicalRequestOutput::RetainedPartial(_) => {
+                    return Err(StreamError::RetainedPartialOnly {
+                        request_id: submitted.request_id.clone(),
+                    }
+                    .into());
+                }
                 gents::session::CanonicalRequestOutput::TerminalNoMessage
                 | gents::session::CanonicalRequestOutput::TerminalMessage { .. } => {
                     let envelope = request_output_envelope(request, output)?;
@@ -551,12 +587,15 @@ pub(crate) async fn stream_turn_progress(
                 | gents::session::CanonicalRequestOutput::Settling(_)
                 | gents::session::CanonicalRequestOutput::Published { .. } => {
                     if last_progress_at.elapsed() >= idle_timeout {
-                        anyhow::bail!(
-                            "timed out waiting for terminal canonical selection for request {} after {}s of inactivity\n{}",
-                            submitted.request_id,
+                        return Err(StreamError::IdleTimeout {
+                            wait: format!(
+                                "terminal canonical selection for request {}",
+                                submitted.request_id
+                            ),
                             timeout_secs,
-                            request_diagnostic_hint(&submitted.request_id)
-                        );
+                            hint: request_diagnostic_hint(&submitted.request_id),
+                        }
+                        .into());
                     }
                     tokio::time::sleep(Duration::from_secs(poll_secs)).await;
                     continue;
@@ -565,12 +604,12 @@ pub(crate) async fn stream_turn_progress(
         }
 
         if last_progress_at.elapsed() >= idle_timeout {
-            anyhow::bail!(
-                "timed out waiting for canonical output for request {} after {}s of inactivity\n{}",
-                submitted.request_id,
+            return Err(StreamError::IdleTimeout {
+                wait: format!("canonical output for request {}", submitted.request_id),
                 timeout_secs,
-                request_diagnostic_hint(&submitted.request_id)
-            );
+                hint: request_diagnostic_hint(&submitted.request_id),
+            }
+            .into());
         }
 
         tokio::time::sleep(Duration::from_secs(poll_secs)).await;

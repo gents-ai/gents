@@ -1,5 +1,6 @@
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::file_changes::{
     FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
     MAX_FILE_IMAGE_BYTES,
@@ -174,7 +175,8 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     .unwrap_err();
     assert!(
         error.to_string().contains("ambiguous observations"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     core.shutdown().await.unwrap();
 }

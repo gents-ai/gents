@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::{fs, time::Duration};
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -36,7 +36,7 @@ async fn config_backend_discover_models_supports_explicit_probe() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_backend_set_accepts_canonical_document_and_supports_discovery() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
     let model = format!("backend-model-{}", Uuid::new_v4().simple());

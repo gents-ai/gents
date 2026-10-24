@@ -5,6 +5,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents_protocol::error_chain::ErrorChain;
 
 mod claimed_publication;
 mod client_control;
@@ -60,6 +61,18 @@ pub(crate) use request_head::{
 pub use reset_resume::resume_at_reset;
 pub(crate) use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;
+
+#[derive(Debug, thiserror::Error)]
+pub enum GoalError {
+    #[error("goal token budget requires a goal objective template")]
+    BudgetRequiresObjective,
+    #[error("goal objective must be non-empty")]
+    ObjectiveEmpty,
+    #[error("goal token budget must be positive")]
+    BudgetNotPositive,
+    #[error("provide objective or token_budget to edit the goal")]
+    EditFieldRequired,
+}
 
 /// Resume only a paused Goal; an interrupted/claimed execution must settle
 /// before a fresh continuation can be staged.
@@ -838,21 +851,17 @@ pub(crate) fn task_goal_fire_key<'a>(request_id: &'a str, expected_owner: &str) 
 pub fn validate_task_goal_declaration(
     objective: Option<&str>,
     token_budget: Option<i64>,
-) -> Result<()> {
+) -> Result<(), GoalError> {
     match objective {
-        None => anyhow::ensure!(
-            token_budget.is_none(),
-            "goal token budget requires a goal objective template"
-        ),
+        None if token_budget.is_some() => return Err(GoalError::BudgetRequiresObjective),
+        None => {}
         Some(objective) => {
-            anyhow::ensure!(
-                !objective.trim().is_empty(),
-                "goal objective must be non-empty"
-            );
-            anyhow::ensure!(
-                token_budget.is_none_or(|budget| budget > 0),
-                "goal token budget must be positive"
-            );
+            if objective.trim().is_empty() {
+                return Err(GoalError::ObjectiveEmpty);
+            }
+            if token_budget.is_some_and(|budget| budget <= 0) {
+                return Err(GoalError::BudgetNotPositive);
+            }
         }
     }
     Ok(())
@@ -1578,7 +1587,7 @@ fn resolve_ambiguous_goal_submission_commit(
         Ok(Some(_)) => Ok(GoalBackedRequestDisposition::Idempotent),
         Ok(None) => Err(commit_error),
         Err(recovery_error) => Err(anyhow::anyhow!(
-            "goal-backed request recovery failed after ambiguous commit: {recovery_error:#}; original commit error: {commit_error:#}"
+            "goal-backed request recovery failed after ambiguous commit: {}; original commit error: {}", ErrorChain(recovery_error.as_ref()), ErrorChain(commit_error.as_ref())
         )),
     }
 }

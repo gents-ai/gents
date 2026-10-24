@@ -3,9 +3,12 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
+
+use gents_protocol::error_chain::ErrorChain;
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 fn apply_live_file_agent_config(
     home: &std::path::Path,
@@ -23,9 +26,9 @@ fn apply_live_file_agent_config(
             "config",
             "export",
             "--home",
-            home.to_str().context("node home is not UTF-8")?,
+            home.to_str().ok_or("node home is not UTF-8")?,
             "--root",
-            root.to_str().context("config root is not UTF-8")?,
+            root.to_str().ok_or("config root is not UTF-8")?,
             "--graphql",
             graphql,
             "--node-did",
@@ -36,10 +39,10 @@ fn apply_live_file_agent_config(
     let mut config = read_json_file(&path)?;
     let tools = config["tools"]
         .as_array_mut()
-        .context("tools is not an array")?
+        .ok_or("tools is not an array")?
         .iter_mut()
         .find(|tools| tools["tools_id"] == tools_id)
-        .context("default Tools document is missing")?;
+        .ok_or("default Tools document is missing")?;
     tools["host"] = host;
     let prompt = fs::read_to_string(system_prompt)?;
     let base_agent = config["agents"][0].clone();
@@ -47,7 +50,7 @@ fn apply_live_file_agent_config(
     for agent_id in agent_ids {
         let existing_context_id = config["agents"]
             .as_array()
-            .context("agents is not an array")?
+            .ok_or("agents is not an array")?
             .iter()
             .find(|agent| agent["agent_id"] == *agent_id)
             .and_then(|agent| agent["context_id"].as_str())
@@ -61,23 +64,23 @@ fn apply_live_file_agent_config(
             agent["context_id"] = Value::String(context_id.clone());
             config["agents"]
                 .as_array_mut()
-                .context("agents is not an array")?
+                .ok_or("agents is not an array")?
                 .push(agent);
             let mut context = base_context.clone();
             context["context_id"] = Value::String(context_id.clone());
             context["tools_id"] = Value::String(tools_id.to_string());
             config["contexts"]
                 .as_array_mut()
-                .context("contexts is not an array")?
+                .ok_or("contexts is not an array")?
                 .push(context);
             context_id
         };
         let context = config["contexts"]
             .as_array_mut()
-            .context("contexts is not an array")?
+            .ok_or("contexts is not an array")?
             .iter_mut()
             .find(|context| context["context_id"] == context_id)
-            .context("agent context is missing")?;
+            .ok_or("agent context is missing")?;
         context["system_prompt"] = Value::String(prompt.clone());
         context["tools_id"] = Value::String(tools_id.to_string());
     }
@@ -88,9 +91,9 @@ fn apply_live_file_agent_config(
             "config",
             "apply",
             "--home",
-            home.to_str().context("node home is not UTF-8")?,
+            home.to_str().ok_or("node home is not UTF-8")?,
             "--root",
-            root.to_str().context("config root is not UTF-8")?,
+            root.to_str().ok_or("config root is not UTF-8")?,
             "--graphql",
             graphql,
         ],
@@ -100,7 +103,7 @@ fn apply_live_file_agent_config(
 
 fn read_only_files(root: &std::path::Path) -> Result<Value> {
     Ok(serde_json::json!({
-        "root": root.to_str().context("file root is not UTF-8")?,
+        "root": root.to_str().ok_or("file root is not UTF-8")?,
         "files": {"mode": "ReadOnly"}
     }))
 }
@@ -109,13 +112,12 @@ fn read_only_files(root: &std::path::Path) -> Result<Value> {
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools() -> Result<()>
 {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("agent-home");
     let desktop_home = tempdir.path().join("desktop-home");
     fs::create_dir_all(&home_dir)?;
-    let home_arg = home_dir
-        .to_str()
-        .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?;
+    let home_arg = home_dir.to_str().ok_or("demo home path is not UTF-8")?;
 
     let files_dir = home_dir.join("demo-files");
     fs::create_dir_all(&files_dir)?;
@@ -158,12 +160,12 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let agent_id = init
         .pointer("/init/default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
+        .ok_or_else(|| format!("init output missing default_agent_id: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
+        .ok_or_else(|| format!("init output missing tools_id: {init}"))?
         .to_string();
 
     let (mut serve, readiness) =
@@ -199,7 +201,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let desktop_next_steps = desktop_init
         .get("nextSteps")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("desktop init output missing nextSteps: {desktop_init}"))?;
+        .ok_or_else(|| format!("desktop init output missing nextSteps: {desktop_init}"))?;
     assert!(
         desktop_next_steps.iter().any(|step| step
             .as_str()
@@ -207,16 +209,26 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         "desktop init should tell the demo to wait for desktop bootstrap before chat replication: {desktop_init}"
     );
     let peer_directory_path = desktop_home.join("peers.json");
-    let peer_directory: Value = serde_json::from_slice(
-        &fs::read(&peer_directory_path)
-            .with_context(|| format!("reading {}", peer_directory_path.display()))?,
-    )
-    .with_context(|| format!("decoding {}", peer_directory_path.display()))?;
+    let peer_directory: Value =
+        serde_json::from_slice(&fs::read(&peer_directory_path).map_err(|error| {
+            format!(
+                "reading {}: {}",
+                peer_directory_path.display(),
+                ErrorChain(&error)
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "decoding {}: {}",
+                peer_directory_path.display(),
+                ErrorChain(&error)
+            )
+        })?;
     let peer = peer_directory
         .get("peers")
         .and_then(Value::as_array)
         .and_then(|peers| peers.first())
-        .ok_or_else(|| anyhow!("desktop init did not persist a peer: {peer_directory}"))?;
+        .ok_or_else(|| format!("desktop init did not persist a peer: {peer_directory}"))?;
     assert_eq!(
         peer.get("source").and_then(Value::as_str),
         Some("local-standard")
@@ -268,7 +280,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let first_content = first
         .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("first live chat output missing response content: {first}"))?;
+        .ok_or_else(|| format!("first live chat output missing response content: {first}"))?;
     assert!(
         first_content.contains(&alpha_token),
         "expected first response to contain {alpha_token}, got content={first_content:?}; full output={first}"
@@ -299,7 +311,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let second_content = second
         .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("second live chat output missing response content: {second}"))?;
+        .ok_or_else(|| format!("second live chat output missing response content: {second}"))?;
     assert!(
         second_content.contains(&alpha_token) && second_content.contains(&beta_token),
         "expected second response to contain {alpha_token} and {beta_token}, got content={second_content:?}; full output={second}"
@@ -323,10 +335,11 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
-    let home_arg = home_dir.to_str().context("home is not UTF-8")?;
+    let home_arg = home_dir.to_str().ok_or("home is not UTF-8")?;
 
     let files_dir = home_dir.join("live-projection-files");
     fs::create_dir_all(&files_dir)?;
@@ -371,12 +384,12 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let agent_id = init
         .pointer("/init/default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
+        .ok_or_else(|| format!("init output missing default_agent_id: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
+        .ok_or_else(|| format!("init output missing tools_id: {init}"))?
         .to_string();
 
     let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
@@ -425,7 +438,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let request_id = result
         .get("request_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("live request result missing request_id: {result}"))?
+        .ok_or_else(|| format!("live request result missing request_id: {result}"))?
         .to_string();
     assert_eq!(
         result.get("session_id").and_then(Value::as_str),
@@ -434,7 +447,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let response = result
         .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("live request result missing response content: {result}"))?;
+        .ok_or_else(|| format!("live request result missing response content: {result}"))?;
     assert!(
         response.contains(&token),
         "expected live response to contain {token}, got {response:?}; full output={result}"
@@ -488,7 +501,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let items = openai
         .pointer("/output/projection/items")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("openai-codex projection missing items: {openai}"))?;
+        .ok_or_else(|| format!("openai-codex projection missing items: {openai}"))?;
     assert!(
         items.iter().any(|item| {
             item.get("type").and_then(Value::as_str) == Some("request")
@@ -506,7 +519,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         })
         .and_then(|item| item.get("id").and_then(Value::as_str))
         .ok_or_else(|| {
-            anyhow!(
+            format!(
                 "live openai-codex projection missing completed read_file tool item: {openai:#}"
             )
         })?
@@ -535,7 +548,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let message_doc_id = terminal_output
         .get("message_doc_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("terminal_output lacks message_doc_id: {terminal_output}"))?;
+        .ok_or_else(|| format!("terminal_output lacks message_doc_id: {terminal_output}"))?;
     let rows = graphql_query(
         &graphql,
         &format!(
@@ -566,11 +579,11 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let terminal_sequence = terminal_message
         .get("sequence")
         .and_then(Value::as_i64)
-        .ok_or_else(|| anyhow!("terminal message lacks a sequence: {terminal_message}"))?;
+        .ok_or_else(|| format!("terminal message lacks a sequence: {terminal_message}"))?;
     let read_file_sequence = first_graphql_row(&rows, "AgentToolCall")?
         .get("message_sequence")
         .and_then(Value::as_i64)
-        .ok_or_else(|| anyhow!("read_file call lacks its message sequence: {rows}"))?;
+        .ok_or_else(|| format!("read_file call lacks its message sequence: {rows}"))?;
     assert!(
         terminal_sequence > read_file_sequence,
         "terminal message {terminal_sequence} must follow the read_file call {read_file_sequence}"
@@ -709,10 +722,11 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
-    let home_arg = home_dir.to_str().context("home is not UTF-8")?;
+    let home_arg = home_dir.to_str().ok_or("home is not UTF-8")?;
 
     struct LiveRequestSpec {
         agent_id: String,
@@ -784,12 +798,12 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .ok_or_else(|| format!("init output missing backend_id: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
+        .ok_or_else(|| format!("init output missing tools_id: {init}"))?
         .to_string();
     let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
@@ -846,26 +860,32 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         }
     }
     if !wait_errors.is_empty() {
-        bail!(
+        return Err(format!(
             "failed waiting for live request child process(es): {}",
             wait_errors.join("; ")
-        );
+        )
+        .into());
     }
 
     for (spec, output) in outputs {
         if !output.status.success() {
             let (server_stdout, server_stderr) = serve.captured_output()?;
-            bail!(
+            return Err(format!(
                 "live request {} failed\nstdout:\n{}\nstderr:\n{}\nserver stdout:\n{}\nserver stderr:\n{}",
                 spec.agent_id,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr),
                 server_stdout,
                 server_stderr
-            );
+            ).into());
         }
-        let result: Value = serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("parsing live request JSON for {}", spec.agent_id))?;
+        let result: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+            format!(
+                "parsing live request JSON for {}: {}",
+                spec.agent_id,
+                ErrorChain(&error)
+            )
+        })?;
         assert_eq!(
             result.get("agent_id").and_then(Value::as_str),
             Some(spec.agent_id.as_str())
@@ -874,7 +894,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             .pointer("/output/presentation/body_markdown")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                anyhow!("request submit result did not include response content: {result}")
+                format!("request submit result did not include response content: {result}")
             })?;
         for token in &spec.tokens {
             assert!(
@@ -886,7 +906,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         let session_id = result
             .get("session_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("live request result missing session_id: {result}"))?;
+            .ok_or_else(|| format!("live request result missing session_id: {result}"))?;
         let tool_calls =
             wait_for_completed_tool_calls(&graphql, session_id, "read_file", spec.tokens.len())
                 .await?;
@@ -918,7 +938,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
 }
 
 fn live_eval_target() -> Result<(String, String, Option<String>)> {
-    let name = std::env::var("GENTS_EVAL_TARGET").context("set GENTS_EVAL_TARGET")?;
+    let name = std::env::var("GENTS_EVAL_TARGET").ok_or("set GENTS_EVAL_TARGET")?;
     let target = read_json_file(
         &workspace_root()?
             .join("scripts/evals/targets")
@@ -927,10 +947,10 @@ fn live_eval_target() -> Result<(String, String, Option<String>)> {
     let backend = &target["inference_backends"][0];
     let endpoint = backend["endpoint"]
         .as_str()
-        .context("target lacks an endpoint")?;
+        .ok_or("target lacks an endpoint")?;
     let model = target["inference_profiles"][0]["model_name"]
         .as_str()
-        .context("target lacks a model")?;
+        .ok_or("target lacks a model")?;
     let api_key_env = (backend["auth"]["kind"] == "environment")
         .then(|| backend["auth"]["variable"].as_str().map(str::to_owned))
         .flatten();
@@ -942,7 +962,7 @@ fn live_eval_target() -> Result<(String, String, Option<String>)> {
 async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Result<()> {
     use std::process::Child;
 
-    anyhow::ensure!(
+    assert!(
         std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
         "set GENTS_LIVE_OPENAI=1"
     );
@@ -984,7 +1004,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             .find(|entry| entry["content"] == content)
             .and_then(|entry| entry["request_doc_id"].as_str())
             .map(str::to_owned)
-            .with_context(|| format!("{content} is not pending: {snapshot}"))
+            .ok_or_else(|| format!("{content} is not pending: {snapshot}").into())
     }
     #[expect(
         clippy::disallowed_methods,
@@ -995,21 +1015,23 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         while child.try_wait()?.is_none() {
             if std::time::Instant::now() > deadline {
                 let _ = child.kill();
-                bail!("harness: {what} did not exit within 600s");
+                return Err(format!("harness: {what} did not exit within 600s").into());
             }
             std::thread::sleep(Duration::from_millis(200));
         }
         let output = child.wait_with_output()?;
-        anyhow::ensure!(
+        assert!(
             output.status.success(),
             "harness: {what} failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        serde_json::from_slice(&output.stdout).with_context(|| format!("parsing {what} output"))
+        serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("parsing {what} output: {}", ErrorChain(&error)).into())
     }
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home = tempdir.path().join("home");
     let workspace = tempdir.path().join("workspace");
     fs::create_dir_all(&home)?;
@@ -1061,7 +1083,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     )?;
 
     let (endpoint, model, api_key_env) = live_eval_target()?;
-    let home_arg = home.to_str().context("home is not UTF-8")?;
+    let home_arg = home.to_str().ok_or("home is not UTF-8")?;
     let mut init_args = vec![
         "--home".to_owned(),
         home_arg.to_owned(),
@@ -1075,7 +1097,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "--tool-root".to_owned(),
         workspace
             .to_str()
-            .context("workspace is not UTF-8")?
+            .ok_or("workspace is not UTF-8")?
             .to_owned(),
     ];
     if let Some(variable) = api_key_env {
@@ -1089,12 +1111,12 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let agent_id = init
         .pointer("/init/default_agent_id")
         .and_then(Value::as_str)
-        .context("init output missing default_agent_id")?
+        .ok_or("init output missing default_agent_id")?
         .to_owned();
     let tools_id = init
         .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .context("init output missing tools_id")?
+        .ok_or("init output missing tools_id")?
         .to_owned();
     let port = allocate_port()?;
     let graphql = graphql_url(port);
@@ -1113,7 +1135,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         &node,
         &tools_id,
         serde_json::json!({
-            "root": workspace.to_str().context("workspace is not UTF-8")?,
+            "root": workspace.to_str().ok_or("workspace is not UTF-8")?,
             "bash": {"mode": "Unrestricted"}
         }),
         &system_prompt,
@@ -1170,13 +1192,18 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
                 loop {
                     let snapshot = pending()?;
                     if contents(&snapshot) == expected {
-                        break Ok::<_, anyhow::Error>(snapshot);
+                        break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(snapshot);
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             })
             .await
-            .with_context(|| format!("harness: pending queue never became {expected:?}"))?
+            .map_err(|error| {
+                format!(
+                    "harness: pending queue never became {expected:?}: {}",
+                    ErrorChain(&error)
+                )
+            })?
         }
     };
     let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
@@ -1196,7 +1223,9 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         let graphql = graphql.clone();
         async move {
             let rows = graphql_query(&graphql, &query).await?;
-            Ok::<_, anyhow::Error>(first_graphql_row(&rows, "AgentRequest")?.clone())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                first_graphql_row(&rows, "AgentRequest")?.clone(),
+            )
         }
     };
     let captures_for = |request_id: &str| {
@@ -1207,7 +1236,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         let graphql = graphql.clone();
         async move {
             let rows = graphql_query(&graphql, &query).await?;
-            Ok::<_, anyhow::Error>(
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
                 rows["data"]["RenderedRequest"]
                     .as_array()
                     .cloned()
@@ -1224,7 +1253,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         while !started.exists() && first.0.as_mut().unwrap().try_wait()?.is_none() {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await;
     if !matches!(entered, Ok(Ok(()))) || !started.exists() {
@@ -1240,9 +1269,9 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             ),
         )
         .await?;
-        bail!(
+        return Err(format!(
             "live model never entered the held bash_unrestricted call (model or harness; see state); this is not a skipped test: {entered:?}\nsubmit stderr: {submit_stderr}\n{observed:#}"
-        );
+        ).into());
     }
     let active = graphql_query(
         &graphql,
@@ -1253,19 +1282,16 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     )
     .await?;
     let active = first_graphql_row(&active, "AgentRequest")?.clone();
-    let active_doc_id = active["_docID"]
-        .as_str()
-        .context("active doc id")?
-        .to_owned();
+    let active_doc_id = active["_docID"].as_str().ok_or("active doc id")?.to_owned();
     let active_request_id = active["request_id"]
         .as_str()
-        .context("active request id")?
+        .ok_or("active request id")?
         .to_owned();
 
     let steer_submit = run(submit(steer, false))?;
     let steer_request_id = steer_submit["request_id"]
         .as_str()
-        .context("steer submit output lacks request_id")?
+        .ok_or("steer submit output lacks request_id")?
         .to_owned();
     wait_for_pending(vec![steer]).await?;
 
@@ -1390,8 +1416,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             &access,
             capture["capture_version"]
                 .as_u64()
-                .context("capture_version")? as u32,
-            capture["request_json"].as_str().context("request_json")?,
+                .ok_or("capture_version")? as u32,
+            capture["request_json"].as_str().ok_or("request_json")?,
             gents::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await?
@@ -1406,7 +1432,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             resumed = Some(body);
         }
     }
-    let body = resumed.context("persisted provider input never received the steered messages")?;
+    let body = resumed.ok_or("persisted provider input never received the steered messages")?;
     for delivered in [&steer_token, &gamma_token, &edited_token] {
         assert_eq!(
             body.matches(delivered.as_str()).count(),
@@ -1416,7 +1442,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     }
     let tool_result = body
         .rfind(tool_done)
-        .context("resumed provider input lacks the held tool's result")?;
+        .ok_or("resumed provider input lacks the held tool's result")?;
     let (steer_at, gamma_at, edited_at) = (
         body.find(&steer_token).unwrap(),
         body.find(&gamma_token).unwrap(),
@@ -1441,7 +1467,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             row["superseded_by_request_doc_id"], active_doc_id,
             "steered input must fold into the running request: {row}"
         );
-        let request_id = row["request_id"].as_str().context("request_id")?;
+        let request_id = row["request_id"].as_str().ok_or("request_id")?;
         assert!(
             captures_for(request_id).await?.is_empty(),
             "steered input {request_id} must not run as its own turn"
@@ -1461,7 +1487,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let answer = first_result
         .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
-        .context("first request output lacks a final answer")?;
+        .ok_or("first request output lacks a final answer")?;
     assert_eq!(
         waited["output"], first_result["output"],
         "the edited message's waiter must follow its replacements to the request that consumed them"
@@ -1501,7 +1527,13 @@ fn trace_project_json(
             "did:test:live-projection-test",
         ],
     )?;
-    serde_json::from_str::<Value>(&output).context("parsing live adapter projection JSON")
+    serde_json::from_str::<Value>(&output).map_err(|error| {
+        format!(
+            "parsing live adapter projection JSON: {}",
+            ErrorChain(&error)
+        )
+        .into()
+    })
 }
 
 fn trace_project_jsonl_lines(
@@ -1534,7 +1566,13 @@ fn trace_project_jsonl_lines(
     output
         .lines()
         .map(|line| {
-            serde_json::from_str::<Value>(line).context("parsing live adapter projection JSONL")
+            serde_json::from_str::<Value>(line).map_err(|error| {
+                format!(
+                    "parsing live adapter projection JSONL: {}",
+                    ErrorChain(&error)
+                )
+                .into()
+            })
         })
         .collect::<Result<Vec<_>>>()
 }

@@ -98,7 +98,8 @@ fn allow_create_rejects_a_dangling_symlink_leaf() {
         .expect_err("a dangling symlink must not be treated as a creatable leaf");
     assert!(
         error.to_string().contains("canonicalizing path ancestor"),
-        "{error:#}"
+        "{}",
+        gents_protocol::error_chain::ErrorChain(&error)
     );
 }
 
@@ -120,7 +121,7 @@ async fn request_runtime_workspace_overrides_static_base() {
             async {
                 let resolved = context.resolve_existing_file("README.md")?;
                 let display = context.display_path(&resolved);
-                anyhow::Ok((resolved, display))
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((resolved, display))
             },
         )
         .await
@@ -168,7 +169,10 @@ async fn request_runtime_workspace_root_replaces_static_root() {
                 let inside = context.resolve_existing_file("notes.txt")?;
                 let denied =
                     context.resolve_existing_file(baked.join("secret.txt").to_str().unwrap());
-                anyhow::Ok((inside, denied.err().map(|error| error.to_string())))
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+                    inside,
+                    denied.err().map(|error| error.to_string()),
+                ))
             },
         )
         .await

@@ -1,8 +1,9 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::io::Write;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use gents::eval::documents::default_breaker_threshold;
 use gents::eval::load_trials;
 use gents::eval::report::load_report;
@@ -11,7 +12,7 @@ use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 
 use super::{
     default_id, follow_progress, render, source_commit, source_dirty, write_json, Deps,
-    EvalContext, Progress,
+    EvalCommandError, EvalContext, Progress,
 };
 use crate::cli::{EvalResumeArgs, EvalRunArgs};
 use crate::commands::pack::{resolve_subject_pack, SubjectPack};
@@ -101,25 +102,28 @@ pub(super) async fn resume(
     finish(ctx, &args.run_id, args.json, result, out).await
 }
 
-pub(super) fn profiles_by_cell(args: &EvalRunArgs) -> Result<BTreeMap<&str, &str>, String> {
+pub(super) fn profiles_by_cell(
+    args: &EvalRunArgs,
+) -> Result<BTreeMap<&str, &str>, EvalCommandError> {
     let mut cells = BTreeSet::new();
     for cell in &args.cells {
         if !cells.insert(cell.cell_id.as_str()) {
-            return Err(format!(
-                "--cell declares cell {:?} more than once",
-                cell.cell_id
-            ));
+            return Err(EvalCommandError::DuplicateCell {
+                cell_id: cell.cell_id.clone(),
+            });
         }
     }
     let mut profiles: BTreeMap<&str, &str> = BTreeMap::new();
     for (cell_id, profile_id) in &args.profiles {
         if !cells.contains(cell_id.as_str()) {
-            return Err(format!(
-                "--profile names cell {cell_id:?}, which no --cell declares"
-            ));
+            return Err(EvalCommandError::ProfileForUndeclaredCell {
+                cell_id: cell_id.clone(),
+            });
         }
         if profiles.insert(cell_id, profile_id).is_some() {
-            return Err(format!("--profile names cell {cell_id:?} more than once"));
+            return Err(EvalCommandError::DuplicateProfile {
+                cell_id: cell_id.clone(),
+            });
         }
     }
     Ok(profiles)
@@ -129,7 +133,7 @@ pub(super) async fn run_request(
     ctx: &EvalContext,
     args: &EvalRunArgs,
 ) -> Result<(RunRequest, Vec<SubjectPack>)> {
-    let profiles = profiles_by_cell(args).map_err(anyhow::Error::msg)?;
+    let profiles = profiles_by_cell(args)?;
     let default_profile =
         default_inference_profile_id_for_agent(&default_agent_id_for_node(&ctx.owner));
     let mut cells = Vec::with_capacity(args.cells.len());
@@ -220,7 +224,7 @@ async fn report_landed(
     let trials = match load_trials(&ctx.access, &ctx.owner, run_id).await {
         Ok(trials) => trials,
         Err(error) => {
-            tracing::warn!(run_id, error = %format!("{error:#}"), "could not read the run's trials for progress");
+            tracing::warn!(run_id, error = %format!("{}", ErrorChain(error.as_ref())), "could not read the run's trials for progress");
             return;
         }
     };
@@ -274,7 +278,7 @@ async fn finish(
         render::report_table(&report, out)?;
     }
     match stopped {
-        Some(note) => Err(anyhow!(note)),
+        Some(note) => Err(EvalCommandError::Stopped { note }.into()),
         None => Ok(()),
     }
 }

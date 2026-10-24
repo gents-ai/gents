@@ -20,8 +20,8 @@ pub(crate) async fn dispatch(command: PluginCommand) -> Result<()> {
         PluginCommand::Remove(args) => remove(args).await,
         PluginCommand::Run(args) => run::run(args).await,
         PluginCommand::Bind(args) => bind::bind(args).await,
-        PluginCommand::Unbind(args) => bind::unbind(args),
-        PluginCommand::Dirs { command } => dirs::dispatch(command),
+        PluginCommand::Unbind(args) => Ok(bind::unbind(args)?),
+        PluginCommand::Dirs { command } => Ok(dirs::dispatch(command)?),
     }
 }
 
@@ -46,12 +46,12 @@ async fn publish(args: PluginPublishArgs) -> Result<()> {
     let client = crate::commands::pack::registry::RegistryClient::new(registry);
     let response = client.publish(&token, pack).await?;
 
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "pack": header.coordinate,
         "version": header.version,
         "digest": header.digest,
         "registry_response": response,
-    }))
+    }))?)
 }
 
 fn plugin_pack(
@@ -101,7 +101,7 @@ fn plugin_pack(
 fn list(args: PluginListArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let records = store::list_records(&home)?;
-    crate::print_json(&json!({ "plugins": records }))
+    Ok(crate::print_json(&json!({ "plugins": records }))?)
 }
 
 async fn remove(args: PluginRemoveArgs) -> Result<()> {
@@ -122,7 +122,9 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
                 "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents pack remove {coordinate}"
             );
             let removed = crate::commands::pack::remove_home_install(&home, &coordinate).await?;
-            return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+            return Ok(crate::print_json(
+                &json!({ "pack": coordinate, "removed": removed }),
+            )?);
         }
     }
     let removed = store::remove_record(&home, namespace, name).with_context(|| {
@@ -137,7 +139,7 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
             crate::commands::pack::record_plugin_store_change(&home, coordinate, None).await,
         );
     }
-    crate::print_json(&json!({ "removed": removed }))
+    Ok(crate::print_json(&json!({ "removed": removed }))?)
 }
 
 pub(crate) fn declaration_from_artifact(
@@ -166,6 +168,7 @@ pub(crate) fn declaration_from_artifact(
 
 #[cfg(test)]
 pub(crate) mod testing {
+    use gents_protocol::error_chain::ErrorChain;
     pub(crate) fn build_plugin_afb(name: &str, main_rs: &[u8]) -> Vec<u8> {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join(name);
@@ -200,13 +203,15 @@ pub(crate) mod testing {
 
         let owner = format!("test plugin ({name})");
         let local = crate::commands::afterburner_build::load_and_validate(&owner, &root)
-            .unwrap_or_else(|error| panic!("loading the {name} package: {error:#}"));
+            .unwrap_or_else(|error| {
+                panic!("loading the {name} package: {}", ErrorChain(error.as_ref()))
+            });
         let out = dir.path().join(format!("{name}.afb"));
         let _guard = crate::commands::afterburner_build::compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::commands::afterburner_build::compile(&owner, &root, local, &out)
-            .unwrap_or_else(|error| panic!("compiling {name}: {error:#}"));
+            .unwrap_or_else(|error| panic!("compiling {name}: {}", ErrorChain(error.as_ref())));
         std::fs::read(&out).expect("reading the compiled .afb")
     }
 

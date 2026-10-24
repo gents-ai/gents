@@ -7,10 +7,10 @@
 //! crash durability or remote P2P merge. A blocked outside read is permitted;
 //! a partial pair is not.
 
-use anyhow::{bail, Context, Result};
 use gents::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -19,6 +19,10 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::watch;
 
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+type TestResult<T = ()> = std::result::Result<T, BoxError>;
+type Result<T = (), E = BoxError> = std::result::Result<T, E>;
+
 const ATOMICITY_SCHEMA: &str = r#"
 type TxnAtomicityLeft { label: String amount: Int }
 type TxnAtomicityRight { label: String amount: Int }
@@ -26,7 +30,7 @@ type TxnAtomicityUnique { key: String @index(unique: true) label: String }
 type TxnAtomicityNote @index(fields: ["chain_root_doc_id", "note_id"], unique: true) { chain_root_doc_id: String note_id: String label: String }
 "#;
 
-async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
+async fn disposable_node() -> TestResult<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     node.add_schema(ATOMICITY_SCHEMA).await?;
     Ok(node)
@@ -38,19 +42,19 @@ fn ensure_no_errors(value: Value) -> Result<Value> {
         .and_then(Value::as_array)
         .is_some_and(|errors| !errors.is_empty())
     {
-        bail!("defradb reported errors: {value}");
+        return Err(format!("defradb reported errors: {value}").into());
     }
     Ok(value)
 }
 
 fn assert_acknowledged(value: &Value, collection: &str) -> Result<()> {
     let response = defra_node::QueryResponse::success(
-        value.get("data").context("mutation omitted data")?.clone(),
+        value.get("data").ok_or("mutation omitted data")?.clone(),
     );
     let field = format!("create_{collection}");
     let row = gents::graphql::single_mutation_document(&response, &field)?
-        .context("mutation returned no document")?;
-    anyhow::ensure!(
+        .ok_or("mutation returned no document")?;
+    assert!(
         row.get("_docID")
             .and_then(Value::as_str)
             .is_some_and(|id| !id.is_empty()),
@@ -59,43 +63,43 @@ fn assert_acknowledged(value: &Value, collection: &str) -> Result<()> {
     Ok(())
 }
 
-async fn collection_count(node: &EmbeddedNode, collection: &str) -> Result<usize> {
+async fn collection_count(node: &EmbeddedNode, collection: &str) -> TestResult<usize> {
     let value = node
         .execute(&format!("query {{ {collection} {{ label }} }}"))
         .await;
-    anyhow::ensure!(
+    assert!(
         !value.has_errors(),
         "count query failed: {:?}",
         value.errors
     );
-    Ok(value.data.context("count query omitted data")?[collection]
+    Ok(value.data.ok_or("count query omitted data")?[collection]
         .as_array()
-        .context("count query omitted collection")?
+        .ok_or("count query omitted collection")?
         .len())
 }
 
-async fn counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
+async fn counts(node: &EmbeddedNode) -> TestResult<(usize, usize)> {
     Ok((
         collection_count(node, "TxnAtomicityLeft").await?,
         collection_count(node, "TxnAtomicityRight").await?,
     ))
 }
 
-async fn pair_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
+async fn pair_counts(node: &EmbeddedNode) -> TestResult<(usize, usize)> {
     let response = gents::graphql::graphql_with_transaction_retry(
         node,
         "query { TxnAtomicityLeft { label } TxnAtomicityRight { label } }",
         "txn_atomicity_independent_reader",
     )
     .await?;
-    let data = response.data.context("pair query omitted data")?;
+    let data = response.data.ok_or("pair query omitted data")?;
     let left = data["TxnAtomicityLeft"]
         .as_array()
-        .context("pair query omitted left collection")?
+        .ok_or("pair query omitted left collection")?
         .len();
     let right = data["TxnAtomicityRight"]
         .as_array()
-        .context("pair query omitted right collection")?
+        .ok_or("pair query omitted right collection")?
         .len();
     Ok((left, right))
 }
@@ -117,7 +121,7 @@ fn write_right(label: &str, amount: i64) -> String {
 }
 
 #[tokio::test]
-async fn committed_transaction_persists_both_writes() -> Result<()> {
+async fn committed_transaction_persists_both_writes() -> TestResult {
     let node = disposable_node().await?;
 
     let (left, right) = ConfigAccess::transact_local_write(
@@ -128,7 +132,7 @@ async fn committed_transaction_persists_both_writes() -> Result<()> {
             Box::pin(async move {
                 let left = ensure_no_errors(txn.execute(&write_left("commit", 1)).await?)?;
                 let right = ensure_no_errors(txn.execute(&write_right("commit", 2)).await?)?;
-                Ok((left, right))
+                Ok::<_, BoxError>((left, right))
             })
         },
     )
@@ -145,7 +149,7 @@ async fn committed_transaction_persists_both_writes() -> Result<()> {
 }
 
 #[tokio::test]
-async fn injected_error_after_first_write_persists_neither() -> Result<()> {
+async fn injected_error_after_first_write_persists_neither() -> TestResult {
     let node = disposable_node().await?;
 
     let outcome: Result<()> = ConfigAccess::transact_local_write(
@@ -156,7 +160,7 @@ async fn injected_error_after_first_write_persists_neither() -> Result<()> {
             Box::pin(async move {
                 let first = ensure_no_errors(txn.execute(&write_left("rollback", 3)).await?)?;
                 assert_acknowledged(&first, "TxnAtomicityLeft")?;
-                Err(anyhow::anyhow!("injected failure after first write"))
+                Err("injected failure after first write".into())
             })
         },
     )
@@ -179,7 +183,7 @@ async fn injected_error_after_first_write_persists_neither() -> Result<()> {
 }
 
 #[tokio::test]
-async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()> {
+async fn failed_second_mutation_persists_neither_when_propagated() -> TestResult {
     let node = disposable_node().await?;
 
     let outcome: Result<()> = ConfigAccess::transact_local_write(
@@ -206,7 +210,7 @@ async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()>
         outcome.is_err(),
         "propagating the failed second mutation must fail the transaction: {outcome:?}"
     );
-    let error = format!("{:#}", outcome.unwrap_err());
+    let error = ErrorChain(outcome.unwrap_err().as_ref()).to_string();
     assert!(
         error.contains("TxnAtomicityMissing"),
         "unexpected failure: {error}"
@@ -220,7 +224,7 @@ async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()>
 }
 
 #[tokio::test]
-async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Result<()> {
+async fn independent_reader_never_observes_half_of_a_two_document_commit() -> TestResult {
     let node = disposable_node().await?;
     let (first_written_tx, mut first_written_rx) = watch::channel(false);
     let (release_tx, release_rx) = watch::channel(false);
@@ -242,7 +246,7 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
                 }
                 let second = ensure_no_errors(txn.execute(&write_right("visible", 2)).await?)?;
                 assert_acknowledged(&second, "TxnAtomicityRight")?;
-                Ok(())
+                Ok::<_, BoxError>(())
             })
         },
     );
@@ -264,7 +268,7 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
         let pair = match before_release {
             Some(result) => {
                 let pair = result?;
-                anyhow::ensure!(
+                assert!(
                     pair == (0, 0),
                     "reader saw uncommitted half-pair before writer release: {pair:?}"
                 );
@@ -272,11 +276,11 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
             }
             None => read.await?,
         };
-        anyhow::ensure!(
+        assert!(
             pair == (0, 0) || pair == (1, 1),
             "independent reader saw a partial pair: {pair:?}"
         );
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     };
 
     let result = tokio::time::timeout(Duration::from_secs(15), async {
@@ -284,7 +288,7 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
     })
     .await;
     release_on_timeout.send_replace(true);
-    let (write, read) = result.context("two-document reader experiment timed out")?;
+    let (write, read) = result.map_err(|_| "two-document reader experiment timed out")?;
     write?;
     read?;
     assert_eq!(pair_counts(&node).await?, (1, 1));
@@ -323,7 +327,7 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
     )?;
     let found = read["data"]["TxnAtomicityUnique"]
         .as_array()
-        .context("unique read omitted collection")?
+        .ok_or("unique read omitted collection")?
         .len();
     if found > 0 {
         return Ok(false);
@@ -341,7 +345,7 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
 /// the insert; the rollback comes from propagating the error, not from
 /// DefraDB aborting the transaction itself.
 #[tokio::test]
-async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result<()> {
+async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> TestResult {
     let node = disposable_node().await?;
 
     let outcome: Result<()> = ConfigAccess::transact_local_write(
@@ -359,10 +363,12 @@ async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result
     )
     .await;
 
-    let error = format!(
-        "{:#}",
-        outcome.expect_err("a duplicate unique-key insert must fail")
-    );
+    let error = ErrorChain(
+        outcome
+            .expect_err("a duplicate unique-key insert must fail")
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("violates unique index"),
         "the unique index must reject the duplicate key: {error}"
@@ -379,7 +385,7 @@ async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result
 /// writes nor the duplicate persists. Rows that share only one of the two
 /// fields are accepted.
 #[tokio::test]
-async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -> Result<()> {
+async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -> TestResult {
     let node = disposable_node().await?;
 
     ConfigAccess::transact_local_write(
@@ -391,7 +397,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
                 ensure_no_errors(txn.execute(&write_note("root-a", "note-1", "seed")).await?)?;
                 ensure_no_errors(txn.execute(&write_note("root-a", "note-2", "seed")).await?)?;
                 ensure_no_errors(txn.execute(&write_note("root-b", "note-1", "seed")).await?)?;
-                Ok(())
+                Ok::<_, BoxError>(())
             })
         },
     )
@@ -419,10 +425,12 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
     )
     .await;
 
-    let error = format!(
-        "{:#}",
-        outcome.expect_err("a duplicate composite-key insert must fail")
-    );
+    let error = ErrorChain(
+        outcome
+            .expect_err("a duplicate composite-key insert must fail")
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("violates unique index"),
         "the composite unique index must reject the duplicate pair: {error}"
@@ -438,7 +446,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
 /// guard on this path and the unique index is not reached. Same pinned
 /// DefraDB rev as `duplicate_unique_key_errors_and_propagated_error_rolls_back`.
 #[tokio::test]
-async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
+async fn concurrent_read_then_insert_leaves_one_row() -> TestResult {
     let node = disposable_node().await?;
     let attempt = || {
         ConfigAccess::transact_local_write(
@@ -455,7 +463,7 @@ async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
         tokio::join!(attempt(), attempt())
     })
     .await
-    .context("concurrent read-then-insert timed out")?;
+    .map_err(|_| "concurrent read-then-insert timed out")?;
 
     let inserted = [first?, second?];
     assert_eq!(
@@ -470,7 +478,7 @@ async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
 /// A read-then-insert of an existing key inserts nothing, so the other write
 /// in the same transaction commits. Same pinned DefraDB rev as above.
 #[tokio::test]
-async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()> {
+async fn read_then_insert_of_existing_key_commits_the_other_write() -> TestResult {
     let node = disposable_node().await?;
     ConfigAccess::transact_local_write(
         &node,
@@ -479,7 +487,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()
         |txn: &ConfigApplyTxn<'_>| {
             Box::pin(async move {
                 ensure_no_errors(txn.execute(&write_unique("existing", "seed")).await?)?;
-                Ok(())
+                Ok::<_, BoxError>(())
             })
         },
     )
@@ -493,7 +501,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()
             Box::pin(async move {
                 let inserted = read_then_insert_unique(txn, "existing").await?;
                 ensure_no_errors(txn.execute(&write_left("other-write", 1)).await?)?;
-                Ok(inserted)
+                Ok::<_, BoxError>(inserted)
             })
         },
     )

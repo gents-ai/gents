@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::output::{
     reconstruction::{reconstruct_stream, ObservedSegment},
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -17,6 +18,38 @@ use crate::session::canonical_rows::{
 };
 
 use super::{CancelCause, FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DeliveryError {
+    #[error("raw tool output requires a running admitted lifecycle")]
+    RawOutputNotRunning,
+    #[error("raw tool output requires a physical tool row")]
+    RawOutputMissingToolRow,
+    #[error("raw tool output requires a request binding")]
+    RawOutputMissingRequest,
+    #[error("dispatch requires an accepted tool header binding")]
+    DispatchMissingHeader,
+    #[error("dispatch requires an accepted request binding")]
+    DispatchMissingRequest,
+    #[error("dispatch requires the accepted execution generation")]
+    DispatchMissingGeneration,
+    #[error("dispatch requires an accepted argument reference")]
+    DispatchMissingArguments,
+    #[error("dispatch requires a physical tool row")]
+    DispatchMissingToolRow,
+    #[error("background receipt requires an accepted direct background invocation")]
+    BackgroundReceiptNotDirect,
+    #[error("background receipt requires tool document")]
+    BackgroundReceiptMissingTool,
+    #[error("background receipt requires request document")]
+    BackgroundReceiptMissingRequest,
+    #[error("background receipt requires accepted header")]
+    BackgroundReceiptMissingHeader,
+    #[error("background receipt requires accepted arguments")]
+    BackgroundReceiptMissingArguments,
+    #[error("background receipt requires execution generation")]
+    BackgroundReceiptMissingGeneration,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolDispatchRejection {
@@ -133,7 +166,7 @@ fn plugin_writes_failed(error: anyhow::Error) -> anyhow::Error {
     if crate::config_client::is_transaction_step_unavailable(&error) {
         return error;
     }
-    let text = format!("{error:#}");
+    let text = ErrorChain(error.as_ref()).to_string();
     error.context(PluginWritesFailed(text))
 }
 
@@ -408,7 +441,7 @@ impl ToolCallLifecycle {
                     }}, input: {{ lifecycle_state: "running", started_at: "{}" }}) {{ _docID }} }}"#,
                         escape_graphql_string(&tool_call_id), escape_graphql_string(&tool_name),
                         escape_graphql_string(&now.to_rfc3339_opts(SecondsFormat::Nanos, true)))).await?;
-                    Ok(mutation["data"]["update_AgentToolCall"].as_array()
+                    Ok::<_, anyhow::Error>(mutation["data"]["update_AgentToolCall"].as_array()
                         .is_some_and(|rows| !rows.is_empty()).then_some(now))
                 })
             }
@@ -619,7 +652,7 @@ impl ToolCallLifecycle {
                         escape_graphql_string(&stable_key), escape_graphql_string(request_id),
                         crate::session::requester_did_create_field(requester_did.as_deref()),
                         escape_graphql_string(&tool_name), escape_graphql_string(&stable_id))).await?;
-                    created_doc_id(&created, "AgentToolCall")
+                    Ok(created_doc_id(&created, "AgentToolCall")?)
                 })
             }
         ).await?;
@@ -634,52 +667,51 @@ impl ToolCallLifecycle {
         .await?
         .context("spawned admission created child could not be rehydrated by physical provenance")
     }
-    pub(crate) fn tool_output_binding(&self) -> Result<ToolOutputBinding> {
-        anyhow::ensure!(
-            self.state == ToolCallState::Running,
-            "raw tool output requires a running admitted lifecycle"
-        );
+    pub(crate) fn tool_output_binding(&self) -> Result<ToolOutputBinding, DeliveryError> {
+        if self.state != ToolCallState::Running {
+            return Err(DeliveryError::RawOutputNotRunning);
+        }
         Ok(ToolOutputBinding {
             node: self.node.clone(),
             tool_call_doc_id: self
                 .doc_id
                 .clone()
-                .context("raw tool output requires a physical tool row")?,
+                .ok_or(DeliveryError::RawOutputMissingToolRow)?,
             request_doc_id: self
                 .request_doc_id
                 .clone()
-                .context("raw tool output requires a request binding")?,
+                .ok_or(DeliveryError::RawOutputMissingRequest)?,
             session_id: self.session_id.clone(),
             node_did: self.node_did.clone(),
             requester_did: self.requester_did.clone(),
         })
     }
 
-    pub(crate) fn dispatch_start(&self) -> Result<DispatchStart> {
+    pub(crate) fn dispatch_start(&self) -> Result<DispatchStart, DeliveryError> {
         Ok(DispatchStart {
             header: self
                 .accepted_header_doc_id
                 .clone()
-                .context("dispatch requires an accepted tool header binding")?,
+                .ok_or(DeliveryError::DispatchMissingHeader)?,
             request: self
                 .request_doc_id
                 .clone()
-                .context("dispatch requires an accepted request binding")?,
+                .ok_or(DeliveryError::DispatchMissingRequest)?,
             generation: self
                 .execution_generation
                 .clone()
-                .context("dispatch requires the accepted execution generation")?,
+                .ok_or(DeliveryError::DispatchMissingGeneration)?,
             arguments: self
                 .arguments
                 .clone()
-                .context("dispatch requires an accepted argument reference")?,
+                .ok_or(DeliveryError::DispatchMissingArguments)?,
             agent: self.node_did.clone(),
             requester: self.requester_did.clone(),
             session: self.session_id.clone(),
             doc_id: self
                 .doc_id
                 .clone()
-                .context("dispatch requires a physical tool row")?,
+                .ok_or(DeliveryError::DispatchMissingToolRow)?,
             id: self.tool_call_id.clone(),
             call_id: self.call_id.clone(),
             message_sequence: self.message_sequence,
@@ -736,32 +768,33 @@ impl ToolCallLifecycle {
         .await
     }
 
-    pub(crate) fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
-        anyhow::ensure!(
-            self.await_mode == super::AwaitMode::Background && !self.is_spawned_background(),
-            "background receipt requires an accepted direct background invocation"
-        );
+    pub(crate) fn background_receipt_binding(
+        &self,
+    ) -> Result<BackgroundReceiptBinding, DeliveryError> {
+        if self.await_mode != super::AwaitMode::Background || self.is_spawned_background() {
+            return Err(DeliveryError::BackgroundReceiptNotDirect);
+        }
         Ok(BackgroundReceiptBinding {
             tool_doc_id: self
                 .doc_id
                 .clone()
-                .context("background receipt requires tool document")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingTool)?,
             request_doc_id: self
                 .request_doc_id
                 .clone()
-                .context("background receipt requires request document")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingRequest)?,
             accepted_header_doc_id: self
                 .accepted_header_doc_id
                 .clone()
-                .context("background receipt requires accepted header")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingHeader)?,
             arguments: self
                 .arguments
                 .clone()
-                .context("background receipt requires accepted arguments")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingArguments)?,
             generation: self
                 .execution_generation
                 .clone()
-                .context("background receipt requires execution generation")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingGeneration)?,
             node_did: self.node_did.clone(),
             requester_did: self.requester_did.clone(),
             session_id: self.session_id.clone(),
@@ -902,7 +935,7 @@ impl ToolCallLifecycle {
         .await?;
         #[cfg(test)]
         if take_terminal_failure_for_test(doc_id) {
-            return Err(crate::config_client::classified_conflict_for_test());
+            return Err(crate::config_client::classified_conflict_for_test().into());
         }
         if let (true, Some(progress)) = (published, job_progress) {
             crate::plugin_job::records::write_progress_in_txn(
@@ -1124,7 +1157,7 @@ impl ToolCallLifecycle {
                     .await?;
                     #[cfg(test)]
                     if take_terminal_failure_for_test(&doc_id) {
-                        return Err(crate::config_client::classified_conflict_for_test());
+                        return Err(crate::config_client::classified_conflict_for_test().into());
                     }
                     // Applied after the terminal compare so a lost compare
                     // writes nothing; a failure rolls the terminal back too.
@@ -1156,7 +1189,7 @@ impl ToolCallLifecycle {
                         )
                         .await?;
                     }
-                    Ok(published)
+                    Ok::<_, anyhow::Error>(published)
                 })
             },
         )
@@ -2233,7 +2266,7 @@ mod plugin_writes_failed_tests {
     #[test]
     fn plugin_writes_failure_keeps_a_typed_conflict_replayable() {
         let conflict = crate::config_client::classified_conflict_for_test();
-        let wrapped = plugin_writes_failed(conflict);
+        let wrapped = plugin_writes_failed(conflict.into());
         assert!(crate::config_client::is_classified_transaction_conflict(
             &wrapped
         ));
@@ -2339,7 +2372,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
     }
 
@@ -2496,7 +2529,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let tool_rows = rows
             .iter()
@@ -2587,7 +2620,7 @@ mod spawned_background_tests {
                 .unwrap()
                 .iter()
                 .map(decode_output_segment_row)
-                .collect::<Result<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             let tool_rows = rows
                 .iter()
@@ -2706,7 +2739,7 @@ mod spawned_background_tests {
                 .unwrap()
                 .iter()
                 .map(decode_output_segment_row)
-                .collect::<Result<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
                 .unwrap()
                 .into_iter()
                 .map(|row| row.doc_id)
@@ -2891,7 +2924,8 @@ mod spawned_background_tests {
             error
                 .to_string()
                 .contains("not an exact extension of persisted raw output"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(tool.state, ToolCallState::Running);
 
@@ -2989,7 +3023,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .filter(|row| {
@@ -3148,7 +3182,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .filter(|row| {
@@ -3277,7 +3311,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .filter(|row| {

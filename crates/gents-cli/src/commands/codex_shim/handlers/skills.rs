@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use super::super::protocol::{send_error, send_result};
 use super::super::store::{query_node_json, write_committed};
+use super::super::CodexShimError;
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::extract_mutation_doc_id;
 
@@ -74,13 +75,13 @@ pub(super) async fn handle_skills_config_write(
     let skill_id = match resolve_skill_id(state, &params).await {
         Ok(skill_id) => skill_id,
         Err(error) => {
-            return send_error(
+            return Ok(send_error(
                 outbound,
                 request_id,
                 JSONRPC_INVALID_PARAMS,
                 error.to_string(),
             )
-            .await;
+            .await?);
         }
     };
     let node_did = escape_graphql_string(&state.node_did);
@@ -98,17 +99,17 @@ pub(super) async fn handle_skills_config_write(
     let response = match write_committed(&state.node, "codex.skill.set_enabled", &mutation).await {
         Ok(response) => response,
         Err(error) => {
-            return send_error(
+            return Ok(send_error(
                 outbound,
                 request_id,
                 JSONRPC_INVALID_PARAMS,
                 format!("failed to update skill {skill_id}: {error}"),
             )
-            .await;
+            .await?);
         }
     };
     if extract_mutation_doc_id(&response, "Skill").is_err() {
-        return send_error(
+        return Ok(send_error(
             outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
@@ -117,16 +118,16 @@ pub(super) async fn handle_skills_config_write(
                 state.node_did
             ),
         )
-        .await;
+        .await?);
     }
-    send_result(
+    Ok(send_result(
         outbound,
         request_id,
         codex::SkillsConfigWriteResponse {
             effective_enabled: params.enabled,
         },
     )
-    .await
+    .await?)
 }
 
 async fn resolve_skill_id(
@@ -161,7 +162,10 @@ async fn resolve_skill_id(
                 .unwrap_or(name)
                 .to_string());
         }
-        anyhow::bail!("no skill named {name:?}");
+        return Err(CodexShimError::SkillNotFound {
+            name: name.to_owned(),
+        }
+        .into());
     }
-    anyhow::bail!("skills/config/write requires a path or name selector")
+    Err(CodexShimError::SkillSelectorRequired.into())
 }

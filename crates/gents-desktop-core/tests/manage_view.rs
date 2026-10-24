@@ -1,4 +1,3 @@
-use anyhow::Result;
 use gents::document_config::{
     Agent, InferenceBackend, InferenceProfile, Node, Schedule, SkillDocument, Task, Tools, Trigger,
 };
@@ -6,8 +5,10 @@ use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::json;
 use std::sync::Arc;
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
+async fn canonical_manage_document_saves_refresh_store() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
@@ -161,7 +162,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
+async fn desktop_task_run_defers_declared_goal_until_claim() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),

@@ -55,7 +55,7 @@ fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn NodeIdentity
             home_dir.display()
         )
     })?;
-    load_initialized_home_identity(&home_dir, &config)
+    Ok(load_initialized_home_identity(&home_dir, &config)?)
 }
 
 async fn submit_agent(
@@ -74,7 +74,7 @@ async fn submit_agent(
         &Default::default(),
     )
     .await?;
-    print_json(&serde_json::from_str::<Value>(&result)?)
+    Ok(print_json(&serde_json::from_str::<Value>(&result)?)?)
 }
 
 fn optional_update(value: Option<String>) -> StringUpdate {
@@ -202,7 +202,7 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
         surfaces.push(serde_json::from_value(row)?);
     }
     let merged = merge_datastore_tool_surfaces(&tools, &surfaces)?;
-    presets::classify_tools(&tools, &merged)
+    Ok(presets::classify_tools(&tools, &merged)?)
 }
 
 const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";
@@ -308,11 +308,12 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
     if let Value::Object(ref mut map) = row {
         map.insert("resolved".to_string(), resolved);
     }
-    print_json(&row)
+    Ok(print_json(&row)?)
 }
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
@@ -530,10 +531,11 @@ mod tests {
             tags: Vec::new(),
             created_at: None,
         };
-        assert!(
-            format!("{:#}", upsert_agent(&node, &agent).await.unwrap_err())
-                .contains("missing-profile")
-        );
+        assert!(format!(
+            "{}",
+            ErrorChain(upsert_agent(&node, &agent).await.unwrap_err().as_ref())
+        )
+        .contains("missing-profile"));
         let response = node
             .execute("{ Agent {agent_id} AgentContext {context_id} Tools {tools_id} }")
             .await;

@@ -1,4 +1,5 @@
-use anyhow::{ensure, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::graphql::GraphqlError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -57,18 +58,61 @@ impl Observation {
 #[error("{0}")]
 pub struct WriteError(String);
 
+/// A refusal of a `write` call before or during its transaction. `Recovery`
+/// carries the next call the model should make, which `WriteTool::call`
+/// renders beside the message.
 #[derive(Debug, thiserror::Error)]
-#[error("{message}")]
-struct WriteRecovery {
-    message: String,
-    recovery: Value,
+pub(crate) enum ApplicationWriteError {
+    #[error("help accepts argv only")]
+    HelpArgvOnly,
+    #[error("help accepts [help] or [help, command]")]
+    HelpSyntax,
+    #[error("unknown write help command; call [help]")]
+    UnknownHelpCommand,
+    #[error("unknown write command; call write with {{\"argv\":[\"help\"]}}")]
+    UnknownCommand,
+    #[error("collection is required; discover fields with query argv:[fields]")]
+    CollectionRequired,
+    #[error(transparent)]
+    CollectionIdentifier(#[from] GraphqlError),
+    #[error("{collection} is protected and cannot be mutated")]
+    Protected { collection: String },
+    #[error("{message}")]
+    Recovery { message: String, recovery: Value },
+    #[error("unknown option {key:?}; accepted options: {allowed:?}")]
+    UnknownOption {
+        key: String,
+        allowed: &'static [&'static str],
+    },
+    #[error("max_targets is required and must be 1–100")]
+    MaxTargetsRequired,
+    #[error("max_targets must be 1–100")]
+    MaxTargetsOutOfRange,
+    #[error(
+        "update/delete require a nonempty filter object; use query find to choose exact targets"
+    )]
+    FilterRequired,
+    #[error("input must be a nonempty object; discover fields with query argv:[fields]")]
+    InputRequired,
+    #[error("preview returns a digest; omit digest while previewing")]
+    PreviewDigest,
+    #[error("internal field {name:?} cannot be written")]
+    InternalField { name: String },
+    #[error("DefraDB returned no target rows")]
+    NoTargetRows,
+    #[error("write preview row missing physical document ID")]
+    MissingDocId,
+    #[error(
+        "mutation receipt differs from observed target count; transaction rolled back: {response}"
+    )]
+    ReceiptMismatch { response: Value },
 }
-fn recovery(message: impl Into<String>, tool: &str, args: Value) -> anyhow::Error {
-    WriteRecovery {
+
+fn recovery(message: impl Into<String>, tool: &str, args: Value) -> ApplicationWriteError {
+    ApplicationWriteError::Recovery {
         message: message.into(),
         recovery: json!({"tool":tool,"args":args}),
     }
-    .into()
 }
 fn preview_call(args: &WriteParams) -> WriteParams {
     let mut next = args.clone();
@@ -77,6 +121,26 @@ fn preview_call(args: &WriteParams) -> WriteParams {
         next.argv.insert(0, "preview".into());
     }
     next
+}
+
+fn help_response(args: &WriteParams) -> Result<Value, ApplicationWriteError> {
+    if args.collection.is_some() || !args.options.is_empty() {
+        return Err(ApplicationWriteError::HelpArgvOnly);
+    }
+    let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
+    let command = match words.as_slice() {
+        ["help"] => "help",
+        ["help", command] | [command, "--help"] => *command,
+        _ => return Err(ApplicationWriteError::HelpSyntax),
+    };
+    let help = match command {
+        "help" => "Write application documents within exact configured collection grants. Commands: preview create, preview update, preview delete; apply the returned next_call after checking its effect. Call [help, create], [help, update], or [help, delete] for syntax. Configuration uses config; definitions use schema.",
+        "create" => "Preview with {argv:[preview,create],collection:Shipment,options:{input:{reference:S1,status:queued}}}. Inspect effect and apply next_call. Input fields must exist in the native schema. Empty nillable lists become null; JSON scalar arrays remain JSON.",
+        "update" => "Preview with {argv:[preview,update],collection:Shipment,options:{filter:{reference:{_eq:S1}},max_targets:1,input:{status:delivered}}}. A nonempty filter and max_targets 1–100 are required. Inspect targets, then apply next_call. Its digest binds input, schema and observed document versions; changed state requires a fresh preview.",
+        "delete" => "Preview with {argv:[preview,delete],collection:Shipment,options:{filter:{reference:{_eq:S1}},max_targets:1}}. A nonempty filter and max_targets 1–100 are required. Inspect targets, then apply next_call. Zero matches or too many matches are refused. Changed state requires a fresh preview.",
+        _ => return Err(ApplicationWriteError::UnknownHelpCommand),
+    };
+    Ok(json!({"help":help}))
 }
 
 #[derive(Clone)]
@@ -107,120 +171,14 @@ impl WriteTool {
             actor,
         }
     }
-    pub async fn execute(&self, args: &WriteParams) -> Result<Value> {
+    pub async fn execute(&self, args: &WriteParams) -> anyhow::Result<Value> {
         if args.argv.first().is_some_and(|v| v == "help")
             || args.argv.last().is_some_and(|v| v == "--help")
         {
-            ensure!(
-                args.collection.is_none() && args.options.is_empty(),
-                "help accepts argv only"
-            );
-            let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
-            let command = match words.as_slice() {
-                ["help"] => "help",
-                ["help", command] | [command, "--help"] => *command,
-                _ => anyhow::bail!("help accepts [help] or [help, command]"),
-            };
-            let help = match command {
-                "help" => "Write application documents within exact configured collection grants. Commands: preview create, preview update, preview delete; apply the returned next_call after checking its effect. Call [help, create], [help, update], or [help, delete] for syntax. Configuration uses config; definitions use schema.",
-                "create" => "Preview with {argv:[preview,create],collection:Shipment,options:{input:{reference:S1,status:queued}}}. Inspect effect and apply next_call. Input fields must exist in the native schema. Empty nillable lists become null; JSON scalar arrays remain JSON.",
-                "update" => "Preview with {argv:[preview,update],collection:Shipment,options:{filter:{reference:{_eq:S1}},max_targets:1,input:{status:delivered}}}. A nonempty filter and max_targets 1–100 are required. Inspect targets, then apply next_call. Its digest binds input, schema and observed document versions; changed state requires a fresh preview.",
-                "delete" => "Preview with {argv:[preview,delete],collection:Shipment,options:{filter:{reference:{_eq:S1}},max_targets:1}}. A nonempty filter and max_targets 1–100 are required. Inspect targets, then apply next_call. Zero matches or too many matches are refused. Changed state requires a fresh preview.",
-                _ => anyhow::bail!("unknown write help command; call [help]"),
-            };
-            return Ok(json!({"help":help}));
+            return Ok(help_response(args)?);
         }
-        let preview = args.argv.first().is_some_and(|v| v == "preview");
-        let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
-        let operation = match words.as_slice() {
-            ["preview", op @ ("create" | "update" | "delete")] if preview => *op,
-            [op @ ("create" | "update" | "delete")] => *op,
-            _ => anyhow::bail!("unknown write command; call write with {{\"argv\":[\"help\"]}}"),
-        };
-        let collection = args
-            .collection
-            .as_deref()
-            .context("collection is required; discover fields with query argv:[fields]")?;
-        crate::graphql::validate_collection_identifier(collection)?;
-        let managed = crate::migration::DEFAULT_REGISTRY
-            .managed_names()
-            .any(|name| name == collection);
-        let protected =
-            crate::document_config::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection);
-        let credential = gents_protocol::schemas::is_credential_collection(collection);
-        ensure!(
-            !protected,
-            "{collection} is protected and cannot be mutated"
-        );
-        if credential {
-            return Err(recovery(
-                format!("{collection} contains credentials; use its credential/config owner"),
-                "config",
-                json!({"argv":["help"]}),
-            ));
-        }
-        if managed {
-            return Err(recovery(
-                format!("{collection} is Gents-managed; use config or its runtime owner"),
-                "config",
-                json!({"argv":["help"]}),
-            ));
-        }
-        if !self.collections.contains(collection) {
-            return Err(recovery(format!("collection {collection:?} is outside the exact write grant {:?}; configure datastore.write_collections",self.collections),"config",json!({"argv":["help","tools"]})));
-        }
-        let allowed: &[&str] = match operation {
-            "create" => &["input", "digest"],
-            "update" => &["input", "filter", "max_targets", "digest"],
-            "delete" => &["filter", "max_targets", "digest"],
-            _ => unreachable!(),
-        };
-        for key in args.options.keys() {
-            ensure!(
-                allowed.contains(&key.as_str()),
-                "unknown option {key:?}; accepted options: {allowed:?}"
-            );
-        }
-        let limit = if operation == "create" {
-            1
-        } else {
-            args.options
-                .get("max_targets")
-                .and_then(Value::as_u64)
-                .context("max_targets is required and must be 1–100")? as usize
-        };
-        ensure!(limit > 0 && limit <= 100, "max_targets must be 1–100");
-        let filter = if operation == "create" {
-            None
-        } else {
-            Some(args.options.get("filter").filter(|v|v.as_object().is_some_and(|m|!m.is_empty())).context("update/delete require a nonempty filter object; use query find to choose exact targets")?.clone())
-        };
-        let input = if operation == "delete" {
-            None
-        } else {
-            Some(
-                args.options
-                    .get("input")
-                    .and_then(Value::as_object)
-                    .filter(|v| !v.is_empty())
-                    .context(
-                        "input must be a nonempty object; discover fields with query argv:[fields]",
-                    )?
-                    .clone(),
-            )
-        };
-        ensure!(
-            !preview || !args.options.contains_key("digest"),
-            "preview returns a digest; omit digest while previewing"
-        );
-        let plan = WritePlan {
-            operation,
-            preview,
-            collection,
-            limit,
-            filter,
-            input,
-        };
+        let plan = self.plan(args)?;
+        let preview = plan.preview;
         match &self.access {
             ConfigAccess::Local(local) => {
                 let node = local.node();
@@ -259,12 +217,113 @@ impl WriteTool {
             }
         }
     }
+    fn plan<'a>(&self, args: &'a WriteParams) -> Result<WritePlan<'a>, ApplicationWriteError> {
+        let preview = args.argv.first().is_some_and(|v| v == "preview");
+        let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
+        let operation = match words.as_slice() {
+            ["preview", op @ ("create" | "update" | "delete")] if preview => *op,
+            [op @ ("create" | "update" | "delete")] => *op,
+            _ => return Err(ApplicationWriteError::UnknownCommand),
+        };
+        let collection = args
+            .collection
+            .as_deref()
+            .ok_or(ApplicationWriteError::CollectionRequired)?;
+        crate::graphql::validate_collection_identifier(collection)?;
+        let managed = crate::migration::DEFAULT_REGISTRY
+            .managed_names()
+            .any(|name| name == collection);
+        let protected =
+            crate::document_config::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection);
+        let credential = gents_protocol::schemas::is_credential_collection(collection);
+        if protected {
+            return Err(ApplicationWriteError::Protected {
+                collection: collection.to_owned(),
+            });
+        }
+        if credential {
+            return Err(recovery(
+                format!("{collection} contains credentials; use its credential/config owner"),
+                "config",
+                json!({"argv":["help"]}),
+            ));
+        }
+        if managed {
+            return Err(recovery(
+                format!("{collection} is Gents-managed; use config or its runtime owner"),
+                "config",
+                json!({"argv":["help"]}),
+            ));
+        }
+        if !self.collections.contains(collection) {
+            return Err(recovery(format!("collection {collection:?} is outside the exact write grant {:?}; configure datastore.write_collections",self.collections),"config",json!({"argv":["help","tools"]})));
+        }
+        let allowed: &'static [&'static str] = match operation {
+            "create" => &["input", "digest"],
+            "update" => &["input", "filter", "max_targets", "digest"],
+            "delete" => &["filter", "max_targets", "digest"],
+            _ => unreachable!(),
+        };
+        for key in args.options.keys() {
+            if !allowed.contains(&key.as_str()) {
+                return Err(ApplicationWriteError::UnknownOption {
+                    key: key.clone(),
+                    allowed,
+                });
+            }
+        }
+        let limit = if operation == "create" {
+            1
+        } else {
+            args.options
+                .get("max_targets")
+                .and_then(Value::as_u64)
+                .ok_or(ApplicationWriteError::MaxTargetsRequired)? as usize
+        };
+        if !(1..=100).contains(&limit) {
+            return Err(ApplicationWriteError::MaxTargetsOutOfRange);
+        }
+        let filter = if operation == "create" {
+            None
+        } else {
+            Some(
+                args.options
+                    .get("filter")
+                    .filter(|v| v.as_object().is_some_and(|m| !m.is_empty()))
+                    .ok_or(ApplicationWriteError::FilterRequired)?
+                    .clone(),
+            )
+        };
+        let input = if operation == "delete" {
+            None
+        } else {
+            Some(
+                args.options
+                    .get("input")
+                    .and_then(Value::as_object)
+                    .filter(|v| !v.is_empty())
+                    .ok_or(ApplicationWriteError::InputRequired)?
+                    .clone(),
+            )
+        };
+        if preview && args.options.contains_key("digest") {
+            return Err(ApplicationWriteError::PreviewDigest);
+        }
+        Ok(WritePlan {
+            operation,
+            preview,
+            collection,
+            limit,
+            filter,
+            input,
+        })
+    }
     async fn in_transaction(
         &self,
         txn: &ConfigApplyTxn<'_>,
         args: &WriteParams,
         plan: WritePlan<'_>,
-    ) -> Result<Value> {
+    ) -> anyhow::Result<Value> {
         let WritePlan {
             operation,
             preview,
@@ -285,10 +344,9 @@ impl WriteTool {
         if let Some(input) = &mut input {
             for (name, value) in input.iter_mut() {
                 crate::graphql::validate_graphql_name(name)?;
-                ensure!(
-                    !name.starts_with('_'),
-                    "internal field {name:?} cannot be written"
-                );
+                if name.starts_with('_') {
+                    return Err(ApplicationWriteError::InternalField { name: name.clone() }.into());
+                }
                 let field = version
                     .fields
                     .iter()
@@ -327,7 +385,9 @@ impl WriteTool {
             )?
             .replace("{ _docID }", "{ _docID _version { cid height fieldName } }");
             let rows = txn.execute(&query).await?["data"][collection].clone();
-            ensure!(rows.is_array(), "DefraDB returned no target rows");
+            if !rows.is_array() {
+                return Err(ApplicationWriteError::NoTargetRows.into());
+            }
             rows
         };
         let targets = if operation == "create" {
@@ -358,7 +418,7 @@ impl WriteTool {
                 == Some(digest.as_str()),
         };
         if !observation.admitted() {
-            return Err(recovery(format!("selected {targets} targets; expected 1–{limit}. Narrow the filter before previewing"), WRITE_TOOL_NAME, serde_json::to_value(preview_call(args))?));
+            return Err(recovery(format!("selected {targets} targets; expected 1–{limit}. Narrow the filter before previewing"), WRITE_TOOL_NAME, serde_json::to_value(preview_call(args))?).into());
         }
         let mut next = intent.clone();
         next.options.insert("digest".into(), json!(digest));
@@ -372,7 +432,8 @@ impl WriteTool {
                 "missing or stale digest; inspect a fresh preview before applying its next_call",
                 WRITE_TOOL_NAME,
                 serde_json::to_value(preview_call(args))?,
-            ));
+            )
+            .into());
         }
         let target_filter = if operation == "create" {
             String::new()
@@ -384,9 +445,9 @@ impl WriteTool {
                 .map(|row| {
                     row["_docID"]
                         .as_str()
-                        .context("write preview row missing physical document ID")
+                        .ok_or(ApplicationWriteError::MissingDocId)
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>, _>>()?;
             let rendered = crate::graphql::graphql_string_list_literal(ids);
             format!("docIDs: {rendered}")
         };
@@ -411,12 +472,12 @@ impl WriteTool {
         } else {
             native_receipts
         };
-        ensure!(
-            receipts
-                .as_array()
-                .is_some_and(|rows| rows.len() == targets),
-            "mutation receipt differs from observed target count; transaction rolled back: {response}"
-        );
+        if !receipts
+            .as_array()
+            .is_some_and(|rows| rows.len() == targets)
+        {
+            return Err(ApplicationWriteError::ReceiptMismatch { response }.into());
+        }
         Ok(
             json!({"effect":{"operation":operation,"collection":collection,"affected_count":targets,"documents":receipts},"committed":true}),
         )
@@ -439,12 +500,13 @@ impl Tool for WriteTool {
             ))
             .map_err(|e| WriteError(e.to_string())),
             Err(error) => {
-                let next = error
-                    .downcast_ref::<WriteRecovery>()
-                    .map(|v| v.recovery.clone())
-                    .unwrap_or_else(|| json!({"tool":"write","args":{"argv":["help"]}}));
+                let next = match error.downcast_ref::<ApplicationWriteError>() {
+                    Some(ApplicationWriteError::Recovery { recovery, .. }) => recovery.clone(),
+                    _ => json!({"tool":"write","args":{"argv":["help"]}}),
+                };
                 Err(WriteError(
-                    json!({"error":format!("{error:#}"),"recovery":next}).to_string(),
+                    json!({"error":ErrorChain(error.as_ref()).to_string(),"recovery":next})
+                        .to_string(),
                 ))
             }
         }

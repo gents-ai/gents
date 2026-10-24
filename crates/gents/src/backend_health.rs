@@ -5,11 +5,11 @@
 //! operator/bootstrap intent knob, and the prober's only doc write is the
 //! recurring `unknown → healthy` promotion.
 
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::{mpsc, RwLock};
@@ -21,6 +21,26 @@ use crate::backend_registry::{
     UNKNOWN_PROBE_STATUS,
 };
 use crate::oauth_credential::{BearerSource, OAuthRefreshKind};
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackendHealthError {
+    #[error("backend kind has no OAuth provider")]
+    NoOAuthProvider,
+    #[error("resolving OAuth credential for backend {backend_id} provider {provider}")]
+    ResolveCredential {
+        backend_id: String,
+        provider: String,
+        #[source]
+        source: Box<crate::oauth_http::OAuthHttpError>,
+    },
+    #[error("resolving current bearer for backend {backend_id} provider {provider}")]
+    ResolveBearer {
+        backend_id: String,
+        provider: String,
+        #[source]
+        source: crate::oauth_credential::OAuthCredentialError,
+    },
+}
 
 #[derive(Clone, Debug)]
 pub struct BackendProberOptions {
@@ -249,9 +269,9 @@ pub struct OAuthProbeContext<'a> {
 async fn oauth_credential_for_probe(
     context: &OAuthProbeContext<'_>,
     backend: &InferenceBackend,
-) -> anyhow::Result<crate::oauth_credential::OAuthCredential> {
+) -> Result<crate::oauth_credential::OAuthCredential, BackendHealthError> {
     let Some(provider) = backend.provider_kind.oauth_provider() else {
-        anyhow::bail!("backend kind has no OAuth provider");
+        return Err(BackendHealthError::NoOAuthProvider);
     };
     let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client(
         context.node.clone(),
@@ -262,18 +282,20 @@ async fn oauth_credential_for_probe(
         crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
     )
     .await
-    .with_context(|| {
-        format!(
-            "resolving OAuth credential for backend {} provider {provider}",
-            backend.backend_id
-        )
+    .map_err(|source| BackendHealthError::ResolveCredential {
+        backend_id: backend.backend_id.clone(),
+        provider: provider.to_owned(),
+        source: Box::new(source),
     })?;
-    credential.access_token = bearer.current_bearer().await.with_context(|| {
-        format!(
-            "resolving current bearer for backend {} provider {provider}",
-            backend.backend_id
-        )
-    })?;
+    credential.access_token =
+        bearer
+            .current_bearer()
+            .await
+            .map_err(|source| BackendHealthError::ResolveBearer {
+                backend_id: backend.backend_id.clone(),
+                provider: provider.to_owned(),
+                source,
+            })?;
     tracing::debug!(
         backend_id = %backend.backend_id,
         provider,
@@ -416,7 +438,7 @@ async fn probe_selected_backends(
                         Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
                     }
                 }
-                Err(error) => (ProbeEvent::ProbeFail, Some(format!("{error:#}"))),
+                Err(error) => (ProbeEvent::ProbeFail, Some(ErrorChain(&error).to_string())),
             };
             record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
             continue;

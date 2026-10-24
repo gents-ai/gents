@@ -3,6 +3,7 @@ use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
+use super::util::BridgeCommandError;
 
 pub async fn tool_file_changes(
     core: &ClientCore,
@@ -150,13 +151,13 @@ pub async fn retry_request(
     Ok(core.retry_request(&parent).await?.into())
 }
 
-pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
+pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>, BridgeCommandError> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
     let path = std::path::Path::new(raw);
     if !path.is_absolute() || !path.is_dir() {
-        bail!("The chat folder must be an existing folder on this computer.");
+        return Err(BridgeCommandError::ChatFolderNotFound);
     }
     Ok(Some(raw.to_string()))
 }

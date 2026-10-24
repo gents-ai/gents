@@ -40,12 +40,10 @@ async fn wait_ready(child: &mut ChildGuard, artifacts: &Path, phase: &str) -> Re
             return Ok(());
         }
         if let Some(status) = child.0.try_wait()? {
-            anyhow::bail!(
-                "child {phase} exited before readiness ({status}): {}",
-                std::fs::read_to_string(artifacts.join(format!("{phase}.log")))?
-            );
+            let log = std::fs::read_to_string(artifacts.join(format!("{phase}.log")))?;
+            return Err(format!("child {phase} exited before readiness ({status}): {log}").into());
         }
-        ensure!(
+        assert!(
             tokio::time::Instant::now() < deadline,
             "{phase} child readiness timed out; artifacts={}",
             artifacts.display()
@@ -89,7 +87,7 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
     let state = loop {
         let state = evidence(access, owner).await?;
-        ensure!(
+        assert!(
             state["requests"].as_array().unwrap().iter().all(|row| {
                 !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
                     row["lifecycle_state"].as_str(),
@@ -98,8 +96,8 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
             "process recovery request failed: {state}"
         );
         for collection in ["requests", "fires", "outcomes"] {
-            ensure!(
-                state[collection].as_array().context("evidence rows")?.len() <= labels.len(),
+            assert!(
+                state[collection].as_array().ok_or("evidence rows")?.len() <= labels.len(),
                 "duplicate or chained delivery: {state}"
             );
         }
@@ -114,7 +112,7 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
         {
             break state;
         }
-        ensure!(
+        assert!(
             tokio::time::Instant::now() < deadline,
             "process recovery did not converge: {state}"
         );
@@ -133,13 +131,13 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
             .iter()
             .map(|row| string(row, key))
             .collect::<Result<BTreeSet<_>>>()?;
-        ensure!(keys.len() == labels.len(), "duplicate {collection} key");
+        assert!(keys.len() == labels.len(), "duplicate {collection} key");
     }
     let emitted = outcomes
         .iter()
         .map(|row| string(row, "source_handoff_id"))
         .collect::<Result<BTreeSet<_>>>()?;
-    ensure!(
+    assert!(
         emitted == labels.iter().copied().collect(),
         "lost source handoffs: {state}"
     );
@@ -151,15 +149,15 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
             source_doc_id: string(fire, "source_doc_id")?.into(),
         };
         let key = identity.fire_key();
-        ensure!(
+        assert!(
             fire["fire_key"] == key && fire["request_id"] == identity.request_id(),
             "noncanonical admitted identity: {fire}"
         );
-        ensure!(
+        assert!(
             fire["queued_serial"] == true && fire["emit_outcome"] == true,
             "wrong durable fire policy: {fire}"
         );
-        ensure!(
+        assert!(
             requests
                 .iter()
                 .filter(|row| row["request_id"] == fire["request_id"])
@@ -170,8 +168,8 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
         let output = outcomes
             .iter()
             .find(|row| row["fire_key"] == key)
-            .context("missing outcome")?;
-        ensure!(
+            .ok_or("missing outcome")?;
+        assert!(
             output["handoff_id"] == identity.outcome_id()
                 && output["request_id"] == fire["request_id"]
                 && output["source_doc_id"] == fire["source_doc_id"]
@@ -182,21 +180,21 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
     let arrivals = access.execute("{ _documentArrivals(collection: \"AgentRequest\", after: \"0\", limit: 128) { entries { cursor docID } } }").await?;
     let order = arrivals["data"]["_documentArrivals"]["entries"]
         .as_array()
-        .context("request arrival journal")?
+        .ok_or("request arrival journal")?
         .iter()
         .map(|entry| {
             let request = requests
                 .iter()
                 .find(|row| row["_docID"] == entry["docID"])
-                .context("unknown request arrival")?;
+                .ok_or("unknown request arrival")?;
             let outcome = outcomes
                 .iter()
                 .find(|row| row["request_id"] == request["request_id"])
-                .context("request outcome missing")?;
+                .ok_or("request outcome missing")?;
             string(outcome, "source_handoff_id")
         })
         .collect::<Result<Vec<_>>>()?;
-    ensure!(
+    assert!(
         order == labels,
         "queued serial receiving-node order changed: {order:?}"
     );
@@ -206,7 +204,7 @@ async fn wait_deliveries(access: &ConfigAccess, owner: &str, labels: &[&str]) ->
 fn retained_keys(state: &Value) -> Result<BTreeMap<String, String>> {
     state["outcomes"]
         .as_array()
-        .context("outcomes")?
+        .ok_or("outcomes")?
         .iter()
         .map(|row| {
             Ok((
@@ -220,7 +218,7 @@ fn retained_keys(state: &Value) -> Result<BTreeMap<String, String>> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "real inference/process crash: GENTS_TRIGGER_DELIVERY_LIVE=1 and both delivery endpoints"]
 async fn real_process_crashes_recover_disabled_and_offline_arrivals_exactly_once() -> Result<()> {
-    ensure!(
+    assert!(
         std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
         "explicit live opt-in required"
     );
@@ -232,7 +230,7 @@ async fn real_process_crashes_recover_disabled_and_offline_arrivals_exactly_once
         killed.push(child.0.id());
         child.0.kill()?;
         let status = child.0.wait()?;
-        ensure!(
+        assert!(
             !status.success(),
             "crash worker unexpectedly exited successfully"
         );
@@ -243,14 +241,14 @@ async fn real_process_crashes_recover_disabled_and_offline_arrivals_exactly_once
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
         loop {
             if let Some(status) = child.0.try_wait()? {
-                ensure!(
+                assert!(
                     status.success(),
                     "restart child {phase} failed: {}",
                     std::fs::read_to_string(artifacts.join(format!("{phase}.log")))?
                 );
                 break;
             }
-            ensure!(
+            assert!(
                 tokio::time::Instant::now() < deadline,
                 "restart child {phase} did not exit"
             );
@@ -259,10 +257,10 @@ async fn real_process_crashes_recover_disabled_and_offline_arrivals_exactly_once
     }
     let final_state: Value =
         serde_json::from_slice(&std::fs::read(artifacts.join("audit.evidence.json"))?)?;
-    ensure!(
+    assert!(
         final_state["outcomes"]
             .as_array()
-            .context("final outcomes")?
+            .ok_or("final outcomes")?
             .len()
             == 4,
         "final recovery outcome count"
@@ -283,12 +281,11 @@ async fn delivery_crash_child() -> Result<()> {
     let Ok(phase) = std::env::var(CHILD_PHASE) else {
         return Ok(());
     };
-    ensure!(
+    assert!(
         std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
         "explicit live opt-in required"
     );
-    let artifacts =
-        PathBuf::from(std::env::var_os(CHILD_ARTIFACTS).context("child artifact path")?);
+    let artifacts = PathBuf::from(std::env::var_os(CHILD_ARTIFACTS).ok_or("child artifact path")?);
     let home_path = artifacts.join("home");
     let home = if phase == "seed" {
         gents::eval::runner::embedded::EmbeddedHome::create_retained(&home_path).await?
@@ -314,7 +311,7 @@ async fn delivery_crash_child() -> Result<()> {
     }
     if phase == "offline" {
         let prior = evidence(&access, &owner).await?;
-        ensure!(
+        assert!(
             prior["outcomes"].as_array().unwrap().len() == 3,
             "terminal outcomes lost after SIGKILL: {prior}"
         );
@@ -325,7 +322,7 @@ async fn delivery_crash_child() -> Result<()> {
         assignment(&access, "disabled-0").await?;
         assignment(&access, "disabled-1").await?;
         let state = evidence(&access, &owner).await?;
-        ensure!(
+        assert!(
             state["fires"].as_array().unwrap().is_empty(),
             "disabled trigger admitted work"
         );
@@ -337,7 +334,7 @@ async fn delivery_crash_child() -> Result<()> {
         std::future::pending::<()>().await;
     } else if phase == "recover" {
         let state = evidence(&access, &owner).await?;
-        ensure!(
+        assert!(
             state["fires"].as_array().unwrap().is_empty(),
             "restart fired disabled work"
         );
@@ -353,7 +350,7 @@ async fn delivery_crash_child() -> Result<()> {
         ready(&artifacts, &phase)?;
         std::future::pending::<()>().await;
     } else {
-        ensure!(
+        assert!(
             matches!(phase.as_str(), "offline" | "audit"),
             "unknown child phase"
         );
@@ -365,20 +362,20 @@ async fn delivery_crash_child() -> Result<()> {
         .await?;
         let prior: Value =
             serde_json::from_slice(&std::fs::read(artifacts.join("recover.evidence.json"))?)?;
-        ensure!(
+        assert!(
             state["owner_did"] == prior["owner_did"],
             "restart changed node identity"
         );
         let current = retained_keys(&state)?;
         for (handoff, key) in retained_keys(&prior)? {
-            ensure!(
+            assert!(
                 current.get(&handoff) == Some(&key),
                 "restart changed durable fire identity"
             );
         }
         for request in state["requests"].as_array().unwrap() {
             let answer = terminal_assistant_answer(&db.node, string(request, "request_id")?).await;
-            ensure!(
+            assert!(
                 answer.contains("WORK"),
                 "recovered request lacks real provider answer: {request}"
             );

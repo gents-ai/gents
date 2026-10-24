@@ -1,13 +1,197 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
-use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use flate2::{write::ZlibEncoder, Compression, Decompress, FlushDecompress, Status};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::num::TryFromIntError;
+
+/// Failures decoding or encoding rendered-request capture records. Display
+/// text reaches the trace reader and tests; keep it stable.
+#[derive(Debug, thiserror::Error)]
+pub enum EncodingError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    CanonicalJson(#[from] gents_loop::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    IntConversion(#[from] TryFromIntError),
+    #[error("unsupported compressed capture encoding")]
+    UnsupportedCompression,
+    #[error("compressed capture exceeds decoded byte bound")]
+    CompressedDecodedBound,
+    #[error("compressed capture exceeds encoded byte bound")]
+    CompressedEncodedBound,
+    #[error("decoding compressed capture base64")]
+    CompressedBase64(#[source] base64::DecodeError),
+    #[error("decompressing capture record")]
+    Decompress(#[source] flate2::DecompressError),
+    #[error("compressed capture is incomplete or exceeds its byte bound")]
+    CompressedIncomplete,
+    #[error("compressed capture length mismatch")]
+    CompressedLength,
+    #[error("compressed capture has trailing bytes")]
+    CompressedTrailingBytes,
+    #[error("compressed capture is not UTF-8")]
+    CompressedNotUtf8(#[source] std::string::FromUtf8Error),
+    #[cfg(test)]
+    #[error("new full capture encoding did not decode as full")]
+    FullNotDecoded,
+    #[cfg(test)]
+    #[error("new full capture encoding did not preserve the incoming value")]
+    FullNotPreserved,
+    #[error("capture manifest exceeds maximum height")]
+    ManifestHeight,
+    #[error("capture manifest exceeds leaf bound")]
+    ManifestLeafBound,
+    #[error("decoding shared manifest node")]
+    ManifestNode(#[source] serde_json::Error),
+    #[error("invalid shared manifest fanout")]
+    ManifestFanout,
+    #[error("capture manifest block field commit changed")]
+    BlockCommitChanged,
+    #[error("capture manifest block length mismatch")]
+    BlockLengthMismatch,
+    #[error("capture manifest block content key mismatch")]
+    BlockContentKeyMismatch,
+    #[error("capture manifest block length exceeds platform size")]
+    BlockLengthPlatform(#[source] TryFromIntError),
+    #[error("capture manifest exhausted resolution fuel")]
+    ManifestFuelExhausted,
+    #[error("capture manifest node is missing")]
+    ManifestNodeMissing,
+    #[error("capture manifest leaf count mismatch")]
+    ManifestLeafCount,
+    #[error("decoding manifest-reassembled capture JSON")]
+    ManifestReassembly(#[source] serde_json::Error),
+    #[cfg(test)]
+    #[error("capture manifest names {blocks} blocks, above the {MAX_MANIFEST_BLOCKS} the reader resolves")]
+    ManifestTooManyBlocks { blocks: usize },
+    #[cfg(test)]
+    #[error("capture record is not a block manifest")]
+    NotManifest,
+    #[error("decoding request envelope")]
+    RequestEnvelope(#[source] serde_json::Error),
+    #[error("decoding provenance envelope")]
+    ProvenanceEnvelope(#[source] serde_json::Error),
+    #[error("encoding capture container")]
+    EncodeContainer(#[source] serde_json::Error),
+    #[error("decoding capture container")]
+    CaptureContainer(#[source] serde_json::Error),
+    #[error("unsupported capture container version {version}")]
+    UnsupportedContainerVersion { version: u32 },
+    #[error("legacy provenance payload lives in provenance_json")]
+    LegacyProvenance,
+    #[error("capture version does not match manifest format")]
+    ManifestVersionMismatch,
+    #[error("unsupported rendered-request capture version {version}")]
+    UnsupportedCaptureVersion { version: u32 },
+    #[error("capture delta depth overflow")]
+    DeltaDepthOverflow,
+    #[error("decoding lossless envelope")]
+    LosslessEnvelope(#[source] serde_json::Error),
+    #[error("compressed capture must contain an uncompressed lossless record")]
+    CompressedNotLossless,
+    #[error("unsupported lossless JSON version {version}")]
+    UnsupportedLosslessVersion { version: u32 },
+    #[error("full capture envelope lacks value")]
+    FullLacksValue,
+    #[error("decoding full capture value")]
+    FullValue(#[source] serde_json::Error),
+    #[error("capture delta lacks base witness")]
+    DeltaLacksBase,
+    #[error("capture delta lacks changed fields")]
+    DeltaLacksChanged,
+    #[error("capture delta lacks removed fields")]
+    DeltaLacksRemoved,
+    #[error("capture tree lacks root")]
+    TreeLacksRoot,
+    #[error("capture manifest lacks block references")]
+    ManifestLacksBlocks,
+    #[error("decoding capture manifest block references")]
+    ManifestBlockReferences(#[source] serde_json::Error),
+    #[error("unsupported lossless JSON payload kind {kind}")]
+    UnsupportedPayloadKind { kind: String },
+    #[error("decoding capture delta field map")]
+    DeltaFieldMap(#[source] serde_json::Error),
+    #[error("decoding capture delta field {key}")]
+    DeltaField {
+        key: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("decoding full delta field value {key}")]
+    FullDeltaFieldValue {
+        key: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("full delta field lacks value")]
+    FullDeltaFieldLacksValue,
+    #[error("splice delta field lacks prefix_bytes")]
+    SpliceLacksPrefix,
+    #[error("splice delta field lacks suffix_bytes")]
+    SpliceLacksSuffix,
+    #[error("splice delta field lacks middle")]
+    SpliceLacksMiddle,
+    #[error("unsupported capture field delta kind {kind}")]
+    UnsupportedFieldDelta { kind: String },
+    #[error("decoding legacy capture JSON")]
+    LegacyCapture(#[source] serde_json::Error),
+    #[error("capture delta requires base resolution")]
+    DeltaRequiresBase,
+    #[error("capture manifest requires block resolution")]
+    ManifestRequiresBlocks,
+    #[error("capture manifest resolution requires a block source")]
+    ManifestRequiresBlockSource,
+    #[error("capture delta chain exceeds maximum depth")]
+    DeltaChainTooDeep,
+    #[error("capture delta chain contains a cycle")]
+    DeltaChainCycle,
+    #[error("capture delta chain exceeds maximum depth or contains a cycle")]
+    DeltaBaseNotPreloaded,
+    #[error("capture delta base field commit changed")]
+    DeltaBaseCommitChanged,
+    #[error("v2 delta base is not a v2 capture")]
+    V2BaseNotV2,
+    #[error("lossless delta base is not an object")]
+    DeltaBaseNotObject,
+    #[error("lossless splice prefix exceeds platform size")]
+    SplicePrefixPlatform(#[source] TryFromIntError),
+    #[error("lossless splice suffix exceeds platform size")]
+    SpliceSuffixPlatform(#[source] TryFromIntError),
+    #[error("splice base field is missing")]
+    SpliceBaseMissing,
+    #[error("lossless splice bounds overflow")]
+    SpliceBoundsOverflow,
+    #[error("invalid lossless splice bounds")]
+    InvalidSpliceBounds,
+    #[error("lossless splice capacity overflow")]
+    SpliceCapacityOverflow,
+    #[error("decoding spliced JSON field")]
+    SplicedField(#[source] serde_json::Error),
+    #[error("shared JSON block was not read")]
+    SharedBlockNotRead,
+    #[error("shared JSON block content key mismatch")]
+    SharedBlockKeyMismatch,
+    #[error("capture manifest block was not read")]
+    ManifestBlockNotRead,
+    #[error("capture manifest block {doc_id} was read under another content key")]
+    BlockReadUnderOtherKey { doc_id: String },
+    #[cfg(test)]
+    #[error("block document is missing")]
+    TestBlockMissing,
+    #[cfg(test)]
+    #[error("missing base")]
+    TestBaseMissing,
+}
+
+type Result<T, E = EncodingError> = std::result::Result<T, E>;
 
 pub(crate) const LOSSLESS_JSON_VERSION: u32 = 1;
 const CAPTURE_CONTAINER_VERSION: u32 = 1;
@@ -48,39 +232,33 @@ fn compress_record(stored: &str) -> Result<String> {
 
 fn decompress_record(stored: &str) -> Result<String> {
     let envelope: CompressedEnvelope = serde_json::from_str(stored)?;
-    anyhow::ensure!(
-        envelope.gents_lossless_json == COMPRESSED_JSON_VERSION && envelope.kind == "zlib",
-        "unsupported compressed capture encoding"
-    );
-    anyhow::ensure!(
-        envelope.uncompressed_bytes <= MAX_COMPRESSED_RECORD_BYTES,
-        "compressed capture exceeds decoded byte bound"
-    );
-    anyhow::ensure!(
-        envelope.data.len() <= MAX_COMPRESSED_RECORD_BYTES.div_ceil(3) * 4,
-        "compressed capture exceeds encoded byte bound"
-    );
+    if envelope.gents_lossless_json != COMPRESSED_JSON_VERSION || envelope.kind != "zlib" {
+        return Err(EncodingError::UnsupportedCompression);
+    }
+    if envelope.uncompressed_bytes > MAX_COMPRESSED_RECORD_BYTES {
+        return Err(EncodingError::CompressedDecodedBound);
+    }
+    if envelope.data.len() > MAX_COMPRESSED_RECORD_BYTES.div_ceil(3) * 4 {
+        return Err(EncodingError::CompressedEncodedBound);
+    }
     let bytes = STANDARD
         .decode(&envelope.data)
-        .context("decoding compressed capture base64")?;
+        .map_err(EncodingError::CompressedBase64)?;
     let mut decoder = Decompress::new(true);
     let mut decoded = Vec::with_capacity(envelope.uncompressed_bytes + 1);
     let status = decoder
         .decompress_vec(&bytes, &mut decoded, FlushDecompress::Finish)
-        .context("decompressing capture record")?;
-    anyhow::ensure!(
-        status == Status::StreamEnd,
-        "compressed capture is incomplete or exceeds its byte bound"
-    );
-    anyhow::ensure!(
-        decoded.len() == envelope.uncompressed_bytes,
-        "compressed capture length mismatch"
-    );
-    anyhow::ensure!(
-        decoder.total_in() == bytes.len() as u64,
-        "compressed capture has trailing bytes"
-    );
-    String::from_utf8(decoded).context("compressed capture is not UTF-8")
+        .map_err(EncodingError::Decompress)?;
+    if status != Status::StreamEnd {
+        return Err(EncodingError::CompressedIncomplete);
+    }
+    if decoded.len() != envelope.uncompressed_bytes {
+        return Err(EncodingError::CompressedLength);
+    }
+    if decoder.total_in() != bytes.len() as u64 {
+        return Err(EncodingError::CompressedTrailingBytes);
+    }
+    String::from_utf8(decoded).map_err(EncodingError::CompressedNotUtf8)
 }
 
 const CHUNK_MIN_SIZE: usize = 2 * 1024;
@@ -241,12 +419,11 @@ pub(crate) fn encode_full(value: &Value) -> Result<EncodedJson> {
         value: value.clone(),
     })?;
     let DecodedRecord::Full(decoded) = decode_record(&stored)? else {
-        anyhow::bail!("new full capture encoding did not decode as full")
+        return Err(EncodingError::FullNotDecoded);
     };
-    anyhow::ensure!(
-        decoded == *value,
-        "new full capture encoding did not preserve the incoming value"
-    );
+    if decoded != *value {
+        return Err(EncodingError::FullNotPreserved);
+    }
     Ok(EncodedJson { stored })
 }
 
@@ -294,10 +471,12 @@ pub(crate) fn encode_against(
 }
 
 fn encode_envelope(payload: Payload) -> Result<String> {
-    super::canonical_json_string(&serde_json::to_value(Envelope {
-        gents_lossless_json: LOSSLESS_JSON_VERSION,
-        payload,
-    })?)
+    Ok(super::canonical_json_string(&serde_json::to_value(
+        Envelope {
+            gents_lossless_json: LOSSLESS_JSON_VERSION,
+            payload,
+        },
+    )?)?)
 }
 
 pub(crate) struct ChunkedBlock {
@@ -328,7 +507,7 @@ const PER_CALL_TRAILING_FIELDS: [&str; 5] = [
 
 pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     let Value::Object(map) = super::canonical_json(value) else {
-        return super::canonical_json_string(value);
+        return Ok(super::canonical_json_string(value)?);
     };
     let (trailing, rest): (Vec<_>, Vec<_>) = map
         .iter()
@@ -476,14 +655,12 @@ pub(crate) struct ManifestTree {
 
 impl ManifestTree {
     pub(crate) fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.height <= MAX_MANIFEST_HEIGHT,
-            "capture manifest exceeds maximum height"
-        );
-        anyhow::ensure!(
-            (1..=MAX_MANIFEST_BLOCKS).contains(&self.leaves),
-            "capture manifest exceeds leaf bound"
-        );
+        if self.height > MAX_MANIFEST_HEIGHT {
+            return Err(EncodingError::ManifestHeight);
+        }
+        if !(1..=MAX_MANIFEST_BLOCKS).contains(&self.leaves) {
+            return Err(EncodingError::ManifestLeafBound);
+        }
         Ok(())
     }
 }
@@ -511,11 +688,10 @@ pub(crate) fn manifest_groups(entries: &[ManifestEntry]) -> Vec<&[ManifestEntry]
 
 pub(crate) fn manifest_children(bytes: &[u8]) -> Result<Vec<ManifestEntry>> {
     let entries: Vec<ManifestEntry> =
-        serde_json::from_slice(bytes).context("decoding shared manifest node")?;
-    anyhow::ensure!(
-        (1..=MANIFEST_FANOUT).contains(&entries.len()),
-        "invalid shared manifest fanout"
-    );
+        serde_json::from_slice(bytes).map_err(EncodingError::ManifestNode)?;
+    if !(1..=MANIFEST_FANOUT).contains(&entries.len()) {
+        return Err(EncodingError::ManifestFanout);
+    }
     Ok(entries)
 }
 
@@ -524,18 +700,15 @@ pub(crate) fn verify_manifest_block(
     bytes: &[u8],
     actual_commit: &str,
 ) -> Result<()> {
-    anyhow::ensure!(
-        actual_commit == entry.field_commit_cid,
-        "capture manifest block field commit changed"
-    );
-    anyhow::ensure!(
-        u64::try_from(bytes.len())? == entry.byte_len,
-        "capture manifest block length mismatch"
-    );
-    anyhow::ensure!(
-        block_content_key(bytes) == entry.content_key,
-        "capture manifest block content key mismatch"
-    );
+    if actual_commit != entry.field_commit_cid {
+        return Err(EncodingError::BlockCommitChanged);
+    }
+    if u64::try_from(bytes.len())? != entry.byte_len {
+        return Err(EncodingError::BlockLengthMismatch);
+    }
+    if block_content_key(bytes) != entry.content_key {
+        return Err(EncodingError::BlockContentKeyMismatch);
+    }
     Ok(())
 }
 
@@ -556,16 +729,17 @@ where
     let mut leaves = 0;
     let mut bytes = Vec::new();
     while let Some((entry, height)) = pending.pop() {
-        anyhow::ensure!(fuel > 0, "capture manifest exhausted resolution fuel");
+        if fuel == 0 {
+            return Err(EncodingError::ManifestFuelExhausted);
+        }
         fuel -= 1;
         let (body, commit) = fetch(&entry)?;
         verify_manifest_block(&entry, &body, &commit)?;
         if height == 0 {
             leaves += 1;
-            anyhow::ensure!(
-                leaves <= tree.leaves,
-                "capture manifest leaf count mismatch"
-            );
+            if leaves > tree.leaves {
+                return Err(EncodingError::ManifestLeafCount);
+            }
             bytes.extend_from_slice(&body);
         } else {
             pending.extend(
@@ -576,22 +750,21 @@ where
             );
         }
     }
-    anyhow::ensure!(
-        leaves == tree.leaves,
-        "capture manifest leaf count mismatch"
-    );
-    serde_json::from_slice(&bytes).context("decoding manifest-reassembled capture JSON")
+    if leaves != tree.leaves {
+        return Err(EncodingError::ManifestLeafCount);
+    }
+    serde_json::from_slice(&bytes).map_err(EncodingError::ManifestReassembly)
 }
 
 pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
 
 #[cfg(test)]
 pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
-    anyhow::ensure!(
-        blocks.len() <= MAX_MANIFEST_BLOCKS,
-        "capture manifest names {} blocks, above the {MAX_MANIFEST_BLOCKS} the reader resolves",
-        blocks.len()
-    );
+    if blocks.len() > MAX_MANIFEST_BLOCKS {
+        return Err(EncodingError::ManifestTooManyBlocks {
+            blocks: blocks.len(),
+        });
+    }
     Ok(EncodedJson {
         stored: encode_envelope(Payload::Manifest {
             blocks: blocks.to_vec(),
@@ -610,7 +783,7 @@ where
 {
     let blocks = match decode_record(stored)? {
         DecodedRecord::Manifest { blocks } => blocks,
-        _ => anyhow::bail!("capture record is not a block manifest"),
+        _ => return Err(EncodingError::NotManifest),
     };
     resolve_manifest_blocks(fuel, &blocks, fetch_block)
 }
@@ -625,49 +798,53 @@ where
 {
     let mut remaining = fuel;
     let mut assembled = Vec::new();
-    anyhow::ensure!(remaining > 0, "capture manifest exhausted resolution fuel");
+    if remaining == 0 {
+        return Err(EncodingError::ManifestFuelExhausted);
+    }
     remaining -= 1;
     for entry in blocks {
-        anyhow::ensure!(remaining > 0, "capture manifest exhausted resolution fuel");
+        if remaining == 0 {
+            return Err(EncodingError::ManifestFuelExhausted);
+        }
         remaining -= 1;
         let (bytes, actual_commit) = fetch_block(entry)?;
-        anyhow::ensure!(
-            actual_commit == entry.field_commit_cid,
-            "capture manifest block field commit changed"
-        );
-        let expected_len = usize::try_from(entry.byte_len)
-            .context("capture manifest block length exceeds platform size")?;
-        anyhow::ensure!(
-            bytes.len() == expected_len,
-            "capture manifest block length mismatch"
-        );
+        if actual_commit != entry.field_commit_cid {
+            return Err(EncodingError::BlockCommitChanged);
+        }
+        let expected_len =
+            usize::try_from(entry.byte_len).map_err(EncodingError::BlockLengthPlatform)?;
+        if bytes.len() != expected_len {
+            return Err(EncodingError::BlockLengthMismatch);
+        }
         assembled.extend_from_slice(&bytes);
     }
-    anyhow::ensure!(remaining > 0, "capture manifest exhausted resolution fuel");
-    serde_json::from_slice(&assembled).context("decoding manifest-reassembled capture JSON")
+    if remaining == 0 {
+        return Err(EncodingError::ManifestFuelExhausted);
+    }
+    serde_json::from_slice(&assembled).map_err(EncodingError::ManifestReassembly)
 }
 
 pub(crate) fn encode_container(request: &EncodedJson, provenance: &EncodedJson) -> Result<String> {
     let request_body = RawValue::from_string(compress_record(&request.stored)?)
-        .context("decoding request envelope")?;
+        .map_err(EncodingError::RequestEnvelope)?;
     let provenance_payload = RawValue::from_string(compress_record(&provenance.stored)?)
-        .context("decoding provenance envelope")?;
+        .map_err(EncodingError::ProvenanceEnvelope)?;
     serde_json::to_string(&RawCaptureContainer {
         gents_capture_json: CAPTURE_CONTAINER_VERSION,
         request_body: &request_body,
         provenance_payload: &provenance_payload,
     })
-    .context("encoding capture container")
+    .map_err(EncodingError::EncodeContainer)
 }
 
 fn select_container_record(stored: &str, kind: CapturePayloadKind) -> Result<String> {
     let container: BorrowedCaptureContainer<'_> =
-        serde_json::from_str(stored).context("decoding capture container")?;
-    anyhow::ensure!(
-        container.gents_capture_json == CAPTURE_CONTAINER_VERSION,
-        "unsupported capture container version {}",
-        container.gents_capture_json
-    );
+        serde_json::from_str(stored).map_err(EncodingError::CaptureContainer)?;
+    if container.gents_capture_json != CAPTURE_CONTAINER_VERSION {
+        return Err(EncodingError::UnsupportedContainerVersion {
+            version: container.gents_capture_json,
+        });
+    }
     let envelope = match kind {
         CapturePayloadKind::RequestBody => container.request_body,
         CapturePayloadKind::ProvenancePayload => container.provenance_payload,
@@ -682,20 +859,19 @@ pub(crate) fn decode_capture_record(
 ) -> Result<DecodedRecord> {
     match capture_version {
         1 if kind == CapturePayloadKind::RequestBody => decode_versioned_record(1, stored),
-        1 => anyhow::bail!("legacy provenance payload lives in provenance_json"),
+        1 => Err(EncodingError::LegacyProvenance),
         2 => decode_record(&select_container_record(stored, kind)?),
         3 | 4 => {
             let record = decode_record(&select_container_record(stored, kind)?)?;
-            anyhow::ensure!(
-                matches!(
-                    (&record, capture_version),
-                    (DecodedRecord::Manifest { .. }, 3) | (DecodedRecord::Tree(_), 4)
-                ),
-                "capture version does not match manifest format"
-            );
+            if !matches!(
+                (&record, capture_version),
+                (DecodedRecord::Manifest { .. }, 3) | (DecodedRecord::Tree(_), 4)
+            ) {
+                return Err(EncodingError::ManifestVersionMismatch);
+            }
             Ok(record)
         }
-        other => anyhow::bail!("unsupported rendered-request capture version {other}"),
+        version => Err(EncodingError::UnsupportedCaptureVersion { version }),
     }
 }
 
@@ -713,7 +889,7 @@ pub(crate) fn capture_record_depth(
             DecodedRecord::Delta { base, .. } => base
                 .depth
                 .checked_add(1)
-                .context("capture delta depth overflow")?,
+                .ok_or(EncodingError::DeltaDepthOverflow)?,
         },
     )
 }
@@ -778,83 +954,86 @@ pub(crate) enum DecodedRecord {
 
 pub(crate) fn decode_record(stored: &str) -> Result<DecodedRecord> {
     let envelope: BorrowedEnvelope<'_> =
-        serde_json::from_str(stored).context("decoding lossless envelope")?;
+        serde_json::from_str(stored).map_err(EncodingError::LosslessEnvelope)?;
     if envelope.gents_lossless_json == COMPRESSED_JSON_VERSION {
         let decoded = decompress_record(stored)?;
         let inner: BorrowedEnvelope<'_> = serde_json::from_str(&decoded)?;
-        anyhow::ensure!(
-            inner.gents_lossless_json == LOSSLESS_JSON_VERSION,
-            "compressed capture must contain an uncompressed lossless record"
-        );
+        if inner.gents_lossless_json != LOSSLESS_JSON_VERSION {
+            return Err(EncodingError::CompressedNotLossless);
+        }
         return decode_record(&decoded);
     }
-    anyhow::ensure!(
-        envelope.gents_lossless_json == LOSSLESS_JSON_VERSION,
-        "unsupported lossless JSON version {}",
-        envelope.gents_lossless_json
-    );
+    if envelope.gents_lossless_json != LOSSLESS_JSON_VERSION {
+        return Err(EncodingError::UnsupportedLosslessVersion {
+            version: envelope.gents_lossless_json,
+        });
+    }
     match envelope.kind.as_str() {
         "full" => Ok(DecodedRecord::Full(
-            serde_json::from_str(
-                envelope
-                    .value
-                    .context("full capture envelope lacks value")?
-                    .get(),
-            )
-            .context("decoding full capture value")?,
+            serde_json::from_str(envelope.value.ok_or(EncodingError::FullLacksValue)?.get())
+                .map_err(EncodingError::FullValue)?,
         )),
         "object_delta" => Ok(DecodedRecord::Delta {
-            base: envelope.base.context("capture delta lacks base witness")?,
+            base: envelope.base.ok_or(EncodingError::DeltaLacksBase)?,
             changed: decode_changed_fields(
                 envelope
                     .changed
-                    .context("capture delta lacks changed fields")?
+                    .ok_or(EncodingError::DeltaLacksChanged)?
                     .get(),
             )?,
-            removed: envelope
-                .removed
-                .context("capture delta lacks removed fields")?,
+            removed: envelope.removed.ok_or(EncodingError::DeltaLacksRemoved)?,
         }),
         "tree" => Ok(DecodedRecord::Tree(
-            envelope.tree.context("capture tree lacks root")?,
+            envelope.tree.ok_or(EncodingError::TreeLacksRoot)?,
         )),
         "manifest" => Ok(DecodedRecord::Manifest {
             blocks: serde_json::from_str(
                 envelope
                     .blocks
-                    .context("capture manifest lacks block references")?
+                    .ok_or(EncodingError::ManifestLacksBlocks)?
                     .get(),
             )
-            .context("decoding capture manifest block references")?,
+            .map_err(EncodingError::ManifestBlockReferences)?,
         }),
-        other => anyhow::bail!("unsupported lossless JSON payload kind {other}"),
+        kind => Err(EncodingError::UnsupportedPayloadKind {
+            kind: kind.to_owned(),
+        }),
     }
 }
 
 fn decode_changed_fields(stored: &str) -> Result<BTreeMap<String, FieldDelta>> {
     let raw: BTreeMap<String, Box<RawValue>> =
-        serde_json::from_str(stored).context("decoding capture delta field map")?;
+        serde_json::from_str(stored).map_err(EncodingError::DeltaFieldMap)?;
     raw.into_iter()
-        .map(|(key, raw)| {
-            let field: BorrowedFieldDelta = serde_json::from_str(raw.get())
-                .with_context(|| format!("decoding capture delta field {key}"))?;
+        .map(|(key, raw)| -> Result<(String, FieldDelta)> {
+            let field: BorrowedFieldDelta =
+                serde_json::from_str(raw.get()).map_err(|source| EncodingError::DeltaField {
+                    key: key.clone(),
+                    source,
+                })?;
             let delta = match field.kind.as_str() {
                 "full" => FieldDelta::Full {
                     value: serde_json::from_str(
-                        field.value.context("full delta field lacks value")?.get(),
+                        field
+                            .value
+                            .ok_or(EncodingError::FullDeltaFieldLacksValue)?
+                            .get(),
                     )
-                    .with_context(|| format!("decoding full delta field value {key}"))?,
+                    .map_err(|source| EncodingError::FullDeltaFieldValue {
+                        key: key.clone(),
+                        source,
+                    })?,
                 },
                 "splice" => FieldDelta::Splice {
-                    prefix_bytes: field
-                        .prefix_bytes
-                        .context("splice delta field lacks prefix_bytes")?,
-                    suffix_bytes: field
-                        .suffix_bytes
-                        .context("splice delta field lacks suffix_bytes")?,
-                    middle: field.middle.context("splice delta field lacks middle")?,
+                    prefix_bytes: field.prefix_bytes.ok_or(EncodingError::SpliceLacksPrefix)?,
+                    suffix_bytes: field.suffix_bytes.ok_or(EncodingError::SpliceLacksSuffix)?,
+                    middle: field.middle.ok_or(EncodingError::SpliceLacksMiddle)?,
                 },
-                other => anyhow::bail!("unsupported capture field delta kind {other}"),
+                kind => {
+                    return Err(EncodingError::UnsupportedFieldDelta {
+                        kind: kind.to_owned(),
+                    })
+                }
             };
             Ok((key, delta))
         })
@@ -865,18 +1044,18 @@ pub(crate) fn decode_versioned_record(capture_version: u32, stored: &str) -> Res
     match capture_version {
         1 => serde_json::from_str(stored)
             .map(DecodedRecord::Legacy)
-            .context("decoding legacy capture JSON"),
+            .map_err(EncodingError::LegacyCapture),
         2..=4 => decode_record(stored),
-        other => anyhow::bail!("unsupported rendered-request capture version {other}"),
+        version => Err(EncodingError::UnsupportedCaptureVersion { version }),
     }
 }
 
 pub(crate) fn decode_inline_value(capture_version: u32, stored: &str) -> Result<Value> {
     match decode_versioned_record(capture_version, stored)? {
         DecodedRecord::Legacy(value) | DecodedRecord::Full(value) => Ok(value),
-        DecodedRecord::Delta { .. } => anyhow::bail!("capture delta requires base resolution"),
+        DecodedRecord::Delta { .. } => Err(EncodingError::DeltaRequiresBase),
         DecodedRecord::Manifest { .. } | DecodedRecord::Tree(_) => {
-            anyhow::bail!("capture manifest requires block resolution")
+            Err(EncodingError::ManifestRequiresBlocks)
         }
     }
 }
@@ -905,26 +1084,23 @@ where
         match decode_versioned_record(version, &encoded)? {
             DecodedRecord::Legacy(value) | DecodedRecord::Full(value) => break value,
             DecodedRecord::Manifest { .. } | DecodedRecord::Tree(_) => {
-                anyhow::bail!("capture manifest resolution requires a block source")
+                return Err(EncodingError::ManifestRequiresBlockSource)
             }
             DecodedRecord::Delta {
                 base,
                 changed,
                 removed,
             } => {
-                anyhow::ensure!(
-                    pending.len() < usize::from(max_depth),
-                    "capture delta chain exceeds maximum depth"
-                );
-                anyhow::ensure!(
-                    visited.insert((base.doc_id.clone(), base.field_commit_cid.clone())),
-                    "capture delta chain contains a cycle"
-                );
+                if pending.len() >= usize::from(max_depth) {
+                    return Err(EncodingError::DeltaChainTooDeep);
+                }
+                if !visited.insert((base.doc_id.clone(), base.field_commit_cid.clone())) {
+                    return Err(EncodingError::DeltaChainCycle);
+                }
                 let (base_version, base_stored, actual_commit) = fetch_base(&base)?;
-                anyhow::ensure!(
-                    actual_commit == base.field_commit_cid,
-                    "capture delta base field commit changed"
-                );
+                if actual_commit != base.field_commit_cid {
+                    return Err(EncodingError::DeltaBaseCommitChanged);
+                }
                 pending.push((changed, removed));
                 version = base_version;
                 encoded = base_stored;
@@ -952,12 +1128,14 @@ where
 {
     match capture_version {
         1 if kind == CapturePayloadKind::RequestBody => decode_inline_value(1, stored),
-        1 => anyhow::bail!("legacy provenance payload lives in provenance_json"),
+        1 => Err(EncodingError::LegacyProvenance),
         2 => {
             let selected = select_container_record(stored, kind)?;
             resolve_with(2, &selected, |base| {
                 let (version, container, commit) = fetch_base(base)?;
-                anyhow::ensure!(version == 2, "v2 delta base is not a v2 capture");
+                if version != 2 {
+                    return Err(EncodingError::V2BaseNotV2);
+                }
                 Ok((2, select_container_record(&container, kind)?, commit))
             })
         }
@@ -966,9 +1144,9 @@ where
             DecodedRecord::Manifest { blocks } => {
                 resolve_manifest_blocks(MANIFEST_RESOLUTION_FUEL, &blocks, fetch_block)
             }
-            _ => anyhow::bail!("capture version does not match manifest format"),
+            _ => Err(EncodingError::ManifestVersionMismatch),
         },
-        other => anyhow::bail!("unsupported rendered-request capture version {other}"),
+        version => Err(EncodingError::UnsupportedCaptureVersion { version }),
     }
 }
 
@@ -980,7 +1158,7 @@ pub(crate) fn apply_delta(
     let mut object = base_value
         .as_object()
         .cloned()
-        .context("lossless delta base is not an object")?;
+        .ok_or(EncodingError::DeltaBaseNotObject)?;
     for key in removed {
         object.remove(&key);
     }
@@ -992,30 +1170,30 @@ pub(crate) fn apply_delta(
                 suffix_bytes,
                 middle,
             } => {
-                let prefix_bytes = usize::try_from(prefix_bytes)
-                    .context("lossless splice prefix exceeds platform size")?;
-                let suffix_bytes = usize::try_from(suffix_bytes)
-                    .context("lossless splice suffix exceeds platform size")?;
-                let base = object.get(&key).context("splice base field is missing")?;
+                let prefix_bytes =
+                    usize::try_from(prefix_bytes).map_err(EncodingError::SplicePrefixPlatform)?;
+                let suffix_bytes =
+                    usize::try_from(suffix_bytes).map_err(EncodingError::SpliceSuffixPlatform)?;
+                let base = object.get(&key).ok_or(EncodingError::SpliceBaseMissing)?;
                 let base = super::canonical_json_string(base)?;
                 let retained = prefix_bytes
                     .checked_add(suffix_bytes)
-                    .context("lossless splice bounds overflow")?;
-                anyhow::ensure!(
-                    retained <= base.len()
-                        && base.is_char_boundary(prefix_bytes)
-                        && base.is_char_boundary(base.len() - suffix_bytes),
-                    "invalid lossless splice bounds"
-                );
+                    .ok_or(EncodingError::SpliceBoundsOverflow)?;
+                if !(retained <= base.len()
+                    && base.is_char_boundary(prefix_bytes)
+                    && base.is_char_boundary(base.len() - suffix_bytes))
+                {
+                    return Err(EncodingError::InvalidSpliceBounds);
+                }
                 let capacity = prefix_bytes
                     .checked_add(middle.len())
                     .and_then(|value| value.checked_add(suffix_bytes))
-                    .context("lossless splice capacity overflow")?;
+                    .ok_or(EncodingError::SpliceCapacityOverflow)?;
                 let mut reconstructed = String::with_capacity(capacity);
                 reconstructed.push_str(&base[..prefix_bytes]);
                 reconstructed.push_str(&middle);
                 reconstructed.push_str(&base[base.len() - suffix_bytes..]);
-                serde_json::from_str(&reconstructed).context("decoding spliced JSON field")?
+                serde_json::from_str(&reconstructed).map_err(EncodingError::SplicedField)?
             }
         };
         object.insert(key, value);
@@ -1309,7 +1487,7 @@ mod tests {
                                 store
                                     .get(&entry.doc_id)
                                     .cloned()
-                                    .context("block document is missing")
+                                    .ok_or(EncodingError::TestBlockMissing)
                             },
                         )
                     } else {
@@ -1318,7 +1496,7 @@ mod tests {
                             store
                                 .get(&entry.doc_id)
                                 .cloned()
-                                .context("block document is missing")
+                                .ok_or(EncodingError::TestBlockMissing)
                         })
                     }
                 }
@@ -1705,7 +1883,7 @@ mod tests {
 
         assert!(
             resolve_manifest_with_limit(64, &manifest.stored, |_| {
-                anyhow::bail!("block document is missing")
+                Err(EncodingError::TestBlockMissing)
             })
             .is_err(),
             "a missing block document fails closed"
@@ -2107,7 +2285,7 @@ mod tests {
         })
         .unwrap();
 
-        assert!(resolve_with(2, &delta, |_| anyhow::bail!("missing base")).is_err());
+        assert!(resolve_with(2, &delta, |_| Err(EncodingError::TestBaseMissing)).is_err());
         let full = encode_full(&json!({"value": 1})).unwrap();
         assert!(resolve_with(2, &delta, |_| {
             Ok((2, full.stored.clone(), "changed-cid".into()))

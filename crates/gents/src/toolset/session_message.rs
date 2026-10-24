@@ -1,6 +1,5 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::anyhow;
 
 use crate::background_tools::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
 use crate::background_tools::{
@@ -20,6 +19,7 @@ use super::{
     AGENT_STOP_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
     READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
+use crate::tool_call_lifecycle::FailureClass;
 
 const SESSION_SERVICE_ID: &str = "session";
 
@@ -160,20 +160,27 @@ impl Tool for AgentNewTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let agent = args.agent.trim();
         if self.config.target(agent).is_none() {
-            return Err(structured_error(serde_json::json!({
-                "ok": false,
-                "failure_class": "tool_not_allowed",
-                "path": "/agent",
-                "message": format!("'{agent}' is not an allowed agent for this agent"),
-                "retryable": false,
-                "service_id": SESSION_SERVICE_ID,
-                "tool_name": Self::NAME,
-                "allowed_agents": self.allowed_target_names()
-            })));
+            return Err(structured_error(
+                FailureClass::PolicyDenied,
+                serde_json::json!({
+                    "ok": false,
+                    "failure_class": "tool_not_allowed",
+                    "path": "/agent",
+                    "message": format!("'{agent}' is not an allowed agent for this agent"),
+                    "retryable": false,
+                    "service_id": SESSION_SERVICE_ID,
+                    "tool_name": Self::NAME,
+                    "allowed_agents": self.allowed_target_names()
+                }),
+            ));
         }
         args.body()
             .map_err(|message| invalid_arguments_error(Self::NAME, "/", message))?;
         Err(not_yet_executable_error(Self::NAME))
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -218,6 +225,10 @@ impl Tool for AgentMessageTool {
             .map_err(|message| invalid_arguments_error(Self::NAME, "/", message))?;
         Err(not_yet_executable_error(Self::NAME))
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for AgentInterruptTool {
@@ -255,6 +266,10 @@ impl Tool for AgentInterruptTool {
         }
         Err(not_yet_executable_error(Self::NAME))
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for AgentStopTool {
@@ -285,6 +300,10 @@ impl Tool for AgentStopTool {
             ));
         }
         Err(not_yet_executable_error(Self::NAME))
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -317,6 +336,10 @@ impl Tool for AgentResumeTool {
         }
         Err(not_yet_executable_error(Self::NAME))
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for AgentListTool {
@@ -337,6 +360,10 @@ impl Tool for AgentListTool {
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         Err(not_yet_executable_error(Self::NAME))
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -378,6 +405,10 @@ impl Tool for AgentSessionListTool {
             .map_err(|error| invalid_arguments_error(Self::NAME, "/", error.to_string()))?;
         Err(not_yet_executable_error(Self::NAME))
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for AgentSessionReadTool {
@@ -408,6 +439,10 @@ impl Tool for AgentSessionReadTool {
         args.validate()
             .map_err(|error| invalid_arguments_error(Self::NAME, "/", error.to_string()))?;
         Err(not_yet_executable_error(Self::NAME))
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -445,6 +480,10 @@ impl Tool for SpawnProcessTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         self.validate(&args)?;
         Err(background_not_yet_executable_error(Self::NAME))
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -484,6 +523,10 @@ impl Tool for WaitProcessTool {
         validate_tool_call_id(WAIT_PROCESS_TOOL_NAME, &args.tool_call_id)?;
         Err(background_not_yet_executable_error(Self::NAME))
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for ListProcessesTool {
@@ -521,6 +564,10 @@ impl Tool for ListProcessesTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let _ = args.validated_limit();
         Err(background_not_yet_executable_error(Self::NAME))
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -574,6 +621,10 @@ false. Pages are contiguous from the cursor; nothing in the middle is dropped."
         let _ = args.validated_max_bytes();
         Err(background_not_yet_executable_error(Self::NAME))
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for CancelProcessTool {
@@ -619,6 +670,10 @@ impl Tool for CancelProcessTool {
         }
         Err(background_not_yet_executable_error(Self::NAME))
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 fn agent_target_name_description(
@@ -658,27 +713,33 @@ fn validate_tool_call_id(tool_name: &str, tool_call_id: &str) -> Result<(), Tool
 }
 
 fn invalid_arguments_error(tool_name: &str, path: &str, message: impl Into<String>) -> ToolError {
-    structured_error(serde_json::json!({
-        "ok": false,
-        "failure_class": "invalid_tool_arguments",
-        "path": path,
-        "message": message.into(),
-        "retryable": false,
-        "service_id": SESSION_SERVICE_ID,
-        "tool_name": tool_name
-    }))
+    structured_error(
+        FailureClass::ArgumentInvalid,
+        serde_json::json!({
+            "ok": false,
+            "failure_class": "invalid_tool_arguments",
+            "path": path,
+            "message": message.into(),
+            "retryable": false,
+            "service_id": SESSION_SERVICE_ID,
+            "tool_name": tool_name
+        }),
+    )
 }
 
 fn not_yet_executable_error(tool_name: &str) -> ToolError {
-    structured_error(serde_json::json!({
-        "ok": false,
-        "failure_class": "service_unavailable",
-        "path": "/",
-        "message": format!("{tool_name} is registered but runs only through the session hook"),
-        "retryable": true,
-        "service_id": SESSION_SERVICE_ID,
-        "tool_name": tool_name
-    }))
+    structured_error(
+        FailureClass::ServiceUnavailable,
+        serde_json::json!({
+            "ok": false,
+            "failure_class": "service_unavailable",
+            "path": "/",
+            "message": format!("{tool_name} is registered but runs only through the session hook"),
+            "retryable": true,
+            "service_id": SESSION_SERVICE_ID,
+            "tool_name": tool_name
+        }),
+    )
 }
 
 fn background_invalid_arguments_error(
@@ -686,15 +747,18 @@ fn background_invalid_arguments_error(
     path: &str,
     message: impl Into<String>,
 ) -> ToolError {
-    structured_error(serde_json::json!({
-        "ok": false,
-        "failure_class": "invalid_tool_arguments",
-        "path": path,
-        "message": message.into(),
-        "retryable": false,
-        "service_id": "process",
-        "tool_name": tool_name
-    }))
+    structured_error(
+        FailureClass::ArgumentInvalid,
+        serde_json::json!({
+            "ok": false,
+            "failure_class": "invalid_tool_arguments",
+            "path": path,
+            "message": message.into(),
+            "retryable": false,
+            "service_id": "process",
+            "tool_name": tool_name
+        }),
+    )
 }
 
 fn background_tool_not_allowed_error(
@@ -704,32 +768,38 @@ fn background_tool_not_allowed_error(
     message: impl Into<String>,
     allowed_targets: Vec<String>,
 ) -> ToolError {
-    structured_error(serde_json::json!({
-        "ok": false,
-        "failure_class": "tool_not_allowed",
-        "path": path,
-        "message": message.into(),
-        "retryable": false,
-        "service_id": "process",
-        "tool_name": tool_name,
-        "requested_tool_name": requested,
-        "allowed_backgroundable_tool_names": allowed_targets
-    }))
+    structured_error(
+        FailureClass::PolicyDenied,
+        serde_json::json!({
+            "ok": false,
+            "failure_class": "tool_not_allowed",
+            "path": path,
+            "message": message.into(),
+            "retryable": false,
+            "service_id": "process",
+            "tool_name": tool_name,
+            "requested_tool_name": requested,
+            "allowed_backgroundable_tool_names": allowed_targets
+        }),
+    )
 }
 
 fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
-    structured_error(serde_json::json!({
-        "ok": false,
-        "failure_class": "service_unavailable",
-        "path": "/",
-        "message": format!("{tool_name} is registered but requires the R6 process hook runtime path before direct execution"),
-        "retryable": true,
-        "service_id": "process",
-        "tool_name": tool_name
-    }))
+    structured_error(
+        FailureClass::ServiceUnavailable,
+        serde_json::json!({
+            "ok": false,
+            "failure_class": "service_unavailable",
+            "path": "/",
+            "message": format!("{tool_name} is registered but requires the R6 process hook runtime path before direct execution"),
+            "retryable": true,
+            "service_id": "process",
+            "tool_name": tool_name
+        }),
+    )
 }
 
-fn structured_error(error: serde_json::Value) -> ToolError {
+fn structured_error(class: FailureClass, error: serde_json::Value) -> ToolError {
     let message = crate::tool_output::render(
         &error,
         &[
@@ -742,5 +812,5 @@ fn structured_error(error: serde_json::Value) -> ToolError {
         ],
     )
     .unwrap_or_else(|_| error.to_string());
-    anyhow!(message).into()
+    ToolError::reported_failure(class, message)
 }

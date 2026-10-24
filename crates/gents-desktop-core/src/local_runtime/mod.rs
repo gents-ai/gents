@@ -15,13 +15,240 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use ts_rs::TS;
 
 use crate::client::{initialize_local_standard_peer, DesktopPaths};
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
+
+#[derive(Debug, thiserror::Error)]
+pub enum LocalRuntimeError {
+    #[error(transparent)]
+    HttpClientTask(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    HttpClient(#[from] reqwest::Error),
+    #[error(transparent)]
+    Paths(#[from] crate::client::PathsError),
+    #[error(transparent)]
+    PeerDirectory(#[from] crate::client::PeerDirectoryError),
+    #[error(transparent)]
+    Identity(#[from] gents::identity::IdentityError),
+    #[error(transparent)]
+    Home(#[from] gents::home::HomeError),
+    #[error("runtime identity {did} has no exportable signing key")]
+    NoExportableSigningKey { did: String },
+    #[error("runtime record is not a runtime this desktop hosts")]
+    NotHostedRuntime,
+    #[error("runtime record has no local Node home")]
+    NoLocalNodeHome,
+    #[error("reading the co-hosted runtime's state")]
+    ReadRuntimeState(#[source] Box<LocalRuntimeError>),
+    #[error("runtime home {} does not serve {endpoint} for {node_did}", home.display())]
+    HomeNotServing {
+        home: PathBuf,
+        endpoint: String,
+        node_did: String,
+    },
+    #[error("runtime home identity does not match the recorded node")]
+    HomeIdentityMismatch,
+    #[error("local runtime keychain identity has no label")]
+    KeychainLabelMissing,
+    #[error("local runtime Secure Enclave identity has no label")]
+    SecureEnclaveLabelMissing,
+    #[error("local runtime {} has no key path and unsupported identity backend {backend:?}", home.display())]
+    UnsupportedIdentityBackend {
+        home: PathBuf,
+        backend: Option<String>,
+    },
+    #[error("local runtime identity does not match configured node DID")]
+    ConfiguredDidMismatch,
+    #[error("server_address is required")]
+    ServerAddressRequired,
+    #[error("server_address is not a valid URL: {error}")]
+    InvalidServerAddress { error: String },
+    #[error("graphql endpoint is required")]
+    GraphqlEndpointRequired,
+    #[error("graphql endpoint is not a valid URL: {error}")]
+    InvalidGraphqlEndpoint { error: String },
+    #[error("expected GraphQL endpoint ending in /graphql, got {endpoint}")]
+    NotGraphqlEndpoint { endpoint: String },
+    #[error("building runtime discovery HTTP client")]
+    DiscoveryClient(#[source] Box<LocalRuntimeError>),
+    #[error("refusing to dangerously overwrite {}", path.display())]
+    RefuseOverwrite { path: PathBuf },
+    #[error("refusing to dangerously overwrite the user home directory {}; pass a dedicated desktop home instead", path.display())]
+    RefuseOverwriteUserHome { path: PathBuf },
+    #[error("dangerously overwriting {}", path.display())]
+    OverwriteDesktopHome {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("clearing desktop runtime state {}", path.display())]
+    ClearDesktopRuntime {
+        path: PathBuf,
+        #[source]
+        source: gents::home::HomeError,
+    },
+    #[error("no running local Gents runtime found at {}; run `gents server` first", path.display())]
+    NoRunningRuntime {
+        path: PathBuf,
+        #[source]
+        source: Box<LocalRuntimeError>,
+    },
+    #[error("building local runtime HTTP client")]
+    LocalRuntimeClient(#[source] Box<LocalRuntimeError>),
+    #[error("local runtime is reachable but did not report a shareable P2P address")]
+    NoShareableAddress,
+    #[error("local runtime is reachable but did not report a usable P2P peer id")]
+    NoUsablePeerId,
+    #[error("{}", gents_protocol::serve_lifecycle::outdated_runtime_message(.version.as_deref()))]
+    RuntimeOutdated { version: Option<String> },
+    #[error("the local Gents runtime at {url} did not finish starting within {seconds} seconds")]
+    StillStarting { url: String, seconds: u64 },
+    #[error("no local Gents runtime answered at {url} within {seconds} seconds")]
+    NoRuntimeAnswer {
+        url: String,
+        seconds: u64,
+        #[source]
+        source: Box<LocalRuntimeError>,
+    },
+    #[error("this home has no usable initialized node DID ({did:?})")]
+    UnusableHomeDid { did: String },
+    #[error("the runtime answering for this home serves {live_did:?}, not {expected_did}")]
+    RuntimeDidMismatch {
+        live_did: String,
+        expected_did: String,
+    },
+    #[error("reading P2P shareable address from {api_base}")]
+    ReadShareableAddress {
+        api_base: String,
+        #[source]
+        source: Box<LocalRuntimeError>,
+    },
+    #[error("runtime GraphQL endpoint is reachable but did not report a shareable P2P address")]
+    NoGraphqlShareableAddress,
+    #[error("runtime reported a shareable P2P address but no usable peer id")]
+    NoGraphqlPeerId,
+    #[error("sending GraphQL identity query to {graphql}")]
+    SendGraphqlIdentity {
+        graphql: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("reading GraphQL identity response from {graphql}")]
+    ReadGraphqlIdentity {
+        graphql: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("GraphQL identity query to {graphql} failed with {status}: {body}")]
+    GraphqlIdentityStatus {
+        graphql: String,
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("decoding GraphQL identity response from {graphql}")]
+    DecodeGraphqlIdentity {
+        graphql: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("GraphQL identity query returned errors: {errors}")]
+    GraphqlIdentityErrors { errors: serde_json::Value },
+    #[error("GraphQL identity query returned no data")]
+    GraphqlIdentityNoData,
+    #[error("GraphQL identity query returned no Node rows")]
+    GraphqlIdentityNoRows,
+    #[error("GraphQL identity query must return exactly one enabled Node, found {found}")]
+    GraphqlIdentityNodeCount { found: usize },
+    #[error("enabled Node has no node_did")]
+    EnabledNodeMissingDid,
+    #[error("enabled Node has no display_name")]
+    EnabledNodeMissingName,
+    #[error("local runtime uses p2p_transport={transport}; desktop pairing requires iroh. Restart with `gents server` from a current build.")]
+    UnsupportedP2pTransport { transport: String },
+    #[error("runtime node DID {runtime:?} does not match initialized node DID {initialized:?}")]
+    NodeDidMismatch {
+        runtime: String,
+        initialized: String,
+    },
+    #[error("runtime node name {runtime} does not match initialized node name {initialized}")]
+    NodeNameMismatch {
+        runtime: String,
+        initialized: String,
+    },
+    #[error("reading {}", path.display())]
+    ReadJsonFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("decoding {}", path.display())]
+    DecodeJsonFile {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("no gents server found at {url}. Start one first with `gents server`. Remote runtimes must be added through authenticated status enrollment in the desktop app.")]
+    NoServerFound {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("sending GET request to {url}")]
+    SendGet {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("reading GET response body from {url}")]
+    ReadGetBody {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("GET {url} failed with {status}: {body}")]
+    GetStatus {
+        url: String,
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("decoding JSON response from {url}")]
+    DecodeGetJson {
+        url: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "Cannot verify goal assignment controls. Reconnect this runtime through its HTTP address."
+    )]
+    GoalControlUnverifiable,
+    #[error("The runtime is not ready. Reconnect it before {action}.")]
+    RuntimeNotReady { action: &'static str },
+    #[error("The extension and runtime use different goal controls. Update them together, then reconnect.")]
+    GoalControlContractMismatch,
+    #[error(
+        "Cannot verify request input support. Reconnect this runtime through its HTTP address."
+    )]
+    RequestInputUnverifiable,
+    #[error("The attached context is invalid. Remove it and capture it again.")]
+    InvalidAttachedContext,
+    #[error(
+        "This runtime does not support this attachment input. Update the runtime and reconnect."
+    )]
+    InputContractUnsupported,
+    #[error(transparent)]
+    Attachment(#[from] gents_protocol::request_input::AttachmentError),
+    #[error("The runtime is still starting.")]
+    WorkspaceRuntimeStarting,
+    #[error("The runtime returned invalid workspace permission capabilities.")]
+    InvalidWorkspacePermissions(#[source] serde_json::Error),
+}
+
+type Result<T, E = LocalRuntimeError> = std::result::Result<T, E>;
 
 use self::http::{http_get_json, p2p_api_base, read_json};
 use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
@@ -58,7 +285,7 @@ async fn runtime_http_client() -> Result<&'static reqwest::Client> {
         .get_or_try_init(|| async {
             tokio::task::spawn_blocking(|| reqwest::Client::builder().timeout(HTTP_TIMEOUT).build())
                 .await?
-                .map_err(anyhow::Error::from)
+                .map_err(LocalRuntimeError::from)
         })
         .await
 }
@@ -129,7 +356,7 @@ pub fn operator_endpoint(
         Err(error) => {
             tracing::warn!(
                 node_did = %record.node_did,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(&error),
                 "runtime node identity key unavailable; using anonymous operator access"
             );
             gents::config_client::GraphqlEndpoint::anonymous(url)
@@ -163,33 +390,34 @@ fn load_operator_node_identity(record: &crate::client::PeerRecord) -> Result<()>
         return hosted_runtime_home(record).map(drop);
     }
     let identity = operator_signer(record)?;
-    anyhow::ensure!(
-        gents::identity::can_mint_defradb_bearer(identity.did()),
-        "runtime identity {} has no exportable signing key",
-        identity.did()
-    );
+    if !gents::identity::can_mint_defradb_bearer(identity.did()) {
+        return Err(LocalRuntimeError::NoExportableSigningKey {
+            did: identity.did().to_owned(),
+        });
+    }
     Ok(())
 }
 
 pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     let endpoint = record
         .operator_graphql()
-        .context("runtime record is not a runtime this desktop hosts")?;
+        .ok_or(LocalRuntimeError::NotHostedRuntime)?;
     let home = record
         .local_node_home
         .as_deref()
         .map(str::trim)
         .filter(|home| !home.is_empty())
-        .context("runtime record has no local Node home")?;
+        .ok_or(LocalRuntimeError::NoLocalNodeHome)?;
     let home = Path::new(home);
     let runtime = read_json::<StoredRuntimeState>(&home.join(RUNTIME_STATE_FILE_NAME))
-        .context("reading the co-hosted runtime's state")?;
-    anyhow::ensure!(
-        runtime.graphql.trim() == endpoint && runtime.node_did.trim() == record.node_did,
-        "runtime home {} does not serve {endpoint} for {}",
-        home.display(),
-        record.node_did
-    );
+        .map_err(|source| LocalRuntimeError::ReadRuntimeState(Box::new(source)))?;
+    if runtime.graphql.trim() != endpoint || runtime.node_did.trim() != record.node_did {
+        return Err(LocalRuntimeError::HomeNotServing {
+            home: home.to_path_buf(),
+            endpoint: endpoint.to_owned(),
+            node_did: record.node_did.clone(),
+        });
+    }
     Ok(home)
 }
 
@@ -198,10 +426,9 @@ pub fn operator_signer(
     record: &crate::client::PeerRecord,
 ) -> Result<Arc<dyn gents::identity::NodeIdentity>> {
     let identity = load_standard_runtime_identity(hosted_runtime_home(record)?)?;
-    anyhow::ensure!(
-        identity.did() == record.node_did,
-        "runtime home identity does not match the recorded node"
-    );
+    if identity.did() != record.node_did {
+        return Err(LocalRuntimeError::HomeIdentityMismatch);
+    }
     Ok(identity)
 }
 
@@ -227,7 +454,7 @@ pub(crate) fn load_standard_runtime_identity(
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .context("local runtime keychain identity has no label")?,
+                    .ok_or(LocalRuntimeError::KeychainLabelMissing)?,
                 None,
             )?),
             Some("macos-secure-enclave") => Arc::new(load_macos_secure_enclave_identity(
@@ -236,19 +463,20 @@ pub(crate) fn load_standard_runtime_identity(
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .context("local runtime Secure Enclave identity has no label")?,
+                    .ok_or(LocalRuntimeError::SecureEnclaveLabelMissing)?,
                 None,
             )?),
-            backend => anyhow::bail!(
-                "local runtime {} has no key path and unsupported identity backend {backend:?}",
-                node_home.display()
-            ),
+            backend => {
+                return Err(LocalRuntimeError::UnsupportedIdentityBackend {
+                    home: node_home.to_path_buf(),
+                    backend: backend.map(str::to_owned),
+                })
+            }
         }
     };
-    anyhow::ensure!(
-        identity.did() == config.node_did.trim(),
-        "local runtime identity does not match configured node DID"
-    );
+    if identity.did() != config.node_did.trim() {
+        return Err(LocalRuntimeError::ConfiguredDidMismatch);
+    }
     Ok(identity)
 }
 
@@ -284,13 +512,13 @@ struct GraphqlResponse {
 }
 
 pub fn default_node_home() -> Result<PathBuf> {
-    gents::home::default_home_dir()
+    Ok(gents::home::default_home_dir()?)
 }
 
 pub fn runtime_status_url(server_address: &str) -> Result<String> {
     let trimmed = server_address.trim();
     if trimmed.is_empty() {
-        anyhow::bail!("server_address is required");
+        return Err(LocalRuntimeError::ServerAddressRequired);
     }
 
     let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -298,8 +526,11 @@ pub fn runtime_status_url(server_address: &str) -> Result<String> {
     } else {
         format!("http://{trimmed}")
     };
-    let mut url = reqwest::Url::parse(&with_scheme)
-        .map_err(|error| anyhow::anyhow!("server_address is not a valid URL: {error}"))?;
+    let mut url = reqwest::Url::parse(&with_scheme).map_err(|error| {
+        LocalRuntimeError::InvalidServerAddress {
+            error: error.to_string(),
+        }
+    })?;
     let path = url.path().trim_end_matches('/');
     if path.is_empty() || path == "/" || path == "/api/v0" || path == "/api/v0/graphql" {
         url.set_path("/status");
@@ -314,7 +545,7 @@ pub fn runtime_status_url(server_address: &str) -> Result<String> {
 pub fn runtime_graphql_url(endpoint: &str) -> Result<String> {
     let trimmed = endpoint.trim();
     if trimmed.is_empty() {
-        anyhow::bail!("graphql endpoint is required");
+        return Err(LocalRuntimeError::GraphqlEndpointRequired);
     }
 
     let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -322,11 +553,16 @@ pub fn runtime_graphql_url(endpoint: &str) -> Result<String> {
     } else {
         format!("http://{trimmed}")
     };
-    let mut url = reqwest::Url::parse(&with_scheme)
-        .map_err(|error| anyhow::anyhow!("graphql endpoint is not a valid URL: {error}"))?;
+    let mut url = reqwest::Url::parse(&with_scheme).map_err(|error| {
+        LocalRuntimeError::InvalidGraphqlEndpoint {
+            error: error.to_string(),
+        }
+    })?;
     let path = url.path().trim_end_matches('/').to_string();
     if !path.ends_with("/graphql") {
-        anyhow::bail!("expected GraphQL endpoint ending in /graphql, got {endpoint}");
+        return Err(LocalRuntimeError::NotGraphqlEndpoint {
+            endpoint: endpoint.to_owned(),
+        });
     }
     url.set_path(&path);
     url.set_query(None);
@@ -379,7 +615,7 @@ pub fn augment_peer_status_payload_for_desktop(mut payload: Value, status_url: &
 pub async fn fetch_runtime_connection_payload(endpoint: &str) -> Result<Value> {
     let client = runtime_http_client()
         .await
-        .context("building runtime discovery HTTP client")?;
+        .map_err(|source| LocalRuntimeError::DiscoveryClient(Box::new(source)))?;
     fetch_runtime_connection_payload_with_client(client, endpoint).await
 }
 
@@ -405,22 +641,24 @@ pub fn dangerously_overwrite_desktop_home(desktop_root: &Path) -> Result<()> {
     }
 
     if desktop_root.as_os_str().is_empty() || desktop_root == Path::new("/") {
-        anyhow::bail!(
-            "refusing to dangerously overwrite {}",
-            desktop_root.display()
-        );
+        return Err(LocalRuntimeError::RefuseOverwrite {
+            path: desktop_root.to_path_buf(),
+        });
     }
     if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from) {
         if desktop_root == user_home {
-            anyhow::bail!(
-                "refusing to dangerously overwrite the user home directory {}; pass a dedicated desktop home instead",
-                desktop_root.display()
-            );
+            return Err(LocalRuntimeError::RefuseOverwriteUserHome {
+                path: desktop_root.to_path_buf(),
+            });
         }
     }
 
-    std::fs::remove_dir_all(desktop_root)
-        .with_context(|| format!("dangerously overwriting {}", desktop_root.display()))?;
+    std::fs::remove_dir_all(desktop_root).map_err(|source| {
+        LocalRuntimeError::OverwriteDesktopHome {
+            path: desktop_root.to_path_buf(),
+            source,
+        }
+    })?;
     Ok(())
 }
 
@@ -433,11 +671,9 @@ pub fn reset_desktop_runtime_state(paths: &DesktopPaths) -> Result<bool> {
         }],
         gents::home::RetireDisposition::Delete,
     )
-    .with_context(|| {
-        format!(
-            "clearing desktop runtime state {}",
-            paths.node_data_dir().display()
-        )
+    .map_err(|source| LocalRuntimeError::ClearDesktopRuntime {
+        path: paths.node_data_dir().to_path_buf(),
+        source,
     })?;
     Ok(!cleared.is_empty())
 }
@@ -489,24 +725,22 @@ pub(crate) async fn discover_standard_runtime(
 ) -> Result<StandardRuntimeDiscovery> {
     let init = read_json::<StoredInitConfig>(&node_home.join(INIT_CONFIG_FILE_NAME))?;
     let runtime = read_json::<StoredRuntimeState>(&node_home.join(RUNTIME_STATE_FILE_NAME))
-        .with_context(|| {
-            format!(
-                "no running local Gents runtime found at {}; run `gents server` first",
-                node_home.join(RUNTIME_STATE_FILE_NAME).display()
-            )
+        .map_err(|source| LocalRuntimeError::NoRunningRuntime {
+            path: node_home.join(RUNTIME_STATE_FILE_NAME),
+            source: Box::new(source),
         })?;
 
     validate_runtime_identity(&runtime, &init)?;
 
     let client = runtime_http_client()
         .await
-        .context("building local runtime HTTP client")?;
+        .map_err(|source| LocalRuntimeError::LocalRuntimeClient(Box::new(source)))?;
     await_serving_runtime(client, &runtime).await?;
     let api_base = p2p_api_base(&runtime.graphql)?;
     let shareable_address: ShareableAddressResponse =
         http_get_json(client, &format!("{api_base}/p2p/shareable-address")).await?;
     let p2p_listen_address = normalize_optional_string(shareable_address.address.as_deref())
-        .context("local runtime is reachable but did not report a shareable P2P address")?;
+        .ok_or(LocalRuntimeError::NoShareableAddress)?;
     let live_identity =
         http_get_json::<NodeIdentityResponse>(client, &format!("{api_base}/node/identity"))
             .await
@@ -518,7 +752,7 @@ pub(crate) async fn discover_standard_runtime(
         Some(&p2p_listen_address),
         runtime.p2p_peer_id.as_deref(),
     )
-    .context("local runtime is reachable but did not report a usable P2P peer id")?;
+    .ok_or(LocalRuntimeError::NoUsablePeerId)?;
 
     Ok(StandardRuntimeDiscovery {
         node_name: runtime.node_name,
@@ -550,22 +784,18 @@ async fn await_serving_runtime_within(
             Ok(status) => match serving_runtime(&status, &runtime.node_did)? {
                 ObservedServeLifecycle::Ready => return Ok(()),
                 ObservedServeLifecycle::Outdated { version } => {
-                    anyhow::bail!(
-                        "{}",
-                        gents_protocol::serve_lifecycle::outdated_runtime_message(
-                            version.as_deref()
-                        )
-                    )
+                    return Err(LocalRuntimeError::RuntimeOutdated { version });
                 }
-                ObservedServeLifecycle::Starting => anyhow::anyhow!(
-                    "the local Gents runtime at {status_url} did not finish starting within {} seconds",
-                    timeout.as_secs()
-                ),
+                ObservedServeLifecycle::Starting => LocalRuntimeError::StillStarting {
+                    url: status_url.clone(),
+                    seconds: timeout.as_secs(),
+                },
             },
-            Err(error) => error.context(format!(
-                "no local Gents runtime answered at {status_url} within {} seconds",
-                timeout.as_secs()
-            )),
+            Err(source) => LocalRuntimeError::NoRuntimeAnswer {
+                url: status_url.clone(),
+                seconds: timeout.as_secs(),
+                source: Box::new(source),
+            },
         };
         if tokio::time::Instant::now() >= deadline {
             return Err(waiting);
@@ -576,16 +806,19 @@ async fn await_serving_runtime_within(
 
 fn serving_runtime(status: &Value, expected_did: &str) -> Result<ObservedServeLifecycle> {
     if !well_formed_did(expected_did) {
-        anyhow::bail!("this home has no usable initialized node DID ({expected_did:?})");
+        return Err(LocalRuntimeError::UnusableHomeDid {
+            did: expected_did.to_owned(),
+        });
     }
     let live_did = status
         .get("node_did")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if !well_formed_did(live_did) || live_did != expected_did {
-        anyhow::bail!(
-            "the runtime answering for this home serves {live_did:?}, not {expected_did}"
-        );
+        return Err(LocalRuntimeError::RuntimeDidMismatch {
+            live_did: live_did.to_owned(),
+            expected_did: expected_did.to_owned(),
+        });
     }
     Ok(ObservedServeLifecycle::observe(status))
 }
@@ -642,11 +875,12 @@ async fn fetch_graphql_runtime_connection_payload(
     let shareable_address: ShareableAddressResponse =
         http_get_json(client, &format!("{api_base}/p2p/shareable-address"))
             .await
-            .with_context(|| format!("reading P2P shareable address from {api_base}"))?;
+            .map_err(|source| LocalRuntimeError::ReadShareableAddress {
+                api_base: api_base.clone(),
+                source: Box::new(source),
+            })?;
     let p2p_listen_address = normalize_optional_string(shareable_address.address.as_deref())
-        .context(
-            "runtime GraphQL endpoint is reachable but did not report a shareable P2P address",
-        )?;
+        .ok_or(LocalRuntimeError::NoGraphqlShareableAddress)?;
     let live_identity =
         http_get_json::<NodeIdentityResponse>(client, &format!("{api_base}/node/identity"))
             .await
@@ -658,7 +892,7 @@ async fn fetch_graphql_runtime_connection_payload(
         Some(&p2p_listen_address),
         None,
     )
-    .context("runtime reported a shareable P2P address but no usable peer id")?;
+    .ok_or(LocalRuntimeError::NoGraphqlPeerId)?;
     let (node_did, node_name) = fetch_graphql_node_identity(client, graphql).await?;
 
     Ok(json!({
@@ -695,49 +929,61 @@ async fn fetch_graphql_node_identity(
         .json(&json!({ "query": query }))
         .send()
         .await
-        .with_context(|| format!("sending GraphQL identity query to {graphql}"))?;
+        .map_err(|source| LocalRuntimeError::SendGraphqlIdentity {
+            graphql: graphql.to_owned(),
+            source,
+        })?;
     let status = response.status();
     let body = response
         .bytes()
         .await
-        .with_context(|| format!("reading GraphQL identity response from {graphql}"))?;
+        .map_err(|source| LocalRuntimeError::ReadGraphqlIdentity {
+            graphql: graphql.to_owned(),
+            source,
+        })?;
     if !status.is_success() {
-        anyhow::bail!(
-            "GraphQL identity query to {graphql} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
+        return Err(LocalRuntimeError::GraphqlIdentityStatus {
+            graphql: graphql.to_owned(),
+            status,
+            body: String::from_utf8_lossy(&body).into_owned(),
+        });
     }
-    let response: GraphqlResponse = serde_json::from_slice(&body)
-        .with_context(|| format!("decoding GraphQL identity response from {graphql}"))?;
+    let response: GraphqlResponse = serde_json::from_slice(&body).map_err(|source| {
+        LocalRuntimeError::DecodeGraphqlIdentity {
+            graphql: graphql.to_owned(),
+            source,
+        }
+    })?;
     if let Some(errors) = response
         .errors
         .as_ref()
         .filter(|errors| !errors_is_empty(errors))
     {
-        anyhow::bail!("GraphQL identity query returned errors: {errors}");
+        return Err(LocalRuntimeError::GraphqlIdentityErrors {
+            errors: errors.clone(),
+        });
     }
     let data = response
         .data
-        .context("GraphQL identity query returned no data")?;
+        .ok_or(LocalRuntimeError::GraphqlIdentityNoData)?;
     let nodes = data
         .get("Node")
         .and_then(Value::as_array)
-        .context("GraphQL identity query returned no Node rows")?;
+        .ok_or(LocalRuntimeError::GraphqlIdentityNoRows)?;
     let enabled = nodes
         .iter()
         .filter(|row| row.get("enabled").and_then(Value::as_bool) == Some(true))
         .collect::<Vec<_>>();
     let [node] = enabled.as_slice() else {
-        anyhow::bail!(
-            "GraphQL identity query must return exactly one enabled Node, found {}",
-            enabled.len()
-        );
+        return Err(LocalRuntimeError::GraphqlIdentityNodeCount {
+            found: enabled.len(),
+        });
     };
     let node_did = string_at(node, "/node_did")
-        .context("enabled Node has no node_did")?
+        .ok_or(LocalRuntimeError::EnabledNodeMissingDid)?
         .to_string();
     let node_name = string_at(node, "/display_name")
-        .context("enabled Node has no display_name")?
+        .ok_or(LocalRuntimeError::EnabledNodeMissingName)?
         .to_string();
 
     Ok((node_did, node_name))
@@ -773,28 +1019,25 @@ fn url_host_is_loopback_or_unspecified(url: &reqwest::Url) -> bool {
 
 fn validate_runtime_identity(runtime: &StoredRuntimeState, init: &StoredInitConfig) -> Result<()> {
     if runtime.p2p_transport != "iroh" {
-        anyhow::bail!(
-            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents server` from a current build.",
-            if runtime.p2p_transport.is_empty() {
-                "<empty>"
+        return Err(LocalRuntimeError::UnsupportedP2pTransport {
+            transport: if runtime.p2p_transport.is_empty() {
+                "<empty>".to_owned()
             } else {
-                runtime.p2p_transport.as_str()
-            }
-        );
+                runtime.p2p_transport.clone()
+            },
+        });
     }
     if !well_formed_did(&init.node_did) || runtime.node_did != init.node_did {
-        anyhow::bail!(
-            "runtime node DID {:?} does not match initialized node DID {:?}",
-            runtime.node_did,
-            init.node_did
-        );
+        return Err(LocalRuntimeError::NodeDidMismatch {
+            runtime: runtime.node_did.clone(),
+            initialized: init.node_did.clone(),
+        });
     }
     if runtime.node_name != init.node_name {
-        anyhow::bail!(
-            "runtime node name {} does not match initialized node name {}",
-            runtime.node_name,
-            init.node_name
-        );
+        return Err(LocalRuntimeError::NodeNameMismatch {
+            runtime: runtime.node_name.clone(),
+            initialized: init.node_name.clone(),
+        });
     }
 
     Ok(())

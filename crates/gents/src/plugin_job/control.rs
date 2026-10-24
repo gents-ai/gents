@@ -1,6 +1,7 @@
 //! The single kill owner for stop, pause, deadline and fail-closed: it
 //! interrupts a job's live children and ends the row now.
 
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 use anyhow::{Context, Result};
@@ -340,7 +341,7 @@ async fn kill_in_txn(
             Err(error) if local => return Err(error),
             Err(error) => tracing::warn!(
                 caused_request_doc_id = request.doc_id,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "peer interrupt of a killed job child was not written"
             ),
         }
@@ -358,7 +359,10 @@ pub async fn control(
     action: JobControlKind,
 ) -> Result<JobControlOutcome, JobReadError> {
     let unavailable = |error: anyhow::Error| JobReadError::Unavailable {
-        message: format!("{error:#}; retry when the node answers"),
+        message: format!(
+            "{}; retry when the node answers",
+            ErrorChain(error.as_ref())
+        ),
     };
     let ConfigAccess::Local(node) = access else {
         return Err(JobReadError::Unavailable {
@@ -667,7 +671,7 @@ mod tests {
                         &json!({ "input": value }),
                     )
                     .await?;
-                gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")
+                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
             })
         })
         .await
@@ -736,7 +740,8 @@ mod tests {
                 })
             })
             .await;
-        assert!(format!("{:#}", result.unwrap_err()).contains("abort the staged kill"));
+        assert!(format!("{}", ErrorChain(result.unwrap_err().as_ref()))
+            .contains("abort the staged kill"));
         assert_eq!(row_state(&admission).await, "running");
         assert!(!interrupted(&admission, &live).await);
         finish(admission).await;

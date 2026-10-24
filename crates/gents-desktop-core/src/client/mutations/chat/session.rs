@@ -1,9 +1,9 @@
 use crate::client::store::ClientStore;
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use std::sync::Arc;
 
 use super::super::graphql::{escape_graphql_string, normalize_required};
+use super::request::ChatMutationError;
 
 pub async fn rename_session(
     node: &Arc<EmbeddedNode>,
@@ -12,12 +12,11 @@ pub async fn rename_session(
     requester_did: &str,
     session_id: &str,
     title: &str,
-) -> Result<()> {
+) -> Result<(), ChatMutationError> {
     let mutation =
         build_rename_session_mutation(store, node_did, requester_did, session_id, title)?;
-    gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation)
-        .await
-        .map(|_| ())
+    gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation).await?;
+    Ok(())
 }
 
 fn build_rename_session_mutation(
@@ -26,7 +25,7 @@ fn build_rename_session_mutation(
     requester_did: &str,
     session_id: &str,
     title: &str,
-) -> Result<String> {
+) -> Result<String, ChatMutationError> {
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let session_id = normalize_required("session_id", session_id)?;
@@ -39,7 +38,9 @@ fn build_rename_session_mutation(
                 && row.node_did == node_did
                 && row.requester_did.as_deref() == Some(requester_did)
         })
-        .ok_or_else(|| anyhow::anyhow!("session {} not found", session_id))?;
+        .ok_or_else(|| ChatMutationError::SessionNotFound {
+            session_id: session_id.to_owned(),
+        })?;
 
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_node_did = escape_graphql_string(node_did);

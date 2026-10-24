@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{ensure, Result};
 use gents::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
 use gents::document_config::{DatastoreTools, InferenceSampling};
 use gents::eval::runner::embedded::EmbeddedHome;
@@ -23,6 +22,8 @@ use crate::support::live_inference::{
     wait_for_request_terminal, InferenceTarget,
 };
 use crate::support::{test_db_from_home, test_p2p_config, TestDb, TestP2pAdmission};
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 #[derive(Deserialize)]
 struct Case {
@@ -179,7 +180,7 @@ fn native_grading_preserves_refusals_and_rejects_identity_substitution() {
 fn regrade_retained_p2p_outcomes() -> Result<()> {
     let directory = PathBuf::from(std::env::var("GENTS_P2P_REPLAY_INPUT")?);
     let output = PathBuf::from(std::env::var("GENTS_P2P_REPLAY_OUTPUT")?);
-    ensure!(!output.exists(), "regrade output already exists");
+    assert!(!output.exists(), "regrade output already exists");
     let mut grades = Vec::new();
     for entry in std::fs::read_dir(&directory)? {
         let trial = entry?.path();
@@ -226,7 +227,7 @@ async fn rows(db: &TestDb, collection: &str, fields: &str) -> Result<Vec<Value>>
     let value = ConfigAccess::local(db.node.clone())
         .execute(&format!("{{{collection}(limit: 100) {{{fields}}}}}"))
         .await?;
-    ensure!(
+    assert!(
         value.get("errors").is_none(),
         "native observation failed: {value}"
     );
@@ -240,7 +241,7 @@ async fn rows(db: &TestDb, collection: &str, fields: &str) -> Result<Vec<Value>>
 #[ignore = "requires workstation target and GENTS_P2P_EVAL_OUTPUT; retains two real node homes per case"]
 async fn engineer_p2p_live_comparison() -> Result<()> {
     let output = PathBuf::from(std::env::var("GENTS_P2P_EVAL_OUTPUT")?);
-    ensure!(!output.exists(), "comparison output already exists");
+    assert!(!output.exists(), "comparison output already exists");
     std::fs::create_dir_all(&output)?;
     let target = InferenceTarget::selected()?;
     let selector = std::env::var("GENTS_P2P_EVAL_CASES").unwrap_or_default();
@@ -375,7 +376,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
                 &peer,
             )
             .await?;
-            ensure!(
+            assert!(
                 tick.live_route_matches
                     && store
                         .load_applied(&peer)
@@ -425,7 +426,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             .agents()
             .iter()
             .find(|b| b.agent_id == "engineer")
-            .ok_or_else(|| anyhow::anyhow!("ready runtime did not resolve the Engineer Agent"))?;
+            .ok_or("ready runtime did not resolve the Engineer Agent")?;
         let surface = behavior
             .tools
             .resolve(&local.node, &did, &Default::default())

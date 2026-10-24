@@ -6,6 +6,7 @@ pub use agent_management::configure_agent;
 use agent_management::load_agent_catalog;
 #[cfg(test)]
 use agent_management::{agent_mutate, agent_preview};
+use gents_protocol::error_chain::ErrorChain;
 mod command;
 pub(crate) use command::{is_help_call, ConfigCommandParams};
 mod execution;
@@ -22,7 +23,7 @@ mod text_tests;
 pub use ops::{
     apply_tool_grant_selection, guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice,
     guard_tools_keep_control, guard_tools_keep_grants, reselection_keeps_grants,
-    validate_tool_network_selection, OperatorGrants, PatchOutcome, SelfConfigCore,
+    validate_tool_network_selection, GuardError, OperatorGrants, PatchOutcome, SelfConfigCore,
     EFFECT_TIMING_NOTE,
 };
 
@@ -95,7 +96,7 @@ pub struct SelfConfigError(anyhow::Error);
 
 impl std::fmt::Display for SelfConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -111,8 +112,20 @@ impl From<anyhow::Error> for SelfConfigError {
     }
 }
 
-fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
-    serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
+impl From<crate::graph_pipeline::GraphPipelineError> for SelfConfigError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self(error.into())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum OutcomeTextError {
+    #[error("serialize outcome: {error}")]
+    Serialize { error: serde_json::Error },
+}
+
+fn outcome_text(outcome: &PatchOutcome) -> Result<String, OutcomeTextError> {
+    serde_json::to_string_pretty(outcome).map_err(|error| OutcomeTextError::Serialize { error })
 }
 
 fn anchored_request(
@@ -132,7 +145,9 @@ fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     let id = core.agent_id().to_owned();
     let mut request = ApplyRequest::new(SelfConfigTarget::Agent, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
-    request.guard = Box::new(|_, stored, merged| guard_agent_keeps_reach(stored, merged));
+    request.guard = Box::new(|_, stored, merged| {
+        guard_agent_keeps_reach(stored, merged).map_err(anyhow::Error::from)
+    });
     fence_profile_pick(&mut request);
     request
 }
@@ -275,10 +290,12 @@ fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
         let held = held.clone();
         Box::pin(async move {
             validate_merged_selection(&merged)?;
-            guard_tools_keep_grants(&held, Some(&stored), &merged)
+            guard_tools_keep_grants(&held, Some(&stored), &merged).map_err(anyhow::Error::from)
         })
     });
-    request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
+    request.guard = Box::new(|_, stored, merged| {
+        guard_tools_keep_control(stored, merged).map_err(anyhow::Error::from)
+    });
     request
 }
 fn refuse_silent_tools_drops(
@@ -422,7 +439,7 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
         Box::pin(async move {
             let backend: crate::InferenceBackend = decode_merged("InferenceBackend", &merged)?;
             guard_backend_auth(&stored, &merged)?;
-            backend.validate()
+            Ok(backend.validate()?)
         })
     });
     request.guard = Box::new(|_, _, merged| {
@@ -482,7 +499,7 @@ fn local_backend_create_request(
                 backend.enabled,
                 "a newly created local backend must be enabled for discovery"
             );
-            backend.validate()
+            Ok(backend.validate()?)
         })
     });
     request
@@ -553,15 +570,21 @@ fn automation_request(
     });
     request
 }
-fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
+#[derive(Debug, thiserror::Error)]
+#[error("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")]
+struct AutomationKindError {
+    kind: String,
+}
+
+fn automation_target(kind: &str) -> Result<SelfConfigTarget, AutomationKindError> {
     match kind {
         "task" => Ok(SelfConfigTarget::Task),
         "schedule" => Ok(SelfConfigTarget::Schedule),
         "trigger" => Ok(SelfConfigTarget::Trigger),
         "event_source" => Ok(SelfConfigTarget::EventSource),
-        _ => {
-            bail!("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")
-        }
+        _ => Err(AutomationKindError {
+            kind: kind.to_owned(),
+        }),
     }
 }
 
@@ -636,7 +659,20 @@ pub struct ConfigureAgentParams {
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
 
-async fn node_default_agent(node: &EmbeddedNode, node_did: &str) -> Result<Option<String>> {
+#[derive(Debug, thiserror::Error)]
+enum NodeDefaultAgentError {
+    #[error(transparent)]
+    Query(#[from] crate::config_client::ConfigClientError),
+    #[error("Node query returned no rows")]
+    MissingRows,
+    #[error("ambiguous node identity")]
+    AmbiguousIdentity,
+}
+
+async fn node_default_agent(
+    node: &EmbeddedNode,
+    node_did: &str,
+) -> Result<Option<String>, NodeDefaultAgentError> {
     let query = format!(
         r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_id }} }}"#,
         escape_graphql_string(node_did)
@@ -649,8 +685,10 @@ async fn node_default_agent(node: &EmbeddedNode, node_did: &str) -> Result<Optio
         .as_ref()
         .and_then(|data| data.get("Node"))
         .and_then(Value::as_array)
-        .context("Node query returned no rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous node identity");
+        .ok_or(NodeDefaultAgentError::MissingRows)?;
+    if rows.len() > 1 {
+        return Err(NodeDefaultAgentError::AmbiguousIdentity);
+    }
     Ok(rows
         .first()
         .and_then(|row| row.get("default_agent_id"))
@@ -733,7 +771,7 @@ async fn agent_list(
                 "enabled": *reference,
                 "protected": catalog.protected_ids.contains(agent_id),
                 "is_default": default_agent_id.as_deref() == Some(agent_id.as_str()),
-                "configuration_error": format!("{error:#}"),
+                "configuration_error": ErrorChain(error.as_ref()).to_string(),
             }),
         };
         agents.push(snapshot);
@@ -802,7 +840,7 @@ async fn agent_inspect(
         "effective_config",
         &Ordered::reading_order(effective, EFFECTIVE_ORDER),
     ));
-    result.pretty()
+    Ok(result.pretty()?)
 }
 
 async fn guard_agent_profile_choice(
@@ -1235,11 +1273,11 @@ impl PackInstaller {
             distribution.manifest(),
             &scope,
             &|path| {
-                distribution
+                Ok(distribution
                     .0
                     .archive
                     .asset(path)
-                    .map(|asset| asset.to_vec())
+                    .map(|asset| asset.to_vec())?)
             },
             &environment,
         )?;
@@ -1367,7 +1405,7 @@ impl PackInstaller {
                         "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
                         "artifact_digest": preferred.digest,
                         "installable": false,
-                        "error": format!("the stored archive could not be opened: {error:#}"),
+                        "error": format!("the stored archive could not be opened: {}", ErrorChain(error.as_ref())),
                     }));
                     continue;
                 }
@@ -1431,14 +1469,14 @@ impl PackInstaller {
             })
             .collect::<Vec<_>>();
         let has_more = response["has_more"].as_bool().unwrap_or(false);
-        ordered! {
+        Ok(ordered! {
             "items": items,
             "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
             "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document, graph and plugins-only packs; search includes other kinds too.",
             "registry": registry,
             "page": page,
             "has_more": has_more,
-        }.pretty()
+        }.pretty()?)
     }
 
     async fn get(&self, package: &str) -> anyhow::Result<String> {
@@ -1532,12 +1570,12 @@ impl PackInstaller {
                 )?;
             }
         }
-        ordered! {
+        Ok(ordered! {
             "pack": coordinate,
             "removed": report,
             "effect": "The package's graph and documents were removed. Package SDL schemas and run history stay.",
         }
-        .pretty()
+        .pretty()?)
     }
 
     fn plugin_install_blockers(&self, manifest: &crate::pack::PackManifest) -> Vec<Value> {
@@ -1557,10 +1595,11 @@ impl PackInstaller {
                             plugin,
                             false,
                         )
+                        .map_err(anyhow::Error::from)
                     });
                 result
                     .err()
-                    .map(|error| json!({"plugin":plugin.name,"reason":format!("{error:#}")}))
+                    .map(|error| json!({"plugin":plugin.name,"reason":ErrorChain(error.as_ref()).to_string()}))
             })
             .collect()
     }
@@ -1589,7 +1628,7 @@ impl PackInstaller {
             home,
             manifest,
             package_digest,
-            |path| distribution.0.archive.asset(path),
+            |path| Ok(distribution.0.archive.asset(path)?),
             false,
             Some(self.core.node_did()),
             bindings,
@@ -2044,7 +2083,8 @@ impl Tool for RunGraphTool {
                 .pointer("/runtime_effective/effective/file_mode")
                 .and_then(Value::as_str)
                 .map(crate::tool_surface::FileToolMode::parse)
-                .transpose()?
+                .transpose()
+                .map_err(anyhow::Error::from)?
                 .unwrap_or_default();
             if effective_file_mode == crate::tool_surface::FileToolMode::Off {
                 return Err(anyhow!(

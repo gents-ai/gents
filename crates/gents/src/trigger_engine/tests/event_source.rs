@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 #[tokio::test]
 async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
@@ -433,7 +434,7 @@ async fn persist_event_bindings(
                     "task_id":trigger.task_id,"enabled":true,"concurrency":trigger.concurrency,
                     "source":{"kind":"event","event_source_id":trigger.trigger_id}}}),
             ).await?;
-            Ok(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })).await.unwrap();
     }
 }
@@ -1493,7 +1494,7 @@ async fn create_event_trigger_doc(
                 &serde_json::json!({"input":input}),
             )
             .await?;
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         },
     )
@@ -1535,7 +1536,8 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
             Ok(()) => committed += 1,
             Err(error) => assert!(
                 crate::config_client::is_classified_transaction_conflict(&error),
-                "only bounded conflict exhaustion may refuse a concurrent update: {error:#}"
+                "only bounded conflict exhaustion may refuse a concurrent update: {}",
+                ErrorChain(error.as_ref())
             ),
         }
     }

@@ -14,6 +14,48 @@ use crate::stream_writer::CanonicalStreamWriter;
 mod progress;
 pub use progress::flush_while_polling;
 
+#[derive(Debug, thiserror::Error)]
+pub enum StreamProcessorError {
+    #[error("audit fragment belongs to another content block")]
+    AuditBlockMismatch,
+    #[error("audit fragment has no reasoning declaration")]
+    AuditWithoutReasoning,
+    #[error("redacted audit payload repeated")]
+    RedactedPayloadRepeated,
+    #[error("audit fragment changed reasoning field kind")]
+    AuditFieldKindChanged,
+    #[error("provider block order changed")]
+    ProviderBlockOrderChanged,
+    #[error("empty Claude reasoning block")]
+    EmptyClaudeReasoning,
+    #[error("Claude reasoning block is unsigned or unsupported")]
+    ClaudeReasoningUnsupported,
+    #[error("Claude thinking has no declared position")]
+    ClaudeThinkingNoPosition,
+    #[error("Claude thinking changed native kind")]
+    ClaudeThinkingKindChanged,
+    #[error("Claude thinking completion changed native kind")]
+    ClaudeThinkingCompletionKindChanged,
+    #[error("Claude thinking bytes changed")]
+    ClaudeThinkingBytesChanged,
+    #[error("Claude thinking signature changed")]
+    ClaudeThinkingSignatureChanged,
+    #[error("Claude redacted block has no declared position")]
+    ClaudeRedactedNoPosition,
+    #[error("Claude redacted block changed native kind")]
+    ClaudeRedactedKindChanged,
+    #[error("Claude redacted completion changed native kind")]
+    ClaudeRedactedCompletionKindChanged,
+    #[error("Claude redacted bytes changed")]
+    ClaudeRedactedBytesChanged,
+    #[error("Claude redacted block followed unfinished text preview")]
+    ClaudeRedactedAfterPreview,
+    #[error("Claude signed thinking changed preview bytes")]
+    ClaudeSignedPreviewChanged,
+    #[error("provider block index overflow")]
+    ProviderBlockIndexOverflow,
+}
+
 pub enum StreamAction {
     Continue,
     Done,
@@ -471,7 +513,7 @@ impl AssistantTurnAccumulator {
     pub fn apply_provider_audit(
         &mut self,
         event: &crate::provider_audit::ClaudeAuditEvent,
-    ) -> Result<bool> {
+    ) -> Result<bool, StreamProcessorError> {
         use crate::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
         use gents_protocol::message::ReasoningContent;
         if let ClaudeAuditEvent::BlockStart { index, kind } = event {
@@ -485,15 +527,14 @@ impl AssistantTurnAccumulator {
             | ClaudeAuditEvent::BlockStop { index } => *index,
             ClaudeAuditEvent::BlockStart { .. } => unreachable!(),
         };
-        anyhow::ensure!(
-            self.next_provider_block.checked_sub(1) == Some(index),
-            "audit fragment belongs to another content block"
-        );
+        if !(self.next_provider_block.checked_sub(1) == Some(index)) {
+            return Err(StreamProcessorError::AuditBlockMismatch);
+        }
         if matches!(event, ClaudeAuditEvent::BlockStop { .. }) {
             return Ok(false);
         }
         let Some(AssistantMessageContent::Reasoning(reasoning)) = self.content.last_mut() else {
-            anyhow::bail!("audit fragment has no reasoning declaration");
+            return Err(StreamProcessorError::AuditWithoutReasoning);
         };
         match (event, reasoning.content.as_mut_slice()) {
             (
@@ -513,10 +554,12 @@ impl AssistantTurnAccumulator {
                 ClaudeAuditEvent::RedactedData { data, .. },
                 [ReasoningContent::Redacted { data: observed }],
             ) => {
-                anyhow::ensure!(observed.is_empty(), "redacted audit payload repeated");
+                if !(observed.is_empty()) {
+                    return Err(StreamProcessorError::RedactedPayloadRepeated);
+                }
                 *observed = data.clone();
             }
-            _ => anyhow::bail!("audit fragment changed reasoning field kind"),
+            _ => return Err(StreamProcessorError::AuditFieldKindChanged),
         }
         Ok(true)
     }
@@ -525,16 +568,15 @@ impl AssistantTurnAccumulator {
         &mut self,
         index: u32,
         kind: &crate::provider_audit::ClaudeBlockKind,
-    ) -> Result<()> {
+    ) -> Result<(), StreamProcessorError> {
         use crate::provider_audit::ClaudeBlockKind;
         use gents_protocol::message::ReasoningContent;
-        anyhow::ensure!(
-            index == self.next_provider_block,
-            "provider block order changed"
-        );
+        if !(index == self.next_provider_block) {
+            return Err(StreamProcessorError::ProviderBlockOrderChanged);
+        }
         self.next_provider_block = index
             .checked_add(1)
-            .context("provider block index overflow")?;
+            .ok_or(StreamProcessorError::ProviderBlockIndexOverflow)?;
         self.provider_block = Some(kind.clone());
         match kind {
             ClaudeBlockKind::Text => {
@@ -612,16 +654,15 @@ impl AssistantTurnAccumulator {
         &mut self,
         profile: ProviderInputProfile,
         reasoning: AssistantReasoning,
-    ) -> Result<()> {
+    ) -> Result<(), StreamProcessorError> {
         if profile != ProviderInputProfile::ClaudeMessages {
             self.push_reasoning(reasoning);
             return Ok(());
         }
         use gents_protocol::message::ReasoningContent;
-        anyhow::ensure!(
-            !reasoning.content.is_empty(),
-            "empty Claude reasoning block"
-        );
+        if !(!reasoning.content.is_empty()) {
+            return Err(StreamProcessorError::EmptyClaudeReasoning);
+        }
         for part in &reasoning.content {
             match part {
                 ReasoningContent::Text {
@@ -629,7 +670,7 @@ impl AssistantTurnAccumulator {
                     ..
                 } if !signature.is_empty() => {}
                 ReasoningContent::Redacted { data } if !data.is_empty() => {}
-                _ => anyhow::bail!("Claude reasoning block is unsigned or unsupported"),
+                _ => return Err(StreamProcessorError::ClaudeReasoningUnsupported),
             }
         }
 
@@ -639,27 +680,28 @@ impl AssistantTurnAccumulator {
             Some(crate::provider_audit::ClaudeBlockKind::Thinking)
         ) {
             let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() else {
-                anyhow::bail!("Claude thinking has no declared position");
+                return Err(StreamProcessorError::ClaudeThinkingNoPosition);
             };
             let [ReasoningContent::Text {
                 text: observed,
                 signature: observed_signature,
             }] = current.content.as_slice()
             else {
-                anyhow::bail!("Claude thinking changed native kind");
+                return Err(StreamProcessorError::ClaudeThinkingKindChanged);
             };
             let [ReasoningContent::Text {
                 text: completed,
                 signature: completed_signature,
             }] = reasoning.content.as_slice()
             else {
-                anyhow::bail!("Claude thinking completion changed native kind");
+                return Err(StreamProcessorError::ClaudeThinkingCompletionKindChanged);
             };
-            anyhow::ensure!(observed == completed, "Claude thinking bytes changed");
-            anyhow::ensure!(
-                observed_signature.is_none() || observed_signature == completed_signature,
-                "Claude thinking signature changed"
-            );
+            if !(observed == completed) {
+                return Err(StreamProcessorError::ClaudeThinkingBytesChanged);
+            }
+            if !(observed_signature.is_none() || observed_signature == completed_signature) {
+                return Err(StreamProcessorError::ClaudeThinkingSignatureChanged);
+            }
             *current = reasoning;
             return Ok(());
         }
@@ -668,19 +710,18 @@ impl AssistantTurnAccumulator {
             Some(crate::provider_audit::ClaudeBlockKind::RedactedThinking)
         ) {
             let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() else {
-                anyhow::bail!("Claude redacted block has no declared position");
+                return Err(StreamProcessorError::ClaudeRedactedNoPosition);
             };
             let [ReasoningContent::Redacted { data: observed }] = current.content.as_slice() else {
-                anyhow::bail!("Claude redacted block changed native kind");
+                return Err(StreamProcessorError::ClaudeRedactedKindChanged);
             };
             let [ReasoningContent::Redacted { data: completed }] = reasoning.content.as_slice()
             else {
-                anyhow::bail!("Claude redacted completion changed native kind");
+                return Err(StreamProcessorError::ClaudeRedactedCompletionKindChanged);
             };
-            anyhow::ensure!(
-                observed.is_empty() || observed == completed,
-                "Claude redacted bytes changed"
-            );
+            if !(observed.is_empty() || observed == completed) {
+                return Err(StreamProcessorError::ClaudeRedactedBytesChanged);
+            }
             *current = reasoning;
             return Ok(());
         }
@@ -695,12 +736,11 @@ impl AssistantTurnAccumulator {
                         text: final_text, ..
                     } = first
                     else {
-                        anyhow::bail!("Claude redacted block followed unfinished text preview");
+                        return Err(StreamProcessorError::ClaudeRedactedAfterPreview);
                     };
-                    anyhow::ensure!(
-                        preview == final_text,
-                        "Claude signed thinking changed preview bytes"
-                    );
+                    if !(preview == final_text) {
+                        return Err(StreamProcessorError::ClaudeSignedPreviewChanged);
+                    }
                     *current.content.last_mut().expect("preview exists") = first.clone();
                     current
                         .content

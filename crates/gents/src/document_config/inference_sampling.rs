@@ -1,5 +1,6 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+use super::error::DocumentConfigError;
 
 /// Optional sampling overrides shared by inference profiles; unsupported
 /// explicit settings must be rejected, not ignored.
@@ -107,12 +108,14 @@ impl InferenceSampling {
         violations
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
         if violations.is_empty() {
             Ok(())
         } else {
-            anyhow::bail!(violations.join("; "))
+            Err(DocumentConfigError::InferenceSamplingViolations {
+                violations: violations.join("; "),
+            })
         }
     }
 }

@@ -31,7 +31,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     home.path(),
                     next.manifest(),
                     next.digest(),
-                    |path| next.asset(path),
+                    |path| Ok(next.asset(path)?),
                     false,
                     None,
                     &bindings,
@@ -124,7 +124,7 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
                 home.path(),
                 archive.manifest(),
                 archive.digest(),
-                |path| archive.asset(path),
+                |path| Ok(archive.asset(path)?),
                 false,
             )
             .is_err());
@@ -154,7 +154,7 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
                 home.path(),
                 archive.manifest(),
                 archive.digest(),
-                |path| archive.asset(path),
+                |path| Ok(archive.asset(path)?),
                 false,
             )
             .is_err());

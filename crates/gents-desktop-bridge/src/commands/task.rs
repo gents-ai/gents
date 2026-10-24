@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use gents::document_config::{Schedule, Task};
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
@@ -8,34 +8,38 @@ use super::super::types::{
     EventSourceDeleteRequest, EventSourceSaveRequest, ScheduleRunRequest, ScheduleSaveRequest,
     TaskRunRequest, TaskRunResult, TaskSaveRequest, TriggerSaveRequest,
 };
-use super::util::require_trimmed;
+use super::util::{require_trimmed, BridgeCommandError};
 
 fn schedule_for_run<'a>(
     rows: &'a [Schedule],
     id: &str,
     node_did: Option<&str>,
-) -> Result<&'a Schedule> {
+) -> Result<&'a Schedule, BridgeCommandError> {
     let mut matches = rows
         .iter()
         .filter(|row| row.schedule_id == id && node_did.is_none_or(|did| row.node_did == did));
     let row = matches
         .next()
-        .ok_or_else(|| anyhow!("schedule {id} was not found"))?;
+        .ok_or_else(|| BridgeCommandError::ScheduleNotFound { id: id.to_owned() })?;
     if matches.next().is_some() {
-        bail!("schedule {id} is ambiguous across agent scopes");
+        return Err(BridgeCommandError::ScheduleAmbiguous { id: id.to_owned() });
     }
     Ok(row)
 }
 
-fn task_for_run<'a>(rows: &'a [Task], id: &str, node_did: Option<&str>) -> Result<&'a Task> {
+fn task_for_run<'a>(
+    rows: &'a [Task],
+    id: &str,
+    node_did: Option<&str>,
+) -> Result<&'a Task, BridgeCommandError> {
     let mut matches = rows
         .iter()
         .filter(|row| row.task_id == id && node_did.is_none_or(|did| row.node_did == did));
     let row = matches
         .next()
-        .ok_or_else(|| anyhow!("task {id} was not found"))?;
+        .ok_or_else(|| BridgeCommandError::TaskNotFound { id: id.to_owned() })?;
     if matches.next().is_some() {
-        bail!("task {id} is ambiguous across agent scopes");
+        return Err(BridgeCommandError::TaskAmbiguous { id: id.to_owned() });
     }
     Ok(row)
 }

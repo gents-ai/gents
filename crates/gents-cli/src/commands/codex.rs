@@ -1,8 +1,7 @@
 use std::io::IsTerminal;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 use tokio::net::TcpStream;
 use url::{Host, Url};
 
@@ -10,6 +9,45 @@ use crate::cli::args::CodexArgs;
 
 const SHIM_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CODEX_BIN_ENV: &str = "GENTS_CODEX_BIN";
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CodexError {
+    #[error(
+        "`gents codex` is interactive and needs a terminal; use `gents chat` for scripted turns"
+    )]
+    NotInteractive,
+    #[error("invalid --remote address {remote:?}")]
+    InvalidRemoteAddress {
+        remote: String,
+        #[source]
+        source: url::ParseError,
+    },
+    #[error("invalid --remote scheme {scheme:?}; expected ws, wss, or unix")]
+    InvalidRemoteScheme { scheme: String },
+    #[error("Codex shim WebSocket endpoint is missing a host")]
+    MissingHost,
+    #[error("Codex shim WebSocket endpoint is missing a port")]
+    MissingPort,
+    #[error(
+        "remote app-server token from {auth_env} requires a wss:// or loopback ws:// endpoint"
+    )]
+    RemoteAuthUnsupported { auth_env: String },
+    #[error("no Codex shim listening at {authority} ({error}); start `gents server` first")]
+    ShimUnreachable {
+        authority: String,
+        error: std::io::Error,
+    },
+    #[error("timed out reaching the Codex shim at {authority}; start `gents server` first")]
+    ShimTimeout { authority: String },
+    #[error("launching `{codex_bin}`; install the Codex CLI or set {CODEX_BIN_ENV} to its path")]
+    Launch {
+        codex_bin: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Codex exited with {status}")]
+    Exited { status: ExitStatus },
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RemoteEndpoint {
@@ -21,9 +59,9 @@ enum RemoteEndpoint {
     UnixSocket,
 }
 
-pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
+pub(crate) async fn codex(args: CodexArgs) -> Result<(), CodexError> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        bail!("`gents codex` is interactive and needs a terminal; use `gents chat` for scripted turns");
+        return Err(CodexError::NotInteractive);
     }
 
     let endpoint = resolve_endpoint(&args.remote)?;
@@ -42,16 +80,15 @@ pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
-        .with_context(|| {
-            format!(
-                "launching `{codex_bin}`; install the Codex CLI or set {CODEX_BIN_ENV} to its path"
-            )
+        .map_err(|source| CodexError::Launch {
+            codex_bin: codex_bin.clone(),
+            source,
         })?;
 
     if status.success() {
         Ok(())
     } else {
-        bail!("Codex exited with {status}")
+        Err(CodexError::Exited { status })
     }
 }
 
@@ -76,23 +113,26 @@ fn codex_command_args(args: &CodexArgs) -> Vec<String> {
     command
 }
 
-fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint> {
+fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint, CodexError> {
     if remote.starts_with("unix://") {
         return Ok(RemoteEndpoint::UnixSocket);
     }
 
-    let url = Url::parse(remote).with_context(|| format!("invalid --remote address {remote:?}"))?;
+    let url = Url::parse(remote).map_err(|source| CodexError::InvalidRemoteAddress {
+        remote: remote.to_owned(),
+        source,
+    })?;
     let secure = match url.scheme() {
         "ws" => false,
         "wss" => true,
-        scheme => bail!("invalid --remote scheme {scheme:?}; expected ws, wss, or unix"),
+        scheme => {
+            return Err(CodexError::InvalidRemoteScheme {
+                scheme: scheme.to_owned(),
+            })
+        }
     };
-    let host = url
-        .host()
-        .context("Codex shim WebSocket endpoint is missing a host")?;
-    let port = url
-        .port_or_known_default()
-        .context("Codex shim WebSocket endpoint is missing a port")?;
+    let host = url.host().ok_or(CodexError::MissingHost)?;
+    let port = url.port_or_known_default().ok_or(CodexError::MissingPort)?;
     let loopback = match host {
         Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
         Host::Ipv4(address) => address.is_loopback(),
@@ -109,7 +149,10 @@ fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint> {
     })
 }
 
-fn validate_remote_auth(endpoint: &RemoteEndpoint, auth_env: Option<&str>) -> Result<()> {
+fn validate_remote_auth(
+    endpoint: &RemoteEndpoint,
+    auth_env: Option<&str>,
+) -> Result<(), CodexError> {
     let Some(auth_env) = auth_env else {
         return Ok(());
     };
@@ -119,26 +162,27 @@ fn validate_remote_auth(endpoint: &RemoteEndpoint, auth_env: Option<&str>) -> Re
             | RemoteEndpoint::WebSocket { loopback: true, .. }
     );
     if !supported {
-        bail!(
-            "remote app-server token from {auth_env} requires a wss:// or loopback ws:// endpoint"
-        );
+        return Err(CodexError::RemoteAuthUnsupported {
+            auth_env: auth_env.to_owned(),
+        });
     }
     Ok(())
 }
 
-async fn probe_shim(endpoint: &RemoteEndpoint) -> Result<()> {
+async fn probe_shim(endpoint: &RemoteEndpoint) -> Result<(), CodexError> {
     let RemoteEndpoint::WebSocket { authority, .. } = endpoint else {
         return Ok(());
     };
     let connect = TcpStream::connect(authority);
     match tokio::time::timeout(SHIM_PROBE_TIMEOUT, connect).await {
         Ok(Ok(_)) => Ok(()),
-        Ok(Err(error)) => {
-            bail!("no Codex shim listening at {authority} ({error}); start `gents server` first")
-        }
-        Err(_) => {
-            bail!("timed out reaching the Codex shim at {authority}; start `gents server` first")
-        }
+        Ok(Err(error)) => Err(CodexError::ShimUnreachable {
+            authority: authority.to_owned(),
+            error,
+        }),
+        Err(_) => Err(CodexError::ShimTimeout {
+            authority: authority.to_owned(),
+        }),
     }
 }
 

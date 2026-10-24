@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -51,7 +52,7 @@ async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Val
         .transact_write("test.self_config.read", |txn| {
             let id = id.clone();
             Box::pin(async move {
-                Ok(
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
                     read_desired_state_record_in_txn(txn, collection, NODE_DID, &id)
                         .await?
                         .unwrap()
@@ -88,7 +89,7 @@ async fn call_tool(
         .unwrap_or_else(|| panic!("missing config tool for {name}"))
         .call(json!({"argv": argv}).to_string())
         .await
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| ErrorChain(&error).to_string())
 }
 
 fn legacy_test_call_as_config_argv(name: &str, args: &Value) -> Vec<String> {

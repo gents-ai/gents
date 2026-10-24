@@ -20,7 +20,7 @@ pub(crate) fn dispatch(args: PluginBuildArgs) -> Result<()> {
     let bytes =
         std::fs::read(&out_path).with_context(|| format!("reading back {}", out_path.display()))?;
     let afb = Afb::from_bytes(&bytes).context("reading back the plugin that was just built")?;
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "namespace": afb.manifest.package.namespace,
         "name": afb.manifest.package.name,
         "version": afb.manifest.package.version,
@@ -28,7 +28,7 @@ pub(crate) fn dispatch(args: PluginBuildArgs) -> Result<()> {
         "digest": afterburner_cloud::afterburner_afb::digest::hex(&afb.digest),
         "size_bytes": bytes.len(),
         "out": out_path,
-    }))
+    }))?)
 }
 
 fn default_out_path(dir: &Path, local: &afterburner_cloud::pkg::LocalPackage) -> PathBuf {

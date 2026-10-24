@@ -91,14 +91,14 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
         .map_err(|error| error.error)
         .with_context(|| format!("writing {}", out.display()))?;
 
-    crate::print_json(&serde_json::json!({
+    Ok(crate::print_json(&serde_json::json!({
         "pack": name,
         "namespace": namespace,
         "version": coordinate.version,
         "digest": header.digest,
         "size_bytes": size_bytes,
         "out": out.display().to_string(),
-    }))
+    }))?)
 }
 
 async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
@@ -111,14 +111,14 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
         );
         let archive = crate::commands::pack::local::open(&local, &home)?;
         let manifest = archive.manifest();
-        return crate::print_json(&serde_json::json!({
+        return Ok(crate::print_json(&serde_json::json!({
             "pack": manifest.name,
             "namespace": manifest.metadata.namespace,
             "version": manifest.version,
             "digest": archive.digest(),
             "source": "local",
             "home": home,
-        }));
+        }))?);
     }
     let spec = match &args.version {
         Some(version) => format!("{}@{version}", args.package),
@@ -137,14 +137,14 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
         gents::pack_resolve::ResolvedFrom::Registry { .. } => "registry",
     };
     let manifest = resolved.archive.manifest();
-    crate::print_json(&serde_json::json!({
+    Ok(crate::print_json(&serde_json::json!({
         "pack": manifest.name,
         "namespace": manifest.metadata.namespace,
         "version": manifest.version,
         "digest": resolved.archive.digest(),
         "source": source,
         "home": home,
-    }))
+    }))?)
 }
 
 fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<()> {
@@ -160,7 +160,7 @@ pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
     let results = client
         .search(args.query.as_deref().unwrap_or(""), args.page.max(1))
         .await?;
-    crate::print_json(&results)
+    Ok(crate::print_json(&results)?)
 }
 
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
@@ -173,12 +173,13 @@ pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
     anyhow::ensure!(!bytes.is_empty(), "{} is empty", args.file.display());
     let client = RegistryClient::new(registry);
     let result = client.publish(&token, bytes).await?;
-    crate::print_json(&result)
+    Ok(crate::print_json(&result)?)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -247,8 +248,11 @@ pub(crate) mod tests {
         };
         let error = resolve(None).unwrap_err();
         assert!(
-            format!("{error:#}").contains("gents pack login"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("gents pack login"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         gents::pack_registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
         assert_eq!(resolve(None).unwrap(), "gcpat_saved");
@@ -454,7 +458,7 @@ pub(crate) mod tests {
         ] {
             let error = verify_pack_coordinate(manifest, namespace, name, version)
                 .expect_err("every coordinate component is identity-bearing");
-            let message = format!("{error:#}");
+            let message = ErrorChain(&error).to_string();
             assert!(message.contains("different identity"), "{message}");
             assert!(
                 message.contains(&format!("{namespace}/{name}@{version}")),
@@ -503,7 +507,7 @@ pub(crate) mod tests {
         let error = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect_err("mismatched digest must be refused");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains(&wrong_digest), "{message}");
         assert!(message.contains("refusing to install"), "{message}");
         assert_eq!(stored_packs(home.path()), 0);
@@ -526,8 +530,11 @@ pub(crate) mod tests {
         .await
         .expect_err("a manifest from another namespace must be refused");
         assert!(
-            format!("{error:#}").contains("different identity"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("different identity"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(stored_packs(home.path()), 0);
     }
@@ -542,7 +549,13 @@ pub(crate) mod tests {
         let error = fetch_pack(&client, Some(home.path()), "gents", "does_not_exist", None)
             .await
             .expect_err("unknown pack must be refused, not silently substituted");
-        assert!(format!("{error:#}").contains("nothing at"), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("nothing at"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -564,8 +577,9 @@ pub(crate) mod tests {
             .await
             .expect_err("advertised bodies over the archive limit must not be buffered");
         assert!(
-            format!("{error:#}").contains("compressed bound"),
-            "{error:#}"
+            ErrorChain(&error).to_string().contains("compressed bound"),
+            "{}",
+            ErrorChain(&error)
         );
     }
 }

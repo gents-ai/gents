@@ -1,4 +1,30 @@
 use super::*;
+use anyhow::{Context, Result};
+use gents_protocol::error_chain::ErrorChain;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ServerError {
+    #[error("refusing to bind app-server shim on unspecified address {bind_addr}; bind loopback or a specific interface instead")]
+    UnspecifiedBindAddress { bind_addr: std::net::IpAddr },
+    #[error("refusing to bind unauthenticated app-server shim on {bind_addr}; set --codex-shim-auth-token-env or bind loopback")]
+    UnauthenticatedBindAddress { bind_addr: std::net::IpAddr },
+    #[error("creating Codex UI log dir {}", log_dir.display())]
+    CreateLogDir {
+        log_dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("resolving current working directory")]
+    CurrentDir(#[source] std::io::Error),
+    #[error("binding Codex shim on {addr}")]
+    Bind {
+        addr: SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("serving Codex TUI shim")]
+    Serve(#[source] std::io::Error),
+}
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
@@ -53,13 +79,13 @@ impl BoundCodexShim {
     }
 
     pub(crate) fn spawn(self) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.serve())
+        tokio::spawn(async move { self.serve().await.map_err(anyhow::Error::from) })
     }
 
-    async fn serve(self) -> Result<()> {
+    async fn serve(self) -> std::result::Result<(), ServerError> {
         axum::serve(self.listener, self.app)
             .await
-            .context("serving Codex TUI shim")
+            .map_err(ServerError::Serve)
     }
 }
 
@@ -73,14 +99,16 @@ pub(crate) async fn resolve_codex_shim_agent_id(
 
 pub(crate) enum CodexShimBindError {
     DependencyMissing(anyhow::Error),
-    HostResource(anyhow::Error),
+    HostResource(ServerError),
 }
 
 impl CodexShimBindError {
-    pub(crate) fn error(&self) -> &anyhow::Error {
-        match self {
-            Self::DependencyMissing(error) | Self::HostResource(error) => error,
-        }
+    pub(crate) fn error(&self) -> ErrorChain<'_> {
+        let error: &(dyn std::error::Error + 'static) = match self {
+            Self::DependencyMissing(error) => error.as_ref(),
+            Self::HostResource(error) => error,
+        };
+        ErrorChain(error)
     }
 
     pub(crate) fn is_dependency_missing(&self) -> bool {
@@ -97,7 +125,10 @@ pub(crate) async fn bind_codex_shim(
     let codex_home = args.home.join(gents::home::CODEX_UI_DIR_NAME);
     let codex_log_dir = codex_home.join("log");
     fs::create_dir_all(&codex_log_dir)
-        .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))
+        .map_err(|source| ServerError::CreateLogDir {
+            log_dir: codex_log_dir.clone(),
+            source,
+        })
         .map_err(CodexShimBindError::HostResource)?;
     let trace_path = codex_log_dir.join("codex-shim-events.jsonl");
     let node_did = args.node_did.clone();
@@ -119,7 +150,7 @@ pub(crate) async fn bind_codex_shim(
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
         cwd: std::env::current_dir()
-            .context("resolving current working directory")
+            .map_err(ServerError::CurrentDir)
             .map_err(CodexShimBindError::HostResource)?,
         fs_root: args.fs_root,
         node: args.node,
@@ -143,7 +174,7 @@ pub(crate) async fn bind_codex_shim(
     let addr = SocketAddr::new(args.bind_addr, args.port);
     let listener = TcpListener::bind(addr)
         .await
-        .with_context(|| format!("binding Codex shim on {addr}"))
+        .map_err(|source| ServerError::Bind { addr, source })
         .map_err(CodexShimBindError::HostResource)?;
 
     Ok(BoundCodexShim {
@@ -161,16 +192,12 @@ pub(crate) async fn bind_codex_shim(
 pub(super) fn validate_bind_security(
     bind_addr: std::net::IpAddr,
     auth_token: Option<&str>,
-) -> Result<()> {
+) -> std::result::Result<(), ServerError> {
     if bind_addr.is_unspecified() {
-        anyhow::bail!(
-            "refusing to bind app-server shim on unspecified address {bind_addr}; bind loopback or a specific interface instead"
-        );
+        return Err(ServerError::UnspecifiedBindAddress { bind_addr });
     }
     if !bind_addr.is_loopback() && auth_token.is_none() {
-        anyhow::bail!(
-            "refusing to bind unauthenticated app-server shim on {bind_addr}; set --codex-shim-auth-token-env or bind loopback"
-        );
+        return Err(ServerError::UnauthenticatedBindAddress { bind_addr });
     }
     Ok(())
 }

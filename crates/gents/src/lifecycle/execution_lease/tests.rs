@@ -636,18 +636,18 @@ async fn expire_observed_execution(node: &EmbeddedNode, doc_id: &str) -> AgentRe
 async fn recover_observed_execution(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
-) -> Result<TerminalizeResult> {
+) -> Result<TerminalizeResult, Box<dyn std::error::Error + Send + Sync>> {
     let agent = row
         .node_did
         .as_deref()
-        .context("observed request missing agent")?;
+        .ok_or("observed request missing agent")?;
     let before_generation = row.execution_generation.as_deref();
     let report = RequestLifecycle::recover_all(node, agent).await?;
     let after = request_row(
         node,
         row.doc_id
             .as_deref()
-            .context("observed request missing document")?,
+            .ok_or("observed request missing document")?,
     )
     .await;
     let recovered_exact_request = after

@@ -6,6 +6,7 @@ use crate::config_client::{
 use crate::document_config::{
     Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools,
 };
+use gents_protocol::error_chain::ErrorChain;
 
 fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::AgentCatalogView> {
     let mut view = agent::AgentCatalogView::default();
@@ -72,9 +73,10 @@ pub(super) async fn agent_preview(
 ) -> Result<String> {
     match agent_apply(node, owner, args, ceiling, true).await {
         Ok(result) => Ok(result),
-        Err(error) => {
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
-        }
+        Err(error) => Ok(
+            ordered! {"admitted":false,"committed":false,"rejection":ErrorChain(error.as_ref()).to_string()}
+                .pretty()?,
+        ),
     }
 }
 
@@ -141,9 +143,10 @@ pub(super) async fn model_agent_preview(
     .await
     {
         Ok(result) => Ok(result),
-        Err(error) => {
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
-        }
+        Err(error) => Ok(
+            ordered! {"admitted":false,"committed":false,"rejection":ErrorChain(error.as_ref()).to_string()}
+                .pretty()?,
+        ),
     }
 }
 
@@ -528,5 +531,5 @@ async fn agent_apply_in_txn(
     if !preview {
         apply_desired_state_plan(txn, &plan).await?;
     }
-    ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_id":id,"agent":doc,"make_default":args.make_default}.pretty()
+    Ok(ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_id":id,"agent":doc,"make_default":args.make_default}.pretty()?)
 }

@@ -10,6 +10,40 @@ use crate::cli::args::PluginRunArgs;
 
 use super::store::{self, InstalledPlugin};
 
+#[derive(Debug, thiserror::Error)]
+enum PluginRunError {
+    #[error("{coordinate} was refused before it ran: {diagnostics}")]
+    Refused {
+        coordinate: String,
+        diagnostics: String,
+    },
+    #[error("{coordinate} ran out of its fuel budget: {diagnostics}")]
+    OutOfFuel {
+        coordinate: String,
+        diagnostics: String,
+    },
+    #[error("{coordinate} exceeded its memory budget: {diagnostics}")]
+    OutOfMemory {
+        coordinate: String,
+        diagnostics: String,
+    },
+    #[error("{coordinate} exceeded its wall-clock budget: {diagnostics}")]
+    Timeout {
+        coordinate: String,
+        diagnostics: String,
+    },
+    #[error("{coordinate} did not return a single JSON value: {diagnostics}")]
+    BadOutput {
+        coordinate: String,
+        diagnostics: String,
+    },
+    #[error("{coordinate} failed: {diagnostics}")]
+    Failed {
+        coordinate: String,
+        diagnostics: String,
+    },
+}
+
 pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
     let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
@@ -31,7 +65,7 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
         executor = executor.with_models(Arc::new(AccessModels(access)));
     }
     let output = run_plugin(&executor, &record, input, args.bind_dir.as_deref()).await?;
-    crate::print_json(&output)
+    Ok(crate::print_json(&output)?)
 }
 
 /// Runs the installed `namespace/name` with `input` and returns its own
@@ -71,7 +105,7 @@ pub async fn call_installed(
     if let Some(note) = &call.binding_note {
         tracing::warn!(plugin = %coordinate, "{note}");
     }
-    outcome_output(&coordinate, call.outcome)
+    Ok(outcome_output(&coordinate, call.outcome)?)
 }
 
 async fn run_plugin(
@@ -93,41 +127,41 @@ async fn run_plugin(
     if let Some(note) = &call.binding_note {
         eprintln!("{note}");
     }
-    outcome_output(&coordinate, call.outcome)
+    Ok(outcome_output(&coordinate, call.outcome)?)
 }
 
-fn outcome_output(coordinate: &str, outcome: PluginOutcome) -> Result<serde_json::Value> {
+fn outcome_output(
+    coordinate: &str,
+    outcome: PluginOutcome,
+) -> Result<serde_json::Value, PluginRunError> {
+    let coordinate = coordinate.to_owned();
+    let diagnostics = outcome.diagnostics;
     match outcome.verdict {
         PluginVerdict::Success => Ok(outcome.output),
-        PluginVerdict::Refused => {
-            anyhow::bail!(
-                "{coordinate} was refused before it ran: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::OutOfFuel => {
-            anyhow::bail!(
-                "{coordinate} ran out of its fuel budget: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::OutOfMemory => {
-            anyhow::bail!(
-                "{coordinate} exceeded its memory budget: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::Timeout => {
-            anyhow::bail!(
-                "{coordinate} exceeded its wall-clock budget: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::BadOutput => anyhow::bail!(
-            "{coordinate} did not return a single JSON value: {}",
-            outcome.diagnostics
-        ),
-        PluginVerdict::Failed => anyhow::bail!("{coordinate} failed: {}", outcome.diagnostics),
+        PluginVerdict::Refused => Err(PluginRunError::Refused {
+            coordinate,
+            diagnostics,
+        }),
+        PluginVerdict::OutOfFuel => Err(PluginRunError::OutOfFuel {
+            coordinate,
+            diagnostics,
+        }),
+        PluginVerdict::OutOfMemory => Err(PluginRunError::OutOfMemory {
+            coordinate,
+            diagnostics,
+        }),
+        PluginVerdict::Timeout => Err(PluginRunError::Timeout {
+            coordinate,
+            diagnostics,
+        }),
+        PluginVerdict::BadOutput => Err(PluginRunError::BadOutput {
+            coordinate,
+            diagnostics,
+        }),
+        PluginVerdict::Failed => Err(PluginRunError::Failed {
+            coordinate,
+            diagnostics,
+        }),
     }
 }
 
@@ -135,6 +169,7 @@ fn outcome_output(coordinate: &str, outcome: PluginOutcome) -> Result<serde_json
 mod tests {
     use super::*;
     use gents::plugin::PluginRunner;
+    use gents_protocol::error_chain::ErrorChain;
 
     async fn run_installed(
         bytes: &[u8],
@@ -290,7 +325,7 @@ mod tests {
         })
         .await
         .expect_err("an uninstalled plugin must be refused");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("gents/does_not_exist"), "{message}");
         assert!(message.contains("not installed"), "{message}");
     }
@@ -308,7 +343,7 @@ mod tests {
             home.path(),
             &manifest,
             archive.digest(),
-            |path| archive.asset(path),
+            |path| Ok(archive.asset(path)?),
             false,
         )
         .unwrap();
@@ -335,8 +370,9 @@ mod tests {
             .await
             .expect_err("without a binding the plugin has no filesystem access at all");
         assert!(
-            format!("{error:#}").contains("trapped"),
-            "expected a hard trap from the guest's own failed filesystem access: {error:#}"
+            ErrorChain(error.as_ref()).to_string().contains("trapped"),
+            "expected a hard trap from the guest's own failed filesystem access: {}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -353,7 +389,7 @@ mod tests {
             home.path(),
             &manifest,
             archive.digest(),
-            |path| archive.asset(path),
+            |path| Ok(archive.asset(path)?),
             false,
         )
         .unwrap();
@@ -395,8 +431,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            format!("{error:#}").contains("--grant-authority"),
-            "{error:#}"
+            ErrorChain(&error).to_string().contains("--grant-authority"),
+            "{}",
+            ErrorChain(&error)
         );
         assert!(store::list_records(home.path()).unwrap().is_empty());
 
@@ -449,7 +486,7 @@ mod tests {
             home.path(),
             &manifest,
             archive.digest(),
-            |path| archive.asset(path),
+            |path| Ok(archive.asset(path)?),
             false,
         )
         .unwrap();
@@ -462,7 +499,7 @@ mod tests {
         let error = call_installed(home.path(), "fixture", "list_files", input.clone())
             .await
             .expect_err("a folder the operator has not allowed must be refused");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("cannot read \"root\""), "{message}");
 
         gents::plugin::allowed::add(home.path(), listing.path(), gents::pack::BindAccess::Read)
@@ -475,7 +512,7 @@ mod tests {
         let error = call_installed(home.path(), "fixture", "list_files", serde_json::json!({}))
             .await
             .expect_err("without the field the plugin runs sealed and cannot read anything");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(!message.contains("cannot read"), "{message}");
         assert!(message.contains("trapped"), "{message}");
     }

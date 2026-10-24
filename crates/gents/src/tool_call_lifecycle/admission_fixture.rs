@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::EmbeddedNode;
@@ -6,6 +7,8 @@ use crate::identity::NodeIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
+
+type FixtureResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub struct PublishedAdmissionOptions {
     pub name: String,
@@ -66,7 +69,7 @@ pub(crate) fn fixture_job_pin() -> gents_protocol::job::JobPin {
 pub(crate) async fn write_fixture_job_pin(
     node: &Arc<EmbeddedNode>,
     tool_doc_id: &str,
-) -> anyhow::Result<()> {
+) -> FixtureResult<()> {
     let mutation = format!(
         r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
         crate::graphql::escape_graphql_string(tool_doc_id),
@@ -99,7 +102,7 @@ pub(crate) async fn publish_accepted_on_claimed_request(
     arguments: serde_json::Value,
     await_mode: AwaitMode,
     start_running: bool,
-) -> anyhow::Result<ToolCallLifecycle> {
+) -> FixtureResult<ToolCallLifecycle> {
     let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
     if turn == 0 {
         request.begin_owned_execution(&writer).await?;
@@ -132,14 +135,13 @@ pub(crate) async fn publish_accepted_on_claimed_request(
     let mut published = writer
         .publish_native_turn(request, turn, 0, &message)
         .await?;
-    anyhow::ensure!(
-        published.accepted_tools.len() == 1,
-        "fixture publication must accept exactly one tool call"
-    );
+    if published.accepted_tools.len() != 1 {
+        return Err("fixture publication must accept exactly one tool call".into());
+    }
     let accepted = published.accepted_tools.pop().unwrap();
     let deadline = request
         .claimed_deadline_at()
-        .ok_or_else(|| anyhow::anyhow!("claimed fixture request has no deadline"))?;
+        .ok_or("claimed fixture request has no deadline")?;
     let mut tool = ToolCallLifecycle::from_accepted(
         node,
         node_did.to_owned(),
@@ -441,14 +443,14 @@ async fn claimed_paired_client_request(
 
 pub async fn published_admission(
     options: PublishedAdmissionOptions,
-) -> anyhow::Result<PublishedAdmission> {
+) -> FixtureResult<PublishedAdmission> {
     let (admission, _owner) = published_admission_with_owner(options).await?;
     Ok(admission)
 }
 
 pub async fn published_admission_with_owner(
     options: PublishedAdmissionOptions,
-) -> anyhow::Result<(PublishedAdmission, RequestLifecycle)> {
+) -> FixtureResult<(PublishedAdmission, RequestLifecycle)> {
     let name = options.name;
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
@@ -609,7 +611,7 @@ pub(crate) async fn materialize_session_message(
     tool: &mut ToolCallLifecycle,
     target_node_did: &str,
     prompt: &str,
-) -> anyhow::Result<crate::session_message::SessionMessageReceipt> {
+) -> FixtureResult<crate::session_message::SessionMessageReceipt> {
     let caller = request.request();
     let cause = crate::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
@@ -642,8 +644,8 @@ pub(crate) async fn materialize_session_message(
         false,
     )
     .await?
-    .map_err(anyhow::Error::msg)?;
-    crate::session_message::commit(node, &cause, tool, plan, false).await
+    .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+    Ok(crate::session_message::commit(node, &cause, tool, plan, false).await?)
 }
 
 pub struct PublishedSessionMessage {
@@ -654,17 +656,16 @@ pub struct PublishedSessionMessage {
 
 pub async fn published_session_message(
     options: PublishedAdmissionOptions,
-) -> anyhow::Result<PublishedSessionMessage> {
+) -> FixtureResult<PublishedSessionMessage> {
     Ok(published_session_message_with_owner(options).await?.0)
 }
 
 pub async fn published_session_message_with_owner(
     options: PublishedAdmissionOptions,
-) -> anyhow::Result<(PublishedSessionMessage, RequestLifecycle)> {
-    anyhow::ensure!(
-        options.real_identity && options.await_mode == AwaitMode::Background,
-        "a session message is signed by a real node and runs in background"
-    );
+) -> FixtureResult<(PublishedSessionMessage, RequestLifecycle)> {
+    if !(options.real_identity && options.await_mode == AwaitMode::Background) {
+        return Err("a session message is signed by a real node and runs in background".into());
+    }
     let (mut admission, request) = published_admission_with_owner(PublishedAdmissionOptions {
         tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
         start_running: false,
@@ -773,7 +774,9 @@ mod lifecycle_tests {
         let (node, path, mut tool) = published_spawn_parent("native-terminal").await;
         tool.complete("done").await.unwrap();
         let error = tool.fail("late", FailureClass::External).await.unwrap_err();
-        assert!(format!("{error:#}").contains("illegal tool call transition"));
+        assert!(ErrorChain(error.as_ref())
+            .to_string()
+            .contains("illegal tool call transition"));
         teardown(node, path).await;
     }
 
@@ -781,7 +784,9 @@ mod lifecycle_tests {
     async fn admitted_native_rejects_duplicate_dispatch_without_duplicate_row() {
         let (node, path, mut tool) = published_spawn_parent("native-duplicate").await;
         let error = tool.start_running().await.unwrap_err();
-        assert!(format!("{error:#}").contains("cannot re-dispatch"));
+        assert!(ErrorChain(error.as_ref())
+            .to_string()
+            .contains("cannot re-dispatch"));
         assert_eq!(
             row(&node, "session-native-duplicate").await["lifecycle_state"],
             "running"

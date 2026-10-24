@@ -2,7 +2,6 @@ use gents::config_client::GraphqlEndpoint;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::{Child, Command};
 
@@ -15,6 +14,28 @@ use crate::graphql_access::post_graphql;
 
 use super::cli_process::path_arg;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ServerError {
+    #[error("creating {}", log.display())]
+    CreateLog {
+        log: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    LogHandle(std::io::Error),
+    #[error("spawning pack server")]
+    Spawn(#[source] std::io::Error),
+    #[error("pack server exited before its runtime became ready ({status})")]
+    RuntimeExited { status: std::process::ExitStatus },
+    #[error("timed out waiting for the pack runtime at {graphql} to become ready")]
+    RuntimeTimeout { graphql: String },
+    #[error("pack server exited before becoming ready ({status})")]
+    Exited { status: std::process::ExitStatus },
+    #[error("timed out waiting for the pack server at {url}")]
+    Timeout { url: String },
+}
+
 pub(super) fn spawn_server_with_args_and_env(
     bin: &Path,
     home: &Path,
@@ -22,9 +43,12 @@ pub(super) fn spawn_server_with_args_and_env(
     log: &Path,
     extra: &[&str],
     environment: &[(&str, String)],
-) -> Result<Child> {
-    let file = std::fs::File::create(log).with_context(|| format!("creating {}", log.display()))?;
-    let errfile = file.try_clone()?;
+) -> Result<Child, ServerError> {
+    let file = std::fs::File::create(log).map_err(|source| ServerError::CreateLog {
+        log: log.to_path_buf(),
+        source,
+    })?;
+    let errfile = file.try_clone().map_err(ServerError::LogHandle)?;
     let mut cmd = Command::new(bin);
     cmd.args([
         "server",
@@ -50,14 +74,14 @@ pub(super) fn spawn_server_with_args_and_env(
     cmd.env("GENTS_REGISTRY_STALE_MS", "300000");
     cmd.env("GENTS_ENDPOINT_HEARTBEAT_MS", "1000");
     cmd.stdout(file).stderr(errfile).kill_on_drop(true);
-    cmd.spawn().context("spawning pack server")
+    cmd.spawn().map_err(ServerError::Spawn)
 }
 
 pub(super) async fn wait_runtime_ready(
     graphql: &GraphqlEndpoint,
     node_did: &str,
     server: &mut Child,
-) -> Result<()> {
+) -> Result<(), ServerError> {
     let query = format!(
         r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
         escape_graphql_string(node_did)
@@ -73,11 +97,13 @@ pub(super) async fn wait_runtime_ready(
             }
         }
         if let Ok(Some(status)) = server.try_wait() {
-            bail!("pack server exited before its runtime became ready ({status})");
+            return Err(ServerError::RuntimeExited { status });
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    bail!("timed out waiting for the pack runtime at {graphql} to become ready")
+    Err(ServerError::RuntimeTimeout {
+        graphql: graphql.to_string(),
+    })
 }
 
 fn readiness_snapshot(response: &Value, expected_node_did: &str) -> Option<NodeReadinessSnapshot> {
@@ -88,7 +114,7 @@ fn readiness_snapshot(response: &Value, expected_node_did: &str) -> Option<NodeR
     decode_node_readiness_snapshot(&row, expected_node_did).ok()
 }
 
-pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {
+pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<(), ServerError> {
     let client = reqwest::Client::new();
     for _ in 0..600 {
         if client
@@ -102,9 +128,11 @@ pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {
             return Ok(());
         }
         if let Ok(Some(status)) = server.try_wait() {
-            bail!("pack server exited before becoming ready ({status})");
+            return Err(ServerError::Exited { status });
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    bail!("timed out waiting for the pack server at {url}")
+    Err(ServerError::Timeout {
+        url: url.to_owned(),
+    })
 }

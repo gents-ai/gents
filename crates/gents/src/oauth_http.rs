@@ -2,7 +2,6 @@ use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use bytes::Bytes;
 use defra_node::EmbeddedNode;
 use rig::http_client::{
@@ -13,8 +12,25 @@ use rig::wasm_compat::WasmCompatSend;
 
 use crate::oauth_credential::{
     classify_oauth_auth_error, resolve_oauth_credential, shared_bearer, AccountPick, BearerSource,
-    DbCredentialBearer, OAuthAuthProblem, OAuthCredential, OAuthProduct, OAuthRefreshKind,
+    DbCredentialBearer, OAuthAuthProblem, OAuthCredential, OAuthCredentialError, OAuthProduct,
+    OAuthRefreshKind,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum OAuthHttpError {
+    #[error("BearerAuthHttpClient used without a configured BearerSource")]
+    NoBearerSource,
+    #[error("loading OAuthCredential for node {node_did}")]
+    LoadCredential {
+        node_did: String,
+        #[source]
+        source: OAuthCredentialError,
+    },
+    #[error("{message}")]
+    SignInMissing { message: String },
+}
+
+type Result<T, E = OAuthHttpError> = std::result::Result<T, E>;
 
 pub trait OAuthHttpPolicy: Clone + Default + Send + Sync + 'static {
     // xAI's proxy uses 403 as a NotEntitled tier gate no refresh fixes; with
@@ -157,18 +173,16 @@ where
     }
 
     async fn fresh_auth_header(&self) -> http_client::Result<http_client::HeaderValue> {
-        let bearer = self.bearer.as_ref().ok_or_else(|| {
-            http_client::Error::Instance(
-                anyhow::anyhow!("BearerAuthHttpClient used without a configured BearerSource")
-                    .into(),
-            )
-        })?;
+        let bearer = self
+            .bearer
+            .as_ref()
+            .ok_or_else(|| http_client::Error::Instance(OAuthHttpError::NoBearerSource.into()))?;
         let token = bearer
             .current_bearer()
             .await
             .map_err(|error| http_client::Error::Instance(error.into()))?;
         http_client::HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|error| http_client::Error::Instance(anyhow::Error::from(error).into()))
+            .map_err(|error| http_client::Error::Instance(error.into()))
     }
 
     async fn prepare(&self, req: Request<Bytes>) -> http_client::Result<Request<Bytes>> {
@@ -288,14 +302,17 @@ pub async fn bootstrap_oauth_client(
         pick,
     )
     .await
-    .with_context(|| format!("loading OAuthCredential for node {node_did}"))?
-    .ok_or_else(|| {
-        anyhow::anyhow!(classify_oauth_auth_error(
+    .map_err(|source| OAuthHttpError::LoadCredential {
+        node_did: node_did.to_owned(),
+        source,
+    })?
+    .ok_or_else(|| OAuthHttpError::SignInMissing {
+        message: classify_oauth_auth_error(
             &product,
             node_did,
             provider,
             &OAuthAuthProblem::Missing,
-        ))
+        ),
     })?;
     let credential_id = credential.credential_id.clone();
     let provider = provider.to_string();

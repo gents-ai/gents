@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::Result;
 use flate2::bufread::GzDecoder;
 use flate2::{Compression, GzBuilder};
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,127 @@ pub const MEDIA_TYPE: &str = "application/vnd.gents.pack";
 pub const EXTENSION: &str = "pack";
 pub const HEADER_ENTRY: &str = "pack.json";
 const MAX_HEADER_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackFormatError {
+    #[error("{digest:?} is not a pack digest; expected sha256:<64 hex>")]
+    DigestPrefix { digest: String },
+    #[error("{digest:?} is not a pack digest; expected sha256:<64 lowercase hex>")]
+    DigestHex { digest: String },
+    #[error("reading the pack")]
+    ReadEntries(#[source] io::Error),
+    #[error("reading a pack entry")]
+    ReadEntry(#[source] io::Error),
+    #[error("pack carries more than {limit} entries")]
+    TooManyEntries { limit: usize },
+    #[error("this file does not start with {HEADER_ENTRY}, so it is not a .{EXTENSION} file")]
+    NotPackFile,
+    #[error("this file is empty, so it is not a .{EXTENSION} file")]
+    EmptyPack,
+    #[error("pack member {path:?} is not a regular file")]
+    MemberNotRegular { path: Option<String> },
+    #[error("reading a pack member's path")]
+    MemberPath(#[source] io::Error),
+    #[error("a pack member path is not valid UTF-8")]
+    MemberPathNotUtf8,
+    #[error("reading a pack member's size")]
+    MemberSize(#[source] io::Error),
+    #[error("pack member {path:?} is not a path a pack may carry")]
+    MemberNotDistributable { path: String },
+    #[error("pack member {path:?} is out of order or repeated after {previous:?}")]
+    MemberOutOfOrder { path: String, previous: String },
+    #[error("reading {HEADER_ENTRY}")]
+    ReadHeader(#[source] io::Error),
+    #[error("{HEADER_ENTRY} is larger than {MAX_HEADER_BYTES} bytes")]
+    HeaderTooLarge,
+    #[error("{HEADER_ENTRY} is not valid JSON")]
+    HeaderNotJson(#[source] serde_json::Error),
+    #[error("{HEADER_ENTRY} does not describe a gents pack")]
+    HeaderNotGents,
+    #[error("this pack uses format version {version}; this gents reads version {FORMAT_VERSION}, so update gents to install it")]
+    FormatVersion { version: u32 },
+    #[error("{HEADER_ENTRY} is malformed")]
+    HeaderMalformed(#[source] serde_json::Error),
+    #[error("the pack declares {path:?} and it is unreadable; a plugin's artifact has to be built before the pack is packed")]
+    DeclaredUnreadable {
+        path: String,
+        #[source]
+        source: crate::pack::PackAssetError,
+    },
+    #[error("reading declared pack asset {path:?}")]
+    DeclaredMetadata {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("the pack declares {path:?} and it is not a regular file")]
+    DeclaredNotRegular { path: String },
+    #[error("reading {path:?}")]
+    CopyRead {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("{path:?} changed while the pack was being written; build it again")]
+    CopyChanged { path: String },
+    #[error("writing pack member {path:?}")]
+    AppendMember {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("reading manifest.json")]
+    ReadManifest(#[source] io::Error),
+    #[error("reading the end of the pack")]
+    ReadEnd(#[source] io::Error),
+    #[error("the file has data after the end of the pack")]
+    TrailingData,
+    #[error("this pack carries no manifest.json, so it is not a pack")]
+    NoManifest,
+    #[error("the pack manifest is not valid JSON")]
+    ManifestNotJson(#[source] serde_json::Error),
+    #[error("the pack declares {path:?} and does not carry it")]
+    DeclaredMissing { path: String },
+    #[error("the pack carries {path:?}, which its manifest does not declare")]
+    UndeclaredMember { path: String },
+    #[error("reading pack member {path:?}")]
+    ReadMember {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("{HEADER_ENTRY} claims digest {claimed} but the contents hash to {computed}")]
+    DigestMismatch { claimed: String, computed: String },
+    #[error(
+        "{HEADER_ENTRY} describes {} {} ({:?}) but the manifest is {} {} ({:?})",
+        .header.coordinate,
+        .header.version,
+        .header.kind,
+        .described.coordinate,
+        .described.version,
+        .described.kind
+    )]
+    HeaderMismatch {
+        header: Box<PackHeader>,
+        described: Box<PackHeader>,
+    },
+    #[error("parsing manifest.json")]
+    ParseManifest(#[source] serde_json::Error),
+    #[error("the pack declares {count} files, over the {limit} entry bound")]
+    TooManyDeclared { count: usize, limit: usize },
+    #[error("the pack's files exceed the {limit} byte bound")]
+    TooLarge { limit: u64 },
+    #[error("a file in {} changed while the pack was being written; build it again", dir.display())]
+    SourceChanged { dir: PathBuf },
+    #[error("finishing the pack")]
+    FinishPack(#[source] io::Error),
+    #[error("finishing pack compression")]
+    FinishCompression(#[source] io::Error),
+    #[error("encoding pack.json")]
+    EncodeHeader(#[source] serde_json::Error),
+    #[error("the pack is {written} bytes compressed, over the {limit} byte bound")]
+    TooCompressed { written: u64, limit: u64 },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,14 +173,17 @@ impl PackHeader {
     }
 }
 
-pub fn digest_hex(digest: &str) -> Result<&str> {
+pub fn digest_hex(digest: &str) -> Result<&str, PackFormatError> {
     let hex = digest
         .strip_prefix("sha256:")
-        .with_context(|| format!("{digest:?} is not a pack digest; expected sha256:<64 hex>"))?;
-    ensure!(
-        hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
-        "{digest:?} is not a pack digest; expected sha256:<64 lowercase hex>"
-    );
+        .ok_or_else(|| PackFormatError::DigestPrefix {
+            digest: digest.to_owned(),
+        })?;
+    if !(hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))) {
+        return Err(PackFormatError::DigestHex {
+            digest: digest.to_owned(),
+        });
+    }
     Ok(hex)
 }
 
@@ -90,7 +214,7 @@ pub struct VerifiedPack {
 pub fn read_pack(
     input: impl Read,
     bounds: Bounds,
-    mut asset: impl FnMut(&str, &mut dyn Read) -> Result<()>,
+    mut asset: impl FnMut(&str, &mut dyn Read) -> io::Result<()>,
 ) -> Result<VerifiedPack> {
     let compressed = io::BufReader::new(BoundedReader::new(input, bounds.compressed, "compressed"));
     let decompressed = BoundedReader::new(
@@ -105,48 +229,48 @@ pub fn read_pack(
     let mut paths: Vec<String> = Vec::new();
     let mut digest = PackDigester::default();
     let mut count = 0usize;
-    for entry in archive.entries().context("reading the pack")? {
-        let mut entry = entry.context("reading a pack entry")?;
+    for entry in archive.entries().map_err(PackFormatError::ReadEntries)? {
+        let mut entry = entry.map_err(PackFormatError::ReadEntry)?;
         count += 1;
-        ensure!(
-            count <= bounds.entries,
-            "pack carries more than {} entries",
-            bounds.entries
-        );
-        ensure!(
-            entry.header().entry_type().is_file(),
-            "pack member {:?} is not a regular file",
-            entry.path().ok().map(|path| path.display().to_string())
-        );
+        if count > bounds.entries {
+            return Err(PackFormatError::TooManyEntries {
+                limit: bounds.entries,
+            }
+            .into());
+        }
+        if !entry.header().entry_type().is_file() {
+            return Err(PackFormatError::MemberNotRegular {
+                path: entry.path().ok().map(|path| path.display().to_string()),
+            }
+            .into());
+        }
         let path = entry
             .path()
-            .context("reading a pack member's path")?
+            .map_err(PackFormatError::MemberPath)?
             .to_str()
-            .context("a pack member path is not valid UTF-8")?
+            .ok_or(PackFormatError::MemberPathNotUtf8)?
             .to_owned();
 
         if header.is_none() {
-            ensure!(
-                path == HEADER_ENTRY,
-                "this file does not start with {HEADER_ENTRY}, so it is not a .{EXTENSION} file"
-            );
+            if path != HEADER_ENTRY {
+                return Err(PackFormatError::NotPackFile.into());
+            }
             header = Some(read_header(&mut entry)?);
             continue;
         }
-        ensure!(
-            path != HEADER_ENTRY && is_distributable_asset_path(&path),
-            "pack member {path:?} is not a path a pack may carry"
-        );
-        if let Some(previous) = paths.last() {
-            ensure!(
-                path.as_str() > previous.as_str(),
-                "pack member {path:?} is out of order or repeated after {previous:?}"
-            );
+        if path == HEADER_ENTRY || !is_distributable_asset_path(&path) {
+            return Err(PackFormatError::MemberNotDistributable { path }.into());
         }
-        let len = entry
-            .header()
-            .size()
-            .context("reading a pack member's size")?;
+        if let Some(previous) = paths.last() {
+            if path.as_str() <= previous.as_str() {
+                return Err(PackFormatError::MemberOutOfOrder {
+                    path,
+                    previous: previous.clone(),
+                }
+                .into());
+            }
+        }
+        let len = entry.header().size().map_err(PackFormatError::MemberSize)?;
         digest.begin_entry(&path, len);
         let mut hashing = HashingReader {
             inner: &mut entry,
@@ -156,65 +280,67 @@ pub fn read_pack(
             let mut bytes = Vec::new();
             hashing
                 .read_to_end(&mut bytes)
-                .context("reading manifest.json")?;
+                .map_err(PackFormatError::ReadManifest)?;
             manifest_bytes = Some(bytes);
         } else {
-            asset(&path, &mut hashing).with_context(|| format!("reading pack member {path:?}"))?;
-            io::copy(&mut hashing, &mut io::sink())
-                .with_context(|| format!("reading pack member {path:?}"))?;
+            asset(&path, &mut hashing).map_err(|source| PackFormatError::ReadMember {
+                path: path.clone(),
+                source,
+            })?;
+            io::copy(&mut hashing, &mut io::sink()).map_err(|source| {
+                PackFormatError::ReadMember {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
         }
         paths.push(path);
     }
     let mut decompressed = archive.into_inner();
-    io::copy(&mut decompressed, &mut io::sink()).context("reading the end of the pack")?;
+    io::copy(&mut decompressed, &mut io::sink()).map_err(PackFormatError::ReadEnd)?;
     let mut compressed = decompressed.inner.into_inner();
-    ensure!(
-        compressed
-            .fill_buf()
-            .context("reading the end of the pack")?
-            .is_empty(),
-        "the file has data after the end of the pack"
-    );
+    if !compressed
+        .fill_buf()
+        .map_err(PackFormatError::ReadEnd)?
+        .is_empty()
+    {
+        return Err(PackFormatError::TrailingData.into());
+    }
 
-    let header =
-        header.with_context(|| format!("this file is empty, so it is not a .{EXTENSION} file"))?;
-    let manifest_bytes =
-        manifest_bytes.context("this pack carries no manifest.json, so it is not a pack")?;
+    let header = header.ok_or(PackFormatError::EmptyPack)?;
+    let manifest_bytes = manifest_bytes.ok_or(PackFormatError::NoManifest)?;
     let manifest: PackManifest =
-        serde_json::from_slice(&manifest_bytes).context("the pack manifest is not valid JSON")?;
+        serde_json::from_slice(&manifest_bytes).map_err(PackFormatError::ManifestNotJson)?;
     validate_manifest(&manifest.name.clone(), &manifest)?;
 
     let declared = declared_paths(&manifest);
     for path in &declared {
-        ensure!(
-            paths.binary_search(path).is_ok(),
-            "the pack declares {path:?} and does not carry it"
-        );
+        if paths.binary_search(path).is_err() {
+            return Err(PackFormatError::DeclaredMissing { path: path.clone() }.into());
+        }
     }
     for path in &paths {
-        ensure!(
-            declared.binary_search(path).is_ok(),
-            "the pack carries {path:?}, which its manifest does not declare"
-        );
+        if declared.binary_search(path).is_err() {
+            return Err(PackFormatError::UndeclaredMember { path: path.clone() }.into());
+        }
     }
 
     let computed = digest.finish();
-    ensure!(
-        computed == header.digest,
-        "{HEADER_ENTRY} claims digest {} but the contents hash to {computed}",
-        header.digest
-    );
+    if computed != header.digest {
+        return Err(PackFormatError::DigestMismatch {
+            claimed: header.digest.clone(),
+            computed,
+        }
+        .into());
+    }
     let described = PackHeader::describe(&manifest, computed);
-    ensure!(
-        described == header,
-        "{HEADER_ENTRY} describes {} {} ({:?}) but the manifest is {} {} ({:?})",
-        header.coordinate,
-        header.version,
-        header.kind,
-        described.coordinate,
-        described.version,
-        described.kind
-    );
+    if described != header {
+        return Err(PackFormatError::HeaderMismatch {
+            header: Box::new(header),
+            described: Box::new(described),
+        }
+        .into());
+    }
     Ok(VerifiedPack {
         header,
         manifest,
@@ -222,7 +348,7 @@ pub fn read_pack(
     })
 }
 
-pub fn peek_header(input: impl Read, bounds: Bounds) -> Result<PackHeader> {
+pub fn peek_header(input: impl Read, bounds: Bounds) -> Result<PackHeader, PackFormatError> {
     let compressed = io::BufReader::new(BoundedReader::new(input, bounds.compressed, "compressed"));
     let decompressed = BoundedReader::new(
         GzDecoder::new(compressed),
@@ -230,51 +356,46 @@ pub fn peek_header(input: impl Read, bounds: Bounds) -> Result<PackHeader> {
         "decompressed",
     );
     let mut archive = tar::Archive::new(decompressed);
-    let mut entries = archive.entries().context("reading the pack")?;
+    let mut entries = archive.entries().map_err(PackFormatError::ReadEntries)?;
     let mut entry = entries
         .next()
-        .with_context(|| format!("this file is empty, so it is not a .{EXTENSION} file"))??;
+        .ok_or(PackFormatError::EmptyPack)?
+        .map_err(PackFormatError::ReadEntry)?;
     let path = entry
         .path()
-        .context("reading a pack member's path")?
+        .map_err(PackFormatError::MemberPath)?
         .to_str()
-        .context("a pack member path is not valid UTF-8")?
+        .ok_or(PackFormatError::MemberPathNotUtf8)?
         .to_owned();
-    ensure!(
-        path == HEADER_ENTRY,
-        "this file does not start with {HEADER_ENTRY}, so it is not a .{EXTENSION} file"
-    );
+    if path != HEADER_ENTRY {
+        return Err(PackFormatError::NotPackFile);
+    }
     read_header(&mut entry)
 }
 
-fn read_header(entry: &mut impl Read) -> Result<PackHeader> {
+fn read_header(entry: &mut impl Read) -> Result<PackHeader, PackFormatError> {
     let mut bytes = Vec::new();
     entry
         .take(MAX_HEADER_BYTES + 1)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("reading {HEADER_ENTRY}"))?;
-    ensure!(
-        bytes.len() as u64 <= MAX_HEADER_BYTES,
-        "{HEADER_ENTRY} is larger than {MAX_HEADER_BYTES} bytes"
-    );
+        .map_err(PackFormatError::ReadHeader)?;
+    if bytes.len() as u64 > MAX_HEADER_BYTES {
+        return Err(PackFormatError::HeaderTooLarge);
+    }
     #[derive(Deserialize)]
     struct Probe {
         format: Option<String>,
         format_version: Option<u32>,
     }
-    let probe: Probe = serde_json::from_slice(&bytes)
-        .with_context(|| format!("{HEADER_ENTRY} is not valid JSON"))?;
-    ensure!(
-        probe.format.as_deref() == Some(FORMAT),
-        "{HEADER_ENTRY} does not describe a gents pack"
-    );
+    let probe: Probe = serde_json::from_slice(&bytes).map_err(PackFormatError::HeaderNotJson)?;
+    if probe.format.as_deref() != Some(FORMAT) {
+        return Err(PackFormatError::HeaderNotGents);
+    }
     let version = probe.format_version.unwrap_or_default();
-    ensure!(
-        version == FORMAT_VERSION,
-        "this pack uses format version {version}; this gents reads version {FORMAT_VERSION}, \
-         so update gents to install it"
-    );
-    serde_json::from_slice(&bytes).with_context(|| format!("{HEADER_ENTRY} is malformed"))
+    if version != FORMAT_VERSION {
+        return Err(PackFormatError::FormatVersion { version });
+    }
+    serde_json::from_slice(&bytes).map_err(PackFormatError::HeaderMalformed)
 }
 
 pub fn write_pack(dir: &Path, out: impl Write) -> Result<PackHeader> {
@@ -286,33 +407,35 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
     let mut manifest_bytes = Vec::new();
     manifest_file
         .read_to_end(&mut manifest_bytes)
-        .context("reading manifest.json")?;
+        .map_err(PackFormatError::ReadManifest)?;
     let manifest: PackManifest =
-        serde_json::from_slice(&manifest_bytes).context("parsing manifest.json")?;
+        serde_json::from_slice(&manifest_bytes).map_err(PackFormatError::ParseManifest)?;
     validate_manifest(&manifest.name.clone(), &manifest)?;
     let paths = declared_paths(&manifest);
-    ensure!(
-        paths.len() < bounds.entries,
-        "the pack declares {} files, over the {} entry bound",
-        paths.len(),
-        bounds.entries
-    );
+    if paths.len() >= bounds.entries {
+        return Err(PackFormatError::TooManyDeclared {
+            count: paths.len(),
+            limit: bounds.entries,
+        }
+        .into());
+    }
 
     let mut total = 0u64;
     let mut digest = PackDigester::default();
     for path in &paths {
         let (mut file, len) = open_declared(dir, path)?;
         total += len;
-        ensure!(
-            total <= bounds.decompressed,
-            "the pack's files exceed the {} byte bound",
-            bounds.decompressed
-        );
+        if total > bounds.decompressed {
+            return Err(PackFormatError::TooLarge {
+                limit: bounds.decompressed,
+            }
+            .into());
+        }
         digest.begin_entry(path, len);
         copy_exact(&mut file, len, &mut DigestWriter(&mut digest), path)?;
     }
     let header = PackHeader::describe(&manifest, digest.finish());
-    let header_bytes = serde_json::to_vec(&header).context("encoding pack.json")?;
+    let header_bytes = serde_json::to_vec(&header).map_err(PackFormatError::EncodeHeader)?;
 
     let counted = CountingWriter {
         inner: out,
@@ -338,22 +461,24 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
         };
         append_entry(&mut builder, path, len, hashing)?;
     }
-    ensure!(
-        again.finish() == header.digest,
-        "a file in {} changed while the pack was being written; build it again",
-        dir.display()
-    );
+    if again.finish() != header.digest {
+        return Err(PackFormatError::SourceChanged {
+            dir: dir.to_path_buf(),
+        }
+        .into());
+    }
     let counted = builder
         .into_inner()
-        .context("finishing the pack")?
+        .map_err(PackFormatError::FinishPack)?
         .finish()
-        .context("finishing pack compression")?;
-    ensure!(
-        counted.written <= bounds.compressed,
-        "the pack is {} bytes compressed, over the {} byte bound",
-        counted.written,
-        bounds.compressed
-    );
+        .map_err(PackFormatError::FinishCompression)?;
+    if counted.written > bounds.compressed {
+        return Err(PackFormatError::TooCompressed {
+            written: counted.written,
+            limit: bounds.compressed,
+        }
+        .into());
+    }
     Ok(header)
 }
 
@@ -363,29 +488,42 @@ pub fn pack_dir(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
     Ok((bytes, header))
 }
 
-fn open_declared(dir: &Path, path: &str) -> Result<(std::fs::File, u64)> {
-    let file = crate::pack::open_pack_asset(dir, path).with_context(|| {
-        format!(
-            "the pack declares {path:?} and it is unreadable; a plugin's artifact has to be \
-             built before the pack is packed"
-        )
+fn open_declared(dir: &Path, path: &str) -> Result<(std::fs::File, u64), PackFormatError> {
+    let file = crate::pack::open_pack_asset(dir, path).map_err(|source| {
+        PackFormatError::DeclaredUnreadable {
+            path: path.to_owned(),
+            source,
+        }
     })?;
     let metadata = file
         .metadata()
-        .with_context(|| format!("reading declared pack asset {path:?}"))?;
-    ensure!(
-        metadata.is_file(),
-        "the pack declares {path:?} and it is not a regular file"
-    );
+        .map_err(|source| PackFormatError::DeclaredMetadata {
+            path: path.to_owned(),
+            source,
+        })?;
+    if !metadata.is_file() {
+        return Err(PackFormatError::DeclaredNotRegular {
+            path: path.to_owned(),
+        });
+    }
     Ok((file, metadata.len()))
 }
 
-fn copy_exact(from: &mut impl Read, len: u64, to: &mut impl Write, path: &str) -> Result<()> {
-    let copied = io::copy(&mut from.take(len), to).with_context(|| format!("reading {path:?}"))?;
-    ensure!(
-        copied == len,
-        "{path:?} changed while the pack was being written; build it again"
-    );
+fn copy_exact(
+    from: &mut impl Read,
+    len: u64,
+    to: &mut impl Write,
+    path: &str,
+) -> Result<(), PackFormatError> {
+    let copied = io::copy(&mut from.take(len), to).map_err(|source| PackFormatError::CopyRead {
+        path: path.to_owned(),
+        source,
+    })?;
+    if copied != len {
+        return Err(PackFormatError::CopyChanged {
+            path: path.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -394,7 +532,7 @@ pub(super) fn append_entry(
     path: &str,
     len: u64,
     data: impl Read,
-) -> Result<()> {
+) -> Result<(), PackFormatError> {
     let mut header = tar::Header::new_ustar();
     header.set_size(len);
     header.set_mode(0o644);
@@ -404,7 +542,10 @@ pub(super) fn append_entry(
     header.set_entry_type(tar::EntryType::Regular);
     builder
         .append_data(&mut header, path, data)
-        .with_context(|| format!("writing pack member {path:?}"))
+        .map_err(|source| PackFormatError::AppendMember {
+            path: path.to_owned(),
+            source,
+        })
 }
 
 struct HashingReader<'a, R> {

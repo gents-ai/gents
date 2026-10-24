@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -863,7 +864,11 @@ fn writer_seal_persists_receipt_and_forbids_read_write() {
         false,
     )
     .unwrap_err();
-    assert!(err.to_string().contains("not bindable"), "{err:#}");
+    assert!(
+        err.to_string().contains("not bindable"),
+        "{}",
+        ErrorChain(&err)
+    );
 }
 
 #[test]
@@ -1009,7 +1014,11 @@ async fn seal_drift_fails_closed() {
         },
     )
     .unwrap_err();
-    assert!(error.to_string().contains("live tree hash"), "{error:#}");
+    assert!(
+        error.to_string().contains("live tree hash"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
     workspace.seal_hash = Some(hash.clone());
     placed.observed_tree_hash = Some("stale".into());
     let stored = bind_workspace_overlay(
@@ -1031,7 +1040,8 @@ async fn seal_drift_fails_closed() {
         stored
             .to_string()
             .contains("observed_tree_hash stale does not match"),
-        "{stored:#}"
+        "{}",
+        ErrorChain(stored.as_ref())
     );
 }
 
@@ -1116,7 +1126,7 @@ fn instruction_manifest_fails_closed_on_git_show_error() {
     let fx = Fixture::new();
     let err = super::adapter::capture_instruction_manifest(&fx.repo, "not-a-commit")
         .expect_err("invalid base_sha must not become empty files");
-    assert!(err.to_string().contains("git show"), "{err:#}");
+    assert!(err.to_string().contains("git show"), "{}", ErrorChain(&err));
 }
 
 #[test]
@@ -1418,7 +1428,8 @@ fn merge_to_trunk_mode_is_denied_for_git_worktree_diff() {
         .expect_err("merge_to_trunk is not v1");
     assert!(
         err.to_string().contains("apply_diff") || err.to_string().contains("not implemented"),
-        "{err:#}"
+        "{}",
+        ErrorChain(&err)
     );
 }
 

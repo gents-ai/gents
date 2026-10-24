@@ -3,6 +3,7 @@ use super::*;
 use crate::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 struct CountingWatcher {
@@ -370,8 +371,11 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     .await
     .expect_err("router generation persistence failure must stop the router");
     assert!(
-        format!("{error:#}").contains("injected fatal agent readiness write"),
-        "unexpected router error: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("injected fatal agent readiness write"),
+        "unexpected router error: {}",
+        ErrorChain(error.as_ref())
     );
     assert!(!gate.is_open().await);
     assert_eq!(

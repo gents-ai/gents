@@ -1,10 +1,27 @@
 use std::io::{IsTerminal, Write as _};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
 use crate::cli::args::{BackendPresetArg, InitArgs};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InteractiveBackendError {
+    #[error("no API key entered")]
+    NoApiKey,
+    #[error("no model name entered")]
+    NoModelName,
+    #[error("no URL entered")]
+    NoUrl,
+    #[error("unrecognized choice: {choice}")]
+    UnrecognizedChoice { choice: String },
+    #[error("reading from stdin")]
+    ReadStdin(#[source] std::io::Error),
+    #[error("stdin reader task panicked")]
+    ReaderTask(#[source] tokio::task::JoinError),
+}
+
+type Result<T, E = InteractiveBackendError> = std::result::Result<T, E>;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5.4-mini";
 const OLLAMA_DEFAULT_URL: &str = "http://127.0.0.1:11434/v1";
@@ -79,7 +96,7 @@ async fn pick_backend() -> Result<BackendSelection> {
             let key = prompt_secret("Paste your OpenAI API key (hidden): ").await?;
             let key = key.trim();
             if key.is_empty() {
-                bail!("no API key entered");
+                return Err(InteractiveBackendError::NoApiKey);
             }
             let model = prompt_line_default("Model", OPENAI_DEFAULT_MODEL).await?;
             Ok(BackendSelection {
@@ -106,7 +123,7 @@ async fn pick_backend() -> Result<BackendSelection> {
                 detected_model
             };
             if model.is_empty() {
-                bail!("no model name entered");
+                return Err(InteractiveBackendError::NoModelName);
             }
             Ok(BackendSelection {
                 label: format!("{url} · {model}"),
@@ -120,11 +137,11 @@ async fn pick_backend() -> Result<BackendSelection> {
             let url = prompt_line("Backend base URL (incl. /v1): ").await?;
             let url = url.trim().to_string();
             if url.is_empty() {
-                bail!("no URL entered");
+                return Err(InteractiveBackendError::NoUrl);
             }
             let model = prompt_line("Model name: ").await?.trim().to_string();
             if model.is_empty() {
-                bail!("no model name entered");
+                return Err(InteractiveBackendError::NoModelName);
             }
             Ok(BackendSelection {
                 label: format!("{url} · {model}"),
@@ -155,7 +172,9 @@ async fn pick_backend() -> Result<BackendSelection> {
             api_key: None,
             label: "Claude subscription (Claude Pro / Max)".to_string(),
         }),
-        other => bail!("unrecognized choice: {other}"),
+        other => Err(InteractiveBackendError::UnrecognizedChoice {
+            choice: other.to_owned(),
+        }),
     }
 }
 
@@ -241,9 +260,9 @@ async fn read_line() -> Result<String> {
         let mut buf = String::new();
         std::io::stdin()
             .read_line(&mut buf)
-            .context("reading from stdin")?;
+            .map_err(InteractiveBackendError::ReadStdin)?;
         Ok(buf)
     })
     .await
-    .context("stdin reader task panicked")?
+    .map_err(InteractiveBackendError::ReaderTask)?
 }

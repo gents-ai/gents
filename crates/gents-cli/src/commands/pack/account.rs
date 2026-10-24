@@ -32,7 +32,7 @@ async fn login_with_password(
         !password.is_empty(),
         "the password read from standard input is empty"
     );
-    client.login(username, password).await
+    Ok(client.login(username, password).await?)
 }
 
 pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
@@ -59,14 +59,18 @@ pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
         .await
         .context("the registry did not accept that token")?;
     credentials::set(&home, &registry, &token)?;
-    crate::print_json(&json!({ "registry": registry, "signed_in_as": me["username"] }))
+    Ok(crate::print_json(
+        &json!({ "registry": registry, "signed_in_as": me["username"] }),
+    )?)
 }
 
 pub(crate) fn logout(args: PackAccountArgs) -> Result<()> {
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let removed = credentials::remove(&home, &registry)?;
-    crate::print_json(&json!({ "registry": registry, "signed_out": removed }))
+    Ok(crate::print_json(
+        &json!({ "registry": registry, "signed_out": removed }),
+    )?)
 }
 
 pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
@@ -74,13 +78,15 @@ pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token = resolve_publish_token(None, &registry, &home)?;
     let me = RegistryClient::new(registry.clone()).me(&token).await?;
-    crate::print_json(&json!({ "registry": registry, "account": me }))
+    Ok(crate::print_json(
+        &json!({ "registry": registry, "account": me }),
+    )?)
 }
 
 pub(crate) async fn info(args: PackInfoArgs) -> Result<()> {
     let (namespace, name) = super::split_namespace(&args.package);
     let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
-    crate::print_json(&client.package(namespace, name).await?)
+    Ok(crate::print_json(&client.package(namespace, name).await?)?)
 }
 
 pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
@@ -98,7 +104,7 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
     let response = RegistryClient::new(registry)
         .yank(&token, namespace, name, version, args.undo)
         .await?;
-    crate::print_json(&response)
+    Ok(crate::print_json(&response)?)
 }
 
 pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
@@ -107,10 +113,10 @@ pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
     let client = RegistryClient::new(registry.clone());
     let Some(username) = args.transfer else {
         let package = client.package(namespace, name).await?;
-        return crate::print_json(&json!({
+        return Ok(crate::print_json(&json!({
             "package": format!("{namespace}/{name}"),
             "owner": package["owner"],
-        }));
+        }))?);
     };
     anyhow::ensure!(
         args.yes,
@@ -119,11 +125,11 @@ pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
-    crate::print_json(
+    Ok(crate::print_json(
         &client
             .transfer_owner(&token, namespace, name, &username)
             .await?,
-    )
+    )?)
 }
 
 #[cfg(test)]
@@ -133,6 +139,7 @@ mod tests {
     use crate::commands::pack::registry::tests::{
         serve_fake_pack, FAKE_PASSWORD, FAKE_TOKEN, FAKE_USERNAME,
     };
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn login_exchanges_a_password_for_a_token_the_fake_registry_issued() {
@@ -234,7 +241,7 @@ mod tests {
         })
         .await
         .unwrap_err();
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("acme/widget"), "{message}");
         assert!(message.contains("new_owner"), "{message}");
         assert!(message.contains("cannot be undone"), "{message}");

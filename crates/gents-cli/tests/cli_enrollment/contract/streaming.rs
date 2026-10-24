@@ -24,9 +24,9 @@ async fn emission_deadline(
     budget: Duration,
 ) -> Result<(std::time::Instant, tokio::time::Instant)> {
     let emitted = *emission.wait_for(|timestamp| timestamp.is_some()).await?;
-    let emitted = emitted.context("provider first-frame timestamp missing")?;
+    let emitted = emitted.expect("provider first-frame timestamp missing");
     let deadline = tokio::time::Instant::from_std(emitted + budget);
-    anyhow::ensure!(
+    assert!(
         tokio::time::Instant::now() < deadline,
         "provider content visibility deadline already elapsed before observation"
     );
@@ -71,9 +71,9 @@ async fn delayed_first_frame_starts_visibility_budget_at_emission() -> Result<()
     tokio::time::timeout_at(deadline, async {
         let mut received = Vec::new();
         while !String::from_utf8_lossy(&received).contains("first-frame") {
-            received.extend(response.chunk().await?.context("missing first frame")?);
+            received.extend(response.chunk().await?.expect("missing first frame"));
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await??;
     assert_eq!(gate.available_permits(), 0, "completion must remain held");
@@ -107,7 +107,7 @@ pub(super) async fn wait_for_visible_content(
     tokio::time::timeout_at(deadline, async {
         loop {
             let content = canonical_live_content(core, request).await?;
-            anyhow::ensure!(
+            assert!(
                 tokio::time::Instant::now() < deadline,
                 "provider content visibility deadline elapsed during observation"
             );
@@ -117,13 +117,13 @@ pub(super) async fn wait_for_visible_content(
                     elapsed_ms = started.elapsed().as_millis(),
                     "canonical live content observed while provider completion remains gated"
                 );
-                return Ok::<_, anyhow::Error>(());
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
             }
             sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .context("streaming content did not reach client projection before provider completion")??;
+    .expect("streaming content did not reach client projection before provider completion")?;
     Ok(())
 }
 

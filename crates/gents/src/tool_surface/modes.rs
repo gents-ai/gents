@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use super::ToolSurfaceError;
 
 use crate::toolset::CliToolConfig;
 
@@ -18,12 +18,14 @@ pub enum FileToolMode {
 impl FileToolMode {
     pub const ALL: [Self; 3] = [Self::Off, Self::ReadOnly, Self::ReadWrite];
 
-    pub fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self, ToolSurfaceError> {
         match value.trim() {
             "" | "Off" => Ok(Self::Off),
             "ReadOnly" => Ok(Self::ReadOnly),
             "ReadWrite" => Ok(Self::ReadWrite),
-            other => bail!("unknown file tool mode {other}"),
+            other => Err(ToolSurfaceError::UnknownFileToolMode {
+                mode: other.to_owned(),
+            }),
         }
     }
 
@@ -56,12 +58,14 @@ pub enum BashMode {
 impl BashMode {
     pub const ALL: [Self; 3] = [Self::Off, Self::ReadOnly, Self::Unrestricted];
 
-    pub fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self, ToolSurfaceError> {
         match value.trim() {
             "" | "Off" => Ok(Self::Off),
             "ReadOnly" => Ok(Self::ReadOnly),
             "Unrestricted" => Ok(Self::Unrestricted),
-            other => bail!("unknown bash mode {other}"),
+            other => Err(ToolSurfaceError::UnknownBashMode {
+                mode: other.to_owned(),
+            }),
         }
     }
 

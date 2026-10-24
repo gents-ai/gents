@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -112,7 +113,8 @@ where
     ) -> Result<()> {
         let task = self.auxiliary_task();
         self.auxiliary_tasks
-            .spawn(async move { task.run(request, shutdown).await })
+            .spawn(async move { task.run(request, shutdown).await })?;
+        Ok(())
     }
 }
 
@@ -134,8 +136,13 @@ fn title_max_tokens(
 }
 
 fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
-    error.is::<crate::agent::loop_stream::OneShotProviderFailure>()
-        || error.is::<crate::agent::loop_stream::OneShotNoVisibleOutput>()
+    find_source::<crate::agent::loop_stream::OneShotError>(error.as_ref()).is_some_and(|error| {
+        matches!(
+            error,
+            crate::agent::loop_stream::OneShotError::ProviderFailure(_)
+                | crate::agent::loop_stream::OneShotError::NoVisibleOutput(_)
+        )
+    })
 }
 
 struct TitleGeneration<'a> {
@@ -296,8 +303,10 @@ where
             Ok(value) => value,
             Err(terminal_error) => {
                 if let Some(error) = reason {
-                    return Err(terminal_error
-                        .context(format!("auxiliary request failed first: {error:#}")));
+                    return Err(terminal_error.context(format!(
+                        "auxiliary request failed first: {}",
+                        ErrorChain(error.as_ref())
+                    )));
                 }
                 return Err(terminal_error);
             }
@@ -510,6 +519,7 @@ where
                 }
                 Ok(Err(error)) => {
                     flush_received_title_partial("provider error").await?;
+                    let error = anyhow::Error::new(error);
                     if !title_attempt_is_retryable(&error) {
                         return Err(error.context("title audit provider/output invariant failed"));
                     }

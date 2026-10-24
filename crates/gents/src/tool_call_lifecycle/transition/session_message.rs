@@ -53,10 +53,10 @@ impl ToolCallLifecycle {
         terminal: &CausedRequestTerminal,
         handoff_reason: Option<&'static str>,
     ) -> Result<bool> {
-        anyhow::ensure!(
-            self.kind() == ToolRowKind::SessionMessage && self.await_mode == AwaitMode::Background,
-            "session-message settlement requires a background agent_new/agent_message row"
-        );
+        if !(self.kind() == ToolRowKind::SessionMessage && self.await_mode == AwaitMode::Background)
+        {
+            return Err(TransitionError::SessionMessageSettlementNotBackground.into());
+        }
         let state = terminal.tool_state();
         self.ensure_state(&[ToolCallState::Running, state], "settle_session_message")?;
         let fields = super::super::delivery::TerminalFields {

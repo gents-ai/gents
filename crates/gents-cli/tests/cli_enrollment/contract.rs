@@ -1,5 +1,6 @@
 use super::*;
 use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 use support::mocks::fake_llm::{ChatAction, FakeLlm};
 use tokio::time::timeout;
@@ -128,7 +129,7 @@ async fn run_contract_with_streaming_cadence(
     let runtime_home = temp.path().join("runtime");
     let client_home = temp.path().join("app");
     fs::create_dir_all(&runtime_home)?;
-    let home = runtime_home.to_str().context("runtime home UTF-8")?;
+    let home = runtime_home.to_str().expect("runtime home UTF-8");
     let init = run_init_json(
         &runtime_home,
         &[
@@ -196,7 +197,7 @@ async fn run_contract_with_streaming_cadence(
             let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
             reached("enrollment_token");
             let pending = core.request_status_enrollment_with_label(&status, Some("Contract")).await?;
-            anyhow::ensure!(pending.state == "pending_approval", "unexpected initial enrollment: {pending:?}");
+            assert!(pending.state == "pending_approval", "unexpected initial enrollment: {pending:?}");
             reached("enrollment_offered");
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
             reached("runtime_saw_request");
@@ -210,8 +211,8 @@ async fn run_contract_with_streaming_cadence(
                 wait_for_readiness_revision(&core, &node_did, expected).await?;
                 reached("client_readiness_revision");
             }
-            anyhow::ensure!(query_collection_dids(core.node(), "Node").await?.is_empty(), "runtime principal replicated to app");
-            Ok::<_, anyhow::Error>(())
+            assert!(query_collection_dids(core.node(), "Node").await?.is_empty(), "runtime principal replicated to app");
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         }).await;
         sampler.abort();
         let _ = sampler.await;
@@ -219,10 +220,8 @@ async fn run_contract_with_streaming_cadence(
             let progress = probe.sample(Duration::from_secs(5)).await;
             let diagnostics = pairing_diagnostics(&core, &graphql).await;
             core.shutdown().await?;
-            bail!(
-                "enroll/approve/readiness exceeded {enroll_budget:?} or failed: {enrollment:?}; phases_ms={:?}; {progress}; {diagnostics}",
-                phases.lock().expect("enrollment phase log"),
-            );
+            return Err(format!("enroll/approve/readiness exceeded {enroll_budget:?} or failed: {enrollment:?}; phases_ms={:?}; {progress}; {diagnostics}",
+                phases.lock().expect("enrollment phase log"),).into());
         }
         drop(probe);
         tracing::info!(elapsed_ms = enrollment_started.elapsed().as_millis(), "app enrollment ready");
@@ -251,7 +250,7 @@ async fn run_contract_with_streaming_cadence(
         core.submit_request(&session, &node_did, OFFLINE_PROMPT, Some(&agent)).await?;
         let (request, _, _) = timeout(TURN_BUDGET, wait_for_runtime_agent_request(
             &graphql, core.node(), &node_did, OFFLINE_PROMPT,
-        )).await.context("second request did not reach runtime in 20s")??;
+        )).await.expect("second request did not reach runtime in 20s")?;
         core.shutdown().await?;
         drop(core);
         offline_gate.add_permits(1);
@@ -269,18 +268,18 @@ async fn run_contract_with_streaming_cadence(
             wait_for_client_node_readiness(&core, &node_did).await?;
             let agent_ready = reconnect_started.elapsed();
             wait_for_replicated_reply(&core, &session, &node_did, &request, OFFLINE_REPLY).await?;
-            Ok::<_, anyhow::Error>((route_ready, agent_ready, reconnect_started.elapsed()))
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((route_ready, agent_ready, reconnect_started.elapsed()))
         }).await;
         let (route_ready, agent_ready, reply_ready) = match recovered {
             Ok(Ok(phases)) => phases,
             failed => {
                 let diagnostics = pairing_diagnostics(&core, &graphql).await;
                 core.shutdown().await?;
-                bail!("app reopen did not recover completed reply within 20s: {failed:?}; {diagnostics}");
+                return Err(format!("app reopen did not recover completed reply within 20s: {failed:?}; {diagnostics}").into());
             }
         };
         let reopened = core.peer_records().await;
-        anyhow::ensure!(records.len() == reopened.len() && records.iter().zip(&reopened).all(|(old, new)| old.peer_id == new.peer_id && old.enrollment_request_id == new.enrollment_request_id), "reopen changed enrollment identity");
+        assert!(records.len() == reopened.len() && records.iter().zip(&reopened).all(|(old, new)| old.peer_id == new.peer_id && old.enrollment_request_id == new.enrollment_request_id), "reopen changed enrollment identity");
         tracing::info!(
             client_core_start_ms = client_core_ready.as_millis(),
             route_after_core_ms = route_ready.saturating_sub(client_core_ready).as_millis(),
@@ -303,9 +302,9 @@ async fn run_contract_with_streaming_cadence(
         .await?;
         assert_local_pagination(&core, &graphql, &session, &node_did).await?;
         assert_observer_did_not_overflow(&core).await?;
-        anyhow::ensure!(query_collection_dids(core.node(), "Node").await?.is_empty(), "reopen replicated runtime principal");
+        assert!(query_collection_dids(core.node(), "Node").await?.is_empty(), "reopen replicated runtime principal");
         core.shutdown().await?;
-        anyhow::ensure!(model.captured_chat_requests().iter().any(|request| {
+        assert!(model.captured_chat_requests().iter().any(|request| {
             request_contains_role_text(request, "user", FOLLOWUP_PROMPT)
                 && request_contains_role_text(request, "assistant", REPLY)
                 && request_contains_role_text(request, "assistant", OFFLINE_REPLY)
@@ -349,11 +348,11 @@ async fn visible_turn(
         let (selection_admitted, runtime_completed, client_visible) = tokio::try_join!(
             async {
                 select_session(core, session, node_did).await?;
-                Ok::<_, anyhow::Error>(started.elapsed())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(started.elapsed())
             },
             async {
                 wait_for_complete_agent_response(graphql, &request, session, TURN_BUDGET).await?;
-                Ok::<_, anyhow::Error>(started.elapsed())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(started.elapsed())
             },
             async {
                 let expected = if prompt == FOLLOWUP_PROMPT { FOLLOWUP_REPLY } else { REPLY };
@@ -387,7 +386,7 @@ async fn visible_turn(
                     visibility?;
                 }
                 wait_for_replicated_reply(core, session, node_did, &request, expected).await?;
-                Ok::<_, anyhow::Error>(started.elapsed())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(started.elapsed())
             },
         )?;
         let return_budget = if stream_gate.is_some() {
@@ -416,17 +415,20 @@ async fn visible_turn(
             AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{created_at claimed_at terminalized_at lifecycle_state terminal_output}}
         }}"#, escape_graphql_string(&request))).await?;
         tracing::info!(timestamps = ?lifecycle, "runtime lifecycle timing evidence");
-        anyhow::ensure!(
+        assert!(
             client_visible.saturating_sub(runtime_completed) <= return_budget,
             "completed reply took too long to reach the client projection: runtime={runtime_completed:?}, client={client_visible:?}",
         );
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await;
     if !matches!(result, Ok(Ok(()))) {
         let diagnostics = pairing_diagnostics(core, graphql).await;
         core.shutdown().await?;
-        bail!("client-visible turn exceeded 20s or failed: {result:?}; {diagnostics}");
+        return Err(format!(
+            "client-visible turn exceeded 20s or failed: {result:?}; {diagnostics}"
+        )
+        .into());
     }
     tracing::info!(
         elapsed_ms = started.elapsed().as_millis(),
@@ -438,8 +440,8 @@ async fn visible_turn(
 }
 
 async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
-    let metrics = core.observer_metrics().await.context("observer running")?;
-    anyhow::ensure!(
+    let metrics = core.observer_metrics().await.expect("observer running");
+    assert!(
         metrics.drop_recoveries == 0,
         "history overflowed the state observer: {metrics:?}"
     );
@@ -454,7 +456,7 @@ async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result
             .await?;
         match core.session_hydration_progress(session, agent).await?.phase {
             ClientHydrationPhase::Idle => sleep(Duration::from_millis(100)).await,
-            ClientHydrationPhase::Failed => bail!("session selection was rejected"),
+            ClientHydrationPhase::Failed => return Err("session selection was rejected".into()),
             _ => return Ok(()),
         }
     }
@@ -490,12 +492,12 @@ async fn wait_for_replicated_reply(
         let mut terminal_ready_at = None;
         loop {
             let result = core.node().execute(&query).await;
-            anyhow::ensure!(
+            assert!(
                 !result.has_errors(),
                 "replica query failed: {:?}",
                 result.errors
             );
-            let data = result.data.context("replica query missing data")?;
+            let data = result.data.expect("replica query missing data");
             let rows = |collection: &str| {
                 data.get(collection)
                     .and_then(Value::as_array)
@@ -513,9 +515,10 @@ async fn wait_for_replicated_reply(
             let mut terminal_request_row = None;
             for row in &requests {
                 let typed: gents_protocol::row::AgentRequestRow =
-                    serde_json::from_value(row.clone())
-                        .with_context(|| format!("decoding canonical AgentRequest row: {row}"))?;
-                anyhow::ensure!(
+                    serde_json::from_value(row.clone()).map_err(|error| {
+                        format!("decoding canonical AgentRequest row: {row}: {error}")
+                    })?;
+                assert!(
                     typed.session_id.as_deref() == Some(session)
                         && typed.node_did.as_deref() == Some(agent)
                         && typed.requester_did.as_deref() == Some(core.node_identity().did()),
@@ -541,7 +544,7 @@ async fn wait_for_replicated_reply(
                         presentation,
                         ..
                     }) => {
-                        anyhow::ensure!(
+                        assert!(
                             header.request_doc_id.as_deref() == row.doc_id.as_deref()
                                 && header.session_id == session
                                 && header.node_did == agent
@@ -552,9 +555,13 @@ async fn wait_for_replicated_reply(
                         body = presentation.body_markdown.clone();
                     }
                     Ok(_) => {}
-                    Err(error) => bail!(
-                        "canonical terminal reconstruction failed on the replica for {request}: {error:#}"
-                    ),
+                    Err(error) => {
+                        return Err(format!(
+                        "canonical terminal reconstruction failed on the replica for {request}: {}",
+                        ErrorChain(error.as_ref())
+                    )
+                        .into())
+                    }
                 }
             }
             for (index, (stage, ready)) in [
@@ -576,14 +583,14 @@ async fn wait_for_replicated_reply(
                     );
                 }
             }
-            anyhow::ensure!(
+            assert!(
                 !requests
                     .iter()
                     .any(|row| row["lifecycle_state"] == "failed"),
                 "replicated failed request: {requests:?}"
             );
             if request_completed && terminal_selection && body.contains(expected_reply) {
-                return Ok::<_, anyhow::Error>((
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
                     Instant::now(),
                     terminal_ready_at.expect("terminal selection timestamp"),
                 ));
@@ -600,12 +607,12 @@ async fn wait_for_replicated_reply(
                         .lifecycle_state
                         .is_some_and(|state| state.as_str() == "completed")
             }) {
-                return Ok::<_, anyhow::Error>(Instant::now());
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Instant::now());
             }
             store_updates
                 .changed()
                 .await
-                .context("app projection update channel closed")?;
+                .expect("app projection update channel closed");
         }
     };
 
@@ -635,7 +642,7 @@ async fn wait_for_replicated_reply(
         database_probe_interval_ms = DATABASE_PROBE_INTERVAL.as_millis(),
         "independently observed local database and app projection visibility",
     );
-    anyhow::ensure!(
+    assert!(
         observer_ready <= terminal_database_ready + Duration::from_millis(500),
         "local DB had the terminal selection more than 500ms before the observer projected it"
     );
@@ -798,13 +805,13 @@ async fn runtime_transcript_keys(
     let rows = response
         .pointer("/data/AgentMessage")
         .and_then(Value::as_array)
-        .context("runtime transcript query returned no AgentMessage rows")?;
+        .expect("runtime transcript query returned no AgentMessage rows");
     rows.iter()
         .map(|row| {
             row.get("message_key")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .context("runtime AgentMessage row is missing its message key")
+                .ok_or_else(|| "runtime AgentMessage row is missing its message key".into())
         })
         .collect()
 }
@@ -850,32 +857,36 @@ async fn assert_local_pagination(
         use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
         loop {
             match core.session_hydration_progress(session, agent).await?.phase {
-                ClientHydrationPhase::Complete => return Ok::<_, anyhow::Error>(()),
-                ClientHydrationPhase::Failed => bail!("session hydration failed before pagination"),
+                ClientHydrationPhase::Complete => {
+                    return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+                }
+                ClientHydrationPhase::Failed => {
+                    return Err("session hydration failed before pagination".into())
+                }
                 _ => sleep(Duration::from_millis(100)).await,
             }
         }
     })
     .await
-    .context("session hydration did not settle before pagination")??;
+    .expect("session hydration did not settle before pagination")?;
     let expected =
         runtime_transcript_keys(graphql, session, agent, core.node_identity().did()).await?;
     timeout(TURN_BUDGET, async {
         loop {
             let local = local_transcript_keys(core, session, agent).await?;
             if local == expected {
-                return Ok::<_, anyhow::Error>(());
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
             }
             sleep(Duration::from_millis(100)).await;
         }
     })
     .await
-    .with_context(|| {
-        format!("client transcript did not replicate the runtime transcript before pagination: expected={expected:?}")
+    .map_err(|error| {
+        format!("client transcript did not replicate the runtime transcript before pagination: expected={expected:?}: {error}")
     })??;
     let intent_query = "{ SessionHydrationRequest { _docID request_key status status_detail served_doc_count served_manifest_json processed_at outcome_signer_did outcome_signature } PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
     let before = core.node().execute(intent_query).await;
-    anyhow::ensure!(!before.has_errors(), "local intent query failed");
+    assert!(!before.has_errors(), "local intent query failed");
     let mut cursor = None;
     let mut seen = std::collections::BTreeSet::new();
     let mut last_sequence = i64::MAX;
@@ -889,14 +900,14 @@ async fn assert_local_pagination(
             Some(1),
         )
         .await?;
-        anyhow::ensure!(
+        assert!(
             page.store.transcript_messages.len() <= 1,
             "local page exceeded requested message budget"
         );
         for message in &page.store.transcript_messages {
             let sequence = i64::from(message.message.sequence);
             let key = message.message.message_key.clone();
-            anyhow::ensure!(
+            assert!(
                 sequence < last_sequence && seen.insert(key.clone()),
                 "local pagination repeated or reordered a message"
             );
@@ -906,21 +917,21 @@ async fn assert_local_pagination(
         if page.source_exhausted {
             break;
         }
-        anyhow::ensure!(
+        assert!(
             !page.store.transcript_messages.is_empty(),
             "local pagination made no progress"
         );
     }
-    anyhow::ensure!(
+    assert!(
         seen == expected,
         "local paging must cover the replicated transcript exactly: seen={seen:?}, expected={expected:?}"
     );
-    anyhow::ensure!(
+    assert!(
         seen.len() >= 6,
         "three conversation turns must survive local paging: {seen:?}"
     );
     let after = core.node().execute(intent_query).await;
-    anyhow::ensure!(
+    assert!(
         !after.has_errors() && before.data == after.data,
         "scrolling changed pairing or hydration intent"
     );
@@ -946,7 +957,7 @@ async fn seed_readiness_history(
     let snapshot = readiness
         .pointer("/data/NodeReadiness/0/snapshot_json")
         .and_then(Value::as_str)
-        .context("aged fixture requires runtime readiness")?;
+        .expect("aged fixture requires runtime readiness");
     let snapshot = escape_graphql_string(snapshot);
     // Replication ancestry must fully transfer before the doc is queryable;
     // revision count must stay under DefraDB's merge-depth limit or the walk
@@ -986,7 +997,7 @@ async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &
     );
     loop {
         let result = core.node().execute(&query).await;
-        anyhow::ensure!(
+        assert!(
             !result.has_errors(),
             "readiness convergence query failed: {:?}",
             result.errors
@@ -1000,7 +1011,7 @@ async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &
             let row: gents_protocol::row::NodeReadinessRow = serde_json::from_value(row.clone())?;
             let actual = chrono::DateTime::parse_from_rfc3339(&row.updated_at)?;
             if actual >= chrono::DateTime::parse_from_rfc3339(expected)? {
-                anyhow::ensure!(
+                assert!(
                     matches!(
                         gents_protocol::row::project_node_readiness_summary(Some(&row), agent),
                         gents_protocol::row::ProjectedNodeReadinessSummary::Observed(_)

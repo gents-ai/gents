@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::recovery::plan_recovery_prefix;
@@ -13,13 +12,78 @@ use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
+use crate::config_client::ConfigClientError;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::graphql::GraphqlResponseError;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session;
 use crate::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables, OutputSegmentRow,
-    TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    output_segment_create_variables, transcript_message_create_variables, CanonicalRowsError,
+    OutputSegmentRow, TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CanonicalRecoveryError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    CanonicalRows(#[from] CanonicalRowsError),
+    #[error("AgentOutputSegment query omitted rows")]
+    SegmentRowsMissing,
+    #[error("auxiliary recovery tool query omitted rows")]
+    ToolRowsMissing,
+    #[error("auxiliary recovery found a tool lifecycle row")]
+    ToolLifecycleRow,
+    #[error("missing request document")]
+    DocumentMissing,
+    #[error("execution request disappeared")]
+    RequestDisappeared,
+    #[error("recovery request purpose missing")]
+    PurposeMissing,
+    #[error("missing request lifecycle")]
+    LifecycleMissing,
+    #[error("missing request session")]
+    SessionMissing,
+    #[error("missing request agent")]
+    AgentMissing,
+    #[error("source disappeared")]
+    SourceDisappeared,
+    #[error("normal recovery has no sequence")]
+    SequenceMissing,
+    #[error("recovery transcript sequence overflow")]
+    SequenceOverflow,
+    #[error("auxiliary recovery requires NoMessage and no transcript headers")]
+    AuxiliarySelectionInvalid,
+    #[error("auxiliary recovery found a transcript header")]
+    TranscriptHeaderFound,
+    #[error("auxiliary recovery closure belongs to another generation")]
+    ClosureGeneration,
+    #[error("auxiliary recovery planned a public header")]
+    PublicHeaderPlanned,
+    #[error("auxiliary recovery cannot select a transcript header")]
+    AuxiliaryChoiceSelected,
+    #[error("auxiliary recovery selected a transcript header")]
+    AuxiliaryHeaderSelected,
+    #[error("expired-generation recovery lost request CAS")]
+    RequestCasLost,
+}
+
+impl crate::config_client::TransactionFailure for CanonicalRecoveryError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = CanonicalRecoveryError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryResult {
@@ -63,12 +127,14 @@ pub(in crate::lifecycle) async fn request_segments(
         .as_ref()
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
-        .context("AgentOutputSegment query omitted rows")?;
-    crate::session::canonical_rows::decode_scoped_request_output_segments(
-        rows,
-        agent,
-        Some(session_id),
-        requester,
+        .ok_or(CanonicalRecoveryError::SegmentRowsMissing)?;
+    Ok(
+        crate::session::canonical_rows::decode_scoped_request_output_segments(
+            rows,
+            agent,
+            Some(session_id),
+            requester,
+        )?,
     )
 }
 
@@ -77,16 +143,15 @@ async fn validate_selection(
     headers: &[TranscriptMessageRow],
     row: &AgentRequestRow,
     selection: &TerminalOutput,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     if row
         .purpose
-        .context("recovery request purpose missing")?
+        .ok_or(CanonicalRecoveryError::PurposeMissing)?
         .is_auxiliary()
     {
-        anyhow::ensure!(
-            matches!(selection, TerminalOutput::NoMessage) && headers.is_empty(),
-            "auxiliary recovery requires NoMessage and no transcript headers"
-        );
+        if !(matches!(selection, TerminalOutput::NoMessage) && headers.is_empty()) {
+            return Err(CanonicalRecoveryError::AuxiliarySelectionInvalid.into());
+        }
         return Ok(());
     }
     let eligible = |header: &&TranscriptMessageRow| {
@@ -140,18 +205,17 @@ async fn ensure_auxiliary_has_no_tools(
         .as_ref()
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(serde_json::Value::as_array)
-        .context("auxiliary recovery tool query omitted rows")?;
-    anyhow::ensure!(
-        rows.is_empty(),
-        "auxiliary recovery found a tool lifecycle row"
-    );
+        .ok_or(CanonicalRecoveryError::ToolRowsMissing)?;
+    if !rows.is_empty() {
+        return Err(CanonicalRecoveryError::ToolLifecycleRow);
+    }
     Ok(())
 }
 
 fn selection_from_choice(
     headers: &[TranscriptMessageRow],
     choice: &RecoverySelectionChoice,
-) -> Result<TerminalOutput> {
+) -> Result<TerminalOutput, RecoverySelectionRejected> {
     match choice {
         RecoverySelectionChoice::NoMessage => Ok(TerminalOutput::NoMessage),
         RecoverySelectionChoice::MessageKey(key) => {
@@ -168,7 +232,7 @@ fn selection_from_choice(
                 })
                 .collect::<Vec<_>>();
             let [header] = matching.as_slice() else {
-                return Err(RecoverySelectionRejected.into());
+                return Err(RecoverySelectionRejected);
             };
             Ok(TerminalOutput::Message {
                 message_doc_id: header.doc_id.clone(),
@@ -182,7 +246,7 @@ pub(super) async fn recover_expired_generation(
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
-) -> Result<RecoveryResult> {
+) -> anyhow::Result<RecoveryResult> {
     recover_expired_generation_with_facts(
         node,
         observed,
@@ -209,11 +273,11 @@ pub(crate) async fn recover_expired_generation_with_facts(
     observed_now: DateTime<Utc>,
     selection_choice: Option<RecoverySelectionChoice>,
     expected_outcome: Option<RequestLifecycleState>,
-) -> Result<RecoveryResult> {
+) -> anyhow::Result<RecoveryResult> {
     let request_doc_id = observed
         .doc_id
         .as_deref()
-        .context("missing request document")?
+        .ok_or(CanonicalRecoveryError::DocumentMissing)?
         .to_owned();
     ConfigAccess::transact_local_idempotent(
         node,
@@ -232,10 +296,10 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 execution_generation execution_lease_expires_at terminal_output
             }} }}"#)).await?;
             let row = crate::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
-                .context("execution request disappeared")?;
-            let purpose = row.purpose.context("recovery request purpose missing")?;
+                .ok_or(CanonicalRecoveryError::RequestDisappeared)?;
+            let purpose = row.purpose.ok_or(CanonicalRecoveryError::PurposeMissing)?;
             let is_auxiliary = purpose.is_auxiliary();
-            let state = row.lifecycle_state.context("missing request lifecycle")?;
+            let state = row.lifecycle_state.ok_or(CanonicalRecoveryError::LifecycleMissing)?;
             if let Some(terminal_output) = row.terminal_output.as_ref().filter(|_| {
                 state.is_terminal()
                     && row.execution_generation.as_deref() == Some(fresh_generation.as_str())
@@ -245,8 +309,8 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 }
                 let headers = session::load_request_headers_in_txn(
                     txn,
-                    row.session_id.as_deref().context("missing request session")?,
-                    row.node_did.as_deref().context("missing request agent")?,
+                    row.session_id.as_deref().ok_or(CanonicalRecoveryError::SessionMissing)?,
+                    row.node_did.as_deref().ok_or(CanonicalRecoveryError::AgentMissing)?,
                     row.requester_did.as_deref(),
                     &request_doc_id,
                 )
@@ -259,8 +323,8 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     let segments = request_segments(
                         txn,
                         &request_doc_id,
-                        row.node_did.as_deref().context("missing request agent")?,
-                        row.session_id.as_deref().context("missing request session")?,
+                        row.node_did.as_deref().ok_or(CanonicalRecoveryError::AgentMissing)?,
+                        row.session_id.as_deref().ok_or(CanonicalRecoveryError::SessionMissing)?,
                         row.requester_did.as_deref(),
                     )
                     .await?;
@@ -284,7 +348,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                             if execution_generation == &fresh_generation
                     ))
                     .count();
-                let agent = row.node_did.as_deref().context("missing request agent")?;
+                let agent = row.node_did.as_deref().ok_or(CanonicalRecoveryError::AgentMissing)?;
                 let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
                 reader.observe_headers(&headers);
                 validate_selection(&mut reader, &headers, &row, terminal_output)
@@ -308,8 +372,8 @@ pub(crate) async fn recover_expired_generation_with_facts(
             if deadline > observed_now {
                 return Ok(RecoveryResult::Lost);
             }
-            let agent = row.node_did.as_deref().context("missing request agent")?;
-            let session_id = row.session_id.as_deref().context("missing request session")?;
+            let agent = row.node_did.as_deref().ok_or(CanonicalRecoveryError::AgentMissing)?;
+            let session_id = row.session_id.as_deref().ok_or(CanonicalRecoveryError::SessionMissing)?;
             let writer = OutputWriter::RequestExecution { execution_generation: expected_generation.to_owned() };
             let mut segments = request_segments(
                 txn, &request_doc_id, agent, session_id, row.requester_did.as_deref(),
@@ -318,7 +382,9 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 txn, session_id, agent, row.requester_did.as_deref(), &request_doc_id,
             ).await?;
             if is_auxiliary {
-                anyhow::ensure!(existing_headers.is_empty(), "auxiliary recovery found a transcript header");
+                if !existing_headers.is_empty() {
+                    return Err(CanonicalRecoveryError::TranscriptHeaderFound.into());
+                }
                 ensure_auxiliary_has_no_tools(txn, &request_doc_id).await?;
             }
             let referenced = existing_headers.iter().flat_map(|header| header.message.payload_references())
@@ -359,7 +425,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 let blocks = match closures.as_slice() {
                     [] => {
                         let plan = plan_recovery_prefix(&observations, &request_doc_id, &source, &writer)?;
-                        let exemplar = segments.iter().find(|record| record.segment.source == source).context("source disappeared")?;
+                        let exemplar = segments.iter().find(|record| record.segment.source == source).ok_or(CanonicalRecoveryError::SourceDisappeared)?;
                         let closing = OutputSegment {
                             node_did: exemplar.segment.node_did.clone(), requester_did: exemplar.segment.requester_did.clone(),
                             session_id: exemplar.segment.session_id.clone(), request_doc_id: request_doc_id.clone(),
@@ -373,8 +439,9 @@ pub(crate) async fn recover_expired_generation_with_facts(
                         blocks
                     }
                     [closing] if is_auxiliary => {
-                        anyhow::ensure!(closing.segment.writer == writer,
-                            "auxiliary recovery closure belongs to another generation");
+                        if closing.segment.writer != writer {
+                            return Err(CanonicalRecoveryError::ClosureGeneration.into());
+                        }
                         Vec::new()
                     }
                     [closing] if closing.segment.writer == writer
@@ -388,11 +455,13 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     _ => continue,
                 };
                 if is_auxiliary {
-                    anyhow::ensure!(blocks.is_empty(), "auxiliary recovery planned a public header");
+                    if !blocks.is_empty() {
+                        return Err(CanonicalRecoveryError::PublicHeaderPlanned.into());
+                    }
                     continue;
                 }
                 if blocks.is_empty() { continue; }
-                let next_sequence = sequence.as_mut().context("normal recovery has no sequence")?;
+                let next_sequence = sequence.as_mut().ok_or(CanonicalRecoveryError::SequenceMissing)?;
                 let message = TranscriptMessage {
                     message_key: crate::streaming::canonical::partial_message_key(&request_doc_id, &source)?, session_id: session_id.to_owned(), node_did: agent.to_owned(),
                     requester_did: row.requester_did.clone(), request_doc_id: Some(request_doc_id.clone()),
@@ -400,7 +469,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     outcome: OutputOutcome::Partial, sequence: *next_sequence, role: MessageRole::Assistant, native_id: None,
                     blocks, created_at: timestamp.clone(),
                 };
-                *next_sequence = next_sequence.checked_add(1).context("recovery transcript sequence overflow")?;
+                *next_sequence = next_sequence.checked_add(1).ok_or(CanonicalRecoveryError::SequenceOverflow)?;
                 let response = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?).await?;
                 let doc_id = created_doc_id(&response, "AgentMessage")?;
                 published.push(TranscriptMessageRow { doc_id, message });
@@ -470,11 +539,13 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 TerminalOutput::NoMessage
             };
             let selection = if is_auxiliary {
-                anyhow::ensure!(selection_choice.as_ref().is_none_or(|choice|
-                    matches!(choice, RecoverySelectionChoice::NoMessage)),
-                    "auxiliary recovery cannot select a transcript header");
-                anyhow::ensure!(matches!(selection, TerminalOutput::NoMessage),
-                    "auxiliary recovery selected a transcript header");
+                if !selection_choice.as_ref().is_none_or(|choice|
+                    matches!(choice, RecoverySelectionChoice::NoMessage)) {
+                    return Err(CanonicalRecoveryError::AuxiliaryChoiceSelected.into());
+                }
+                if !matches!(selection, TerminalOutput::NoMessage) {
+                    return Err(CanonicalRecoveryError::AuxiliaryHeaderSelected.into());
+                }
                 TerminalOutput::NoMessage
             } else {
                 match &selection_choice {
@@ -502,7 +573,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     failure_reason: "execution lease expired", terminalized_at: "{now}", terminal_redrive_attempts: 0,
                     terminal_output: $terminal_output }}) {{ _docID }} }}"#), &serde_json::json!({"terminal_output": selection})).await?;
             if !response.get("data").and_then(|data| data.get("update_AgentRequest")).is_some_and(response_has_documents) {
-                anyhow::bail!("expired-generation recovery lost request CAS");
+                return Err(CanonicalRecoveryError::RequestCasLost.into());
             }
             crate::trigger_engine::durable::publish_request_outcome(
                 txn, agent, &row.request_id, &target, "execution lease expired", &timestamp,

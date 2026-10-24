@@ -7,6 +7,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use super::ToolSurfaceError;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
@@ -36,38 +37,45 @@ impl RootExecutionGuard {
     pub(crate) async fn validate(&self, node: &defra_node::EmbeddedNode) -> Result<()> {
         let policy = load_workspace_root_policy(node, self.ceiling_root.as_deref()).await?;
         let Some(selected_root) = self.selected_root.as_deref() else {
-            anyhow::ensure!(
-                !policy.configured,
-                "agent {} has active host tools but no explicit root under current WorkspaceRoot policy",
-                self.agent_id
-            );
+            if policy.configured {
+                return Err(ToolSurfaceError::ActiveHostToolsWithoutRoot {
+                    agent_id: self.agent_id.clone(),
+                }
+                .into());
+            }
             return Ok(());
         };
         match policy.admit(selected_root)? {
             RootAdmission::Admitted(root) if root == selected_root => Ok(()),
-            RootAdmission::Admitted(root) => anyhow::bail!(
-                "agent {} persisted root {} re-resolved to {} at the execution boundary",
-                self.agent_id,
-                selected_root.display(),
-                root.display()
-            ),
-            denied @ RootAdmission::Denied { .. } => anyhow::bail!(
-                "agent {} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {}",
-                self.agent_id,
-                selected_root.display(),
-                denied.denial_reason().expect("denied outcome has a reason")
-            ),
+            RootAdmission::Admitted(root) => Err(ToolSurfaceError::RootReresolved {
+                agent_id: self.agent_id.clone(),
+                selected_root: selected_root.to_path_buf(),
+                resolved_root: root,
+            }
+            .into()),
+            denied @ RootAdmission::Denied { .. } => {
+                Err(ToolSurfaceError::RootNotAdmittedAtBoundary {
+                    agent_id: self.agent_id.clone(),
+                    selected_root: selected_root.to_path_buf(),
+                    reason: denied
+                        .denial_reason()
+                        .expect("denied outcome has a reason")
+                        .to_string(),
+                }
+                .into())
+            }
         }
     }
 }
 
 impl WorkspaceRootPolicy {
     pub(crate) fn admit(&self, candidate: &Path) -> Result<RootAdmission> {
-        anyhow::ensure!(
-            candidate.is_absolute(),
-            "configured tool root must be absolute, got {}",
-            candidate.display()
-        );
+        if !candidate.is_absolute() {
+            return Err(ToolSurfaceError::ConfiguredRootNotAbsolute {
+                root: candidate.to_path_buf(),
+            }
+            .into());
+        }
         // With no operator policy and no process ceiling, preserve the legacy
         // embedder contract: an authored absolute root narrows to its own
         // canonical resolution; configured/revoked policy stays fail-closed.
@@ -173,10 +181,9 @@ pub fn admit_authored_root(
 ) -> Result<Option<PathBuf>> {
     let root = authored_root.trim();
     if root.is_empty() {
-        anyhow::ensure!(
-            !policy.configured,
-            "configured WorkspaceRoot policy requires an explicit root"
-        );
+        if policy.configured {
+            return Err(ToolSurfaceError::WorkspaceRootRequiresExplicitRoot.into());
+        }
         return Ok(None);
     }
     match policy.admit(Path::new(root))? {
@@ -198,11 +205,14 @@ pub fn admit_authored_root(
                     return resolve_configured_tool_root(Path::new(root)).map(Some);
                 }
             }
-            anyhow::bail!(
-                "Tools.host.root {:?} is not admitted by published WorkspaceRoot policy: {}",
-                root,
-                denied.denial_reason().expect("denied outcome has a reason")
-            )
+            Err(ToolSurfaceError::RootNotAdmitted {
+                root: root.to_owned(),
+                reason: denied
+                    .denial_reason()
+                    .expect("denied outcome has a reason")
+                    .to_string(),
+            }
+            .into())
         }
     }
 }
@@ -227,10 +237,9 @@ pub fn canonicalize_tools_root(
         .filter(|root| !root.is_empty());
 
     let Some(authored_root) = authored_root else {
-        anyhow::ensure!(
-            !policy.configured || !requires_root,
-            "active host tools require an explicit root in Tools.host.root while WorkspaceRoot policy is configured. Set host.root to an admitted absolute workspace path (a sibling of host.files and host.bash). In config, read tools get first, then tools update with set.host preserving its other fields; do not put root inside host.files"
-        );
+        if policy.configured && requires_root {
+            return Err(ToolSurfaceError::ActiveHostToolsRequireRoot.into());
+        }
         if let Some(host) = tools.host.as_mut() {
             host.root = None;
         }
@@ -432,6 +441,7 @@ fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[test]
     fn nonexistent_descendant_is_retained_and_admitted() {
@@ -656,7 +666,8 @@ mod tests {
             error
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -697,7 +708,8 @@ mod tests {
             error
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -723,7 +735,8 @@ mod tests {
             error
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

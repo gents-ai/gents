@@ -1,7 +1,8 @@
+use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use gents::file_lock::FileLock;
 
 use crate::support::process::ServeProcess;
@@ -25,10 +26,15 @@ pub struct FailureArtifacts {
 }
 
 impl FailureArtifacts {
-    pub fn new(root: &Path, retain_failures: bool) -> Result<Self> {
+    pub fn new(root: &Path, retain_failures: bool) -> TestResult<Self> {
         let directory = if retain_failures {
-            fs::create_dir_all(root)
-                .with_context(|| format!("creating failure artifact root {}", root.display()))?;
+            fs::create_dir_all(root).map_err(|error| {
+                format!(
+                    "creating failure artifact root {}: {}",
+                    root.display(),
+                    ErrorChain(&error)
+                )
+            })?;
             tempfile::Builder::new()
                 .prefix(DIRECTORY_PREFIX)
                 .tempdir_in(root)?
@@ -54,34 +60,42 @@ impl FailureArtifacts {
         self.server = Some(server);
     }
 
-    pub fn captured_output(&self) -> Result<(String, String)> {
+    pub fn captured_output(&self) -> TestResult<(String, String)> {
         self.server
             .as_ref()
-            .context("fixture server was not started")?
+            .ok_or("fixture server was not started")?
             .captured_output()
     }
 
-    pub fn finish<T>(mut self, result: Result<T>) -> Result<T> {
+    pub fn finish<T>(mut self, result: TestResult<T>) -> TestResult<T> {
         self.succeeded = result.is_ok();
         match (result, self.finalize()) {
-            (Err(error), Ok(Some(path))) => {
-                Err(error.context(format!("failed fixture retained at {}", path.display())))
-            }
-            (Err(error), Err(retention)) => {
-                Err(error.context(format!("finalizing failure artifacts: {retention:#}")))
-            }
+            (Err(error), Ok(Some(path))) => Err(format!(
+                "failed fixture retained at {}: {}",
+                path.display(),
+                ErrorChain(&*error)
+            )
+            .into()),
+            (Err(error), Err(retention)) => Err(format!(
+                "finalizing failure artifacts: {}: {}",
+                ErrorChain(&*retention),
+                ErrorChain(&*error)
+            )
+            .into()),
             (Ok(_), Err(error)) => Err(error),
             (result, _) => result,
         }
     }
 
-    fn finalize(&mut self) -> Result<Option<PathBuf>> {
+    fn finalize(&mut self) -> TestResult<Option<PathBuf>> {
         drop(self.server.take());
         let Some(directory) = self.directory.take() else {
             return Ok(None);
         };
         if self.succeeded || !self.retain_failures {
-            directory.close().context("cleaning fixture artifacts")?;
+            directory
+                .close()
+                .map_err(|error| format!("cleaning fixture artifacts: {}", ErrorChain(&error)))?;
             return Ok(None);
         }
 
@@ -97,7 +111,13 @@ impl FailureArtifacts {
             fs::write(path.join(RETAINED_MARKER), MARKER_CONTENTS)?;
             prune_completed_failures(&self.root, &path, self.limit)
         })();
-        retained.with_context(|| format!("retaining failed fixture at {}", path.display()))?;
+        retained.map_err(|error| {
+            format!(
+                "retaining failed fixture at {}: {}",
+                path.display(),
+                ErrorChain(&*error)
+            )
+        })?;
         tracing::error!(path = %path.display(), "retained failed fixture for investigation");
         Ok(Some(path))
     }
@@ -111,7 +131,7 @@ impl Drop for FailureArtifacts {
     }
 }
 
-fn prune_completed_failures(root: &Path, current: &Path, limit: usize) -> Result<()> {
+fn prune_completed_failures(root: &Path, current: &Path, limit: usize) -> TestResult<()> {
     let mut retained = Vec::new();
     for entry in fs::read_dir(root)? {
         let entry = entry?;
@@ -142,8 +162,13 @@ fn prune_completed_failures(root: &Path, current: &Path, limit: usize) -> Result
     });
     let remove = retained.len().saturating_sub(limit.max(1));
     for (path, _) in retained.into_iter().take(remove) {
-        fs::remove_dir_all(&path)
-            .with_context(|| format!("pruning completed failure {}", path.display()))?;
+        fs::remove_dir_all(&path).map_err(|error| {
+            format!(
+                "pruning completed failure {}: {}",
+                path.display(),
+                ErrorChain(&error)
+            )
+        })?;
     }
     Ok(())
 }

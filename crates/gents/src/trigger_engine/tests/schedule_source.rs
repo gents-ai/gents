@@ -6,14 +6,16 @@ async fn read_trigger_cursor(
     node: &defra_node::EmbeddedNode,
     owner_did: &str,
     trigger_id: &str,
-) -> anyhow::Result<Option<String>> {
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
     let mut results = crate::document_config::load_trigger_next_run_at_batch(
         node,
         &[(owner_did.to_owned(), trigger_id.to_owned())],
     )
     .await;
-    anyhow::ensure!(results.len() == 1, "singleton cursor result is missing");
-    results.remove(0)
+    if results.len() != 1 {
+        return Err("singleton cursor result is missing".into());
+    }
+    Ok(results.remove(0)?)
 }
 
 fn schedule_test_behavior() -> Arc<ResolvedAgent> {
@@ -46,7 +48,7 @@ async fn create_schedule_cadence_doc(
                     &serde_json::json!({"input":input}),
                 )
                 .await?;
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         },
     )
@@ -101,7 +103,7 @@ async fn create_schedule_with_next_run_at(
                     &serde_json::json!({"input":input}),
                 )
                 .await?;
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         },
     )

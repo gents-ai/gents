@@ -1,5 +1,5 @@
 use super::{fake_llm, Attachment, ChatAction};
-use anyhow::{ensure, Context, Result};
+use crate::support::{TestError, TestResult};
 use gents::{graphql::escape_graphql_string, ConfigAccess};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -18,7 +18,7 @@ fn contents(marker: &str) -> String {
     )
 }
 
-pub fn prepare(root: &Path) -> Result<()> {
+pub fn prepare(root: &Path) -> TestResult<()> {
     let before = contents("Recorded original");
     let after = contents("Recorded replacement");
     std::fs::write(root.join(FILE), &before)?;
@@ -73,9 +73,9 @@ pub async fn verify(
     node: &str,
     session: &str,
     author: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-review-ui.json"))?)?;
-    ensure!(
+    assert!(
         ui["completeDiffOpened"] == true
             && ui["readOnly"] == true
             && ui["laterWorkingCopyPreserved"] == true,
@@ -89,37 +89,35 @@ pub async fn verify(
         .iter()
         .filter(|row| row.content.as_deref() == Some(PROMPT))
         .collect::<Vec<_>>();
-    ensure!(
+    assert!(
         matches.len() == 1,
         "review input was not admitted exactly once"
     );
     let request = matches[0];
     gents::verify_request_receipt_signature(request)?;
-    ensure!(
+    assert!(
         request.requester_did.as_deref() == Some(author),
         "review authority changed"
     );
     let query = format!("{{ AgentToolCall(filter: {{ request_doc_id: {{_eq: \"{}\"}} }}) {{ _docID lifecycle_state }} }}",
-        escape_graphql_string(request.doc_id.as_deref().context("physical review request")?));
+        escape_graphql_string(request.doc_id.as_deref().expect("physical review request")));
     let calls = access.execute(&query).await?;
     let calls = calls["data"]["AgentToolCall"]
         .as_array()
-        .context("physical file tool records")?;
-    ensure!(
+        .expect("physical file tool records");
+    assert!(
         calls.len() == 1 && calls[0]["lifecycle_state"] == "completed",
         "review must use one completed native file mutation"
     );
-    let physical = calls[0]["_docID"]
-        .as_str()
-        .context("physical review tool")?;
+    let physical = calls[0]["_docID"].as_str().expect("physical review tool");
     let retained = access.execute(&format!(
         r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID file_changes }} }}"#,
         escape_graphql_string(physical),
     )).await?;
     let observations = retained["data"]["ToolFileChange"]
         .as_array()
-        .context("retained file observations")?;
-    ensure!(
+        .expect("retained file observations");
+    assert!(
         observations.len() == 1,
         "review must retain exactly one file observation"
     );
@@ -134,16 +132,16 @@ pub async fn verify(
         )
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         images == observations[0]["file_changes"],
         "client transport changed retained images"
     );
-    ensure!(
+    assert!(
         images["changes"][0]["before"]["kind"] == "file"
             && images["changes"][0]["after"]["kind"] == "file",
         "both immutable file versions must be retained"
     );
-    ensure!(
+    assert!(
         node != author,
         "review must cross enrolled client identities"
     );
@@ -158,8 +156,8 @@ pub async fn verify(
         .await?;
     let receipts = delivered["data"]["FileImageHydrationRequest"]
         .as_array()
-        .context("remote review delivery receipts")?;
-    ensure!(
+        .expect("remote review delivery receipts");
+    assert!(
         receipts.len() == 1,
         "review demand must be reused after delivery; found {} receipts",
         receipts.len()
@@ -168,7 +166,7 @@ pub async fn verify(
     let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
         admission: gents_protocol::session_hydration::HydrationRequest {
             request_key: String::new(),
-            peer_id: receipt["peer_id"].as_str().context("review peer")?.into(),
+            peer_id: receipt["peer_id"].as_str().expect("review peer").into(),
             requester_did: author.into(),
             node_did: node.into(),
             session_id: session.into(),
@@ -176,18 +174,18 @@ pub async fn verify(
         request_doc_id: request
             .doc_id
             .as_deref()
-            .context("physical review request")?
+            .expect("physical review request")
             .into(),
         tool_call_doc_id: physical.into(),
     };
     demand.admission.request_key = demand.derive_request_key();
     for (field, expected) in demand.reference_fields() {
-        ensure!(
+        assert!(
             receipt[field].as_str() == Some(expected),
             "review receipt changed {field}"
         );
     }
-    ensure!(
+    assert!(
         receipt["status"] == "served"
             && receipt["observation_doc_id"] == observations[0]["_docID"]
             && receipt["outcome_signer_did"] == node
@@ -196,7 +194,7 @@ pub async fn verify(
                 .is_some_and(|value| !value.is_empty()),
         "review receipt did not identify the delivered physical image"
     );
-    ensure!(
+    assert!(
         std::fs::read_to_string(root.join(FILE))? == LATER,
         "review overwrote later user changes"
     );
@@ -217,7 +215,7 @@ pub async fn verify_permission_recovery(
     author: &str,
     baseline: &Value,
     verifier: &dyn gents::NodeIdentity,
-) -> Result<Value> {
+) -> TestResult<Value> {
     use gents_protocol::file_image_hydration::FileImageDemand;
     use gents_protocol::session_hydration::HydrationRequest;
     use std::time::Duration;
@@ -227,7 +225,7 @@ pub async fn verify_permission_recovery(
     const RESTORED_RETRY: &str = "4be6aa69-c87a-44bb-a946-2452ac3a283b";
     let physical = field(baseline, "physicalTool")?;
     let receipts = review_receipts(access, physical).await?;
-    ensure!(receipts.len() == 1, "initial review has multiple demands");
+    assert!(receipts.len() == 1, "initial review has multiple demands");
     let original = receipts[0].clone();
     let demand = FileImageDemand {
         admission: HydrationRequest {
@@ -241,7 +239,7 @@ pub async fn verify_permission_recovery(
         tool_call_doc_id: physical.into(),
     };
     for (name, value) in demand.reference_fields() {
-        ensure!(
+        assert!(
             original[name].as_str() == Some(value),
             "initial receipt changed {name}"
         );
@@ -252,10 +250,10 @@ pub async fn verify_permission_recovery(
     )).await?;
     let enrollments = enrollment["data"]["NetworkEnrollmentRequest"]
         .as_array()
-        .context("initial enrollment rows")?;
-    ensure!(enrollments.len() == 1, "initial enrollment is ambiguous");
+        .expect("initial enrollment rows");
+    assert!(enrollments.len() == 1, "initial enrollment is ambiguous");
     let old_request = field(&enrollments[0], "request_id")?;
-    ensure!(
+    assert!(
         enrollments[0]["candidate_peer"] == demand.admission.peer_id,
         "review peer differs from enrollment"
     );
@@ -277,7 +275,7 @@ pub async fn verify_permission_recovery(
         .try_call(*id, "desktop_tool_file_changes", args.clone())
         .await?;
     *id += 1;
-    ensure!(
+    assert!(
         cached["tool_call_doc_id"] == physical
             && cached["version"] == gents_protocol::file_changes::FILE_CHANGES_VERSION,
         "revocation hid an already retained image"
@@ -286,7 +284,7 @@ pub async fn verify_permission_recovery(
         .call(*id, "desktop_tool_file_changes", cached_args)
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         replayed_cache == cached_retry && replayed_cache == cached,
         "revocation hid a served explicit retry"
     );
@@ -304,11 +302,11 @@ pub async fn verify_permission_recovery(
     *id += 1;
     let error = blocked.expect_err("revoked enrollment must not serve a fresh review demand");
     let inactive_read_ms = started.elapsed().as_millis();
-    ensure!(
+    assert!(
         started.elapsed() < Duration::from_secs(5),
         "inactive review waited {inactive_read_ms} ms"
     );
-    ensure!(
+    assert!(
         error
             .message
             .contains("Reconnect this runtime to load new file versions.")
@@ -324,11 +322,11 @@ pub async fn verify_permission_recovery(
         let mut blocked_demand = demand.clone();
         blocked_demand.admission.request_key = blocked_key.clone();
         verify_model_receipt(verifier, row, &blocked_demand).await?;
-        ensure!(
+        assert!(
             row["status"] == "rejected",
             "revoked review acquired a terminal delivery: {row}"
         );
-        ensure!(
+        assert!(
             row["observation_doc_id"].is_null(),
             "revoked review named an image"
         );
@@ -341,7 +339,7 @@ pub async fn verify_permission_recovery(
     .to_owned();
     let server = status_url
         .strip_suffix("/api/v0/graphql")
-        .context("runtime status base")?;
+        .expect("runtime status base");
     let pending = client
         .call(
             *id,
@@ -351,7 +349,7 @@ pub async fn verify_permission_recovery(
         .await;
     *id += 1;
     let next_request = field(&pending, "requestId")?;
-    ensure!(
+    assert!(
         next_request != old_request,
         "reenrollment reused the revoked request"
     );
@@ -369,7 +367,7 @@ pub async fn verify_permission_recovery(
         )
         .await?;
     *id += 1;
-    ensure!(
+    assert!(
         restored == cached,
         "reenrollment changed the retained images"
     );
@@ -377,13 +375,13 @@ pub async fn verify_permission_recovery(
         .call(*id, "desktop_tool_file_changes", restored_args)
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         replayed == restored,
         "explicit retry replay changed retained images"
     );
     let resumed = client.call(*id, "desktop_tool_file_changes", args).await;
     *id += 1;
-    ensure!(
+    assert!(
         resumed == restored,
         "normal reopening did not resume verified review"
     );
@@ -393,7 +391,7 @@ pub async fn verify_permission_recovery(
         .iter()
         .filter(|row| row["request_key"] == restored_key)
         .collect();
-    ensure!(
+    assert!(
         matches.len() == 1 && matches[0]["status"] == "served",
         "explicit retry was not served exactly once"
     );
@@ -401,26 +399,26 @@ pub async fn verify_permission_recovery(
     retried.admission.request_key = restored_key;
     verify_model_receipt(verifier, matches[0], &retried).await?;
     for (name, value) in retried.reference_fields() {
-        ensure!(
+        assert!(
             matches[0][name].as_str() == Some(value),
             "restored receipt changed {name}"
         );
     }
-    ensure!(
+    assert!(
         matches[0]["observation_doc_id"] == original["observation_doc_id"],
         "retry selected another image"
     );
-    ensure!(
+    assert!(
         receipts.iter().any(|row| row == &original),
         "retry changed the original receipt"
     );
     if let Some(denied) = &denied {
-        ensure!(
+        assert!(
             receipts.iter().any(|row| row == denied),
             "reenrollment reset a signed refusal"
         );
     }
-    ensure!(
+    assert!(
         std::fs::read_to_string(root.join(FILE))? == LATER,
         "permission recovery changed the working copy"
     );
@@ -434,13 +432,13 @@ pub async fn verify_permission_recovery(
     }))
 }
 
-fn field<'a>(row: &'a Value, name: &str) -> Result<&'a str> {
+fn field<'a>(row: &'a Value, name: &str) -> TestResult<&'a str> {
     row[name]
         .as_str()
-        .with_context(|| format!("review fixture omitted {name}"))
+        .ok_or_else(|| format!("review fixture omitted {name}").into())
 }
 
-async fn review_receipts(access: &ConfigAccess, physical: &str) -> Result<Vec<Value>> {
+async fn review_receipts(access: &ConfigAccess, physical: &str) -> TestResult<Vec<Value>> {
     let response = access
         .execute(&format!(
             r#"{{ FileImageHydrationRequest(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{
@@ -452,11 +450,16 @@ async fn review_receipts(access: &ConfigAccess, physical: &str) -> Result<Vec<Va
         .await?;
     Ok(response["data"]["FileImageHydrationRequest"]
         .as_array()
-        .context("review receipts")?
+        .expect("review receipts")
         .clone())
 }
 
-async fn enrollment_decision(root: &Path, home: &Path, action: &str, request: &str) -> Result<()> {
+async fn enrollment_decision(
+    root: &Path,
+    home: &Path,
+    action: &str,
+    request: &str,
+) -> TestResult<()> {
     let cli = super::support::native_binary("gents")?;
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -468,7 +471,7 @@ async fn enrollment_decision(root: &Path, home: &Path, action: &str, request: &s
             .output(),
     )
     .await??;
-    ensure!(
+    assert!(
         result.status.success(),
         "enrollment {action} failed: {}",
         String::from_utf8_lossy(&result.stderr)
@@ -481,14 +484,14 @@ async fn wait_review_route(
     id: &mut u32,
     node: &str,
     ready: bool,
-) -> Result<()> {
+) -> TestResult<()> {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             let snapshot = client.snapshot(*id).await;
             *id += 1;
             let deployment = snapshot["client"]["deployments"]
                 .as_array()
-                .context("client deployments")?
+                .expect("client deployments")
                 .iter()
                 .find(|row| row["nodeDid"] == node);
             if deployment.is_some_and(|row| row["chatSafe"] == true) == ready {
@@ -498,10 +501,10 @@ async fn wait_review_route(
         }
     })
     .await
-    .context("client did not observe the enrollment change")?
+    .expect("client did not observe the enrollment change")
 }
 
-async fn wait_enrollment_arrival(access: &ConfigAccess, request: &str) -> Result<()> {
+async fn wait_enrollment_arrival(access: &ConfigAccess, request: &str) -> TestResult<()> {
     let query = format!(
         r#"{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
         escape_graphql_string(request)
@@ -519,26 +522,26 @@ async fn wait_enrollment_arrival(access: &ConfigAccess, request: &str) -> Result
         }
     })
     .await
-    .context("runtime did not observe reenrollment")?
+    .expect("runtime did not observe reenrollment")
 }
 
 async fn verify_model_receipt(
     verifier: &dyn gents::NodeIdentity,
     row: &Value,
     demand: &gents_protocol::file_image_hydration::FileImageDemand,
-) -> Result<()> {
+) -> TestResult<()> {
     use gents_protocol::file_image_hydration::{
         FileImageHydrationReceipt, FileImageSelection, FILE_IMAGE_RECEIPT_VERSION,
     };
     for (name, expected) in demand.reference_fields() {
-        ensure!(
+        assert!(
             row[name].as_str() == Some(expected),
             "review receipt changed {name}"
         );
     }
     let selection = match field(row, "status")? {
         "rejected" => {
-            ensure!(
+            assert!(
                 row["observation_doc_id"].is_null(),
                 "refusal named an observation"
             );
@@ -549,9 +552,13 @@ async fn verify_model_receipt(
             Value::String(document) => FileImageSelection::Selected {
                 document: document.clone(),
             },
-            _ => anyhow::bail!("invalid retained observation identity"),
+            _ => return Err(TestError::from("invalid retained observation identity")),
         },
-        status => anyhow::bail!("review receipt is not terminal: {status}"),
+        status => {
+            return Err(TestError::from(format!(
+                "review receipt is not terminal: {status}"
+            )))
+        }
     };
     let receipt = FileImageHydrationReceipt {
         version: FILE_IMAGE_RECEIPT_VERSION,

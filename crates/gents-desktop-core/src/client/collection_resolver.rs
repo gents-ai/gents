@@ -1,11 +1,21 @@
 use rapidhash::RapidHashMap;
 use std::sync::RwLock;
 
-use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::schemas::{
     ALL_COLLECTION_NAMES, INFERENCE_CALL_NAME, RUNTIME_COLLECTION_NAMES,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum CollectionResolverError {
+    #[error("get_collection({name}) failed: {error}")]
+    GetCollection {
+        name: &'static str,
+        error: defra_node::Error,
+    },
+}
+
+type Result<T, E = CollectionResolverError> = std::result::Result<T, E>;
 
 /// Collection IDs never change for the lifetime of a collection, so entries
 /// are never invalidated. Unknown IDs may become available through schema
@@ -41,7 +51,7 @@ impl CollectionResolver {
         {
             let collection = node
                 .get_collection(name)
-                .map_err(|e| anyhow!("get_collection({name}) failed: {e}"))?;
+                .map_err(|error| CollectionResolverError::GetCollection { name, error })?;
             if let Some(c) = collection {
                 self.cache
                     .write()

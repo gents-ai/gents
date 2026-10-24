@@ -11,33 +11,42 @@ pub(super) struct LiveCodexShim {
     pub(super) _server: ServeProcess,
 }
 
-pub(super) async fn start_live_codex_shim() -> Result<LiveCodexShim> {
+pub(super) async fn start_live_codex_shim() -> TestResult<LiveCodexShim> {
     start_live_codex_shim_with_write_tools(false, None).await
 }
 
 pub(super) fn create_existing_client_codex_home(
     smoke: &LiveCodexShim,
     label: &str,
-) -> Result<std::path::PathBuf> {
+) -> TestResult<std::path::PathBuf> {
     let codex_home = smoke
         .tempdir
         .path()
         .join(format!("client-codex-home-{label}"));
-    fs::create_dir_all(&codex_home)
-        .with_context(|| format!("creating client Codex home {}", codex_home.display()))?;
+    fs::create_dir_all(&codex_home).map_err(|error| {
+        format!(
+            "creating client Codex home {}: {error}",
+            codex_home.display()
+        )
+    })?;
     fs::write(
         codex_home.join("config.toml"),
         "# Existing user Codex config should remain client-side.\n",
     )
-    .with_context(|| format!("writing client Codex config in {}", codex_home.display()))?;
+    .map_err(|error| {
+        format!(
+            "writing client Codex config in {}: {error}",
+            codex_home.display()
+        )
+    })?;
     Ok(codex_home)
 }
 
 pub(super) async fn start_live_codex_shim_with_write_tools(
     write_tools: bool,
     tool_root: Option<&std::path::Path>,
-) -> Result<LiveCodexShim> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+) -> TestResult<LiveCodexShim> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 

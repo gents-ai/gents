@@ -6,6 +6,17 @@ use afterburner::cli::compile::lang::SourceLang;
 use afterburner_cloud::pkg;
 use anyhow::{Context, Result};
 
+#[derive(Debug, thiserror::Error)]
+enum AfterburnerBuildError {
+    #[error("flushing standard output")]
+    Flush(#[source] std::io::Error),
+    #[cfg(unix)]
+    #[error("could not save standard output")]
+    Save,
+    #[error("could not send compiler output to standard error")]
+    Redirect,
+}
+
 pub(crate) fn describe_source(path: &Path) -> String {
     if !path.exists() {
         "which is missing".to_owned()
@@ -75,20 +86,22 @@ struct StdoutToStderr {
 }
 
 impl StdoutToStderr {
-    fn start() -> Result<Self> {
+    fn start() -> Result<Self, AfterburnerBuildError> {
         use std::io::Write;
         std::io::stdout()
             .flush()
-            .context("flushing standard output")?;
+            .map_err(AfterburnerBuildError::Flush)?;
         #[cfg(unix)]
         {
             // SAFETY: dup/dup2 on the process's own standard descriptors; each
             // result is checked before it is used.
             let saved = unsafe { libc::dup(libc::STDOUT_FILENO) };
-            anyhow::ensure!(saved >= 0, "could not save standard output");
+            if saved < 0 {
+                return Err(AfterburnerBuildError::Save);
+            }
             if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
                 unsafe { libc::close(saved) };
-                anyhow::bail!("could not send compiler output to standard error");
+                return Err(AfterburnerBuildError::Redirect);
             }
             Ok(Self { saved })
         }
@@ -100,10 +113,9 @@ impl StdoutToStderr {
             // SAFETY: reads and swaps the process's standard handles; restored on drop.
             unsafe {
                 let saved = GetStdHandle(STD_OUTPUT_HANDLE);
-                anyhow::ensure!(
-                    SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE)) != 0,
-                    "could not send compiler output to standard error"
-                );
+                if SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE)) == 0 {
+                    return Err(AfterburnerBuildError::Redirect);
+                }
                 Ok(Self { saved })
             }
         }
@@ -147,6 +159,7 @@ pub(crate) fn compile_lock() -> &'static std::sync::Mutex<()> {
 mod tests {
     use super::*;
     use afterburner_cloud::Afb;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn write(path: &Path, contents: &[u8]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -175,13 +188,20 @@ mod tests {
         let owner = format!("test plugin ({language})");
         let out = root.parent().unwrap().join(format!("{language}.afb"));
         let local = load_and_validate(&owner, root).unwrap_or_else(|error| {
-            panic!("loading the {language} package must succeed: {error:#}")
+            panic!(
+                "loading the {language} package must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
         });
         let _guard = compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        compile(&owner, root, local, &out)
-            .unwrap_or_else(|error| panic!("compiling {language} must succeed: {error:#}"));
+        compile(&owner, root, local, &out).unwrap_or_else(|error| {
+            panic!(
+                "compiling {language} must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
+        });
 
         let bytes = std::fs::read(&out).unwrap();
         let afb = Afb::from_bytes(&bytes)
@@ -372,13 +392,21 @@ mod tests {
 
         let owner = "test plugin (python)";
         let out = root.parent().unwrap().join("python.afb");
-        let local = load_and_validate(owner, &root)
-            .unwrap_or_else(|error| panic!("loading the python package must succeed: {error:#}"));
+        let local = load_and_validate(owner, &root).unwrap_or_else(|error| {
+            panic!(
+                "loading the python package must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
+        });
         let _guard = compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        compile(owner, &root, local, &out)
-            .unwrap_or_else(|error| panic!("compiling python must succeed: {error:#}"));
+        compile(owner, &root, local, &out).unwrap_or_else(|error| {
+            panic!(
+                "compiling python must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
+        });
 
         let bytes = std::fs::read(&out).unwrap();
         let afb = Afb::from_bytes(&bytes).expect("python's output must be a readable .afb");
@@ -405,7 +433,10 @@ mod tests {
             ..Default::default()
         };
         gents::plugin::PluginRunner::compile(&bytes, &plugin).unwrap_or_else(|error| {
-            panic!("a compiled python bundle runs under every bound a call applies: {error:#}")
+            panic!(
+                "a compiled python bundle runs under every bound a call applies: {}",
+                ErrorChain(&error)
+            )
         });
     }
 
@@ -422,7 +453,7 @@ mod tests {
         let error = load_and_validate("test plugin (haskell)", &root)
             .map(drop)
             .expect_err("haskell must be refused");
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains("haskell"), "{message}");
         assert!(
             message.contains("does not know how to compile"),

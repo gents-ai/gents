@@ -1,19 +1,18 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::graphql_string_list_literal;
 use serde_json::Value;
 
-use super::runtime::graph_artifact_revision_digest;
+use super::runtime::{graph_artifact_revision_digest, GraphPipelineError};
 use crate::graphql::escape_graphql_string;
 
 pub(crate) async fn live_run_correlations<'a>(
     node: &EmbeddedNode,
     owner: &str,
     consumer_ids: impl IntoIterator<Item = &'a str>,
-) -> Result<RapidHashMap<String, String>> {
+) -> Result<RapidHashMap<String, String>, GraphPipelineError> {
     let digests = consumer_ids
         .into_iter()
         .filter_map(graph_artifact_revision_digest)
@@ -29,7 +28,7 @@ pub(crate) async fn live_run_correlations<'a>(
     );
     let response = crate::graphql::graphql_with_transaction_retry(node, &query, "graph.live_runs")
         .await
-        .context("finding running graph runs")?;
+        .map_err(|source| GraphPipelineError::LiveRunQuery { source })?;
     Ok(crate::graphql::rows::<Value>(&response, "GraphRun")?
         .into_iter()
         .filter_map(|run| {

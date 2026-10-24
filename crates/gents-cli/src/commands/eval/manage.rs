@@ -7,9 +7,10 @@ use gents::eval::report::load_runs;
 use gents::eval::runner::{request_cancel, run_dir, run_finished, running_elsewhere, slots_owed};
 use gents::eval::{invalidate_run, load_run, load_trials};
 use gents::ConfigAccess;
+use gents_protocol::error_chain::ErrorChain;
 
 use super::render::human_bytes;
-use super::EvalContext;
+use super::{EvalCommandError, EvalContext};
 use crate::cli::{EvalGcArgs, EvalInvalidateArgs, EvalRmArgs, EvalRunIdArgs};
 
 /// The marker needs no database, so it is written first: the process
@@ -40,7 +41,7 @@ where
         Err(error) => {
             tracing::warn!(
                 run_id,
-                error = %format!("{error:#}"),
+                error = %format!("{}", ErrorChain(error.as_ref())),
                 "the cancel marker is written, but the run's documents could not be read to check whether it belongs to an optimization job"
             );
             writeln!(
@@ -221,7 +222,12 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
         let trials = match load_trials(&ctx.access, &ctx.owner, &record.run_id).await {
             Ok(trials) => trials,
             Err(error) => {
-                writeln!(out, "kept {}: {error:#}", record.run_id)?;
+                writeln!(
+                    out,
+                    "kept {}: {}",
+                    ErrorChain(error.as_ref()),
+                    record.run_id
+                )?;
                 continue;
             }
         };
@@ -241,7 +247,7 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
         let size = match dir_size(&dir) {
             Ok(size) => size,
             Err(error) => {
-                writeln!(out, "kept {}: {error:#}", record.run_id)?;
+                writeln!(out, "kept {}: {}", record.run_id, ErrorChain(&error))?;
                 continue;
             }
         };
@@ -400,7 +406,7 @@ async fn gc_jobs(
         let size = match dir_size(&dir) {
             Ok(size) => size,
             Err(error) => {
-                writeln!(out, "kept job {}: {error:#}", job.job_id)?;
+                writeln!(out, "kept job {}: {}", job.job_id, ErrorChain(&error))?;
                 continue;
             }
         };
@@ -432,44 +438,56 @@ async fn gc_jobs(
 pub(crate) fn job_dir_in_this_home(
     ctx: &EvalContext,
     job: &gents::optimization::JobRecord,
-) -> Result<PathBuf> {
+) -> Result<PathBuf, EvalCommandError> {
     let home_jobs = std::fs::canonicalize(ctx.jobs_dir()).ok();
-    anyhow::ensure!(
-        home_jobs.is_some() && std::fs::canonicalize(&job.origin.jobs_dir).ok() == home_jobs,
-        "job {}: its directory is not under this home",
-        job.job_id
-    );
+    if home_jobs.is_none() || std::fs::canonicalize(&job.origin.jobs_dir).ok() != home_jobs {
+        return Err(EvalCommandError::JobOutsideHome {
+            job_id: job.job_id.clone(),
+        });
+    }
     Ok(gents::optimization::job_dir(
         &job.origin.jobs_dir,
         &job.job_id,
     ))
 }
 
-pub(crate) fn dir_size(path: &Path) -> Result<u64> {
+pub(crate) fn dir_size(path: &Path) -> Result<u64, EvalCommandError> {
     let metadata =
-        std::fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
+        std::fs::symlink_metadata(path).map_err(|source| EvalCommandError::ReadPath {
+            path: path.to_owned(),
+            source,
+        })?;
     if !metadata.is_dir() {
         return Ok(metadata.len());
     }
+    let entries = std::fs::read_dir(path).map_err(|source| EvalCommandError::ListPath {
+        path: path.to_owned(),
+        source,
+    })?;
     let mut total = 0;
-    for entry in std::fs::read_dir(path).with_context(|| format!("listing {}", path.display()))? {
+    for entry in entries {
         total += below(entry.map(|entry| entry.path()))?;
     }
     Ok(total)
 }
 
-fn below(entry: std::io::Result<PathBuf>) -> Result<u64> {
-    let gone = |error: &anyhow::Error| {
-        error
-            .chain()
-            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-            .any(|error| error.kind() == std::io::ErrorKind::NotFound)
+fn below(entry: std::io::Result<PathBuf>) -> Result<u64, EvalCommandError> {
+    let measured = match entry {
+        Ok(path) => dir_size(&path),
+        Err(error) => Err(EvalCommandError::Io(error)),
     };
-    match entry
-        .map_err(anyhow::Error::from)
-        .and_then(|path| dir_size(&path))
-    {
-        Err(error) if gone(&error) => Ok(0),
+    match measured {
+        Err(error) if is_not_found(&error) => Ok(0),
         other => other,
     }
+}
+
+fn is_not_found(error: &EvalCommandError) -> bool {
+    matches!(
+        error,
+        EvalCommandError::Io(source)
+            | EvalCommandError::ReadPath { source, .. }
+            | EvalCommandError::ListPath { source, .. }
+            if source.kind() == std::io::ErrorKind::NotFound
+    )
 }

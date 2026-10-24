@@ -109,31 +109,20 @@ async fn register_file_image_policy<'n>(
     {
         return Ok(None);
     }
-    if let Some(collection) = node
-        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
-        .map_err(|error| Error::Node(error.into()))?
-    {
+    if let Some(collection) = node.get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)? {
         validate_file_image_policy(&collection, true)?;
     }
-    if let Some(collection) = node
-        .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
-        .map_err(|error| Error::Node(error.into()))?
+    if let Some(collection) =
+        node.get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)?
     {
         validate_file_image_policy(&collection, false)?;
     }
-    let owner = node.node_identity_did().ok_or_else(|| {
-        Error::Node(anyhow::anyhow!(
-            "retained file image storage requires the configured node identity"
-        ))
-    })?;
+    let owner = node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
     let policy = node
         .add_dac_policy_with_counter(owner, gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY, 0)
-        .await
-        .map_err(|error| Error::Node(error.into()))?;
+        .await?;
     if policy != gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID {
-        return Err(Error::Node(anyhow::anyhow!(
-            "retained file image policy does not match its schema binding"
-        )));
+        return Err(Error::FileImagePolicyMismatch);
     }
     Ok(Some(owner))
 }
@@ -147,9 +136,7 @@ fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) 
                 && policy.resource_name == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
         })
     {
-        return Err(Error::Node(anyhow::anyhow!(
-            "retained file image collection has an incompatible document policy"
-        )));
+        return Err(Error::IncompatibleFileImagePolicy);
     }
     Ok(())
 }
@@ -158,11 +145,10 @@ fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) 
 /// document has no local ACP registration. That fallback must remain private.
 async fn register_file_image_owner(node: &EmbeddedNode, owner: &str) -> Result<()> {
     let owner = owner
-        .parse()
-        .map_err(|error| Error::Node(anyhow::anyhow!("invalid image owner DID: {error}")))?;
+        .parse::<identity::Did>()
+        .map_err(|error| Error::InvalidImageOwner { error })?;
     let collection = node
-        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
-        .map_err(|error| Error::Node(error.into()))?
+        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)?
         .ok_or_else(|| Error::CollectionMissing {
             collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.into(),
         })?;
@@ -173,21 +159,19 @@ async fn register_file_image_owner(node: &EmbeddedNode, owner: &str) -> Result<(
     if acp
         .is_doc_registered(policy, resource, &collection.collection_id)
         .await
-        .map_err(|error| Error::Node(error.into()))?
+        .map_err(|error| Error::from(defra_node::Error::from(error)))?
     {
         let existing_owner = acp
             .get_doc_owner(policy, resource, &collection.collection_id)
             .await
-            .map_err(|error| Error::Node(error.into()))?;
+            .map_err(|error| Error::from(defra_node::Error::from(error)))?;
         if existing_owner.as_ref() != Some(&owner) {
-            return Err(Error::Node(anyhow::anyhow!(
-                "retained file image collection belongs to a different node"
-            )));
+            return Err(Error::ForeignFileImageOwner);
         }
     } else {
         acp.register_object(&owner, policy, resource, &collection.collection_id)
             .await
-            .map_err(|error| Error::Node(error.into()))?;
+            .map_err(|error| Error::from(defra_node::Error::from(error)))?;
     }
     Ok(())
 }
@@ -229,11 +213,7 @@ async fn register_baseline(
 ) -> Result<()> {
     let mut missing = Vec::new();
     for entry in registry.baseline {
-        if node
-            .get_collection(entry.name)
-            .map_err(|error| Error::Node(error.into()))?
-            .is_some()
-        {
+        if node.get_collection(entry.name)?.is_some() {
             report.baseline_already_present += 1;
             debug!(collection = entry.name, "baseline schema already present");
         } else {
@@ -278,8 +258,7 @@ async fn reconcile_ordinary_indexes(node: &EmbeddedNode, registry: &Registry<'_>
             })
             .collect();
         node.ensure_ordinary_index(index.collection, index.name, fields)
-            .await
-            .map_err(|error| Error::Node(error.into()))?;
+            .await?;
     }
     Ok(())
 }
@@ -360,10 +339,7 @@ async fn apply_add_collection(
     }
 
     if let Some(pin) = expected_version {
-        let versions = node
-            .get_all_collection_versions()
-            .await
-            .map_err(|error| Error::Node(error.into()))?;
+        let versions = node.get_all_collection_versions().await?;
         let Some(active) = versions
             .iter()
             .find(|v| v.version_id == pin && !v.is_placeholder)
@@ -408,16 +384,14 @@ async fn apply_patch_versioned(
         expected_state,
     } = ctx;
     let Some(pin) = expected_version else {
-        return Err(Error::StepFailed {
+        return Err(Error::MissingVersionPin {
             step: id.to_string(),
             collection: collection.to_string(),
-            source: anyhow::anyhow!("PatchVersioned steps require expected_version pin"),
         });
     };
 
     let active = node
-        .get_collection(collection)
-        .map_err(|error| Error::Node(error.into()))?
+        .get_collection(collection)?
         .ok_or_else(|| Error::CollectionMissing {
             collection: collection.to_string(),
         })?;
@@ -428,10 +402,7 @@ async fn apply_patch_versioned(
         return Ok(());
     }
 
-    let all = node
-        .get_all_collection_versions()
-        .await
-        .map_err(|error| Error::Node(error.into()))?;
+    let all = node.get_all_collection_versions().await?;
     let dest = all.iter().find(|v| v.version_id == pin);
 
     // A later step in the same collection may already be active. In that
@@ -632,8 +603,7 @@ async fn verify_active_step(
         ..
     } = ctx;
     let active = node
-        .get_collection(collection)
-        .map_err(|error| Error::Node(error.into()))?
+        .get_collection(collection)?
         .ok_or_else(|| Error::CollectionMissing {
             collection: collection.to_string(),
         })?;
@@ -719,8 +689,7 @@ async fn apply_patch_in_place(
     report: &mut MigrationReport,
 ) -> Result<()> {
     let active = node
-        .get_collection(collection)
-        .map_err(|error| Error::Node(error.into()))?
+        .get_collection(collection)?
         .ok_or_else(|| Error::CollectionMissing {
             collection: collection.to_string(),
         })?;
@@ -765,10 +734,7 @@ fn versions_by_name(
 /// Reject a store whose existing managed collections descend from a lineage
 /// this registry does not know, before anything is registered or patched.
 async fn reject_unknown_lineage(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    let all_versions = node
-        .get_all_collection_versions()
-        .await
-        .map_err(|error| Error::Node(error.into()))?;
+    let all_versions = node.get_all_collection_versions().await?;
     let by_name = versions_by_name(&all_versions);
     let known_pins = known_pin_set(registry);
     for entry in registry.baseline {
@@ -784,10 +750,7 @@ async fn verify_managed_lineages(
     registry: &Registry<'_>,
     _report: &mut MigrationReport,
 ) -> Result<()> {
-    let all_versions = node
-        .get_all_collection_versions()
-        .await
-        .map_err(|error| Error::Node(error.into()))?;
+    let all_versions = node.get_all_collection_versions().await?;
     let by_name = versions_by_name(&all_versions);
 
     let known_pins = known_pin_set(registry);

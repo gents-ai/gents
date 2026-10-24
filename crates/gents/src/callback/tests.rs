@@ -1375,16 +1375,18 @@ impl Backlog {
         self.access
             .transact_write("test.backlog_cursor", |txn| {
                 Box::pin(async move {
-                    Ok(crate::config_client::event_source_cursor::load_or_seed(
-                        txn,
-                        BACKLOG_OWNER,
-                        &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
-                            binding_id: "bind-backlog".into(),
-                        },
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                        crate::config_client::event_source_cursor::load_or_seed(
+                            txn,
+                            BACKLOG_OWNER,
+                            &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
+                                binding_id: "bind-backlog".into(),
+                            },
+                        )
+                        .await?
+                        .cursor
+                        .after,
                     )
-                    .await?
-                    .cursor
-                    .after)
                 })
             })
             .await

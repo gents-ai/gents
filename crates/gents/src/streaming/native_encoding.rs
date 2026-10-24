@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use super::StreamingError;
 use base64::Engine;
 use gents_protocol::message::{
     AssistantContent, DocumentSourceKind, Message, ReasoningContent, ToolCall,
@@ -89,12 +89,13 @@ impl EncodedNativeMessage {
         &self,
         close_doc_id: &str,
         tool_doc_ids: &[String],
-    ) -> Result<Vec<MessageBlock>> {
-        anyhow::ensure!(!close_doc_id.trim().is_empty(), "blank closing identity");
-        anyhow::ensure!(
-            tool_doc_ids.len() == self.tool_calls.len(),
-            "tool identity count changed"
-        );
+    ) -> Result<Vec<MessageBlock>, StreamingError> {
+        if close_doc_id.trim().is_empty() {
+            return Err(StreamingError::BlankClosingIdentity);
+        }
+        if tool_doc_ids.len() != self.tool_calls.len() {
+            return Err(StreamingError::ToolIdentityCountChanged);
+        }
         let reference = |stream| PayloadRef {
             close_doc_id: close_doc_id.to_owned(),
             stream,
@@ -137,7 +138,7 @@ impl EncodedNativeMessage {
                     } => MessageBlock::ToolCall {
                         tool_call_doc_id: tool_doc_ids
                             .get(*native_index)
-                            .context("tool identity missing")?
+                            .ok_or(StreamingError::ToolIdentityMissing)?
                             .clone(),
                         id: call.id.clone(),
                         call_id: call.call_id.clone(),
@@ -253,12 +254,14 @@ fn media_plan(
     }
 }
 
-pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMessage> {
+pub(crate) fn encode_native_message(
+    message: &Message,
+) -> Result<EncodedNativeMessage, StreamingError> {
     if let Message::User { content } = message {
         let mut streams = Vec::new();
         let mut plans = Vec::new();
         for (block, item) in content.iter().enumerate() {
-            let block = u32::try_from(block)?;
+            let block = u32::try_from(block).map_err(StreamingError::IntegerOverflow)?;
             match item {
                 gents_protocol::message::UserContent::Text(text) => {
                     let stream = push_stream(
@@ -292,12 +295,12 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
                         image.additional_params.clone(),
                     )));
                 }
-                _ => anyhow::bail!(
-                    "authored publication requires native user text, image or document blocks"
-                ),
+                _ => return Err(StreamingError::AuthoredUserBlockUnsupported),
             }
         }
-        anyhow::ensure!(!plans.is_empty(), "native user message has no blocks");
+        if plans.is_empty() {
+            return Err(StreamingError::NativeUserMessageEmpty);
+        }
         return Ok(EncodedNativeMessage {
             role: MessageRole::User,
             native_id: None,
@@ -307,13 +310,13 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
         });
     }
     let Message::Assistant { id, content } = message else {
-        anyhow::bail!("unsupported native authored role")
+        return Err(StreamingError::UnsupportedAuthoredRole);
     };
     let mut streams = Vec::new();
     let mut plans = Vec::new();
     let mut tool_calls = Vec::new();
     for (block, content) in content.iter().enumerate() {
-        let block = u32::try_from(block).context("native block index exceeds u32")?;
+        let block = u32::try_from(block).map_err(StreamingError::NativeBlockIndexOverflow)?;
         match content {
             AssistantContent::Text(text) => {
                 let stream = push_stream(
@@ -328,7 +331,8 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
             AssistantContent::Reasoning(reasoning) => {
                 let mut parts = Vec::new();
                 for (part, value) in reasoning.content.iter().enumerate() {
-                    let part = u32::try_from(part).context("reasoning part index exceeds u32")?;
+                    let part =
+                        u32::try_from(part).map_err(StreamingError::ReasoningPartIndexOverflow)?;
                     parts.push(match value {
                         ReasoningContent::Text { text, signature } => {
                             let stream = push_stream(
@@ -388,7 +392,7 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
             }
             AssistantContent::ToolCall(call) => {
                 let arguments = serde_json::to_string(&call.function.arguments)
-                    .context("encoding exact native tool arguments")?;
+                    .map_err(StreamingError::EncodeToolArguments)?;
                 let stream = push_stream(
                     &mut streams,
                     block,
@@ -425,7 +429,9 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
             ))),
         }
     }
-    anyhow::ensure!(!plans.is_empty(), "native assistant message has no blocks");
+    if plans.is_empty() {
+        return Err(StreamingError::NativeAssistantMessageEmpty);
+    }
     Ok(EncodedNativeMessage {
         role: MessageRole::Assistant,
         native_id: id.clone(),

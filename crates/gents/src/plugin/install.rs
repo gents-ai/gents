@@ -1,13 +1,43 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-
 use super::authority::describe_plugin_authority;
 use super::model_calls::ModelBinding;
-use super::store::{self, InstalledPlugin};
-use super::{Manifold, PluginRunner};
+use super::store::{self, InstalledPlugin, PluginStoreError};
+use super::{Manifold, PluginError, PluginRunner};
 use crate::pack::{PackManifest, PackPlugin};
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginInstallError {
+    #[error(transparent)]
+    Store(#[from] PluginStoreError),
+    #[error("admitting pack plugin {name}")]
+    Admit {
+        name: String,
+        #[source]
+        source: PluginError,
+    },
+    #[error("reading existing plugin {namespace}/{name} before installation")]
+    ReadExisting {
+        namespace: String,
+        name: String,
+        #[source]
+        source: Box<PluginStoreError>,
+    },
+    #[error("plugin {coordinate} is not installed")]
+    NotInstalled {
+        coordinate: String,
+        #[source]
+        source: Box<PluginStoreError>,
+    },
+    #[error("plugin {coordinate} does not call a model, so it has no slot to bind")]
+    NoModelSlot { coordinate: String },
+    #[error("plugin slot bindings require an owner")]
+    BindingsNeedOwner,
+}
+
+type Result<T, E = PluginInstallError> = std::result::Result<T, E>;
 
 #[allow(clippy::too_many_arguments)]
 pub fn install_from_pack(
@@ -63,18 +93,20 @@ fn install_from_pack_locked(
         Ok(previous) => Some(previous)
             .filter(|previous| previous.declaration.model_slot == plugin.model_slot)
             .and_then(|previous| previous.model_binding),
-        Err(error) if is_not_found(&error) => None,
+        Err(error) if store::is_not_found(&error) => None,
         Err(error) => {
             tracing::warn!(
                 plugin = %plugin.name,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(&error),
                 "the previous plugin record is unreadable; its model binding is not carried over"
             );
             None
         }
     };
-    PluginRunner::compile(artifact_bytes, plugin)
-        .with_context(|| format!("admitting pack plugin {}", plugin.name))?;
+    PluginRunner::compile(artifact_bytes, plugin).map_err(|source| PluginInstallError::Admit {
+        name: plugin.name.clone(),
+        source,
+    })?;
     let effective = granted.clone().unwrap_or_else(Manifold::sealed);
     if let Some(description) = describe_plugin_authority(plugin, &effective) {
         tracing::info!(
@@ -109,9 +141,9 @@ pub fn install_pack_plugins<'a>(
     home: &Path,
     manifest: &PackManifest,
     pack_digest: &str,
-    asset: impl Fn(&str) -> Result<&'a [u8]>,
+    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
     consent: bool,
-) -> Result<Vec<InstalledPlugin>> {
+) -> anyhow::Result<Vec<InstalledPlugin>> {
     install_pack_plugins_with_bindings(
         home,
         manifest,
@@ -132,16 +164,16 @@ pub fn install_pack_plugins_with_bindings<'a>(
     home: &Path,
     manifest: &PackManifest,
     pack_digest: &str,
-    asset: impl Fn(&str) -> Result<&'a [u8]>,
+    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
-    publish_local: impl FnOnce(&[InstalledPlugin]) -> Result<()>,
-) -> Result<Vec<InstalledPlugin>> {
+    publish_local: impl FnOnce(&[InstalledPlugin]) -> anyhow::Result<()>,
+) -> anyhow::Result<Vec<InstalledPlugin>> {
     let lock = store::try_lock_store(home)?;
     store::list_records(home)?;
     let previous = snapshot_pack_plugin_records(home, manifest)?;
-    let result = (|| {
+    let result = (|| -> anyhow::Result<Vec<InstalledPlugin>> {
         let installed =
             install_pack_plugins_locked(&lock, home, manifest, pack_digest, asset, consent)?;
         if !bindings.is_empty() {
@@ -149,7 +181,7 @@ pub fn install_pack_plugins_with_bindings<'a>(
                 &lock,
                 home,
                 manifest,
-                owner.context("plugin slot bindings require an owner")?,
+                owner.ok_or(PluginInstallError::BindingsNeedOwner)?,
                 bindings,
             )?;
         }
@@ -167,24 +199,24 @@ fn install_pack_plugins_locked<'a>(
     home: &Path,
     manifest: &PackManifest,
     pack_digest: &str,
-    asset: impl Fn(&str) -> Result<&'a [u8]>,
+    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
     consent: bool,
-) -> Result<Vec<InstalledPlugin>> {
+) -> anyhow::Result<Vec<InstalledPlugin>> {
     lock.for_home(home)?;
     let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     manifest
         .metadata
         .plugins
         .iter()
-        .map(|plugin| {
+        .map(|plugin| -> anyhow::Result<InstalledPlugin> {
             let instructions = plugin
                 .instructions
                 .as_deref()
-                .map(|path| crate::pack::tool_instructions(&plugin.name, asset(path)?))
+                .map(|path| anyhow::Ok(crate::pack::tool_instructions(&plugin.name, asset(path)?)?))
                 .transpose()?;
             let (data_unique_keys, data_collection_fields) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;
-            install_from_pack_locked(
+            Ok(install_from_pack_locked(
                 lock,
                 home,
                 &manifest.metadata.namespace,
@@ -197,7 +229,7 @@ fn install_pack_plugins_locked<'a>(
                 data_unique_keys,
                 data_collection_fields,
                 consent,
-            )
+            )?)
         })
         .collect()
 }
@@ -244,14 +276,6 @@ fn bind_plugin_slots_locked(
     Ok(bound)
 }
 
-fn is_not_found(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-    })
-}
-
 pub fn set_model_binding(
     home: &Path,
     coordinate: &str,
@@ -269,12 +293,17 @@ fn set_model_binding_locked(
 ) -> Result<InstalledPlugin> {
     lock.for_home(home)?;
     let (namespace, name) = store::parse_coordinate(coordinate)?;
-    let mut record = store::read_record(home, namespace, name)
-        .with_context(|| format!("plugin {coordinate} is not installed"))?;
-    anyhow::ensure!(
-        record.declaration.model_slot.is_some(),
-        "plugin {coordinate} does not call a model, so it has no slot to bind"
-    );
+    let mut record = store::read_record(home, namespace, name).map_err(|source| {
+        PluginInstallError::NotInstalled {
+            coordinate: coordinate.to_owned(),
+            source: Box::new(source),
+        }
+    })?;
+    if record.declaration.model_slot.is_none() {
+        return Err(PluginInstallError::NoModelSlot {
+            coordinate: coordinate.to_owned(),
+        });
+    }
     record.model_binding = binding;
     store::write_record(home, &record)?;
     Ok(record)
@@ -293,12 +322,11 @@ fn snapshot_pack_plugin_records(
                 match store::read_record(home, &manifest.metadata.namespace, &plugin.name) {
                     Ok(record) => Some(record),
                     Err(error) if store::is_not_found(&error) => None,
-                    Err(error) => {
-                        return Err(error).with_context(|| {
-                            format!(
-                                "reading existing plugin {}/{} before installation",
-                                manifest.metadata.namespace, plugin.name
-                            )
+                    Err(source) => {
+                        return Err(PluginInstallError::ReadExisting {
+                            namespace: manifest.metadata.namespace.clone(),
+                            name: plugin.name.clone(),
+                            source: Box::new(source),
                         })
                     }
                 };

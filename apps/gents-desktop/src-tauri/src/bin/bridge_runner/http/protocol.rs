@@ -1,10 +1,27 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+type Result<T, E = ProtocolError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ProtocolError {
+    #[error("timed out reading the request")]
+    ReadTimeout(#[source] tokio::time::error::Elapsed),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("connection closed before headers")]
+    ClosedBeforeHeaders,
+    #[error("missing request line")]
+    MissingRequestLine,
+    #[error("missing request method")]
+    MissingRequestMethod,
+    #[error("missing request path")]
+    MissingRequestPath,
+}
 
 #[derive(Debug)]
 pub(super) struct HttpRequestData {
@@ -46,9 +63,10 @@ impl HttpResponse {
 }
 
 async fn read_some(stream: &mut TcpStream, buffer: &mut [u8]) -> Result<usize> {
-    Ok(tokio::time::timeout(READ_TIMEOUT, stream.read(buffer))
+    let read = tokio::time::timeout(READ_TIMEOUT, stream.read(buffer))
         .await
-        .context("timed out reading the request")??)
+        .map_err(ProtocolError::ReadTimeout)?;
+    Ok(read?)
 }
 
 pub(super) async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
@@ -57,7 +75,7 @@ pub(super) async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequ
     let header_end = loop {
         let read = read_some(stream, &mut temp).await?;
         if read == 0 {
-            anyhow::bail!("connection closed before headers");
+            return Err(ProtocolError::ClosedBeforeHeaders);
         }
         buffer.extend_from_slice(&temp[..read]);
         if let Some(index) = find_subslice(&buffer, b"\r\n\r\n") {
@@ -66,9 +84,7 @@ pub(super) async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequ
     };
     let header_text = String::from_utf8_lossy(&buffer[..header_end]);
     let mut lines = header_text.split("\r\n").filter(|line| !line.is_empty());
-    let request_line = lines
-        .next()
-        .ok_or_else(|| anyhow!("missing request line"))?;
+    let request_line = lines.next().ok_or(ProtocolError::MissingRequestLine)?;
     let mut content_length = 0_usize;
     for line in lines.clone() {
         if let Some((name, value)) = line.split_once(':') {
@@ -80,11 +96,11 @@ pub(super) async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequ
     let mut parts = request_line.split_whitespace();
     let method = parts
         .next()
-        .ok_or_else(|| anyhow!("missing request method"))?
+        .ok_or(ProtocolError::MissingRequestMethod)?
         .to_string();
     let path = parts
         .next()
-        .ok_or_else(|| anyhow!("missing request path"))?
+        .ok_or(ProtocolError::MissingRequestPath)?
         .to_string();
     while buffer.len() < header_end + content_length {
         let read = read_some(stream, &mut temp).await?;

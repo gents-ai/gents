@@ -6,12 +6,14 @@ use acp::{
 use identity::Did;
 use std::sync::Arc;
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
 const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";
 
 async fn build_local_acp_from_lean_case(
     case: &LeanIdentityPermissionCase,
-) -> anyhow::Result<LocalDocumentACP> {
+) -> TestResult<LocalDocumentACP> {
     assert!(
         case.permission.ends_with(".read"),
         "case {:?}: only .read permission fixtures are supported by this ACP witness, got {:?}",
@@ -70,7 +72,7 @@ fn did_from_lean_case(value: &str, case: &LeanIdentityPermissionCase, field: &st
 }
 
 #[tokio::test]
-async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<()> {
+async fn resolved_identity_permission_cases_drive_defra_acp() -> TestResult {
     for case in lean_identity_permission_cases() {
         if case.expected_actor_node.is_none() || case.expected_peer_node.is_none() {
             continue;

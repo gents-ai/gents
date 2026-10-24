@@ -36,7 +36,11 @@ impl ConfigCommandTool {
             std::path::Path::new(&argv[2]),
             &argv[1],
             &self.node_did,
-            |path| context.resolve_path(path.to_str().context("skill path must be UTF-8")?),
+            |path| {
+                context
+                    .resolve_path(path.to_str().context("skill path must be UTF-8")?)
+                    .map_err(anyhow::Error::from)
+            },
         )?;
         let target = SelfConfigTarget::Skill;
         let value = serde_json::to_value(document)?;

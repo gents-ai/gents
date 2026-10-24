@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::error::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::P2pAccessArgs;

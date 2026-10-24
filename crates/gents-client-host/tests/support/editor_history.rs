@@ -1,6 +1,7 @@
 use super::{fake_llm, read_session, read_session_page, Attachment};
-use anyhow::{ensure, Context, Result};
+use crate::support::{TestError, TestResult};
 use gents::ConfigAccess;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,11 +21,11 @@ pub struct ProfileEvidence(std::path::PathBuf);
 
 #[cfg(feature = "editor-e2e")]
 impl ProfileEvidence {
-    pub fn from_env(root: &Path) -> Result<Option<Self>> {
+    pub fn from_env(root: &Path) -> TestResult<Option<Self>> {
         if std::env::var("GENTS_VSCODE_HISTORY_PROFILE").as_deref() != Ok("1") {
             return Ok(None);
         }
-        let extension = std::env::var_os("GENTS_VSCODE_ROOT").context("extension root")?;
+        let extension = std::env::var_os("GENTS_VSCODE_ROOT").expect("extension root");
         let results = Path::new(&extension).join("test-results");
         std::fs::create_dir_all(&results)?;
         let results = std::fs::canonicalize(results)?;
@@ -32,12 +33,12 @@ impl ProfileEvidence {
         let mut parts = vec![version];
         if let Some(remote) = std::env::var_os("GENTS_VSCODE_REMOTE_FIXTURE") {
             let remote: Value = serde_json::from_slice(&std::fs::read(remote)?)?;
-            parts.push(remote["kind"].as_str().context("remote kind")?.to_owned());
+            parts.push(remote["kind"].as_str().expect("remote kind").to_owned());
         }
         let mut artifacts = results.join("native-editor");
         for part in parts {
             let mut components = Path::new(&part).components();
-            ensure!(
+            assert!(
                 matches!(components.next(), Some(std::path::Component::Normal(_)))
                     && components.next().is_none(),
                 "editor artifact scope must be a single path component"
@@ -47,7 +48,7 @@ impl ProfileEvidence {
         artifacts.push("history-profile");
         std::fs::create_dir_all(&artifacts)?;
         let artifacts = std::fs::canonicalize(artifacts)?;
-        ensure!(
+        assert!(
             artifacts.starts_with(results),
             "editor evidence left test-results"
         );
@@ -58,7 +59,7 @@ impl ProfileEvidence {
         Ok(Some(Self::begin(artifacts)?))
     }
 
-    fn begin(artifacts: std::path::PathBuf) -> Result<Self> {
+    fn begin(artifacts: std::path::PathBuf) -> TestResult<Self> {
         std::fs::write(
             artifacts.join("editor-history-profile.json"),
             serde_json::to_vec_pretty(&json!({
@@ -68,18 +69,18 @@ impl ProfileEvidence {
         Ok(Self(artifacts))
     }
 
-    pub fn finish(self, root: &Path, result: &Result<()>) -> Result<()> {
+    pub fn finish(self, root: &Path, result: &TestResult<()>) -> TestResult<()> {
         let path = self.0.join("editor-history-profile.json");
         let mut report: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         report["nativeComplete"] = json!(result.is_ok());
         match result {
-            Ok(()) => ensure!(
+            Ok(()) => assert!(
                 report["complete"] == true,
                 "editor profile returned without complete UI evidence"
             ),
             Err(error) => {
                 report["complete"] = json!(false);
-                report["nativeFailure"] = json!(format!("{error:#}"));
+                report["nativeFailure"] = json!(ErrorChain(error.as_ref()).to_string());
                 report["phase"] = json!(if root.join("editor.log").exists() {
                     "editor-or-native-verification"
                 } else {
@@ -117,7 +118,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn from_env() -> Result<Self> {
+    pub fn from_env() -> TestResult<Self> {
         Self::parse(
             std::env::var("GENTS_VSCODE_HISTORY_TURNS").ok().as_deref(),
             std::env::var("GENTS_VSCODE_HISTORY_PROFILE")
@@ -126,8 +127,8 @@ impl Options {
         )
     }
 
-    fn parse(turns: Option<&str>, profile: Option<&str>) -> Result<Self> {
-        ensure!(
+    fn parse(turns: Option<&str>, profile: Option<&str>) -> TestResult<Self> {
+        assert!(
             matches!(profile, None | Some("0") | Some("1")),
             "GENTS_VSCODE_HISTORY_PROFILE must be 0 or 1"
         );
@@ -135,12 +136,12 @@ impl Options {
         let turns = turns
             .unwrap_or(if profile { "1000" } else { "45" })
             .parse::<usize>()
-            .context("GENTS_VSCODE_HISTORY_TURNS must be an integer in 45..=5000")?;
-        ensure!(
+            .expect("GENTS_VSCODE_HISTORY_TURNS must be an integer in 45..=5000");
+        assert!(
             (45..=5000).contains(&turns),
             "GENTS_VSCODE_HISTORY_TURNS must be in 45..=5000"
         );
-        ensure!(
+        assert!(
             if profile { turns >= 100 } else { turns == 45 },
             "history profiling requires 100..=5000 turns; without GENTS_VSCODE_HISTORY_PROFILE=1 the ordinary journey requires 45"
         );
@@ -187,9 +188,9 @@ pub async fn populate(
     author: &str,
     options: Options,
     root: &Path,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let started = std::time::Instant::now();
-    let progress = |completed| -> Result<()> {
+    let progress = |completed| -> TestResult<()> {
         std::fs::write(
             root.join("editor-history-seed-progress.json"),
             serde_json::to_vec_pretty(&json!({
@@ -212,8 +213,8 @@ pub async fn populate(
             )
             .await;
         *id += 1;
-        let request = receipt["requestId"].as_str().context("history request")?;
-        ensure!(receipt["sessionId"] == session, "history changed sessions");
+        let request = receipt["requestId"].as_str().expect("history request");
+        assert!(receipt["sessionId"] == session, "history changed sessions");
         let mut last = Value::Null;
         let completed = tokio::time::timeout(TURN_OBSERVATION_TIMEOUT, async {
             loop {
@@ -227,7 +228,7 @@ pub async fn populate(
                     )
                     .await;
                 *id += 1;
-                ensure!(
+                assert!(
                     output["nodeDid"] == node
                         && output["sessionId"] == session
                         && output["requestId"] == request,
@@ -235,20 +236,29 @@ pub async fn populate(
                 );
                 match output["output"]["kind"].as_str() {
                     Some("terminalMessage") => {
-                        ensure!(
+                        assert!(
                             output["output"]["content"] == format!("History reply {turn:02}."),
                             "unexpected history output: {output}"
                         );
-                        return Ok::<_, anyhow::Error>(());
+                        return Ok::<_, TestError>(());
                     }
                     Some("loading") => last = output,
-                    _ => anyhow::bail!("history request did not complete normally: {output}"),
+                    _ => {
+                        return Err(TestError::from(format!(
+                            "history request did not complete normally: {output}"
+                        )))
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
         })
         .await
-        .with_context(|| format!("history turn {turn} did not complete: {last}"))
+        .map_err(|error| {
+            TestError::from(format!(
+                "history turn {turn} did not complete: {last}: {}",
+                ErrorChain(&error)
+            ))
+        })
         .and_then(|result| result);
         if let Err(error) = completed {
             if options.profile {
@@ -270,7 +280,7 @@ pub async fn populate(
     let seed_seconds = started.elapsed().as_secs_f64();
     let rows = verified_requests(access, node, session, author, options.turns + 1).await?;
     let snapshot = read_session(client, id, node, session).await?;
-    ensure!(
+    assert!(
         snapshot["timelinePage"]["hasOlder"] == true,
         "history did not cross the native transcript page boundary: {snapshot}"
     );
@@ -284,33 +294,33 @@ pub async fn populate(
         .then(|| {
             rows.iter()
                 .find(|row| row.content.as_deref() == Some("History fixture turn 01"))
-                .context("profile action request")
+                .ok_or("profile action request")
         })
         .transpose()?;
     loop {
         pages += 1;
-        ensure!(
+        assert!(
             pages <= options.turns + 1,
             "history paging did not terminate"
         );
         let items = page["timelineItems"]
             .as_array()
-            .context("history page has no timeline items")?;
-        ensure!(!items.is_empty(), "history page unexpectedly empty");
+            .expect("history page has no timeline items");
+        assert!(!items.is_empty(), "history page unexpectedly empty");
         for item in items {
-            let key = item["itemKey"].as_str().context("history item key")?;
-            ensure!(keys.insert(key.to_owned()), "history paging repeated {key}");
-            let kind = item["kind"].as_str().context("history item kind")?;
+            let key = item["itemKey"].as_str().expect("history item key");
+            assert!(keys.insert(key.to_owned()), "history paging repeated {key}");
+            let kind = item["kind"].as_str().expect("history item kind");
             *kinds.entry(kind.to_owned()).or_default() += 1;
             if options.profile && kind == "toolGroup" {
-                let tools = item["tools"].as_array().context("profile action tools")?;
-                ensure!(
+                let tools = item["tools"].as_array().expect("profile action tools");
+                assert!(
                     tools.len() == 1 && action.is_none(),
                     "profile must contain exactly one native action"
                 );
                 let tool = &tools[0];
                 let presentation = &tool["presentation"];
-                ensure!(
+                assert!(
                     tool["toolCallId"] == ACTION_CALL_ID
                         && tool["requestId"].as_str()
                             == action_request.map(|row| row.request_id.as_str())
@@ -325,7 +335,7 @@ pub async fn populate(
                         && presentation["body"] == ACTION_CONTENT,
                     "profile action did not preserve its canonical identity and file contents: {tool}"
                 );
-                ensure!(
+                assert!(
                     tool["itemKey"]
                         .as_str()
                         .is_some_and(|value| !value.is_empty()),
@@ -335,7 +345,7 @@ pub async fn populate(
                     access,
                     node,
                     session,
-                    action_request.context("profile action request")?,
+                    action_request.expect("profile action request"),
                     tool,
                 )
                 .await?;
@@ -353,21 +363,21 @@ pub async fn populate(
         }
         let cursor = page["timelinePage"]["oldestItemKey"]
             .as_str()
-            .context("history page has no older cursor")?
+            .expect("history page has no older cursor")
             .to_owned();
         page = read_session_page(client, id, node, session, Some(&cursor)).await?;
-        ensure!(
+        assert!(
             page["nodeDid"] == node
                 && page["sessionId"] == session
                 && page["timelinePage"]["oldestItemKey"] != cursor,
             "history page crossed scope or failed to advance"
         );
     }
-    ensure!(
+    assert!(
         kinds.get("userMessage") == Some(&(options.turns + 1)),
         "history paging did not retain every authored turn"
     );
-    ensure!(
+    assert!(
         !options.profile || action.is_some(),
         "history profile did not retain its native action"
     );
@@ -389,11 +399,8 @@ async fn canonical_action_doc_id(
     session: &str,
     request: &gents_protocol::row::AgentRequestRow,
     rendered: &Value,
-) -> Result<String> {
-    let request_doc_id = request
-        .doc_id
-        .as_deref()
-        .context("profile request document")?;
+) -> TestResult<String> {
+    let request_doc_id = request.doc_id.as_deref().expect("profile request document");
     let response = access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}},
@@ -410,9 +417,11 @@ async fn canonical_action_doc_id(
     let rows: Vec<gents_protocol::row::AgentToolCallRow> =
         serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
     let [row] = rows.as_slice() else {
-        anyhow::bail!("profile action must resolve to exactly one canonical tool record");
+        return Err(TestError::from(
+            "profile action must resolve to exactly one canonical tool record",
+        ));
     };
-    ensure!(
+    assert!(
         row.node_did.as_deref() == Some(node)
             && row.session_id.as_deref() == Some(session)
             && row.request_doc_id.as_deref() == Some(request_doc_id)
@@ -427,7 +436,9 @@ async fn canonical_action_doc_id(
     row.doc_id
         .clone()
         .filter(|value| !value.is_empty())
-        .context("profile action has no canonical document identity")
+        .ok_or(TestError::from(
+            "profile action has no canonical document identity",
+        ))
 }
 
 async fn verified_requests(
@@ -436,7 +447,7 @@ async fn verified_requests(
     session: &str,
     author: &str,
     expected: usize,
-) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
+) -> TestResult<Vec<gents_protocol::row::AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
         gents::graphql::escape_graphql_string(node),
@@ -445,10 +456,10 @@ async fn verified_requests(
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(result["data"]["AgentRequest"].clone())?;
-    ensure!(rows.len() == expected, "unexpected history request count");
+    assert!(rows.len() == expected, "unexpected history request count");
     for row in &rows {
         gents::verify_request_receipt_signature(row)?;
-        ensure!(
+        assert!(
             row.admission_signer_did.as_deref() == Some(author)
                 && row.requester_did.as_deref() == Some(author)
                 && row.lifecycle_state == Some(RequestLifecycleState::Completed),
@@ -466,13 +477,13 @@ pub async fn verify_profile(
     session: &str,
     author: &str,
     options: Options,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let rows = verified_requests(access, node, session, author, options.turns + 2).await?;
     let streamed = rows
         .iter()
         .filter(|row| row.content.as_deref() == Some("History profile streaming request."))
         .collect::<Vec<_>>();
-    ensure!(
+    assert!(
         streamed.len() == 1,
         "profile must submit exactly one additional streaming request"
     );
@@ -485,7 +496,7 @@ pub async fn verify_profile(
         )
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         output["nodeDid"] == node
             && output["sessionId"] == session
             && output["requestId"] == *request
@@ -565,7 +576,7 @@ fn history_profile_calls_read_file_until_its_exact_result_then_completes() {
 
 #[cfg(feature = "editor-e2e")]
 #[test]
-fn history_profile_replaces_stale_success_before_seeding_and_preserves_failure() -> Result<()> {
+fn history_profile_replaces_stale_success_before_seeding_and_preserves_failure() -> TestResult<()> {
     let artifacts = tempfile::tempdir()?;
     let root = tempfile::tempdir()?;
     let report = artifacts.path().join("editor-history-profile.json");
@@ -583,7 +594,7 @@ fn history_profile_replaces_stale_success_before_seeding_and_preserves_failure()
         serde_json::to_vec(&failure)?,
     )?;
     std::fs::write(root.path().join("runtime.err"), "native stall evidence")?;
-    evidence.finish(root.path(), &Err(anyhow::anyhow!("seed deadline elapsed")))?;
+    evidence.finish(root.path(), &Err(TestError::from("seed deadline elapsed")))?;
     let failed: Value = serde_json::from_slice(&std::fs::read(report)?)?;
     assert_eq!(failed["complete"], false);
     assert_eq!(failed["nativeComplete"], false);

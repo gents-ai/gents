@@ -2,13 +2,14 @@ use rapidhash::RapidHashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::config_client::{ConfigAccess, ConfigClientError};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::session::load_latest_request_in_txn;
 pub(crate) use gents::session_origin::SessionScope;
 use gents::session_origin::{
-    lineage, load_session, started_by, starting_request, SessionLink, REQUEST_FIELDS,
+    lineage, load_session, started_by, starting_request, SessionLink, SessionOriginError,
+    REQUEST_FIELDS,
 };
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
@@ -129,12 +130,12 @@ pub(crate) async fn load_caused_session(
 pub(crate) async fn started_by_request(
     access: &ConfigAccess,
     cause: &AgentRequestRow,
-) -> Result<Vec<(SessionLink, AgentRequestRow)>> {
+) -> Result<Vec<(SessionLink, AgentRequestRow)>, CausedSessionError> {
     let cause_doc_id = cause
         .doc_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .context("started sessions require a physical request")?;
+        .ok_or(CausedSessionError::MissingPhysicalRequest)?;
     let mut started = Vec::new();
     for link in lineage(access, &row_scope(cause)?).await?.started {
         if link.cause_request_doc_id != cause_doc_id {
@@ -209,7 +210,10 @@ pub(crate) async fn load_session_head(
     Ok(heads.pop())
 }
 
-async fn request_rows(access: &ConfigAccess, query: &str) -> Result<Vec<AgentRequestRow>> {
+async fn request_rows(
+    access: &ConfigAccess,
+    query: &str,
+) -> Result<Vec<AgentRequestRow>, CausedSessionError> {
     access
         .execute(query)
         .await?
@@ -218,20 +222,36 @@ async fn request_rows(access: &ConfigAccess, query: &str) -> Result<Vec<AgentReq
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .map(|row| serde_json::from_value(row).context("decoding AgentRequest row"))
+        .map(|row| serde_json::from_value(row).map_err(CausedSessionError::DecodeRow))
         .collect()
 }
 
-fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CausedSessionError {
+    #[error("AgentRequest row omitted node_did")]
+    RowOmittedNodeDid,
+    #[error("AgentRequest row omitted session_id")]
+    RowOmittedSessionId,
+    #[error("started sessions require a physical request")]
+    MissingPhysicalRequest,
+    #[error("decoding AgentRequest row")]
+    DecodeRow(#[source] serde_json::Error),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Origin(#[from] SessionOriginError),
+}
+
+fn row_scope(row: &AgentRequestRow) -> Result<SessionScope, CausedSessionError> {
     Ok(SessionScope {
         node_did: row
             .node_did
             .clone()
-            .context("AgentRequest row omitted node_did")?,
+            .ok_or(CausedSessionError::RowOmittedNodeDid)?,
         session_id: row
             .session_id
             .clone()
-            .context("AgentRequest row omitted session_id")?,
+            .ok_or(CausedSessionError::RowOmittedSessionId)?,
         requester_did: row.requester_did.clone(),
     })
 }

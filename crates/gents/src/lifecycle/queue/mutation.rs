@@ -19,7 +19,7 @@ pub(super) struct SessionRequestFields<'a> {
 pub(super) async fn session_request_create_mutation(
     parent: &AgentRequest,
     fields: SessionRequestFields<'_>,
-) -> Result<String> {
+) -> anyhow::Result<String> {
     session_request_create_mutation_at_hop(parent, parent.request_hop, fields).await
 }
 
@@ -27,7 +27,7 @@ pub(super) async fn session_request_create_mutation_at_hop(
     parent: &AgentRequest,
     hop: u32,
     fields: SessionRequestFields<'_>,
-) -> Result<String> {
+) -> anyhow::Result<String> {
     let SessionRequestFields {
         agent_id,
         content,

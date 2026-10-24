@@ -245,7 +245,7 @@ fn escape_rich_invalid_pattern_error_is_bounded() {
 
 #[test]
 fn error_envelope_is_bounded_for_any_message() {
-    let error = anyhow::anyhow!("{}", "\"\\\u{1}".repeat(1_000_000));
+    let error = std::io::Error::other("\"\\\u{1}".repeat(1_000_000));
     let line = gents_fs_runner::error_response_line(&error);
     assert!(line.len() <= MAX_RESPONSE_BYTES, "{} bytes", line.len());
     let response: NativeFsRunnerResponse = serde_json::from_str(line.trim_end()).unwrap();

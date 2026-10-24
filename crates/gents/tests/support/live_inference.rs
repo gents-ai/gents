@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +26,22 @@ use crate::support::{first_optional_row, TestDb};
 pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";
 
 const TARGET_VALIDATION_OWNER: &str = "did:key:inference-target-validation";
+
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceSelectorError {
+    #[error("inference target selector is blank")]
+    Blank,
+    #[error("inference target path has no name: {}", path.display())]
+    NoName { path: PathBuf },
+    #[error("inference targets {} and {} share the name {name}", existing.display(), path.display())]
+    SharedName {
+        existing: PathBuf,
+        path: PathBuf,
+        name: String,
+    },
+    #[error("{EVAL_TARGET_VARIABLE} names no inference target")]
+    NoTargets,
+}
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -194,12 +211,9 @@ impl InferenceTarget {
             .build()
             .expect("reqwest client");
         let mut request = client.get(&url);
-        if let Some(key) = self
-            .backend
-            .auth
-            .resolve_api_key()
-            .unwrap_or_else(|error| panic!("target {} credential: {error:#}", self.name))
-        {
+        if let Some(key) = self.backend.auth.resolve_api_key().unwrap_or_else(|error| {
+            panic!("target {} credential: {}", self.name, ErrorChain(&error))
+        }) {
             request = request.bearer_auth(key);
         }
         let name = &self.name;
@@ -215,9 +229,11 @@ impl InferenceTarget {
     }
 }
 
-fn resolve_selector(selector: &str) -> Result<(String, PathBuf)> {
+fn resolve_selector(selector: &str) -> Result<(String, PathBuf), InferenceSelectorError> {
     let selector = selector.trim();
-    anyhow::ensure!(!selector.is_empty(), "inference target selector is blank");
+    if selector.is_empty() {
+        return Err(InferenceSelectorError::Blank);
+    }
     let path = if selector.contains('/') || selector.ends_with(".json") {
         let path = PathBuf::from(selector);
         if path.is_absolute() {
@@ -232,12 +248,12 @@ fn resolve_selector(selector: &str) -> Result<(String, PathBuf)> {
     let name = path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .with_context(|| format!("inference target path has no name: {}", path.display()))?
+        .ok_or_else(|| InferenceSelectorError::NoName { path: path.clone() })?
         .to_owned();
     Ok((name, path))
 }
 
-pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>> {
+pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>, InferenceSelectorError> {
     let mut selected: Vec<(String, PathBuf)> = Vec::new();
     for selector in value
         .split(',')
@@ -246,23 +262,24 @@ pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>> {
         let (name, path) = resolve_selector(selector)?;
         match selected.iter().find(|(existing, _)| *existing == name) {
             Some((_, existing)) if *existing == path => {}
-            Some((_, existing)) => anyhow::bail!(
-                "inference targets {} and {} share the name {name}",
-                existing.display(),
-                path.display()
-            ),
+            Some((_, existing)) => {
+                return Err(InferenceSelectorError::SharedName {
+                    existing: existing.clone(),
+                    path,
+                    name,
+                })
+            }
             None => selected.push((name, path)),
         }
     }
-    anyhow::ensure!(
-        !selected.is_empty(),
-        "{EVAL_TARGET_VARIABLE} names no inference target"
-    );
+    if selected.is_empty() {
+        return Err(InferenceSelectorError::NoTargets);
+    }
     Ok(selected)
 }
 
 pub fn live_target() -> InferenceTarget {
-    InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
+    InferenceTarget::selected().unwrap_or_else(|error| panic!("{}", ErrorChain(error.as_ref())))
 }
 
 pub async fn bind_target(

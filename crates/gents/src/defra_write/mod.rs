@@ -1,9 +1,11 @@
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, bail, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::graphql::GraphqlError;
 use serde_json::{json, Map, Value};
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::WriteToolDecl;
+use crate::document_config::{DocumentConfigError, WriteToolDecl};
 
 mod input;
 
@@ -11,8 +13,65 @@ pub use input::can_hold_canonical_count;
 pub(crate) use input::parameters as field_parameters;
 pub(crate) use input::validate_input as validate_field_input;
 
-pub(crate) fn field_literal(schema: &str, value: &Value) -> Result<String> {
+pub(crate) fn field_literal(schema: &str, value: &Value) -> Result<String, DefraWriteFailure> {
     input::literal(schema, value)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DefraWriteFailure {
+    #[error("unsupported bounded write field type `{schema}`")]
+    UnsupportedFieldType { schema: String },
+    #[error("runtime-filled field must not be supplied")]
+    RuntimeFilledSupplied,
+    #[error("required field missing")]
+    RequiredFieldMissing,
+    #[error("null is not allowed for `{schema}`")]
+    NullNotAllowed { schema: String },
+    #[error("expected `{schema}`")]
+    ExpectedSchemaValue { schema: String },
+    #[error("empty nonnullable lists cannot be written by DefraDB")]
+    EmptyNonnullableList,
+    #[error("expected native JSON value matching `{schema}`; values are not coerced")]
+    NativeValueMismatch { schema: String },
+    #[error(
+        "empty JSON arrays cannot be represented in a DefraDB mutation without changing the value"
+    )]
+    EmptyJsonArray,
+    #[error(transparent)]
+    GraphqlInput(#[from] GraphqlError),
+    #[error(
+        "MailboxItem requires the dedicated stamped mailbox tool and cannot use BoundedWriteTool"
+    )]
+    MailboxCollection,
+    #[error("invalid bounded write tool declaration: {error}")]
+    InvalidDeclaration { error: Box<DocumentConfigError> },
+    #[error(transparent)]
+    Fill(Box<DocumentConfigError>),
+    #[error("field `{field}` is absent from `{collection}`")]
+    FieldAbsent { field: String, collection: String },
+    #[error("{refusal}")]
+    UndeclaredField { refusal: String },
+    #[error("{refusal}")]
+    RuntimeFilledField { refusal: String },
+    #[error("invalid field `{field}` for tool `{tool_name}`")]
+    InvalidField {
+        field: String,
+        tool_name: String,
+        #[source]
+        source: Box<DefraWriteFailure>,
+    },
+    #[error("invalid field `{field}`")]
+    InvalidFieldValue {
+        field: String,
+        #[source]
+        source: Box<DefraWriteFailure>,
+    },
+}
+
+impl From<DocumentConfigError> for DefraWriteFailure {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::Fill(Box::new(error))
+    }
 }
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
@@ -22,7 +81,7 @@ pub struct DefraWriteError(anyhow::Error);
 
 impl std::fmt::Display for DefraWriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -35,6 +94,12 @@ impl std::error::Error for DefraWriteError {
 impl From<anyhow::Error> for DefraWriteError {
     fn from(error: anyhow::Error) -> Self {
         Self(error)
+    }
+}
+
+impl From<DefraWriteFailure> for DefraWriteError {
+    fn from(error: DefraWriteFailure) -> Self {
+        Self(error.into())
     }
 }
 
@@ -81,15 +146,15 @@ impl BoundedWriteTool {
         Ok(())
     }
 
-    fn ensure_declaration(&self) -> Result<()> {
+    fn ensure_declaration(&self) -> Result<(), DefraWriteFailure> {
         if self.decl.collection == crate::mailbox::MAILBOX_COLLECTION {
-            bail!(
-                "MailboxItem requires the dedicated stamped mailbox tool and cannot use BoundedWriteTool"
-            );
+            return Err(DefraWriteFailure::MailboxCollection);
         }
         self.decl
             .validate()
-            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))
+            .map_err(|error| DefraWriteFailure::InvalidDeclaration {
+                error: Box::new(error),
+            })
     }
 
     /// The field types read from the embedded node, without I/O.
@@ -104,7 +169,7 @@ impl BoundedWriteTool {
             .node()
             .get_collection(&self.decl.collection)?
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
-        self.field_types_of(&collection)
+        Ok(self.field_types_of(&collection)?)
     }
 
     /// The field types from wherever `access` reads the schema.
@@ -119,13 +184,13 @@ impl BoundedWriteTool {
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
         let collection: ::schema::CollectionVersion = serde_json::from_value(version)
             .with_context(|| format!("decoding the `{}` schema", self.decl.collection))?;
-        self.field_types_of(&collection)
+        Ok(self.field_types_of(&collection)?)
     }
 
     fn field_types_of(
         &self,
         collection: &::schema::CollectionVersion,
-    ) -> Result<std::collections::BTreeMap<String, String>> {
+    ) -> Result<std::collections::BTreeMap<String, String>, DefraWriteFailure> {
         self.decl
             .fields
             .iter()
@@ -134,12 +199,9 @@ impl BoundedWriteTool {
                     .fields
                     .iter()
                     .find(|f| f.name == field.name)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "field `{}` is absent from `{}`",
-                            field.name,
-                            self.decl.collection
-                        )
+                    .ok_or_else(|| DefraWriteFailure::FieldAbsent {
+                        field: field.name.clone(),
+                        collection: self.decl.collection.clone(),
                     })?;
                 let schema = schema_field.kind.graphql_type_name();
                 input::parameters(schema)?;
@@ -152,15 +214,14 @@ impl BoundedWriteTool {
         &self,
         args: &Map<String, Value>,
         types: &std::collections::BTreeMap<String, String>,
-    ) -> Result<String> {
+    ) -> Result<String, DefraWriteFailure> {
         self.ensure_declaration()?;
 
         for key in args.keys() {
             let field = self.decl.fields.iter().find(|field| &field.name == key);
             if field.is_none() {
-                bail!(
-                    "{}",
-                    crate::document_config::undeclared_field_refusal(
+                return Err(DefraWriteFailure::UndeclaredField {
+                    refusal: crate::document_config::undeclared_field_refusal(
                         "field",
                         key,
                         &self.decl.tool_name,
@@ -172,20 +233,19 @@ impl BoundedWriteTool {
                             .filter(|field| field.fill.is_none())
                             .map(|field| field.name.as_str())
                             .collect::<Vec<_>>(),
-                    )
-                );
+                    ),
+                });
             }
             if let Some(fill) = field.and_then(|field| field.fill.as_ref()) {
-                bail!(
-                    "{}",
-                    crate::document_config::runtime_filled_refusal(
+                return Err(DefraWriteFailure::RuntimeFilledField {
+                    refusal: crate::document_config::runtime_filled_refusal(
                         "field",
                         key,
                         &self.decl.tool_name,
                         self.surface_id.as_deref(),
                         fill,
-                    )
-                );
+                    ),
+                });
             }
         }
 
@@ -196,11 +256,10 @@ impl BoundedWriteTool {
                 field.fill.is_some(),
                 args.get(&field.name),
             )
-            .with_context(|| {
-                format!(
-                    "invalid field `{}` for tool `{}`",
-                    field.name, self.decl.tool_name
-                )
+            .map_err(|source| DefraWriteFailure::InvalidField {
+                field: field.name.clone(),
+                tool_name: self.decl.tool_name.clone(),
+                source: Box::new(source),
             })?;
         }
 
@@ -219,8 +278,12 @@ impl BoundedWriteTool {
                     &filled
                 }
             };
-            let literal = input::literal(&types[&field.name], value)
-                .with_context(|| format!("invalid field `{}`", field.name))?;
+            let literal = input::literal(&types[&field.name], value).map_err(|source| {
+                DefraWriteFailure::InvalidFieldValue {
+                    field: field.name.clone(),
+                    source: Box::new(source),
+                }
+            })?;
             input_parts.push(format!("{}: {}", field.name, literal));
         }
 
@@ -298,7 +361,11 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
         let types = self.resolved_field_types().await?;
         let mutation = self.build_mutation(&args.0, &types)?;
 
-        let resp = self.access.write("tool.defra_write", &mutation).await?;
+        let resp = self
+            .access
+            .write("tool.defra_write", &mutation)
+            .await
+            .map_err(anyhow::Error::from)?;
 
         let document = resp
             .get("data")
@@ -314,7 +381,8 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
             &json!({"collection":self.decl.collection, "document_id":doc_id,
                 "document":document}),
             &["document", "document_id", "collection"],
-        )?)
+        )
+        .map_err(anyhow::Error::from)?)
     }
 }
 

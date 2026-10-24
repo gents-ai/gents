@@ -29,11 +29,11 @@ impl gents::pack::authoring::PluginCompiler for CliPluginCompiler {
 pub(crate) fn dispatch(args: PackBuildArgs) -> Result<()> {
     if args.all {
         let reports = build_all(Path::new("packs"))?;
-        return crate::print_json(&json!({ "packs": reports }));
+        return Ok(crate::print_json(&json!({ "packs": reports }))?);
     }
     let dir = args.dir.unwrap_or_else(|| Path::new(".").to_path_buf());
     let report = build_pack(&dir, args.out.as_deref())?;
-    crate::print_json(&serde_json::to_value(report)?)
+    Ok(crate::print_json(&serde_json::to_value(report)?)?)
 }
 
 pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {
@@ -60,6 +60,7 @@ pub(crate) fn plugin_entry(language: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use gents::pack_archive::PackArchive;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn write_plain_pack(root: &Path, name: &str) {
         std::fs::create_dir_all(root).unwrap();
@@ -164,7 +165,7 @@ mod tests {
         );
 
         let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("plugins/format_check.afb"), "{message}");
         assert!(message.contains("missing"), "{message}");
@@ -189,7 +190,7 @@ mod tests {
         std::fs::write(root.join("plugin_src"), b"not a directory").unwrap();
 
         let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("is not a directory"), "{message}");
     }
@@ -264,7 +265,7 @@ mod tests {
         std::fs::write(root.join("plugin_src/main.rs"), b"fn main() {}").unwrap();
 
         let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("has no source/main.rs"), "{message}");
     }
@@ -288,7 +289,7 @@ mod tests {
         std::fs::write(root.join("plugins/format_check.afb"), b"stub").unwrap();
 
         let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("haskell"), "{message}");
     }
@@ -296,7 +297,7 @@ mod tests {
     #[test]
     fn missing_pack_dir_names_a_clear_error() {
         let error = build_pack(Path::new("/no/such/pack"), None).unwrap_err();
-        assert!(format!("{error:#}").contains("manifest"));
+        assert!(ErrorChain(error.as_ref()).to_string().contains("manifest"));
     }
 
     #[test]

@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
+use gents_protocol::error_chain::find_source;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -7,6 +10,138 @@ use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
 use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalSplit, EvalTier};
 use crate::graphql::escape_graphql_string;
+
+/// Display text is shown to operators and the model; keep it stable.
+#[derive(Debug, thiserror::Error)]
+pub enum EvalError {
+    #[error(transparent)]
+    ReportRefused(#[from] super::report::ReportRefused),
+    #[error(transparent)]
+    FreezeRefused(#[from] super::runner::freeze::FreezeRefused),
+    #[error(transparent)]
+    ProviderDown(#[from] super::runner::ProviderDown),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{} has no parent directory", path.display())]
+    NoParentDirectory { path: PathBuf },
+    #[error("{} has no cell directory", path.display())]
+    NoCellDirectory { path: PathBuf },
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading {}", path.display())]
+    ReadPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing {}", path.display())]
+    ParsePath {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("writing {}", path.display())]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}", path.display())]
+    WriteRecord {
+        path: PathBuf,
+        #[source]
+        source: Box<EvalError>,
+    },
+    #[error("removing {}", path.display())]
+    RemovePath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("renaming {} to {}", from.display(), to.display())]
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("staging {}", path.display())]
+    StageSnapshot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("encoding {}", path.display())]
+    EncodeSnapshot {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("replacing {}", path.display())]
+    ReplaceSnapshot {
+        path: PathBuf,
+        #[source]
+        source: tempfile::PersistError,
+    },
+    #[error("no eval run {run_id:?} for {owner}")]
+    NoRun { run_id: String, owner: String },
+    #[error("trial budget closed")]
+    TrialBudgetClosed {
+        #[source]
+        source: tokio::sync::AcquireError,
+    },
+    #[error("run {run_id} froze no case {case_id:?}")]
+    UnfrozenCase { run_id: String, case_id: String },
+    #[error("run {run_id} froze no cell {cell_id:?}")]
+    UnfrozenCell { run_id: String, cell_id: String },
+    #[error("review checks unavailable")]
+    ReviewChecksUnavailable,
+    #[error("review check failed: {check}")]
+    ReviewCheckFailed { check: serde_json::Value },
+    #[error("trial concurrency must be between 1 and {max}")]
+    TrialConcurrency { max: usize },
+    #[error("fixture asset {asset:?} must be a path inside the pack")]
+    FixtureAssetInvalid { asset: String },
+    #[error("reading fixture asset {}", path.display())]
+    ReadFixture {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading fixture asset directory {}", path.display())]
+    ReadFixtureDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not UTF-8", path.display())]
+    NotUtf8 { path: PathBuf },
+    #[error("fixture asset outside the pack")]
+    FixtureOutsidePack {
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+    #[error("reading pack directory {}", path.display())]
+    ReadPackDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("pack entry {} is a symlink; a pack carries its own bytes", path.display())]
+    PackSymlink { path: PathBuf },
+    #[error("{} is outside the pack", path.display())]
+    PackPathOutside {
+        path: PathBuf,
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+    #[error("pack path {} is not UTF-8", path.display())]
+    PackPathNotUtf8 { path: PathBuf },
+}
 
 pub const DENOMINATOR_POLICY_V1: &str = "exclude_not_evidence_v1";
 
@@ -173,8 +308,8 @@ impl std::fmt::Display for AlreadyCompleted {
 }
 impl std::error::Error for AlreadyCompleted {}
 
-pub fn already_completed(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<AlreadyCompleted>().is_some()
+pub fn already_completed(error: &(dyn std::error::Error + 'static)) -> bool {
+    find_source::<AlreadyCompleted>(error).is_some()
 }
 
 #[derive(Debug)]
@@ -186,8 +321,10 @@ impl std::fmt::Display for AlreadyInvalidated {
 }
 impl std::error::Error for AlreadyInvalidated {}
 
-pub fn already_invalidated(error: &anyhow::Error) -> Option<&AlreadyInvalidated> {
-    error.downcast_ref::<AlreadyInvalidated>()
+pub fn already_invalidated<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a AlreadyInvalidated> {
+    find_source::<AlreadyInvalidated>(error)
 }
 
 #[derive(Debug)]
@@ -199,8 +336,8 @@ impl std::fmt::Display for FeedbackOffTrain {
 }
 impl std::error::Error for FeedbackOffTrain {}
 
-pub fn feedback_off_train(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<FeedbackOffTrain>().is_some()
+pub fn feedback_off_train(error: &(dyn std::error::Error + 'static)) -> bool {
+    find_source::<FeedbackOffTrain>(error).is_some()
 }
 
 fn now() -> String {
@@ -365,6 +502,7 @@ pub async fn invalidate_run(
                 )
                 .await
                 .map(|_| ())
+                .map_err(Into::into)
             })
         })
         .await?;
@@ -438,6 +576,7 @@ pub async fn complete_trial(
                 )
                 .await
                 .map(|_| ())
+                .map_err(Into::into)
             })
         })
         .await
@@ -590,6 +729,7 @@ mod tests {
     use super::*;
     use crate::defra_node::EmbeddedNode;
     use crate::eval::TAXONOMY_VERSION;
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     const OWNER: &str = "did:key:eval-owner";
@@ -748,7 +888,11 @@ mod tests {
         let error = invalidate_run(&access, OWNER, "run-1", "did:key:other", "second thoughts")
             .await
             .unwrap_err();
-        assert!(already_invalidated(&error).is_some(), "{error:#}");
+        assert!(
+            already_invalidated(error.as_ref()).is_some(),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         let again = load_run(&access, OWNER, "run-1").await.unwrap().unwrap();
         assert_eq!(
             again.invalidated.expect("still invalidated"),
@@ -783,7 +927,11 @@ mod tests {
         let error = complete_trial(&access, OWNER, "trial-1", &rival_completion())
             .await
             .unwrap_err();
-        assert!(already_completed(&error), "{error:#}");
+        assert!(
+            already_completed(error.as_ref()),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         let after = load_trials(&access, OWNER, "run-2").await.unwrap();
         let stored = after[0].completion.as_ref().expect("the trial completed");
         assert_eq!(stored.usage.output_tokens, None, "missing usage stays null");
@@ -886,7 +1034,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(feedback_off_train(&error), "{error:#}");
+        assert!(
+            feedback_off_train(error.as_ref()),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         append_verdict(
             &access,
             OWNER,
@@ -937,8 +1089,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("10001"),
-            "the error names the offending score: {error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("10001"),
+            "the error names the offending score: {}",
+            ErrorChain(error.as_ref())
         );
         assert!(
             load_verdicts(&access, OWNER, "r3")
@@ -980,7 +1133,7 @@ mod tests {
         .await
         .unwrap();
         let error = load_verdicts(&access, OWNER, "r4").await.unwrap_err();
-        let rendered = format!("{error:#}");
+        let rendered = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             rendered.contains("unknown provider_reason") && rendered.contains("bogus"),
             "{rendered}"

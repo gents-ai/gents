@@ -1,11 +1,10 @@
-use anyhow::{Context, Result};
 use gents::plugin::approval::workspace::{Support, CONTRACT_VERSION, STATUS_SUPPORT_FIELD};
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use serde_json::Value;
 
 use crate::client::PeerRecord;
 
-use super::{http::peer_status, serving_runtime};
+use super::{http::peer_status, serving_runtime, LocalRuntimeError, Result};
 
 /// Capabilities belong to the process serving the saved peer, not the client
 /// binary. Matching the node and lifecycle prevents a stale home or a different
@@ -20,7 +19,9 @@ pub async fn workspace_permission_support(record: &PeerRecord) -> Result<Option<
 fn decode(status: &Value, expected_did: &str) -> Result<Option<Support>> {
     match serving_runtime(status, expected_did)? {
         ObservedServeLifecycle::Ready => {}
-        ObservedServeLifecycle::Starting => anyhow::bail!("The runtime is still starting."),
+        ObservedServeLifecycle::Starting => {
+            return Err(LocalRuntimeError::WorkspaceRuntimeStarting)
+        }
         ObservedServeLifecycle::Outdated { .. } => return Ok(None),
     }
     let Some(support) = status
@@ -37,7 +38,7 @@ fn decode(status: &Value, expected_did: &str) -> Result<Option<Support>> {
         return Ok(None);
     }
     let support: Support = serde_json::from_value(support.clone())
-        .context("The runtime returned invalid workspace permission capabilities.")?;
+        .map_err(LocalRuntimeError::InvalidWorkspacePermissions)?;
     Ok(Some(support))
 }
 

@@ -1,16 +1,101 @@
 use std::fs;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use gents::config_client::GraphqlEndpoint;
 use gents::identity::{
-    load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
+    load_macos_keychain_identity, load_macos_secure_enclave_identity, IdentityError, KeyIdentity,
+    NodeIdentity,
 };
+use gents_protocol::error_chain::ErrorChain;
 
+use crate::native_service::AtomicWriteError;
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 use crate::{DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HomeStateError {
+    #[error(transparent)]
+    Home(#[from] gents::home::HomeError),
+    #[error("initialized home {} has no node DID", home_dir.display())]
+    NoNodeDid { home_dir: PathBuf },
+    #[error("loading identity key {}", path.display())]
+    LoadIdentityKey {
+        path: PathBuf,
+        #[source]
+        source: IdentityError,
+    },
+    #[error("initialized home node DID {expected_did} requires identity key {} to already exist", path.display())]
+    IdentityKeyMissing { expected_did: String, path: PathBuf },
+    #[error("initialized home {} uses macos-keychain but has no keychain_label", home_dir.display())]
+    KeychainLabelMissing { home_dir: PathBuf },
+    #[error("loading macOS keychain identity {label}")]
+    LoadKeychainIdentity {
+        label: String,
+        #[source]
+        source: IdentityError,
+    },
+    #[error("initialized home {} uses macos-secure-enclave but has no secure_enclave_label", home_dir.display())]
+    SecureEnclaveLabelMissing { home_dir: PathBuf },
+    #[error("loading macOS Secure Enclave identity {label}")]
+    LoadSecureEnclaveIdentity {
+        label: String,
+        #[source]
+        source: IdentityError,
+    },
+    #[error("initialized home {} has no key_path and unsupported identity_backend {backend:?}", home_dir.display())]
+    UnsupportedIdentityBackend {
+        home_dir: PathBuf,
+        backend: Option<String>,
+    },
+    #[error(
+        "initialized home node DID {expected_did} does not match loaded identity DID {loaded_did}"
+    )]
+    IdentityDidMismatch {
+        expected_did: String,
+        loaded_did: String,
+    },
+    #[error("creating home directory {}", path.display())]
+    CreateHomeDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("encoding local runtime state JSON")]
+    EncodeRuntimeState(#[source] serde_json::Error),
+    #[error("writing runtime state {}", path.display())]
+    WriteRuntimeState {
+        path: PathBuf,
+        #[source]
+        source: AtomicWriteError,
+    },
+    #[error("reading runtime state {}", path.display())]
+    ReadRuntimeState {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("decoding runtime state {}", path.display())]
+    DecodeRuntimeState {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("removing stale runtime state {}", path.display())]
+    RemoveRuntimeState {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("home {} has no running server recorded; start `gents server --home {}` or pass --graphql explicitly", home_dir.display(), home_dir.display())]
+    NoRunningServer { home_dir: PathBuf },
+    #[error("node DID is required; run `gents init`, start `gents server`, then retry `gents status`, or pass --node-did explicitly")]
+    NodeDidRequired,
+}
+
+type Result<T, E = HomeStateError> = std::result::Result<T, E>;
 
 pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
@@ -44,11 +129,11 @@ pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
-    gents::home::write_init_config(home_dir, state)
+    Ok(gents::home::write_init_config(home_dir, state)?)
 }
 
 pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
-    gents::home::read_init_config(home_dir)
+    Ok(gents::home::read_init_config(home_dir)?)
 }
 
 /// Load and register the signer recorded by an initialized home; every
@@ -60,7 +145,9 @@ pub(crate) fn load_initialized_home_identity(
 ) -> Result<Arc<dyn NodeIdentity>> {
     let expected_did = config.node_did.trim();
     if expected_did.is_empty() {
-        anyhow::bail!("initialized home {} has no node DID", home_dir.display());
+        return Err(HomeStateError::NoNodeDid {
+            home_dir: home_dir.to_path_buf(),
+        });
     }
 
     let identity: Arc<dyn NodeIdentity> = if let Some(key_path) = config
@@ -71,14 +158,18 @@ pub(crate) fn load_initialized_home_identity(
     {
         let key_path = PathBuf::from(key_path);
         if !key_path.exists() {
-            anyhow::bail!(
-                "initialized home node DID {expected_did} requires identity key {} to already exist",
-                key_path.display()
-            );
+            return Err(HomeStateError::IdentityKeyMissing {
+                expected_did: expected_did.to_owned(),
+                path: key_path,
+            });
         }
         Arc::new(
-            KeyIdentity::load_existing(&key_path, None)
-                .with_context(|| format!("loading identity key {}", key_path.display()))?,
+            KeyIdentity::load_existing(&key_path, None).map_err(|source| {
+                HomeStateError::LoadIdentityKey {
+                    path: key_path.clone(),
+                    source,
+                }
+            })?,
         )
     } else {
         match config
@@ -93,16 +184,15 @@ pub(crate) fn load_initialized_home_identity(
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "initialized home {} uses macos-keychain but has no keychain_label",
-                            home_dir.display()
-                        )
+                    .ok_or_else(|| HomeStateError::KeychainLabelMissing {
+                        home_dir: home_dir.to_path_buf(),
                     })?;
-                Arc::new(
-                    load_macos_keychain_identity(label, None)
-                        .with_context(|| format!("loading macOS keychain identity {label}"))?,
-                )
+                Arc::new(load_macos_keychain_identity(label, None).map_err(|source| {
+                    HomeStateError::LoadKeychainIdentity {
+                        label: label.to_owned(),
+                        source,
+                    }
+                })?)
             }
             Some("macos-secure-enclave") => {
                 let label = config
@@ -110,43 +200,51 @@ pub(crate) fn load_initialized_home_identity(
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "initialized home {} uses macos-secure-enclave but has no secure_enclave_label",
-                            home_dir.display()
-                        )
+                    .ok_or_else(|| HomeStateError::SecureEnclaveLabelMissing {
+                        home_dir: home_dir.to_path_buf(),
                     })?;
                 Arc::new(
-                    load_macos_secure_enclave_identity(label, None).with_context(|| {
-                        format!("loading macOS Secure Enclave identity {label}")
+                    load_macos_secure_enclave_identity(label, None).map_err(|source| {
+                        HomeStateError::LoadSecureEnclaveIdentity {
+                            label: label.to_owned(),
+                            source,
+                        }
                     })?,
                 )
             }
-            backend => anyhow::bail!(
-                "initialized home {} has no key_path and unsupported identity_backend {backend:?}",
-                home_dir.display()
-            ),
+            backend => {
+                return Err(HomeStateError::UnsupportedIdentityBackend {
+                    home_dir: home_dir.to_path_buf(),
+                    backend: backend.map(str::to_owned),
+                })
+            }
         }
     };
 
     if identity.did() != expected_did {
-        anyhow::bail!(
-            "initialized home node DID {expected_did} does not match loaded identity DID {}",
-            identity.did()
-        );
+        return Err(HomeStateError::IdentityDidMismatch {
+            expected_did: expected_did.to_owned(),
+            loaded_did: identity.did().to_owned(),
+        });
     }
     Ok(identity)
 }
 
 pub(crate) fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {
-    fs::create_dir_all(home_dir)
-        .with_context(|| format!("creating home directory {}", home_dir.display()))?;
+    fs::create_dir_all(home_dir).map_err(|source| HomeStateError::CreateHomeDirectory {
+        path: home_dir.to_path_buf(),
+        source,
+    })?;
     let path = runtime_state_path(home_dir);
-    let contents = serde_json::to_vec_pretty(state).context("encoding local runtime state JSON")?;
+    let contents = serde_json::to_vec_pretty(state).map_err(HomeStateError::EncodeRuntimeState)?;
     // Replaced, never truncated in place: a server killed mid-write would
     // otherwise leave an empty file every later command fails to decode.
-    crate::native_service::atomic_write(&path, &contents)
-        .with_context(|| format!("writing runtime state {}", path.display()))
+    crate::native_service::atomic_write(&path, &contents).map_err(|source| {
+        HomeStateError::WriteRuntimeState {
+            path: path.clone(),
+            source,
+        }
+    })
 }
 
 pub(crate) fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
@@ -154,18 +252,25 @@ pub(crate) fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntime
     if !path.exists() {
         return Ok(None);
     }
-    let bytes =
-        fs::read(&path).with_context(|| format!("reading runtime state {}", path.display()))?;
-    let state = serde_json::from_slice(&bytes)
-        .with_context(|| format!("decoding runtime state {}", path.display()))?;
+    let bytes = fs::read(&path).map_err(|source| HomeStateError::ReadRuntimeState {
+        path: path.clone(),
+        source,
+    })?;
+    let state =
+        serde_json::from_slice(&bytes).map_err(|source| HomeStateError::DecodeRuntimeState {
+            path: path.clone(),
+            source,
+        })?;
     Ok(Some(state))
 }
 
 pub(crate) fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
     let path = runtime_state_path(home_dir);
     if path.exists() {
-        fs::remove_file(&path)
-            .with_context(|| format!("removing stale runtime state {}", path.display()))?;
+        fs::remove_file(&path).map_err(|source| HomeStateError::RemoveRuntimeState {
+            path: path.clone(),
+            source,
+        })?;
         return Ok(true);
     }
     Ok(false)
@@ -184,12 +289,9 @@ pub(crate) fn resolve_graphql_endpoint(
         return Ok(home_graphql_endpoint(&home_dir, runtime_state.graphql));
     }
 
-    anyhow::ensure!(
-        home.is_none(),
-        "home {} has no running server recorded; start `gents server --home {}` or pass --graphql explicitly",
-        home_dir.display(),
-        home_dir.display()
-    );
+    if home.is_some() {
+        return Err(HomeStateError::NoRunningServer { home_dir });
+    }
 
     Ok(home_graphql_endpoint(
         &home_dir,
@@ -208,7 +310,7 @@ pub(crate) fn home_graphql_endpoint(home_dir: &Path, url: impl Into<String>) -> 
         Ok(Some(config)) if endpoint_serves_home(home_dir, &url) => {
             load_initialized_home_identity(home_dir, &config)
                 .map(|identity| identity.did().to_string())
-                .map_err(|error| format!("{error:#}"))
+                .map_err(|error| ErrorChain(&error).to_string())
                 .and_then(|did| {
                     gents::identity::can_mint_defradb_bearer(&did)
                         .then_some(did)
@@ -256,9 +358,7 @@ pub(crate) fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> R
         return Ok(init_config.node_did);
     }
 
-    anyhow::bail!(
-        "node DID is required; run `gents init`, start `gents server`, then retry `gents status`, or pass --node-did explicitly"
-    )
+    Err(HomeStateError::NodeDidRequired)
 }
 
 pub(crate) fn display_host(host: IpAddr) -> String {

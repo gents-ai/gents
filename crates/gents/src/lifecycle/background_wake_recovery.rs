@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
@@ -11,9 +10,12 @@ use crate::lifecycle::materialize::{
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
 };
 use crate::lifecycle::ExecutionOrigin;
+use crate::lifecycle::LifecycleError;
 
 use super::queue::{row_queue, RequestQueue};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};
+
+type Result<T, E = LifecycleError> = std::result::Result<T, E>;
 
 const BACKGROUND_WAKE_REDRIVE_BATCH_LIMIT: usize = 64;
 const BACKGROUND_WAKE_RETRY_BASE_SECONDS: i64 = 5;
@@ -97,7 +99,7 @@ impl RequestLifecycle {
                     tracing::warn!(
                         request_id = %candidate.request_id,
                         session_id = required_str(candidate.session_id.as_deref(), "session_id")?,
-                        error = ?error,
+                        error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
                         "failed to redrive background-completion wake"
                     );
                 }
@@ -143,28 +145,48 @@ async fn load_candidates(
         "load_candidates",
     )
     .await?;
-    let data = response.data.context("background wake query has no data")?;
+    let data = response
+        .data
+        .ok_or(LifecycleError::BackgroundWakeQueryData)?;
     let failed: Vec<AgentRequestRow> =
-        serde_json::from_value(data["failed"].clone()).context("decoding failed wakes")?;
+        serde_json::from_value(data["failed"].clone()).map_err(|source| {
+            LifecycleError::BackgroundWakeDecode {
+                what: "failed wakes",
+                source,
+            }
+        })?;
     for candidate in &failed {
         validate_failed_wake(candidate)?;
     }
     Ok((
         failed,
-        serde_json::from_value(data["successors"].clone()).context("decoding successors")?,
-        serde_json::from_value(data["pending"].clone()).context("decoding pending wakes")?,
+        serde_json::from_value(data["successors"].clone()).map_err(|source| {
+            LifecycleError::BackgroundWakeDecode {
+                what: "successors",
+                source,
+            }
+        })?,
+        serde_json::from_value(data["pending"].clone()).map_err(|source| {
+            LifecycleError::BackgroundWakeDecode {
+                what: "pending wakes",
+                source,
+            }
+        })?,
     ))
 }
 
-fn required_str<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
-    value.ok_or_else(|| anyhow::anyhow!("failed background wake is missing {field}"))
+fn required_str<'a>(
+    value: Option<&'a str>,
+    field: &'static str,
+) -> Result<&'a str, LifecycleError> {
+    value.ok_or(LifecycleError::BackgroundWakeFieldMissing { field })
 }
 
-fn required_i64(value: Option<i64>, field: &str) -> Result<i64> {
-    value.ok_or_else(|| anyhow::anyhow!("failed background wake is missing {field}"))
+fn required_i64(value: Option<i64>, field: &'static str) -> Result<i64, LifecycleError> {
+    value.ok_or(LifecycleError::BackgroundWakeFieldMissing { field })
 }
 
-fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
+fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<(), LifecycleError> {
     required_str(candidate.doc_id.as_deref(), "_docID")?;
     required_str(candidate.node_did.as_deref(), "node_did")?;
     required_str(candidate.agent_id.as_deref(), "agent_id")?;
@@ -175,7 +197,7 @@ fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
         .request_hop
         .map(u32::try_from)
         .transpose()
-        .context("failed background wake request_hop must fit in u32")?;
+        .map_err(LifecycleError::BackgroundWakeRequestHop)?;
     Ok(())
 }
 
@@ -190,7 +212,7 @@ fn automated_queue_key(queue: &RequestQueue) -> Option<String> {
         .flatten()
 }
 
-fn eligible_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>> {
+fn eligible_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>, LifecycleError> {
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
     let max_retries = required_i64(candidate.max_retries, "max_retries")?;
     if retry_count < 0 || retry_count >= max_retries {
@@ -225,7 +247,10 @@ pub fn background_wake_next_retry_at(
     Some(terminalized_at + background_wake_retry_delay(retry_count))
 }
 
-fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>) -> Result<bool> {
+fn retry_is_due(
+    candidate: &AgentRequestRow,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, LifecycleError> {
     Ok(background_wake_next_retry_at(
         candidate.terminalized_at.as_deref(),
         required_i64(candidate.retry_count, "retry_count")?,
@@ -236,7 +261,7 @@ fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>)
 async fn redrive_one(
     node: &std::sync::Arc<EmbeddedNode>,
     candidate: &AgentRequestRow,
-) -> Result<RedriveOutcome> {
+) -> anyhow::Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_id = &request_id;
     crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -255,7 +280,7 @@ async fn redrive_in_transaction(
     txn: &ConfigApplyTxn<'_>,
     candidate: &AgentRequestRow,
     request_id: &str,
-) -> Result<RedriveOutcome> {
+) -> anyhow::Result<RedriveOutcome> {
     let retry_key = format!(
         "retry:doc:{}",
         required_str(candidate.doc_id.as_deref(), "_docID")?
@@ -263,7 +288,9 @@ async fn redrive_in_transaction(
     let response = txn
         .execute(&precondition_query(candidate, &retry_key)?)
         .await?;
-    let data = response.get("data").context("redrive query has no data")?;
+    let data = response
+        .get("data")
+        .ok_or(LifecycleError::RedriveQueryData)?;
     if !agent_request_rows(data, "successor")?.is_empty() {
         return Ok(RedriveOutcome::AlreadyCreated);
     }
@@ -279,7 +306,7 @@ async fn redrive_in_transaction(
         return Ok(RedriveOutcome::Ineligible);
     }
     let candidate = current;
-    let queue_key = eligible_queue_key(candidate)?.context("wake became ineligible")?;
+    let queue_key = eligible_queue_key(candidate)?.ok_or(LifecycleError::WakeIneligible)?;
     if agent_request_rows(data, "pending")?.iter().any(|row| {
         row_queue(row)
             .and_then(automated_queue_key)
@@ -318,39 +345,43 @@ async fn redrive_in_transaction(
         .execute_local_response(&redrive_mutation(candidate, request_id, &retry_key, hop).await?)
         .await?;
     let created = crate::watcher::agent_request_from_mutation_response(&response, "successor")?
-        .context("background wake successor create matched no document")?;
+        .ok_or(LifecycleError::SuccessorCreateEmpty)?;
     let successor = crate::session::load_latest_request_in_txn(txn, node_did, session_id, None)
         .await?
-        .context("background wake successor is missing")?;
-    anyhow::ensure!(
-        successor.observed.request_doc_id == created.doc_id
-            && successor.observed.request_id == created.request_id,
-        "background wake successor is not the canonical request head"
-    );
+        .ok_or(LifecycleError::SuccessorMissing)?;
+    if successor.observed.request_doc_id != created.doc_id
+        || successor.observed.request_id != created.request_id
+    {
+        return Err(LifecycleError::SuccessorNotHead.into());
+    }
     // The observation never supplies retry authority; reopening remains the
     // claim owner's responsibility.
-    anyhow::ensure!(
-        crate::session::advance_session_request_observation_in_txn(
-            txn,
-            &successor,
-            &created.content,
-            &created.created_at,
-        )
-        .await?,
-        "background wake successor observation was not advanced"
-    );
+    if !crate::session::advance_session_request_observation_in_txn(
+        txn,
+        &successor,
+        &created.content,
+        &created.created_at,
+    )
+    .await?
+    {
+        return Err(LifecycleError::SuccessorObservationNotAdvanced.into());
+    }
     Ok(RedriveOutcome::Created {
         request_id: request_id.to_string(),
     })
 }
 
 fn agent_request_rows(data: &serde_json::Value, name: &str) -> Result<Vec<AgentRequestRow>> {
-    serde_json::from_value(
-        data.get(name)
-            .cloned()
-            .with_context(|| format!("query omitted {name}"))?,
-    )
-    .with_context(|| format!("decoding {name} AgentRequest rows"))
+    let rows = data
+        .get(name)
+        .cloned()
+        .ok_or_else(|| LifecycleError::QueryRowsMissing {
+            name: name.to_owned(),
+        })?;
+    serde_json::from_value(rows).map_err(|source| LifecycleError::RowsDecode {
+        name: name.to_owned(),
+        source,
+    })
 }
 
 fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<String> {
@@ -383,7 +414,7 @@ async fn redrive_mutation(
     request_id: &str,
     retry_key: &str,
     hop: u32,
-) -> Result<String> {
+) -> anyhow::Result<String> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let retry_root = candidate
         .retry_root_request
@@ -436,7 +467,9 @@ async fn redrive_mutation(
         )
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
-    let request_fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
+    let request_fields = create
+        .graphql_input_fields()
+        .map_err(|message| LifecycleError::SignedRequestFields { message })?;
     Ok(format!(
         r#"mutation {{
             successor: create_AgentRequest(input: {{ {request_fields} }}) {{ {fields} }}

@@ -3,13 +3,13 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -53,10 +53,10 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     );
 
     let enabled_root = tempdir.path().join("does_not_exist_yet/enabled_root");
-    let enabled_root_str = enabled_root.to_str().context("enabled root utf8")?;
+    let enabled_root_str = enabled_root.to_str().expect("enabled root utf8");
     let disabled_root = tempdir.path().join("disabled_root");
     fs::create_dir_all(&disabled_root)?;
-    let disabled_root_str = disabled_root.to_str().context("disabled root utf8")?;
+    let disabled_root_str = disabled_root.to_str().expect("disabled root utf8");
 
     let set_enabled = run_cli_json(
         &home_dir,
@@ -116,11 +116,11 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     let items = list
         .get("items")
         .and_then(Value::as_array)
-        .context("workspace-root list must include items")?;
+        .expect("workspace-root list must include items");
     let enabled_row = items
         .iter()
         .find(|row| row.get("root_path").and_then(Value::as_str) == Some(enabled_root_str))
-        .ok_or_else(|| anyhow!("list missing enabled root: {list}"))?;
+        .ok_or_else(|| format!("list missing enabled root: {list}"))?;
     assert_eq!(
         enabled_row.get("enabled").and_then(Value::as_bool),
         Some(true)
@@ -128,7 +128,7 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     let disabled_row = items
         .iter()
         .find(|row| row.get("root_path").and_then(Value::as_str) == Some(disabled_root_str))
-        .ok_or_else(|| anyhow!("list missing disabled root: {list}"))?;
+        .ok_or_else(|| format!("list missing disabled root: {list}"))?;
     assert_eq!(
         disabled_row.get("enabled").and_then(Value::as_bool),
         Some(false)
@@ -160,7 +160,7 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         .get("data")
         .and_then(|data| data.get("WorkspaceRoot"))
         .and_then(Value::as_array)
-        .context("WorkspaceRoot query must return an array")?
+        .expect("WorkspaceRoot query must return an array")
         .iter()
         .filter_map(|row| row.get("root_path").and_then(Value::as_str))
         .collect::<Vec<_>>();
@@ -213,7 +213,7 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         .get("data")
         .and_then(|data| data.get("WorkspaceRoot"))
         .and_then(Value::as_array)
-        .context("WorkspaceRoot query must return an array")?
+        .expect("WorkspaceRoot query must return an array")
         .iter()
         .filter_map(|row| row.get("root_path").and_then(Value::as_str))
         .collect::<Vec<_>>();

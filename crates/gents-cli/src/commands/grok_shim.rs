@@ -5,6 +5,7 @@ use defra_node::EmbeddedNode;
 
 pub(crate) mod acp;
 mod binding;
+mod error;
 mod goals;
 mod graph_runs;
 mod job_runs;

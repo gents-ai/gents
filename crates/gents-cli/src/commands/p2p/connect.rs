@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use super::error::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::{P2pAccessArgs, P2pConnectArgs};
@@ -9,7 +9,7 @@ use super::p2p_probe_get;
 
 pub(super) async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = super::p2p_http_client().context("building P2P connect HTTP client")?;
+    let client = super::p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     http_send(
         graphql.authorize(

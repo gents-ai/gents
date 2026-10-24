@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use chrono::Utc;
+use gents::config_client::ConfigClientError;
 use gents::document_config::ToolServiceRegistry;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
@@ -12,6 +13,17 @@ use gents_protocol::row::ToolServiceHealthStateRow;
 use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
+use super::util::BridgeCommandError;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum McpRegistryError {
+    #[error(transparent)]
+    Graphql(#[from] ConfigClientError),
+    #[error("no enabled ToolServiceRegistry row for service_id={service_id}")]
+    NoEnabledRow { service_id: String },
+    #[error(transparent)]
+    DecodeRow(#[from] serde_json::Error),
+}
 
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = core.selected_node_did() else {
@@ -64,22 +76,24 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<_, _>>()
-        .map_err(|error| anyhow!("parsing ToolServiceHealthState rows: {error}"))?;
+        .map_err(|error| BridgeCommandError::ParseHealthRows { error })?;
     // Twins of one service are not schema-unique; the order puts the
     // health checker's chosen row first.
     rows.dedup_by(|later, first| later.service_id == first.service_id);
 
-    rows.into_iter().map(view_from_row).collect()
+    Ok(rows
+        .into_iter()
+        .map(view_from_row)
+        .collect::<std::result::Result<_, _>>()?)
 }
 
-pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPServiceHealthView> {
+pub(crate) fn view_from_row(
+    row: ToolServiceHealthStateRow,
+) -> Result<MCPServiceHealthView, BridgeCommandError> {
     let display_state = ToolServiceHealthState::parse_opt(row.status.as_deref())
-        .ok_or_else(|| {
-            anyhow!(
-                "ToolServiceHealthState row for service_id={:?} has missing/unrecognized status {:?}",
-                row.service_id,
-                row.status
-            )
+        .ok_or_else(|| BridgeCommandError::HealthStatusUnrecognized {
+            service_id: row.service_id.clone(),
+            status: row.status.clone(),
         })?
         .project()
         .as_str()
@@ -194,7 +208,7 @@ async fn load_registry_entry(
     core: &ClientCore,
     node_did: &str,
     service_id: &str,
-) -> Result<ToolServiceRegistry> {
+) -> Result<ToolServiceRegistry, McpRegistryError> {
     let escaped = escape_graphql_string(service_id);
     let escaped_node = escape_graphql_string(node_did);
     let query = format!(
@@ -229,8 +243,10 @@ async fn load_registry_entry(
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .ok_or_else(|| anyhow!("no enabled ToolServiceRegistry row for service_id={service_id}"))?;
-    serde_json::from_value(row).map_err(Into::into)
+        .ok_or_else(|| McpRegistryError::NoEnabledRow {
+            service_id: service_id.to_owned(),
+        })?;
+    Ok(serde_json::from_value(row)?)
 }
 
 #[cfg(test)]

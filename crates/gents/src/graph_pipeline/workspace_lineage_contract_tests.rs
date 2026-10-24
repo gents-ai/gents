@@ -1,6 +1,7 @@
 use super::*;
 use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::WorkspaceLineage;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
 struct Fixture {
@@ -402,7 +403,7 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
                 (populated == 0 && candidate.workspace_seal_hash.is_none()) || populated == 3;
             let signed = crate::sign_agent_request_create(&fx.identity, &mut candidate).await;
             if structurally_complete {
-                signed.unwrap_or_else(|error| panic!("{name}: {error:#}"));
+                signed.unwrap_or_else(|error| panic!("{name}: {}", ErrorChain(error.as_ref())));
                 let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
                 assert!(
                     workspace_lineage::fence_root_workspace_in_txn(&txn, &candidate)
@@ -491,7 +492,8 @@ async fn cleaned_source_attenuates_for_triage_but_bound_destination_cannot_upgra
         .unwrap();
     assert!(
         error.to_string().contains("immutable entry seal"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -502,16 +504,16 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
     }
     #[async_trait::async_trait]
     impl GraphRunQuery for Native<'_> {
-        async fn execute_graph_query(&self, text: &str) -> Result<Value> {
+        async fn execute_graph_query(&self, text: &str) -> Result<Value, GraphPipelineError> {
             let response = self
                 .node
                 .execute_request_in_txn(defra_node::QueryRequest::new(text), self.handle)
                 .await;
-            anyhow::ensure!(
-                !response.has_errors(),
-                "native query failed: {:?}",
-                response.errors
-            );
+            if response.has_errors() {
+                return Err(GraphPipelineError::NativeQueryFailed {
+                    errors: format!("{:?}", response.errors),
+                });
+            }
             Ok(json!({"data":response.data.unwrap_or(Value::Null)}))
         }
     }
@@ -651,7 +653,8 @@ async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
         error
             .to_string()
             .contains("conflicts with authenticated entry"),
-        "unexpected denial: {error:#}"
+        "unexpected denial: {}",
+        ErrorChain(error.as_ref())
     );
     txn.discard().await.unwrap();
     let omitted = fx
@@ -665,7 +668,8 @@ async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
         error
             .to_string()
             .contains("differs from resolved publication evidence"),
-        "unexpected denial: {error:#}"
+        "unexpected denial: {}",
+        ErrorChain(error.as_ref())
     );
     txn.discard().await.unwrap();
     fx.node.shutdown().await;

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -509,7 +510,7 @@ pub async fn capture_body(
         components,
         admission_join,
     )
-    .map_err(|error| (CaptureFailureStage::BuildFact, error))?;
+    .map_err(|error| (CaptureFailureStage::BuildFact, anyhow::Error::from(error)))?;
 
     let capture_key = rendered.capture_key.clone();
     let request_id = rendered.request_id.clone();
@@ -547,8 +548,9 @@ pub fn capture_failure_message(
 ) -> String {
     format!(
         "rendered-request capture failed at stage {} for scope {capture_scope} turn {turn_index} \
-         attempt {attempt}; the provider call was not issued: {error:#}",
-        stage.as_str()
+         attempt {attempt}; the provider call was not issued: {}",
+        stage.as_str(),
+        ErrorChain(error.as_ref())
     )
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
 use crate::lifecycle::RequestTerminalOutcome;
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
 
@@ -17,7 +18,7 @@ async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> Strin
                     &json!({ "input": input }),
                 )
                 .await?;
-            gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")?)
         })
     })
     .await
@@ -960,8 +961,12 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             .await
             .unwrap_err();
         assert!(
-            error.is::<super::super::PendingInputChanged>(),
-            "{name}: {error:#}"
+            matches!(
+                error.downcast_ref::<super::super::QueueError>(),
+                Some(super::super::QueueError::PendingInputChanged(_))
+            ),
+            "{name}: {}",
+            ErrorChain(error.as_ref())
         );
         let rows = fold_rows(&db.node, session_id).await;
         for entry in &expected.pending {

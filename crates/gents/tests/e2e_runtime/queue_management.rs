@@ -5,6 +5,7 @@ use gents::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -60,11 +61,13 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 async fn submit_edit(
     db: &TestDb,
     session_id: &str,
     edit: PendingQueueEdit,
-) -> anyhow::Result<SessionInputEditReceipt> {
+) -> Result<SessionInputEditReceipt> {
     submit_edit_inner(db, session_id, edit, None).await
 }
 
@@ -73,7 +76,7 @@ async fn submit_edit_inner(
     session_id: &str,
     edit: PendingQueueEdit,
     steer: Option<&str>,
-) -> anyhow::Result<SessionInputEditReceipt> {
+) -> Result<SessionInputEditReceipt> {
     let did = db.node_identity.did();
     let existing = ConfigAccess::local(db.node.clone())
         .execute(&format!(
@@ -130,7 +133,7 @@ async fn submit_edit_inner(
     };
     cancel.cancel();
     worker.await??;
-    result
+    Ok(result?)
 }
 
 pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
@@ -420,8 +423,9 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
     ] {
         let error = gents::verify_request_receipt_signature(&tampered).expect_err(field);
         assert!(
-            format!("{error:#}").contains("signature"),
-            "{field}: {error:#}"
+            ErrorChain(&error).to_string().contains("signature"),
+            "{field}: {}",
+            ErrorChain(&error)
         );
     }
     gents::verify_request_receipt_signature(signed)

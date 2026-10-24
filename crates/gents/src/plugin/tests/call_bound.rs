@@ -15,7 +15,7 @@ fn bound_dir_refuses_a_path_outside_within() {
     std::fs::create_dir_all(&outside).unwrap();
 
     let error = BoundDir::new(&outside, Some(&within)).expect_err("outside must be refused within");
-    let message = format!("{error:#}");
+    let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
     assert!(message.contains("outside"), "{message}");
 }
 
@@ -41,7 +41,9 @@ fn bound_dir_refuses_dot_dot_traversal_out_of_within() {
     let traversal = within.join("..").join("outside");
     let error = BoundDir::new(&traversal, Some(&within))
         .expect_err("../outside must resolve outside within and be refused");
-    assert!(format!("{error:#}").contains("outside"));
+    assert!(gents_protocol::error_chain::ErrorChain(&error)
+        .to_string()
+        .contains("outside"));
 }
 
 #[test]
@@ -57,7 +59,9 @@ fn bound_dir_refuses_a_symlink_inside_within_pointing_outside() {
 
     let error = BoundDir::new(&link, Some(&within))
         .expect_err("a symlink resolving outside within must be refused");
-    assert!(format!("{error:#}").contains("outside"));
+    assert!(gents_protocol::error_chain::ErrorChain(&error)
+        .to_string()
+        .contains("outside"));
 }
 
 #[test]
@@ -70,7 +74,9 @@ fn call_bound_refuses_a_plugin_that_declares_no_bind_dir() {
     let error = runner
         .call_bound(&serde_json::json!({}), &PluginBudget::default(), &bound)
         .expect_err("a plugin with no bind_dir cannot be bound");
-    assert!(format!("{error:#}").contains("bind_dir"));
+    assert!(gents_protocol::error_chain::ErrorChain(&error)
+        .to_string()
+        .contains("bind_dir"));
 }
 
 #[test]
@@ -130,7 +136,9 @@ fn call_bound_treats_null_arguments_as_an_empty_object() {
     let error = runner
         .call_bound(&serde_json::json!([1, 2]), &PluginBudget::default(), &bound)
         .expect_err("a non-object, non-null value must still be refused");
-    assert!(format!("{error:#}").contains("must be a JSON object"));
+    assert!(gents_protocol::error_chain::ErrorChain(&error)
+        .to_string()
+        .contains("must be a JSON object"));
 }
 
 #[test]
@@ -147,7 +155,7 @@ fn admission_refuses_a_bind_dir_plugin_whose_dispatch_path_cannot_enforce_read_o
 
     let error = PluginRunner::compile(&afb_bytes, &plugin)
         .expect_err("python cannot enforce a read-only filesystem grant");
-    let message = format!("{error:#}");
+    let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
     assert!(message.contains("py_plugin"), "{message}");
     assert!(message.contains("read-only"), "{message}");
 }

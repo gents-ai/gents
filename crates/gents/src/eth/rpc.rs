@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use super::error::{EthError, Result};
 use super::methods::{
     normalize_method, optional_trailing_block_arity, reject_forbidden, validate_query_methods,
 };
@@ -31,13 +31,13 @@ impl HttpJsonRpc {
 
     pub fn with_timeout(timeout: Duration) -> Result<Self> {
         if timeout.is_zero() {
-            bail!("eth rpc_timeout_secs must be positive");
+            return Err(EthError::ZeroTimeout);
         }
         let client = reqwest::Client::builder()
             .user_agent(ETH_USER_AGENT)
             .timeout(timeout)
             .build()
-            .context("building eth JSON-RPC HTTP client")?;
+            .map_err(EthError::HttpClient)?;
         Ok(Self { client })
     }
 }
@@ -51,22 +51,32 @@ impl JsonRpcTransport for HttpJsonRpc {
             .json(body)
             .send()
             .await
-            .with_context(|| format!("posting eth JSON-RPC to {url}"))?;
+            .map_err(|source| EthError::Post {
+                url: url.to_string(),
+                source,
+            })?;
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .with_context(|| format!("reading eth JSON-RPC body from {url}"))?;
+        let text = response.text().await.map_err(|source| EthError::ReadBody {
+            url: url.to_string(),
+            source,
+        })?;
         if status.as_u16() == 403 {
-            bail!(
-                "eth JSON-RPC {url} returned 403; public endpoints (e.g. Base) require User-Agent {ETH_USER_AGENT}"
-            );
+            return Err(EthError::HttpForbidden {
+                url: url.to_string(),
+            });
         }
         if !status.is_success() {
-            bail!("eth JSON-RPC {url} failed with {status}: {text}");
+            return Err(EthError::HttpStatus {
+                url: url.to_string(),
+                status,
+                text,
+            });
         }
-        serde_json::from_str(&text)
-            .with_context(|| format!("decoding eth JSON-RPC body from {url}: {text}"))
+        serde_json::from_str(&text).map_err(|source| EthError::DecodeBody {
+            url: url.to_string(),
+            text: text.clone(),
+            source,
+        })
     }
 }
 
@@ -84,7 +94,7 @@ impl HttpEthRpc {
     pub fn configured_timeout(seconds: Option<i64>) -> Result<Duration> {
         let seconds = seconds.unwrap_or(DEFAULT_RPC_TIMEOUT_SECS);
         if seconds <= 0 {
-            bail!("eth rpc_timeout_secs must be positive");
+            return Err(EthError::ZeroTimeout);
         }
         Ok(Duration::from_secs(seconds as u64))
     }
@@ -129,10 +139,10 @@ where
     ) -> Result<Self> {
         let rpc_url = rpc_url.into();
         if rpc_url.trim().is_empty() {
-            bail!("eth RPC URL is empty");
+            return Err(EthError::RpcUrlEmpty);
         }
         if expected_chain_id == 0 {
-            bail!("eth chain_id must be a positive integer");
+            return Err(EthError::ChainIdZero);
         }
         let allowed = validate_query_methods(query_methods)?;
         Ok(Self {
@@ -152,7 +162,7 @@ where
         let method = normalize_method(method);
         reject_forbidden(&method)?;
         if !self.allowed_methods.contains(&method) {
-            bail!("eth method {method} is not in the configured query_methods ∩ builtin ceiling");
+            return Err(EthError::MethodNotConfigured { method });
         }
         let params = default_block_if_needed(&method, params)?;
         if method == "eth_getLogs" {
@@ -209,16 +219,25 @@ where
         let block = self
             .rpc("eth_getBlockByNumber", json!(["latest", false]))
             .await
-            .context("eth_getBlockByNumber latest")?;
+            .map_err(|source| EthError::LatestBlock {
+                source: Box::new(source),
+            })?;
         let fee = block
             .get("baseFeePerGas")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("latest block missing baseFeePerGas: {block}"))?;
+            .ok_or_else(|| EthError::BaseFeeMissing {
+                block: block.clone(),
+            })?;
         let hex = fee
             .strip_prefix("0x")
             .or_else(|| fee.strip_prefix("0X"))
-            .ok_or_else(|| anyhow!("baseFeePerGas is not hex: {fee}"))?;
-        u128::from_str_radix(hex, 16).with_context(|| format!("decoding baseFeePerGas {fee}"))
+            .ok_or_else(|| EthError::BaseFeeNotHex {
+                fee: fee.to_string(),
+            })?;
+        u128::from_str_radix(hex, 16).map_err(|source| EthError::BaseFeeDecode {
+            fee: fee.to_string(),
+            source,
+        })
     }
 
     #[allow(dead_code)]
@@ -241,26 +260,28 @@ where
             .expect("eth chain id cache lock poisoned")
         {
             if cached != self.expected_chain_id {
-                bail!(
-                    "eth chain_id mismatch: document {}, endpoint {:#x}",
-                    self.expected_chain_id,
-                    cached
-                );
+                return Err(EthError::ChainIdCached {
+                    expected: self.expected_chain_id,
+                    actual: cached,
+                });
             }
             return Ok(());
         }
         let result = self.rpc("eth_chainId", json!([])).await?;
-        let actual = parse_hex_u64(&value_as_quantity(&result)?).context("decoding eth_chainId")?;
+        let actual = parse_hex_u64(&value_as_quantity(&result)?).map_err(|source| {
+            EthError::DecodeChainId {
+                source: Box::new(source),
+            }
+        })?;
         *self
             .cached_chain_id
             .lock()
             .expect("eth chain id cache lock poisoned") = Some(actual);
         if actual != self.expected_chain_id {
-            bail!(
-                "eth chain_id mismatch: document {}, endpoint {actual} ({:#x})",
-                self.expected_chain_id,
-                actual
-            );
+            return Err(EthError::ChainIdMismatch {
+                expected: self.expected_chain_id,
+                actual,
+            });
         }
         Ok(())
     }
@@ -269,7 +290,7 @@ where
         let params = match params {
             Value::Array(_) => params,
             Value::Null => json!([]),
-            other => bail!("eth JSON-RPC params must be an array, got {other}"),
+            other => return Err(EthError::RpcParamsNotArray { got: other }),
         };
         let body = json!({
             "jsonrpc": "2.0",
@@ -291,17 +312,17 @@ fn decode_rpc_result(response: Value) -> Result<Value> {
             .to_string();
         let code = error.get("code").cloned().unwrap_or(Value::Null);
         if is_pruned_history_message(&message) {
-            bail!("eth pruned-history error (not retried): {message}");
+            return Err(EthError::PrunedHistory { message });
         }
         if let Some(reason) = revert_reason_from_error(error) {
-            bail!("eth call reverted: {reason}");
+            return Err(EthError::Reverted { reason });
         }
-        bail!("eth JSON-RPC error {code}: {message}");
+        return Err(EthError::RpcError { code, message });
     }
     response
         .get("result")
         .cloned()
-        .ok_or_else(|| anyhow!("eth JSON-RPC response missing result: {response}"))
+        .ok_or(EthError::MissingResult { response })
 }
 
 pub fn revert_reason_from_error(error: &Value) -> Option<String> {
@@ -352,7 +373,7 @@ fn default_block_if_needed(method: &str, params: Value) -> Result<Value> {
     let mut params = match params {
         Value::Null => Vec::new(),
         Value::Array(items) => items,
-        other => bail!("eth JSON-RPC params must be an array, got {other}"),
+        other => return Err(EthError::RpcParamsNotArray { got: other }),
     };
     if let Some(arity) = optional_trailing_block_arity(method) {
         if params.len() + 1 == arity {
@@ -367,7 +388,7 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
         .as_array()
         .and_then(|items| items.first())
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("eth_getLogs requires a filter object as params[0]"))?;
+        .ok_or(EthError::GetLogsFilterMissing)?;
 
     let address_ok = match filter.get("address") {
         Some(Value::String(value)) if is_eth_address(value) => true,
@@ -382,15 +403,15 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
     };
     let topics_ok = filter.get("topics").is_some_and(topic_filter_constrains);
     if !address_ok && !topics_ok {
-        bail!("eth_getLogs requires address and/or topics; unfiltered log queries are rejected");
+        return Err(EthError::GetLogsUnfiltered);
     }
 
     if let Some(block_hash) = filter.get("blockHash") {
         if filter.contains_key("fromBlock") || filter.contains_key("toBlock") {
-            bail!("eth_getLogs blockHash cannot be combined with fromBlock/toBlock");
+            return Err(EthError::GetLogsBlockHashWithRange);
         }
         if !is_block_hash(block_hash) {
-            bail!("eth_getLogs blockHash must be a 32-byte hex string");
+            return Err(EthError::GetLogsBlockHashInvalid);
         }
         return Ok(());
     }
@@ -399,26 +420,21 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
     let to = block_tag(filter.get("toBlock"))?.default_latest();
     match (from, to) {
         (BlockTag::Earliest, _) | (_, BlockTag::Earliest) => {
-            bail!("eth_getLogs fromBlock/toBlock earliest is unbounded and rejected")
+            return Err(EthError::GetLogsUnboundedEarliest)
         }
         (BlockTag::Number(from_num), BlockTag::Number(to_num)) => {
             if to_num < from_num {
-                bail!("eth_getLogs toBlock is before fromBlock");
+                return Err(EthError::GetLogsReversedRange);
             }
             let distance = to_num - from_num;
             if distance >= ETH_GET_LOGS_MAX_RANGE {
-                bail!(
-                    "eth_getLogs range {} exceeds max {ETH_GET_LOGS_MAX_RANGE} blocks",
-                    distance.saturating_add(1)
-                );
+                return Err(EthError::GetLogsRangeTooLarge {
+                    blocks: distance.saturating_add(1),
+                });
             }
         }
         (from_tag, to_tag) if from_tag == to_tag => {}
-        _ => {
-            bail!(
-                "eth_getLogs numeric-to-dynamic or mixed dynamic ranges are unbounded and rejected"
-            )
-        }
+        _ => return Err(EthError::GetLogsMixedRange),
     }
     Ok(())
 }
@@ -471,12 +487,12 @@ fn block_tag(value: Option<&Value>) -> Result<BlockTag> {
         Value::Null => Ok(BlockTag::Missing),
         Value::String(tag) => parse_block_tag(tag),
         Value::Number(number) => {
-            let n = number
-                .as_u64()
-                .ok_or_else(|| anyhow!("eth block number {number} is not a u64"))?;
+            let n = number.as_u64().ok_or_else(|| EthError::BlockNumberNotU64 {
+                number: number.clone(),
+            })?;
             Ok(BlockTag::Number(n))
         }
-        other => bail!("eth block tag must be a string or number, got {other}"),
+        other => Err(EthError::BlockTagType { got: other.clone() }),
     }
 }
 
@@ -496,23 +512,29 @@ fn value_as_quantity(value: &Value) -> Result<String> {
     match value {
         Value::String(text) => Ok(text.clone()),
         Value::Number(number) => Ok(number.to_string()),
-        other => bail!("expected hex quantity, got {other}"),
+        other => Err(EthError::QuantityType { got: other.clone() }),
     }
 }
 
 pub fn parse_hex_u64(value: &str) -> Result<u64> {
     let text = value.trim();
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).with_context(|| format!("parsing hex quantity {value}"))
+        u64::from_str_radix(hex, 16).map_err(|source| EthError::HexQuantity {
+            value: value.to_string(),
+            source,
+        })
     } else {
-        text.parse::<u64>()
-            .with_context(|| format!("parsing quantity {value}"))
+        text.parse::<u64>().map_err(|source| EthError::Quantity {
+            value: value.to_string(),
+            source,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::{find_source, ErrorChain};
     use std::collections::VecDeque;
     use std::sync::Arc;
 
@@ -542,7 +564,7 @@ mod tests {
                 .lock()
                 .expect("responses")
                 .pop_front()
-                .ok_or_else(|| anyhow!("scripted eth RPC has no remaining responses"))
+                .ok_or(EthError::ScriptExhausted)
         }
     }
 
@@ -743,10 +765,9 @@ mod tests {
             .expect("configured timeout must beat the default 30 seconds")
             .expect_err("server never responds");
         assert!(
-            error.chain().any(|cause| cause
-                .downcast_ref::<reqwest::Error>()
-                .is_some_and(reqwest::Error::is_timeout)),
-            "{error:#}"
+            find_source::<reqwest::Error>(&error).is_some_and(reqwest::Error::is_timeout),
+            "{}",
+            ErrorChain(&error)
         );
     }
 

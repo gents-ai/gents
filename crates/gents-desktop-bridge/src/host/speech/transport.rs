@@ -1,10 +1,39 @@
-use anyhow::{Context, Result};
 use gents::mcp_pool::McpPool;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::types::ToolServiceToolView;
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum SpeechTransportError {
+    #[error("The speech worker could not start. Restart the Gents client.")]
+    Spawn(#[source] std::io::Error),
+    #[error("The speech worker is busy or unavailable. Stop voice and try again.")]
+    Unavailable,
+    #[error("The speech worker disconnected.")]
+    Disconnected(#[source] oneshot::error::RecvError),
+    #[error("The speech worker is busy. Stop voice and try again.")]
+    Busy,
+    #[error("The speech service timed out. Check its connection before trying again.")]
+    TimedOut,
+    #[error(
+        "The speech service could not list its tools. Check its connection and service settings."
+    )]
+    ListFailed,
+    #[error("The speech service returned too many tools to inspect.")]
+    TooManyTools,
+    #[error("The speech tool call failed. Check the selected service and tool settings.")]
+    CallFailed,
+    #[error("The speech tool reported a failure. Check its service settings.")]
+    ToolFailure,
+    #[error("The speech tool must return one structured result.")]
+    UnstructuredResult,
+    #[error("The speech tool must return a JSON result. Check its speech adapter configuration.")]
+    NotJson,
+}
+
+type Result<T, E = SpeechTransportError> = std::result::Result<T, E>;
 
 pub(super) enum Operation {
     List,
@@ -40,7 +69,7 @@ impl SpeechTransport {
         std::thread::Builder::new()
             .name("gents-speech".into())
             .spawn(move || run_worker(receiver))
-            .context("The speech worker could not start. Restart the Gents client.")?;
+            .map_err(SpeechTransportError::Spawn)?;
         Ok(Self { sender })
     }
 
@@ -54,12 +83,8 @@ impl SpeechTransport {
                 cancelled,
                 reply,
             })
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "The speech worker is busy or unavailable. Stop voice and try again."
-                )
-            })?;
-        result.await.context("The speech worker disconnected.")?
+            .map_err(|_| SpeechTransportError::Unavailable)?;
+        result.await.map_err(SpeechTransportError::Disconnected)?
     }
 }
 
@@ -88,7 +113,7 @@ fn run_worker(mut receiver: mpsc::Receiver<Work>) {
                     if work.cancelled.is_cancelled() { continue; }
                     while calls.try_join_next().is_some() {}
                     if calls.len() >= 4 {
-                        let _ = work.reply.send(Err(anyhow::anyhow!("The speech worker is busy. Stop voice and try again.")));
+                        let _ = work.reply.send(Err(SpeechTransportError::Busy));
                         continue;
                     }
                     let pool = pool.clone();
@@ -97,7 +122,7 @@ fn run_worker(mut receiver: mpsc::Receiver<Work>) {
                             biased;
                             _ = work.cancelled.cancelled() => {},
                             result = tokio::time::timeout(std::time::Duration::from_secs(90), execute(&pool, work.request)) => {
-                                let result = result.unwrap_or_else(|_| Err(anyhow::anyhow!("The speech service timed out. Check its connection before trying again.")));
+                                let result = result.unwrap_or(Err(SpeechTransportError::TimedOut));
                                 let _ = work.reply.send(result);
                             }
                         }
@@ -117,12 +142,13 @@ async fn execute(pool: &McpPool, request: Request) -> Result<Response> {
     let actor = request.send_node_did.then_some(request.actor.as_str());
     match request.operation {
         Operation::List => {
-            let result = pool.list_tools_with_node_did(&request.service, &request.endpoint, actor).await
-                .map_err(|_| anyhow::anyhow!("The speech service could not list its tools. Check its connection and service settings."))?;
-            anyhow::ensure!(
-                result.tools.len() <= 512,
-                "The speech service returned too many tools to inspect."
-            );
+            let result = pool
+                .list_tools_with_node_did(&request.service, &request.endpoint, actor)
+                .await
+                .map_err(|_| SpeechTransportError::ListFailed)?;
+            if result.tools.len() > 512 {
+                return Err(SpeechTransportError::TooManyTools);
+            }
             Ok(Response::Tools(
                 result
                     .tools
@@ -135,12 +161,19 @@ async fn execute(pool: &McpPool, request: Request) -> Result<Response> {
             ))
         }
         Operation::Call { tool, arguments } => {
-            let result = pool.call_tool_with_node_did(&request.service, &request.endpoint, &tool, arguments, actor).await
-                .map_err(|_| anyhow::anyhow!("The speech tool call failed. Check the selected service and tool settings."))?;
-            anyhow::ensure!(
-                !result.is_error.unwrap_or(false),
-                "The speech tool reported a failure. Check its service settings."
-            );
+            let result = pool
+                .call_tool_with_node_did(
+                    &request.service,
+                    &request.endpoint,
+                    &tool,
+                    arguments,
+                    actor,
+                )
+                .await
+                .map_err(|_| SpeechTransportError::CallFailed)?;
+            if result.is_error.unwrap_or(false) {
+                return Err(SpeechTransportError::ToolFailure);
+            }
             if let Some(value) = result.structured_content {
                 return Ok(Response::Value(value));
             }
@@ -149,11 +182,11 @@ async fn execute(pool: &McpPool, request: Request) -> Result<Response> {
                 .iter()
                 .filter_map(|block| block.raw.as_text().map(|text| text.text.as_str()))
                 .collect();
-            anyhow::ensure!(
-                texts.len() == 1,
-                "The speech tool must return one structured result."
-            );
-            let value = serde_json::from_str(texts[0]).map_err(|_| anyhow::anyhow!("The speech tool must return a JSON result. Check its speech adapter configuration."))?;
+            if texts.len() != 1 {
+                return Err(SpeechTransportError::UnstructuredResult);
+            }
+            let value =
+                serde_json::from_str(texts[0]).map_err(|_| SpeechTransportError::NotJson)?;
             Ok(Response::Value(value))
         }
     }
@@ -162,6 +195,7 @@ async fn execute(pool: &McpPool, request: Request) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -364,7 +398,9 @@ mod tests {
                 Err(error) => error,
                 Ok(_) => panic!("invalid speech result accepted"),
             };
-            assert!(!format!("{error:#}").contains("private-audio-marker"));
+            assert!(!ErrorChain(&error)
+                .to_string()
+                .contains("private-audio-marker"));
         }
     }
 }

@@ -9,6 +9,7 @@ use gents::provider_context_reduction::{
     load_for_request, persist, reduction_key, rendered_capture_cites_reduction,
     NewProviderContextReduction, SourceBoundary,
 };
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::rendered_request::{AssemblyBuildPath, AssemblyTrace, ProvenanceManifest};
 use serde_json::Value;
 
@@ -223,8 +224,9 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             Err(error) => {
                 assert!(
                     error.to_string().contains("conflicting immutable facts"),
-                    "{}: expected immutable-fact conflict, got {error:#}",
-                    case.name
+                    "{}: expected immutable-fact conflict, got {}",
+                    case.name,
+                    ErrorChain(&error)
                 );
                 "conflict"
             }

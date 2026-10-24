@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -161,7 +162,7 @@ async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
     let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap_err();
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(error.as_ref()));
     assert!(message.contains(&run.run_id), "{message}");
     assert!(message.contains("code-review"), "{message}");
     assert!(message.contains("gents graph cancel"), "{message}");

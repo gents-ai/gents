@@ -238,14 +238,14 @@ impl TrialEvidence {
         })
         .unwrap_or_else(|error| {
             tracing::error!(
-                error = %format!("{error:#}"),
+                error = %gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 "eval trial evidence did not serialize; its digest covers nothing"
             );
             Value::Null
         });
         let bytes = serde_json::to_vec(&canonical(value)).unwrap_or_else(|error| {
             tracing::error!(
-                error = %format!("{error:#}"),
+                error = %gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 "eval trial evidence digest input did not encode; its digest covers nothing"
             );
             Vec::new()

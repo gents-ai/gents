@@ -16,6 +16,12 @@ use gents::config_client::{
 #[cfg(test)]
 use std::sync::Arc;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ManageMutationError {
+    #[error("Configuration must be an object.")]
+    ConfigurationNotObject,
+}
+
 pub async fn apply_plan(
     access: &ConfigAccess,
     operation: &'static str,

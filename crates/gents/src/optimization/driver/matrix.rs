@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -723,7 +724,7 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
         .await
         .unwrap_err();
         let reason = &super::job_refused(&error)
-            .unwrap_or_else(|| panic!("{error:#}"))
+            .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())))
             .0;
         assert!(reason.contains("task target \"plan\""), "{reason}");
         assert!(
@@ -950,8 +951,8 @@ async fn a_resume_with_another_capture_list_is_refused() {
     let mut changed = request.clone();
     changed.captures.clear();
     let error = settle_err(&harness, &changed).await;
-    let refusal =
-        crate::optimization::driver::job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+    let refusal = crate::optimization::driver::job_refused(&error)
+        .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
     assert!(refusal.0.contains("captures"), "{}", refusal.0);
     assert_eq!(journal(&harness, &request.job_id).await, before);
 }
@@ -961,7 +962,7 @@ async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
     let harness = Harness::new().await;
     let refusal = |error: anyhow::Error| {
         crate::optimization::driver::job_refused(&error)
-            .unwrap_or_else(|| panic!("{error:#}"))
+            .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())))
             .0
             .clone()
     };
@@ -1426,8 +1427,9 @@ async fn a_resumed_job_reaches_the_journal_of_its_uninterrupted_twin() {
     .await
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("proposer unavailable"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("proposer unavailable"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     let partial = journal(&harness, "twin-b").await;
     assert_eq!(decisions(&partial), vec![(Some(1), Decision::Accept)]);
@@ -1503,8 +1505,9 @@ async fn a_resumed_job_with_no_budget_slack_reaches_the_journal_of_its_twin() {
     .await
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("no answer for round 2"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("no answer for round 2"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     let finished = settle(&harness, &resumed, &executor, &proposer).await;
     assert_eq!(finished.state, JobState::ReadyToPromote);
@@ -1785,8 +1788,9 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
         .await
         .unwrap_err();
     assert!(
-        crate::eval::runner::freeze_refused(&error).is_some(),
-        "{error:#}"
+        crate::eval::runner::freeze_refused(error.as_ref()).is_some(),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     let outcome = settle(
         &harness,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
+use gents::config_client::ConfigClientError;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
@@ -15,6 +16,16 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 
 pub use gents::agent::p2p_reconcile::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EnrollmentNonceError {
+    #[error(transparent)]
+    Timestamp(#[from] chrono::ParseError),
+    #[error("enrollment operator nonce was already consumed")]
+    AlreadyConsumed,
+    #[error("persisting enrollment operator nonce replay fence")]
+    Persist(#[source] ConfigClientError),
+}
 
 pub(crate) type EnrollmentOfferIssuerHandle = Arc<RwLock<Option<EnrollmentOfferIssuer>>>;
 pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDecisionService>>>;
@@ -118,7 +129,8 @@ impl EnrollmentDecisionService {
             self.identity.verify(signer_did, payload, sig).await?,
             "operator command signature is invalid"
         );
-        consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await
+        consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await?;
+        Ok(())
     }
 }
 
@@ -132,7 +144,7 @@ async fn consume_operator_nonce(
     admin_did: &str,
     nonce: &str,
     now: chrono::DateTime<Utc>,
-) -> Result<()> {
+) -> Result<(), EnrollmentNonceError> {
     let nonce_key = derive_enrollment_id("gents-enrollment-operator-nonce-v1", &[admin_did, nonce]);
     let now = now.to_rfc3339_opts(SecondsFormat::Secs, true);
     let expires_at = (chrono::DateTime::parse_from_rfc3339(&now)?
@@ -174,9 +186,9 @@ async fn consume_operator_nonce(
                     .is_ok_and(|rows| rows.iter().any(|row| row.nonce_key == nonce_key))
             });
             if consumed {
-                anyhow::bail!("enrollment operator nonce was already consumed");
+                return Err(EnrollmentNonceError::AlreadyConsumed);
             }
-            Err(write_error).context("persisting enrollment operator nonce replay fence")
+            Err(EnrollmentNonceError::Persist(write_error))
         }
     }
 }

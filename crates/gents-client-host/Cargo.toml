@@ -23,6 +23,8 @@ futures = "0.3"
 gents = { path = "../gents" }
 gents-desktop-core.workspace = true
 gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
+gents-protocol.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["rt", "codec"] }
 tracing.workspace = true
@@ -36,7 +38,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
 bs58 = "0.5"
 axum = "0.8"
 futures-util = "0.3"
-gents-protocol.workspace = true
 tempfile = "3"
 
 [target.'cfg(windows)'.dev-dependencies]

@@ -6,6 +6,12 @@ use crate::goal::{CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NA
 
 use super::shared::ToolError;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GoalToolError {
+    #[error("{tool} is executed by the session persistence hook")]
+    ExecutedByPersistenceHook { tool: &'static str },
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetGoalArgs {}
@@ -71,7 +77,10 @@ impl Tool for CreateGoalTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Err(anyhow::anyhow!("create_goal is executed by the session persistence hook").into())
+        Err(GoalToolError::ExecutedByPersistenceHook {
+            tool: "create_goal",
+        }
+        .into())
     }
 }
 
@@ -94,7 +103,7 @@ impl Tool for GetGoalTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Err(anyhow::anyhow!("get_goal is executed by the session persistence hook").into())
+        Err(GoalToolError::ExecutedByPersistenceHook { tool: "get_goal" }.into())
     }
 }
 
@@ -137,7 +146,10 @@ impl Tool for UpdateGoalTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Err(anyhow::anyhow!("update_goal is executed by the session persistence hook").into())
+        Err(GoalToolError::ExecutedByPersistenceHook {
+            tool: "update_goal",
+        }
+        .into())
     }
 }
 

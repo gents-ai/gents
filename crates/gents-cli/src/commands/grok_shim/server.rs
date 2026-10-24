@@ -24,6 +24,7 @@
 //! LOCK_NB`), and `O_NOFOLLOW` is passed from a per-target constant declared
 //! in this file with the same ABI value `libc`/`nix` use.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::fs::{File, OpenOptions, Permissions};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -33,7 +34,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::net::{UnixListener, UnixStream};
@@ -46,6 +46,186 @@ use super::protocol::{
     LeaderCapabilities, ProtocolError, RegisterMode, ServerEnvelope, ShutdownReason,
     LEADER_PROTOCOL_VERSION,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GrokServerError {
+    #[error("the grok shim leader connection is closed")]
+    LeaderClosed,
+    #[error("the grok shim leader outbound queue is full")]
+    LeaderQueueFull,
+    #[error("the grok shim leader socket path {} must name a socket file", path.display())]
+    SocketPathNotFile { path: PathBuf },
+    #[error("inspecting platform temporary root {}", root.display())]
+    PlatformTempRootInspect {
+        root: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("resolving platform temporary root alias {}", root.display())]
+    PlatformTempRootResolve {
+        root: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("removing platform temporary root {} from {}", root.display(), path.display())]
+    PlatformTempRootStrip {
+        root: PathBuf,
+        path: PathBuf,
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+    #[error("the grok shim leader task failed to join: {error}")]
+    LeaderTaskJoin { error: tokio::task::JoinError },
+    #[error("the grok shim leader task failed")]
+    LeaderTaskFailed {
+        #[source]
+        source: Box<GrokServerError>,
+    },
+    #[error("grok shim leader connection cleanup exceeded {grace_ms}ms")]
+    CleanupTimeout { grace_ms: u128 },
+    #[error("register requires a non-empty client_type")]
+    RegisterClientTypeEmpty,
+    #[error("refusing the grok shim socket parent {}: {} is a symlink", parent.display(), component.display())]
+    SocketParentSymlink { parent: PathBuf, component: PathBuf },
+    #[error("refusing the grok shim socket parent {}: {} exists and is not a directory", parent.display(), component.display())]
+    SocketParentNotDirectory { parent: PathBuf, component: PathBuf },
+    #[error("inspecting the grok shim socket parent component {}", component.display())]
+    SocketParentInspect {
+        component: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating the grok shim socket parent {}", component.display())]
+    SocketParentCreate {
+        component: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("verifying the newly created grok shim socket parent {}", component.display())]
+    SocketParentVerify {
+        component: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the grok shim socket parent component {} was created but is not a plain directory", component.display())]
+    SocketParentNotPlain { component: PathBuf },
+    #[error("creating the grok shim leader lock parent {}", parent.display())]
+    LeaderLockParent {
+        parent: PathBuf,
+        #[source]
+        source: Box<GrokServerError>,
+    },
+    #[error("opening the grok shim leader lock {}", path.display())]
+    LeaderLockOpen {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("another grok leader already holds {} (last recorded holder pid: {holder})", path.display())]
+    LeaderLockHeld { path: PathBuf, holder: String },
+    #[error("locking the grok shim leader lock {} failed: {error}", path.display())]
+    LeaderLockTryLock {
+        path: PathBuf,
+        error: std::fs::TryLockError,
+    },
+    #[error("the grok shim leader lock {} changed inode during acquisition", path.display())]
+    LeaderLockInodeChanged { path: PathBuf },
+    #[error("recording the leader pid in {}", path.display())]
+    LeaderPidRecord {
+        path: PathBuf,
+        #[source]
+        source: Box<GrokServerError>,
+    },
+    #[error("reading the mode of the grok shim leader lock {}", path.display())]
+    LeaderLockMode {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("forcing mode 0600 on the grok shim leader lock {}", path.display())]
+    LeaderLockForceMode {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("re-reading the mode of the grok shim leader lock {}", path.display())]
+    LeaderLockRereadMode {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the grok shim leader lock {} is mode {mode:o} instead of 0600", path.display())]
+    LeaderLockWrongMode { path: PathBuf, mode: u32 },
+    #[error("truncating the grok shim leader lock")]
+    LockTruncate(#[source] std::io::Error),
+    #[error("writing the leader pid into the lock file")]
+    LockWritePid(#[source] std::io::Error),
+    #[error("refusing to replace the symlink at {} with a grok shim leader socket", path.display())]
+    StaleSocketSymlink { path: PathBuf },
+    #[error("{} exists and is not a unix socket; refusing to replace it", path.display())]
+    StaleSocketNotSocket { path: PathBuf },
+    #[error("removing the stale grok shim socket {}", path.display())]
+    StaleSocketRemove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting the grok shim socket path {}", path.display())]
+    SocketPathInspect {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the grok shim leader socket path {} has no parent directory", path.display())]
+    SocketPathNoParent { path: PathBuf },
+    #[error("creating the grok shim leader socket parent {}", parent.display())]
+    LeaderSocketParent {
+        parent: PathBuf,
+        #[source]
+        source: Box<GrokServerError>,
+    },
+    #[error("binding the grok shim socket inside the staging ancestor {}", staging_dir.display())]
+    SocketBind {
+        staging_dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("publishing the grok shim socket at {}", socket_path.display())]
+    SocketPublish {
+        socket_path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("forcing mode 0600 on the grok shim socket {}", socket.display())]
+    SocketForceMode {
+        socket: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading the mode of the grok shim socket {}", socket.display())]
+    SocketReadMode {
+        socket: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the grok shim socket {} is mode {mode:o} instead of 0600", socket.display())]
+    SocketWrongMode { socket: PathBuf, mode: u32 },
+    #[error("inspecting the grok shim staging ancestor {}", path.display())]
+    StagingInspect {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the grok shim staging ancestor {} is mode {mode:o} instead of 0700", path.display())]
+    StagingWrongMode { path: PathBuf, mode: u32 },
+    #[error("no writable same-device staging ancestor for {}; last error: {last_error}", final_parent.display())]
+    StagingUnavailable {
+        final_parent: PathBuf,
+        last_error: String,
+    },
+}
+
+type Result<T, E = GrokServerError> = std::result::Result<T, E>;
 
 const LOG_TARGET: &str = "gents_cli::commands::grok_shim::server";
 
@@ -117,38 +297,34 @@ enum FrameSender {
 }
 
 impl FrameSender {
-    async fn send(&self, envelope: ServerEnvelope) -> Result<()> {
+    async fn send(&self, envelope: ServerEnvelope) -> Result<(), GrokServerError> {
         match self {
             FrameSender::Bounded(frames) => frames
                 .send(envelope)
                 .await
-                .map_err(|_| anyhow!("the grok shim leader connection is closed")),
+                .map_err(|_| GrokServerError::LeaderClosed),
             #[cfg(test)]
             FrameSender::Unbounded(frames) => frames
                 .send(envelope)
-                .map_err(|_| anyhow!("the grok shim leader connection is closed")),
+                .map_err(|_| GrokServerError::LeaderClosed),
         }
     }
 
     /// Nonblocking connection-loop send. Protocol/control/lifecycle frames
     /// cannot park the reader behind a saturated data queue; saturation is a
     /// fatal connection condition for these callers.
-    fn try_send(&self, envelope: ServerEnvelope) -> Result<()> {
+    fn try_send(&self, envelope: ServerEnvelope) -> Result<(), GrokServerError> {
         match self {
             FrameSender::Bounded(frames) => {
                 frames.try_send(envelope).map_err(|error| match error {
-                    mpsc::error::TrySendError::Full(_) => {
-                        anyhow!("the grok shim leader outbound queue is full")
-                    }
-                    mpsc::error::TrySendError::Closed(_) => {
-                        anyhow!("the grok shim leader connection is closed")
-                    }
+                    mpsc::error::TrySendError::Full(_) => GrokServerError::LeaderQueueFull,
+                    mpsc::error::TrySendError::Closed(_) => GrokServerError::LeaderClosed,
                 })
             }
             #[cfg(test)]
             FrameSender::Unbounded(frames) => frames
                 .send(envelope)
-                .map_err(|_| anyhow!("the grok shim leader connection is closed")),
+                .map_err(|_| GrokServerError::LeaderClosed),
         }
     }
 }
@@ -160,7 +336,7 @@ impl AcpOutbound {
             frames: FrameSender::Unbounded(frames),
         }
     }
-    pub(crate) async fn send(&self, payload: impl Into<String>) -> Result<()> {
+    pub(crate) async fn send(&self, payload: impl Into<String>) -> Result<(), GrokServerError> {
         self.frames
             .send(ServerEnvelope::Acp {
                 payload: payload.into(),
@@ -168,7 +344,7 @@ impl AcpOutbound {
             .await
     }
 
-    fn try_send(&self, payload: impl Into<String>) -> Result<()> {
+    fn try_send(&self, payload: impl Into<String>) -> Result<(), GrokServerError> {
         self.frames.try_send(ServerEnvelope::Acp {
             payload: payload.into(),
         })
@@ -185,7 +361,7 @@ pub(crate) trait AcpDelegate: Send + Sync + 'static {
         &'a self,
         payload: &'a str,
         outbound: AcpOutbound,
-    ) -> BoxFuture<'a, Result<()>>;
+    ) -> BoxFuture<'a, anyhow::Result<()>>;
 
     /// The connection went away (disconnect, EOF, protocol violation, or
     /// leader shutdown). Runs on the connection's own delegate exactly once,
@@ -207,18 +383,18 @@ pub(crate) trait AcpDelegateFactory: Send + Sync + 'static {
         &'a self,
         client_id: u64,
         registration: &'a Registration,
-    ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>>;
+    ) -> BoxFuture<'a, anyhow::Result<Arc<dyn AcpDelegate>>>;
 }
 
 impl<F> AcpDelegateFactory for F
 where
-    F: Fn(u64, &Registration) -> Result<Arc<dyn AcpDelegate>> + Send + Sync + 'static,
+    F: Fn(u64, &Registration) -> anyhow::Result<Arc<dyn AcpDelegate>> + Send + Sync + 'static,
 {
     fn create_delegate<'a>(
         &'a self,
         client_id: u64,
         registration: &'a Registration,
-    ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>> {
+    ) -> BoxFuture<'a, anyhow::Result<Arc<dyn AcpDelegate>>> {
         Box::pin(async move { self(client_id, registration) })
     }
 }
@@ -239,7 +415,7 @@ impl LeaderServerConfig {
 pub(crate) struct LeaderHandle {
     socket_path: PathBuf,
     shutdown_tx: watch::Sender<bool>,
-    task: Option<JoinHandle<Result<()>>>,
+    task: Option<JoinHandle<Result<(), GrokServerError>>>,
 }
 
 impl LeaderHandle {
@@ -253,18 +429,22 @@ impl LeaderHandle {
         self.socket_path.with_extension("lock")
     }
 
-    pub(crate) async fn shutdown(&mut self) -> Result<()> {
+    pub(crate) async fn shutdown(&mut self) -> Result<(), GrokServerError> {
         let _ = self.shutdown_tx.send(true);
         self.join().await
     }
 
-    pub(crate) async fn join(&mut self) -> Result<()> {
+    pub(crate) async fn join(&mut self) -> Result<(), GrokServerError> {
         match self.task.take() {
             None => Ok(()),
             Some(task) => task
                 .await
-                .map_err(|error| anyhow!("the grok shim leader task failed to join: {error}"))
-                .and_then(|result| result.context("the grok shim leader task failed")),
+                .map_err(|error| GrokServerError::LeaderTaskJoin { error })
+                .and_then(|result| {
+                    result.map_err(|source| GrokServerError::LeaderTaskFailed {
+                        source: Box::new(source),
+                    })
+                }),
         }
     }
 }
@@ -295,10 +475,7 @@ pub(crate) fn spawn_leader(
 ) -> Result<LeaderHandle> {
     let socket_path = normalize_platform_temp_root(&config.socket_path)?;
     if socket_path.file_name().is_none_or(|name| name.is_empty()) {
-        bail!(
-            "the grok shim leader socket path {} must name a socket file",
-            socket_path.display()
-        );
+        return Err(GrokServerError::SocketPathNotFile { path: socket_path });
     }
 
     let lock = LeaderLock::acquire(&socket_path)?;
@@ -357,25 +534,29 @@ fn normalize_platform_temp_root(path: &Path) -> Result<PathBuf> {
         let metadata = match std::fs::symlink_metadata(root) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("inspecting platform temporary root {}", root.display())
+            Err(source) => {
+                return Err(GrokServerError::PlatformTempRootInspect {
+                    root: root.to_path_buf(),
+                    source,
                 });
             }
         };
         if !metadata.file_type().is_symlink() {
             return Ok(path.to_path_buf());
         }
-        let canonical = std::fs::canonicalize(root).with_context(|| {
-            format!("resolving platform temporary root alias {}", root.display())
+        let canonical = std::fs::canonicalize(root).map_err(|source| {
+            GrokServerError::PlatformTempRootResolve {
+                root: root.to_path_buf(),
+                source,
+            }
         })?;
-        let suffix = path.strip_prefix(root).with_context(|| {
-            format!(
-                "removing platform temporary root {} from {}",
-                root.display(),
-                path.display()
-            )
-        })?;
+        let suffix =
+            path.strip_prefix(root)
+                .map_err(|source| GrokServerError::PlatformTempRootStrip {
+                    root: root.to_path_buf(),
+                    path: path.to_path_buf(),
+                    source,
+                })?;
         return Ok(canonical.join(suffix));
     }
     Ok(path.to_path_buf())
@@ -447,10 +628,9 @@ async fn accept_loop(
         );
         connections.abort_all();
         while connections.join_next().await.is_some() {}
-        Err(anyhow!(
-            "grok shim leader connection cleanup exceeded {}ms",
-            CONNECTION_CLEANUP_GRACE.as_millis()
-        ))
+        Err(GrokServerError::CleanupTimeout {
+            grace_ms: CONNECTION_CLEANUP_GRACE.as_millis(),
+        })
     } else {
         Ok(())
     };
@@ -737,12 +917,12 @@ async fn register_client(
                     target: LOG_TARGET,
                     client_type = %client_type,
                     mode = %mode.wire_name(),
-                    reason = %format!("{reason:#}"),
+                    reason = %ErrorChain(&reason),
                     "grok shim leader rejected an invalid register frame"
                 );
                 let _ = frames.try_send(ServerEnvelope::Error {
                     code: ENVELOPE_ERROR_INVALID_REQUEST,
-                    message: format!("{reason:#}"),
+                    message: ErrorChain(&reason).to_string(),
                 });
                 return Err(());
             }
@@ -778,7 +958,7 @@ async fn register_client(
 
 fn validate_register(client_type: &str, _mode: &RegisterMode) -> Result<()> {
     if client_type.trim().is_empty() {
-        bail!("register requires a non-empty client_type");
+        return Err(GrokServerError::RegisterClientTypeEmpty);
     }
     Ok(())
 }
@@ -891,45 +1071,41 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
                 if file_type.is_symlink() {
-                    bail!(
-                        "refusing the grok shim socket parent {}: {} is a symlink",
-                        parent.display(),
-                        current.display()
-                    );
+                    return Err(GrokServerError::SocketParentSymlink {
+                        parent: parent.to_path_buf(),
+                        component: current,
+                    });
                 }
                 if !file_type.is_dir() {
-                    bail!(
-                        "refusing the grok shim socket parent {}: {} exists and is not a directory",
-                        parent.display(),
-                        current.display()
-                    );
+                    return Err(GrokServerError::SocketParentNotDirectory {
+                        parent: parent.to_path_buf(),
+                        component: current,
+                    });
                 }
                 continue;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "inspecting the grok shim socket parent component {}",
-                        current.display()
-                    )
+            Err(source) => {
+                return Err(GrokServerError::SocketParentInspect {
+                    component: current,
+                    source,
                 });
             }
         }
-        builder.create(&current).with_context(|| {
-            format!("creating the grok shim socket parent {}", current.display())
-        })?;
-        let created = std::fs::symlink_metadata(&current).with_context(|| {
-            format!(
-                "verifying the newly created grok shim socket parent {}",
-                current.display()
-            )
+        builder
+            .create(&current)
+            .map_err(|source| GrokServerError::SocketParentCreate {
+                component: current.clone(),
+                source,
+            })?;
+        let created = std::fs::symlink_metadata(&current).map_err(|source| {
+            GrokServerError::SocketParentVerify {
+                component: current.clone(),
+                source,
+            }
         })?;
         if created.file_type().is_symlink() || !created.file_type().is_dir() {
-            bail!(
-                "the grok shim socket parent component {} was created but is not a plain directory",
-                current.display()
-            );
+            return Err(GrokServerError::SocketParentNotPlain { component: current });
         }
     }
     Ok(())
@@ -948,11 +1124,9 @@ impl LeaderLock {
     fn acquire(socket_path: &Path) -> Result<Self> {
         let path = socket_path.with_extension("lock");
         if let Some(parent) = path.parent() {
-            ensure_socket_parent(parent).with_context(|| {
-                format!(
-                    "creating the grok shim leader lock parent {}",
-                    parent.display()
-                )
+            ensure_socket_parent(parent).map_err(|source| GrokServerError::LeaderLockParent {
+                parent: parent.to_path_buf(),
+                source: Box::new(source),
             })?;
         }
         for _ in 0..LOCK_ACQUIRE_ATTEMPTS {
@@ -964,22 +1138,24 @@ impl LeaderLock {
                 .mode(PRIVATE_FILE_MODE)
                 .custom_flags(O_NOFOLLOW)
                 .open(&path)
-                .with_context(|| format!("opening the grok shim leader lock {}", path.display()))?;
+                .map_err(|source| GrokServerError::LeaderLockOpen {
+                    path: path.clone(),
+                    source,
+                })?;
             if let Err(error) = file.try_lock() {
                 if matches!(error, std::fs::TryLockError::WouldBlock) {
                     let holder = read_holder_pid(&path);
-                    return Err(anyhow!(
-                        "another grok leader already holds {} (last recorded holder pid: {})",
-                        path.display(),
-                        holder
+                    return Err(GrokServerError::LeaderLockHeld {
+                        path: path.clone(),
+                        holder: holder
                             .map(|pid| pid.to_string())
                             .unwrap_or_else(|| "unknown".to_string()),
-                    ));
+                    });
                 }
-                return Err(anyhow!(
-                    "locking the grok shim leader lock {} failed: {error}",
-                    path.display()
-                ));
+                return Err(GrokServerError::LeaderLockTryLock {
+                    path: path.clone(),
+                    error,
+                });
             }
             if file_identity(&file) != path_identity(&path) {
                 drop(file);
@@ -987,8 +1163,10 @@ impl LeaderLock {
             }
             force_private_mode(&file, &path)?;
             let mut file = file;
-            write_holder_pid(&mut file)
-                .with_context(|| format!("recording the leader pid in {}", path.display()))?;
+            write_holder_pid(&mut file).map_err(|source| GrokServerError::LeaderPidRecord {
+                path: path.clone(),
+                source: Box::new(source),
+            })?;
             // Revalidate after every mutation of the descriptor. A replaced
             // pathname never becomes the published election point.
             if file_identity(&file) != path_identity(&path) {
@@ -997,10 +1175,7 @@ impl LeaderLock {
             }
             return Ok(Self { path, file });
         }
-        bail!(
-            "the grok shim leader lock {} changed inode during acquisition",
-            path.display()
-        )
+        Err(GrokServerError::LeaderLockInodeChanged { path })
     }
 
     /// Release by dropping the descriptor while retaining the stable private
@@ -1018,11 +1193,9 @@ impl LeaderLock {
 fn force_private_mode(file: &File, path: &Path) -> Result<()> {
     let current = file
         .metadata()
-        .with_context(|| {
-            format!(
-                "reading the mode of the grok shim leader lock {}",
-                path.display()
-            )
+        .map_err(|source| GrokServerError::LeaderLockMode {
+            path: path.to_path_buf(),
+            source,
         })?
         .permissions()
         .mode();
@@ -1030,28 +1203,23 @@ fn force_private_mode(file: &File, path: &Path) -> Result<()> {
         return Ok(());
     }
     file.set_permissions(Permissions::from_mode(PRIVATE_FILE_MODE))
-        .with_context(|| {
-            format!(
-                "forcing mode 0600 on the grok shim leader lock {}",
-                path.display()
-            )
+        .map_err(|source| GrokServerError::LeaderLockForceMode {
+            path: path.to_path_buf(),
+            source,
         })?;
     let forced = file
         .metadata()
-        .with_context(|| {
-            format!(
-                "re-reading the mode of the grok shim leader lock {}",
-                path.display()
-            )
+        .map_err(|source| GrokServerError::LeaderLockRereadMode {
+            path: path.to_path_buf(),
+            source,
         })?
         .permissions()
         .mode();
     if forced & 0o777 != PRIVATE_FILE_MODE {
-        bail!(
-            "the grok shim leader lock {} is mode {:o} instead of 0600",
-            path.display(),
-            forced & 0o777
-        );
+        return Err(GrokServerError::LeaderLockWrongMode {
+            path: path.to_path_buf(),
+            mode: forced & 0o777,
+        });
     }
     Ok(())
 }
@@ -1074,10 +1242,9 @@ fn read_holder_pid(lock_path: &Path) -> Option<u32> {
 }
 
 fn write_holder_pid(file: &mut File) -> Result<()> {
-    file.set_len(0)
-        .with_context(|| "truncating the grok shim leader lock".to_string())?;
+    file.set_len(0).map_err(GrokServerError::LockTruncate)?;
     file.write_all(format!("{}\n", process::id()).as_bytes())
-        .with_context(|| "writing the leader pid into the lock file".to_string())?;
+        .map_err(GrokServerError::LockWritePid)?;
     Ok(())
 }
 
@@ -1089,22 +1256,20 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
         Ok(metadata) => {
             let file_type = metadata.file_type();
             if file_type.is_symlink() {
-                bail!(
-                    "refusing to replace the symlink at {} with a grok shim leader socket",
-                    socket_path.display()
-                );
+                return Err(GrokServerError::StaleSocketSymlink {
+                    path: socket_path.to_path_buf(),
+                });
             }
             if !file_type.is_socket() {
-                bail!(
-                    "{} exists and is not a unix socket; refusing to replace it",
-                    socket_path.display()
-                );
+                return Err(GrokServerError::StaleSocketNotSocket {
+                    path: socket_path.to_path_buf(),
+                });
             }
-            std::fs::remove_file(socket_path).with_context(|| {
-                format!(
-                    "removing the stale grok shim socket {}",
-                    socket_path.display()
-                )
+            std::fs::remove_file(socket_path).map_err(|source| {
+                GrokServerError::StaleSocketRemove {
+                    path: socket_path.to_path_buf(),
+                    source,
+                }
             })?;
             tracing::debug!(
                 target: LOG_TARGET,
@@ -1113,12 +1278,10 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
             );
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "inspecting the grok shim socket path {}",
-                    socket_path.display()
-                )
+        Err(source) => {
+            return Err(GrokServerError::SocketPathInspect {
+                path: socket_path.to_path_buf(),
+                source,
             });
         }
     }
@@ -1130,17 +1293,14 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
 /// path length), force the socket `0600` while it is still unreachable, then
 /// `rename(2)` onto the published path.
 fn publish_listener(socket_path: &Path) -> Result<UnixListener> {
-    let parent = socket_path.parent().ok_or_else(|| {
-        anyhow!(
-            "the grok shim leader socket path {} has no parent directory",
-            socket_path.display()
-        )
-    })?;
-    ensure_socket_parent(parent).with_context(|| {
-        format!(
-            "creating the grok shim leader socket parent {}",
-            parent.display()
-        )
+    let parent = socket_path
+        .parent()
+        .ok_or_else(|| GrokServerError::SocketPathNoParent {
+            path: socket_path.to_path_buf(),
+        })?;
+    ensure_socket_parent(parent).map_err(|source| GrokServerError::LeaderSocketParent {
+        parent: parent.to_path_buf(),
+        source: Box::new(source),
     })?;
     let staging = StagingDir::create(parent)?;
     let result = bind_and_publish(&staging.path, socket_path);
@@ -1150,52 +1310,44 @@ fn publish_listener(socket_path: &Path) -> Result<UnixListener> {
 
 fn bind_and_publish(staging_dir: &Path, socket_path: &Path) -> Result<UnixListener> {
     let staged_socket = staging_dir.join(STAGED_SOCKET_NAME);
-    let listener = UnixListener::bind(&staged_socket).with_context(|| {
-        format!(
-            "binding the grok shim socket inside the staging ancestor {}",
-            staging_dir.display()
-        )
-    })?;
+    let listener =
+        UnixListener::bind(&staged_socket).map_err(|source| GrokServerError::SocketBind {
+            staging_dir: staging_dir.to_path_buf(),
+            source,
+        })?;
     if let Err(error) = force_socket_mode(&staged_socket) {
         let _ = std::fs::remove_file(&staged_socket);
         return Err(error);
     }
-    if let Err(error) = std::fs::rename(&staged_socket, socket_path) {
+    if let Err(source) = std::fs::rename(&staged_socket, socket_path) {
         let _ = std::fs::remove_file(&staged_socket);
-        return Err(error).with_context(|| {
-            format!(
-                "publishing the grok shim socket at {}",
-                socket_path.display()
-            )
+        return Err(GrokServerError::SocketPublish {
+            socket_path: socket_path.to_path_buf(),
+            source,
         });
     }
     Ok(listener)
 }
 
 fn force_socket_mode(socket: &Path) -> Result<()> {
-    std::fs::set_permissions(socket, Permissions::from_mode(PRIVATE_FILE_MODE)).with_context(
-        || {
-            format!(
-                "forcing mode 0600 on the grok shim socket {}",
-                socket.display()
-            )
+    std::fs::set_permissions(socket, Permissions::from_mode(PRIVATE_FILE_MODE)).map_err(
+        |source| GrokServerError::SocketForceMode {
+            socket: socket.to_path_buf(),
+            source,
         },
     )?;
     let mode = std::fs::metadata(socket)
-        .with_context(|| {
-            format!(
-                "reading the mode of the grok shim socket {}",
-                socket.display()
-            )
+        .map_err(|source| GrokServerError::SocketReadMode {
+            socket: socket.to_path_buf(),
+            source,
         })?
         .permissions()
         .mode();
     if mode & 0o777 != PRIVATE_FILE_MODE {
-        bail!(
-            "the grok shim socket {} is mode {:o} instead of 0600",
-            socket.display(),
-            mode & 0o777
-        );
+        return Err(GrokServerError::SocketWrongMode {
+            socket: socket.to_path_buf(),
+            mode: mode & 0o777,
+        });
     }
     Ok(())
 }
@@ -1218,21 +1370,18 @@ impl StagingDir {
                 match builder.create(&candidate) {
                     Ok(()) => {
                         let mode = std::fs::metadata(&candidate)
-                            .with_context(|| {
-                                format!(
-                                    "inspecting the grok shim staging ancestor {}",
-                                    candidate.display()
-                                )
+                            .map_err(|source| GrokServerError::StagingInspect {
+                                path: candidate.clone(),
+                                source,
                             })?
                             .permissions()
                             .mode();
                         if mode & 0o777 != STAGING_DIR_MODE {
                             let _ = std::fs::remove_dir(&candidate);
-                            bail!(
-                                "the grok shim staging ancestor {} is mode {:o} instead of 0700",
-                                candidate.display(),
-                                mode & 0o777
-                            );
+                            return Err(GrokServerError::StagingWrongMode {
+                                path: candidate,
+                                mode: mode & 0o777,
+                            });
                         }
                         tracing::debug!(
                             target: LOG_TARGET,
@@ -1249,13 +1398,12 @@ impl StagingDir {
                 }
             }
         }
-        bail!(
-            "no writable same-device staging ancestor for {}; last error: {}",
-            final_parent.display(),
-            last_error
+        Err(GrokServerError::StagingUnavailable {
+            final_parent: final_parent.to_path_buf(),
+            last_error: last_error
                 .map(|error| error.to_string())
-                .unwrap_or_else(|| "none".to_string())
-        )
+                .unwrap_or_else(|| "none".to_string()),
+        })
     }
 
     fn cleanup(self) {
@@ -1351,7 +1499,7 @@ mod tests {
             &'a self,
             payload: &'a str,
             outbound: AcpOutbound,
-        ) -> BoxFuture<'a, Result<()>> {
+        ) -> BoxFuture<'a, anyhow::Result<()>> {
             Box::pin(async move {
                 self.payloads
                     .lock()
@@ -1406,7 +1554,7 @@ mod tests {
             &'a self,
             _payload: &'a str,
             _outbound: AcpOutbound,
-        ) -> BoxFuture<'a, Result<()>> {
+        ) -> BoxFuture<'a, anyhow::Result<()>> {
             Box::pin(async { Ok(()) })
         }
 
@@ -1446,7 +1594,7 @@ mod tests {
             &'a self,
             client_id: u64,
             registration: &'a Registration,
-        ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>> {
+        ) -> BoxFuture<'a, anyhow::Result<Arc<dyn AcpDelegate>>> {
             Box::pin(async move {
                 self.client_ids
                     .lock()
@@ -1488,10 +1636,12 @@ mod tests {
             &'a self,
             _client_id: u64,
             _registration: &'a Registration,
-        ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>> {
+        ) -> BoxFuture<'a, anyhow::Result<Arc<dyn AcpDelegate>>> {
             Box::pin(async move {
                 self.attempts.fetch_add(1, Ordering::SeqCst);
-                Err(anyhow!("test factory refuses to construct a delegate"))
+                Err(anyhow::anyhow!(
+                    "test factory refuses to construct a delegate"
+                ))
             })
         }
     }
@@ -1747,7 +1897,8 @@ mod tests {
                 Err(error) => {
                     assert!(
                         Instant::now() < deadline,
-                        "a leader should be spawnable after the previous handle was dropped: {error:#}"
+                        "a leader should be spawnable after the previous handle was dropped: {}",
+                        ErrorChain(&error)
                     );
                     sleep(Duration::from_millis(10)).await;
                 }
@@ -1884,7 +2035,8 @@ mod tests {
         let error = ensure_socket_parent(&deep).expect_err("a symlink component must be rejected");
         assert!(
             error.to_string().contains("is a symlink"),
-            "the error should name the symlink component: {error:#}"
+            "the error should name the symlink component: {}",
+            ErrorChain(&error)
         );
         assert!(
             !target.join("nested").exists(),
@@ -1919,7 +2071,8 @@ mod tests {
             ensure_socket_parent(&deep).expect_err("a non-directory component must be rejected");
         assert!(
             error.to_string().contains("is not a directory"),
-            "the error should name the non-directory component: {error:#}"
+            "the error should name the non-directory component: {}",
+            ErrorChain(&error)
         );
         assert_eq!(
             std::fs::read_to_string(&blocker).expect("the blocking file should be readable"),

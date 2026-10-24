@@ -1,10 +1,28 @@
-use anyhow::{Context, Result};
-
 pub const AGENT_OUTPUT_SEGMENT_FIELDS: &str = "node_did requester_did session_id \
 request_doc_id source ordinal writer runs payload close created_at _docID";
 
 pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id node_did requester_did \
 request_doc_id publication outcome sequence role native_id blocks created_at _docID";
+
+#[derive(Debug, thiserror::Error)]
+pub enum CanonicalRowsError {
+    #[error("{collection} row omitted _docID")]
+    MissingDocId { collection: &'static str },
+    #[error("{collection} row is not an object")]
+    NotAnObject { collection: &'static str },
+    #[error("decoding canonical AgentOutputSegment")]
+    DecodeSegment(#[source] serde_json::Error),
+    #[error("decoding canonical AgentMessage")]
+    DecodeMessage(#[source] serde_json::Error),
+    #[error("serializing canonical AgentOutputSegment")]
+    EncodeSegment(#[source] serde_json::Error),
+    #[error("serializing canonical AgentMessage")]
+    EncodeMessage(#[source] serde_json::Error),
+    #[error(transparent)]
+    BlockEncode(serde_json::Error),
+    #[error(transparent)]
+    GraphqlInput(#[from] gents_protocol::graphql::GraphqlError),
+}
 
 #[derive(Debug, Clone)]
 pub struct OutputSegmentRow {
@@ -20,33 +38,37 @@ pub struct TranscriptMessageRow {
 
 fn split_physical_doc_id(
     row: &serde_json::Value,
-    collection: &str,
-) -> Result<(String, serde_json::Value)> {
+    collection: &'static str,
+) -> Result<(String, serde_json::Value), CanonicalRowsError> {
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .with_context(|| format!("{collection} row omitted _docID"))?
+        .ok_or(CanonicalRowsError::MissingDocId { collection })?
         .to_string();
     let mut document = row.clone();
     document
         .as_object_mut()
-        .with_context(|| format!("{collection} row is not an object"))?
+        .ok_or(CanonicalRowsError::NotAnObject { collection })?
         .remove("_docID");
     Ok((doc_id, document))
 }
 
-pub fn decode_output_segment_row(row: &serde_json::Value) -> Result<OutputSegmentRow> {
+pub fn decode_output_segment_row(
+    row: &serde_json::Value,
+) -> Result<OutputSegmentRow, CanonicalRowsError> {
     let (doc_id, document) = split_physical_doc_id(row, "AgentOutputSegment")?;
     let segment: gents_protocol::output::OutputSegment =
-        serde_json::from_value(document).context("decoding canonical AgentOutputSegment")?;
+        serde_json::from_value(document).map_err(CanonicalRowsError::DecodeSegment)?;
     Ok(OutputSegmentRow { doc_id, segment })
 }
 
-pub fn decode_transcript_message_row(row: &serde_json::Value) -> Result<TranscriptMessageRow> {
+pub fn decode_transcript_message_row(
+    row: &serde_json::Value,
+) -> Result<TranscriptMessageRow, CanonicalRowsError> {
     let (doc_id, document) = split_physical_doc_id(row, "AgentMessage")?;
     let message: gents_protocol::output::TranscriptMessage =
-        serde_json::from_value(document).context("decoding canonical AgentMessage")?;
+        serde_json::from_value(document).map_err(CanonicalRowsError::DecodeMessage)?;
     Ok(TranscriptMessageRow { doc_id, message })
 }
 
@@ -63,7 +85,7 @@ pub fn request_output_segments_query(request_doc_id: &str) -> String {
 pub(crate) fn source_output_segments_query(
     request_doc_id: &str,
     source: &gents_protocol::output::OutputSource,
-) -> Result<String> {
+) -> Result<String, CanonicalRowsError> {
     let discriminator = output_source_discriminator(source);
     let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
         "request_doc_id": {"_eq": request_doc_id},
@@ -108,7 +130,7 @@ pub fn decode_scoped_request_output_segments(
     node_did: &str,
     session_id: Option<&str>,
     requester_did: Option<&str>,
-) -> Result<Vec<OutputSegmentRow>> {
+) -> Result<Vec<OutputSegmentRow>, CanonicalRowsError> {
     decode_scoped_canonical_rows(
         rows,
         node_did,
@@ -123,8 +145,8 @@ pub fn decode_scoped_canonical_rows<T>(
     node_did: &str,
     session_id: Option<&str>,
     requester_did: Option<&str>,
-    decode: impl Fn(&serde_json::Value) -> Result<T>,
-) -> Result<Vec<T>> {
+    decode: impl Fn(&serde_json::Value) -> Result<T, CanonicalRowsError>,
+) -> Result<Vec<T>, CanonicalRowsError> {
     fn text<'a>(row: &'a serde_json::Value, field: &str) -> Option<&'a str> {
         row.get(field).and_then(serde_json::Value::as_str)
     }
@@ -153,9 +175,8 @@ pub(crate) fn authored_message_key(request_doc_id: &str, key: &str) -> String {
 
 pub fn output_segment_create_variables(
     segment: &gents_protocol::output::OutputSegment,
-) -> Result<serde_json::Value> {
-    let input =
-        serde_json::to_value(segment).context("serializing canonical AgentOutputSegment")?;
+) -> Result<serde_json::Value, CanonicalRowsError> {
+    let input = serde_json::to_value(segment).map_err(CanonicalRowsError::EncodeSegment)?;
     Ok(serde_json::Value::Object(serde_json::Map::from_iter([(
         "input".to_owned(),
         input,
@@ -164,9 +185,11 @@ pub fn output_segment_create_variables(
 
 pub fn transcript_message_create_variables(
     message: &gents_protocol::output::TranscriptMessage,
-) -> Result<serde_json::Value> {
-    let mut input = serde_json::to_value(message).context("serializing canonical AgentMessage")?;
-    if let Some(compact) = gents_protocol::output::storage::encode_blocks(&message.blocks)? {
+) -> Result<serde_json::Value, CanonicalRowsError> {
+    let mut input = serde_json::to_value(message).map_err(CanonicalRowsError::EncodeMessage)?;
+    if let Some(compact) = gents_protocol::output::storage::encode_blocks(&message.blocks)
+        .map_err(CanonicalRowsError::BlockEncode)?
+    {
         input["blocks"] = compact;
     }
     Ok(serde_json::Value::Object(serde_json::Map::from_iter([(

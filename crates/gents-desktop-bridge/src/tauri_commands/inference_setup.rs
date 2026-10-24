@@ -5,6 +5,7 @@
 use crate::accounts::{observe_provider_accounts, retry_pending_credential};
 #[cfg(test)]
 use crate::accounts::{require_reachable_configuration, save_issued_credential};
+use gents_protocol::error_chain::ErrorChain;
 use std::time::Duration;
 
 use gents::inference_setup::{
@@ -48,7 +49,7 @@ where
     if let Err(error) = core.refresh_store().await {
         tracing::warn!(
             target: LOG_TARGET,
-            error = %format!("{error:#}"),
+            error = %ErrorChain(error.as_ref()),
             "refreshing the client store after a configuration write failed"
         );
     }
@@ -513,7 +514,7 @@ pub(crate) async fn desktop_provider_usage_read(
         Err(error) if !request.refresh => {
             tracing::warn!(
                 target: LOG_TARGET,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "usage read on open failed; showing stored usage"
             );
             None

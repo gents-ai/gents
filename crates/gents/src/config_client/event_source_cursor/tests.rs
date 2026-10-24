@@ -80,6 +80,7 @@ async fn create_source(access: &ConfigAccess, collection: &str, label: &str) -> 
             })
         })
         .await
+        .map_err(Into::into)
 }
 
 fn trigger_consumer() -> EventConsumer {

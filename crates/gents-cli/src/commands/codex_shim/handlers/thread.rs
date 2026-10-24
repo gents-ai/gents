@@ -23,6 +23,7 @@ use super::super::thread_projection::{
     thread_start_response_json, thread_token_usage,
 };
 use super::super::thread_routes;
+use super::super::CodexShimError;
 use super::super::{ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 
 pub(super) async fn handle_thread_request(
@@ -64,13 +65,13 @@ pub(super) async fn handle_thread_request(
                 resume_loaded_codex_thread(state, &params.thread_id, params.cwd.as_deref(), record)
                     .await?
             else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             };
             state
                 .set_thread_cwd(&record.session_id, record.cwd.clone())
@@ -149,11 +150,11 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadList {
             request_id, params, ..
         } => match thread_routes::list_threads_response(state, params).await {
-            Ok(response) => {
-                send_typed_json_result::<codex::ThreadListResponse>(outbound, request_id, response)
-                    .await
-            }
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
+            Ok(response) => Ok(send_typed_json_result::<codex::ThreadListResponse>(
+                outbound, request_id, response,
+            )
+            .await?),
+            Err(err) => Ok(send_error(outbound, request_id, err.code, err.message).await?),
         },
         codex::ClientRequest::ThreadFork {
             request_id, params, ..
@@ -165,7 +166,7 @@ pub(super) async fn handle_thread_request(
                         .cloned()
                         .unwrap_or_else(|| codex_thread_json(&record, false)),
                 )
-                .context("validating forked thread notification")?;
+                .map_err(CodexShimError::ForkedThreadNotification)?;
                 state
                     .set_thread_cwd(&record.session_id, record.cwd.clone())
                     .await;
@@ -182,67 +183,63 @@ pub(super) async fn handle_thread_request(
                 ensure_loaded_root_continuation_stream(connection, state, &record, None).await;
                 Ok(())
             }
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
+            Err(err) => Ok(send_error(outbound, request_id, err.code, err.message).await?),
         },
         codex::ClientRequest::ThreadSearch {
             request_id, params, ..
         } => match thread_routes::search_threads_response(state, params).await {
-            Ok(response) => {
-                send_typed_json_result::<codex::ThreadSearchResponse>(
-                    outbound, request_id, response,
-                )
-                .await
-            }
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::ThreadLoadedList { request_id, .. } => {
-            send_result(
-                outbound,
-                request_id,
-                codex::ThreadLoadedListResponse {
-                    data: loaded_codex_thread_ids(state).await?,
-                    next_cursor: None,
-                },
+            Ok(response) => Ok(send_typed_json_result::<codex::ThreadSearchResponse>(
+                outbound, request_id, response,
             )
-            .await
-        }
+            .await?),
+            Err(err) => Ok(send_error(outbound, request_id, err.code, err.message).await?),
+        },
+        codex::ClientRequest::ThreadLoadedList { request_id, .. } => Ok(send_result(
+            outbound,
+            request_id,
+            codex::ThreadLoadedListResponse {
+                data: loaded_codex_thread_ids(state).await?,
+                next_cursor: None,
+            },
+        )
+        .await?),
         codex::ClientRequest::ThreadRead {
             request_id, params, ..
         } => {
             let Some(record) = load_codex_thread(state, &params.thread_id).await? else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             };
             let turns = if params.include_turns {
                 load_thread_turns(state, &record).await?
             } else {
                 Vec::new()
             };
-            send_typed_json_result::<codex::ThreadReadResponse>(
+            Ok(send_typed_json_result::<codex::ThreadReadResponse>(
                 outbound,
                 request_id,
                 json!({
                     "thread": codex_thread_json_with_turns(&record, turns)
                 }),
             )
-            .await
+            .await?)
         }
         codex::ClientRequest::ThreadTurnsList {
             request_id, params, ..
         } => {
             let Some(record) = load_codex_thread(state, &params.thread_id).await? else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             };
             let turns = load_thread_turns(state, &record).await?;
             let response = thread_turns_list_response(
@@ -252,19 +249,19 @@ pub(super) async fn handle_thread_request(
                 params.sort_direction,
                 params.items_view,
             );
-            send_result(outbound, request_id, response).await
+            Ok(send_result(outbound, request_id, response).await?)
         }
         codex::ClientRequest::ThreadTurnsItemsList {
             request_id, params, ..
         } => {
             let Some(record) = load_codex_thread(state, &params.thread_id).await? else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             };
             let turns = load_thread_turns(state, &record).await?;
             let Some(response) = thread_turn_items_list_response(
@@ -274,7 +271,7 @@ pub(super) async fn handle_thread_request(
                 params.limit,
                 params.sort_direction,
             ) else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
@@ -283,9 +280,9 @@ pub(super) async fn handle_thread_request(
                         params.turn_id, params.thread_id
                     ),
                 )
-                .await;
+                .await?);
             };
-            send_result(outbound, request_id, response).await
+            Ok(send_result(outbound, request_id, response).await?)
         }
         codex::ClientRequest::ThreadUnsubscribe {
             request_id, params, ..
@@ -295,32 +292,32 @@ pub(super) async fn handle_thread_request(
             connection
                 .stop_root_continuation_stream(&params.thread_id)
                 .await;
-            send_result(
+            Ok(send_result(
                 outbound,
                 request_id,
                 codex::ThreadUnsubscribeResponse {
                     status: codex::ThreadUnsubscribeStatus::Unsubscribed,
                 },
             )
-            .await
+            .await?)
         }
         codex::ClientRequest::ThreadArchive {
             request_id, params, ..
         } => {
             if !set_codex_thread_archived(state, &params.thread_id, true).await? {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             }
             connection.stop_child_stream(&params.thread_id).await;
             connection
                 .stop_root_continuation_stream(&params.thread_id)
                 .await;
-            send_result(outbound, request_id, codex::ThreadArchiveResponse {}).await
+            Ok(send_result(outbound, request_id, codex::ThreadArchiveResponse {}).await?)
         }
         codex::ClientRequest::ThreadUnarchive {
             request_id, params, ..
@@ -330,13 +327,13 @@ pub(super) async fn handle_thread_request(
             let Some(record) =
                 resume_loaded_codex_thread(state, &params.thread_id, None, loaded).await?
             else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             };
             send_typed_json_result::<codex::ThreadUnarchiveResponse>(
                 outbound,
@@ -352,28 +349,28 @@ pub(super) async fn handle_thread_request(
             request_id, params, ..
         } => {
             if set_codex_thread_name(state, &params.thread_id, &params.name).await? {
-                send_result(outbound, request_id, codex::ThreadSetNameResponse {}).await
+                Ok(send_result(outbound, request_id, codex::ThreadSetNameResponse {}).await?)
             } else {
-                send_error(
+                Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await
+                .await?)
             }
         }
         codex::ClientRequest::ThreadMemoryModeSet {
             request_id, params, ..
         } => {
             set_codex_thread_memory_mode(state, &params.thread_id, params.mode).await?;
-            send_result(outbound, request_id, codex::ThreadMemoryModeSetResponse {}).await
+            Ok(send_result(outbound, request_id, codex::ThreadMemoryModeSetResponse {}).await?)
         }
         codex::ClientRequest::ThreadSettingsUpdate {
             request_id, params, ..
         } => {
             set_codex_thread_settings(state, &params.thread_id, &params).await?;
-            send_result(outbound, request_id, codex::ThreadSettingsUpdateResponse {}).await
+            Ok(send_result(outbound, request_id, codex::ThreadSettingsUpdateResponse {}).await?)
         }
         codex::ClientRequest::ThreadMetadataUpdate {
             request_id, params, ..
@@ -381,51 +378,53 @@ pub(super) async fn handle_thread_request(
             let Some(record) =
                 set_codex_thread_git_info(state, &params.thread_id, &params.git_info).await?
             else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             };
-            send_typed_json_result::<codex::ThreadMetadataUpdateResponse>(
-                outbound,
-                request_id,
-                json!({ "thread": codex_thread_json(&record, false) }),
+            Ok(
+                send_typed_json_result::<codex::ThreadMetadataUpdateResponse>(
+                    outbound,
+                    request_id,
+                    json!({ "thread": codex_thread_json(&record, false) }),
+                )
+                .await?,
             )
-            .await
         }
         codex::ClientRequest::ThreadGoalSet {
             request_id, params, ..
         } => {
             let Some(goal) = set_codex_thread_goal(state, &params).await? else {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!("unknown Codex thread `{}`", params.thread_id),
                 )
-                .await;
+                .await?);
             };
-            send_result(outbound, request_id, codex::ThreadGoalSetResponse { goal }).await
+            Ok(send_result(outbound, request_id, codex::ThreadGoalSetResponse { goal }).await?)
         }
         codex::ClientRequest::ThreadGoalGet {
             request_id, params, ..
         } => {
             let goal = get_codex_thread_goal(state, &params.thread_id).await?;
-            send_result(outbound, request_id, codex::ThreadGoalGetResponse { goal }).await
+            Ok(send_result(outbound, request_id, codex::ThreadGoalGetResponse { goal }).await?)
         }
         codex::ClientRequest::ThreadGoalClear {
             request_id, params, ..
         } => {
             let cleared = clear_codex_thread_goal(state, &params.thread_id).await?;
-            send_result(
+            Ok(send_result(
                 outbound,
                 request_id,
                 codex::ThreadGoalClearResponse { cleared },
             )
-            .await
+            .await?)
         }
         codex::ClientRequest::GetConversationSummary {
             request_id, params, ..
@@ -433,33 +432,33 @@ pub(super) async fn handle_thread_request(
             codex::GetConversationSummaryParams::ThreadId { conversation_id } => {
                 let thread_id = conversation_id.to_string();
                 let Some(record) = load_codex_thread(state, &thread_id).await? else {
-                    return send_error(
+                    return Ok(send_error(
                         outbound,
                         request_id,
                         JSONRPC_INVALID_PARAMS,
                         format!("unknown Codex thread `{thread_id}`"),
                     )
-                    .await;
+                    .await?);
                 };
-                send_typed_json_result::<codex::GetConversationSummaryResponse>(
-                    outbound,
-                    request_id,
-                    conversation_summary_json(state, &record),
+                Ok(
+                    send_typed_json_result::<codex::GetConversationSummaryResponse>(
+                        outbound,
+                        request_id,
+                        conversation_summary_json(state, &record),
+                    )
+                    .await?,
                 )
-                .await
             }
-            codex::GetConversationSummaryParams::RolloutPath { rollout_path } => {
-                send_error(
-                    outbound,
-                    request_id,
-                    JSONRPC_INVALID_PARAMS,
-                    format!(
-                        "rollout path summaries are unavailable for GENTS-backed Codex threads: {}",
-                        rollout_path.display()
-                    ),
-                )
-                .await
-            }
+            codex::GetConversationSummaryParams::RolloutPath { rollout_path } => Ok(send_error(
+                outbound,
+                request_id,
+                JSONRPC_INVALID_PARAMS,
+                format!(
+                    "rollout path summaries are unavailable for GENTS-backed Codex threads: {}",
+                    rollout_path.display()
+                ),
+            )
+            .await?),
         },
         other => unreachable!(
             "non-thread Codex request routed to thread handler: {}",

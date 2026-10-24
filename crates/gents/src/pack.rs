@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gents_protocol::job::{
     AssetMountDeclaration, PluginCatalogDeclaration, PluginDataDeclaration, PluginJobDeclaration,
 };
@@ -6,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod authoring;
+mod error;
 pub mod home_install;
 mod inference;
 mod installation;
@@ -17,6 +17,7 @@ pub mod plugin_lifecycle;
 mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;
+pub use error::PackError;
 pub use home_install::{
     forget_home_install, list_home_installs, list_readable_home_installs, read_home_install,
     record_after_install, write_home_install, HomePackInstall, InstalledVia,
@@ -43,6 +44,7 @@ pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_t
 
 #[path = "pack_asset_path.rs"]
 mod asset_path;
+pub(crate) use asset_path::PackAssetError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -217,13 +219,15 @@ impl BindAccess {
 }
 
 impl std::str::FromStr for BindAccess {
-    type Err = anyhow::Error;
+    type Err = PackError;
 
-    fn from_str(text: &str) -> anyhow::Result<Self> {
+    fn from_str(text: &str) -> Result<Self, PackError> {
         match text {
             "read" => Ok(Self::Read),
             "read_write" => Ok(Self::ReadWrite),
-            other => anyhow::bail!("{other:?} is not an access; use read or read_write"),
+            other => Err(PackError::UnknownAccess {
+                access: other.to_owned(),
+            }),
         }
     }
 }
@@ -372,144 +376,141 @@ pub fn is_valid_directive_name(name: &str) -> bool {
 impl PackUxPlugin {
     /// The rules a UX plugin has to satisfy at the pack. `plugin_names` is
     /// the pack's declared `.afb` plugins, for the `plugin` producer.
-    pub fn validate(&self, plugin_names: &BTreeSet<&str>) -> Result<()> {
-        anyhow::ensure!(
-            is_valid_pack_name(&self.name),
-            "ux plugin name must be snake_case: {:?}",
-            self.name
-        );
-        anyhow::ensure!(
-            !self.description.trim().is_empty(),
-            "ux plugin {:?} needs a description; it is what the UX Plugins panel shows",
-            self.name
-        );
+    pub fn validate(&self, plugin_names: &BTreeSet<&str>) -> Result<(), PackError> {
+        let name = &self.name;
+        if !is_valid_pack_name(name) {
+            return Err(PackError::UxPluginName { name: name.clone() });
+        }
+        if self.description.trim().is_empty() {
+            return Err(PackError::UxPluginDescription { name: name.clone() });
+        }
         match (&self.entry, &self.plugin) {
             (Some(entry), None) => {
-                anyhow::ensure!(
-                    is_distributable_asset_path(entry),
-                    "unsafe ux plugin entry path: {entry:?}"
-                );
-                anyhow::ensure!(
-                    entry.starts_with(UX_PLUGIN_PREFIX) && entry.ends_with(".js"),
-                    "ux plugin {:?} entry must be a .js file under {UX_PLUGIN_PREFIX}, got {entry:?}",
-                    self.name
-                );
+                if !is_distributable_asset_path(entry) {
+                    return Err(PackError::UxPluginEntryPath {
+                        entry: entry.clone(),
+                    });
+                }
+                if !(entry.starts_with(UX_PLUGIN_PREFIX) && entry.ends_with(".js")) {
+                    return Err(PackError::UxPluginEntryFile {
+                        name: name.clone(),
+                        entry: entry.clone(),
+                    });
+                }
             }
             (None, Some(plugin)) => {
-                anyhow::ensure!(
-                    plugin_names.contains(plugin.as_str()),
-                    "ux plugin {:?} names the plugin {plugin:?}, which this pack does not declare",
-                    self.name
-                );
-                anyhow::ensure!(
-                    self.css.is_none(),
-                    "ux plugin {:?} is produced by a plugin, which emits its own css; drop the css field",
-                    self.name
-                );
+                if !plugin_names.contains(plugin.as_str()) {
+                    return Err(PackError::UxPluginUnknownPlugin {
+                        name: name.clone(),
+                        plugin: plugin.clone(),
+                    });
+                }
+                if self.css.is_some() {
+                    return Err(PackError::UxPluginCssWithPlugin { name: name.clone() });
+                }
             }
             (Some(_), Some(_)) => {
-                anyhow::bail!(
-                    "ux plugin {:?} declares both entry and plugin; exactly one produces the module",
-                    self.name
-                )
+                return Err(PackError::UxPluginEntryAndPlugin { name: name.clone() });
             }
-            (None, None) => anyhow::bail!(
-                "ux plugin {:?} declares neither entry nor plugin; one must produce the module",
-                self.name
-            ),
+            (None, None) => return Err(PackError::UxPluginNoModule { name: name.clone() }),
         }
         if let Some(css) = &self.css {
-            anyhow::ensure!(
-                is_distributable_asset_path(css)
-                    && css.starts_with(UX_PLUGIN_PREFIX)
-                    && css.ends_with(".css"),
-                "ux plugin {:?} css must be a .css file under {UX_PLUGIN_PREFIX}, got {css:?}",
-                self.name
-            );
+            if !(is_distributable_asset_path(css)
+                && css.starts_with(UX_PLUGIN_PREFIX)
+                && css.ends_with(".css"))
+            {
+                return Err(PackError::UxPluginCssFile {
+                    name: name.clone(),
+                    css: css.clone(),
+                });
+            }
         }
-        anyhow::ensure!(
-            !self.contributes.areas.is_empty(),
-            "ux plugin {:?} must declare at least one area it contributes to",
-            self.name
-        );
+        if self.contributes.areas.is_empty() {
+            return Err(PackError::UxPluginNoAreas { name: name.clone() });
+        }
         for area in &self.contributes.areas {
-            anyhow::ensure!(
-                UX_PLUGIN_AREAS.contains(&area.as_str()),
-                "ux plugin {:?} declares the area {area:?}, which the desktop does not have; known \
-                 areas: {}",
-                self.name,
-                UX_PLUGIN_AREAS.join(", ")
-            );
+            if !UX_PLUGIN_AREAS.contains(&area.as_str()) {
+                return Err(PackError::UxPluginUnknownArea {
+                    name: name.clone(),
+                    area: area.clone(),
+                });
+            }
         }
         for directive in &self.contributes.directives {
-            anyhow::ensure!(
-                is_valid_directive_name(directive),
-                "ux plugin {:?} declares the directive {directive:?}; a directive name is \
-                 lowercase letters, digits and dashes, starting with a letter",
-                self.name
-            );
+            if !is_valid_directive_name(directive) {
+                return Err(PackError::UxPluginDirective {
+                    name: name.clone(),
+                    directive: directive.clone(),
+                });
+            }
         }
-        anyhow::ensure!(
-            self.contributes.directives.is_empty()
-                || self
-                    .contributes
-                    .areas
-                    .iter()
-                    .any(|a| a == "transcript.directives"),
-            "ux plugin {:?} declares directives but not the transcript.directives area",
-            self.name
-        );
+        if !(self.contributes.directives.is_empty()
+            || self
+                .contributes
+                .areas
+                .iter()
+                .any(|a| a == "transcript.directives"))
+        {
+            return Err(PackError::UxPluginDirectivesWithoutArea { name: name.clone() });
+        }
         let mut surfaces = BTreeSet::new();
         for declared in &self.data {
             let surface = declared.surface.as_str();
-            anyhow::ensure!(
-                !surface.is_empty()
-                    && !surface.chars().any(char::is_whitespace)
-                    && surface.len() <= MAX_UX_DATA_SURFACE_ID_LEN,
-                "ux plugin {:?} declares the data surface {surface:?}; a surface id is non-empty, \
-                 has no whitespace and is at most {MAX_UX_DATA_SURFACE_ID_LEN} characters",
-                self.name
-            );
-            anyhow::ensure!(
-                surfaces.insert(surface),
-                "ux plugin {:?} declares the data surface {surface:?} twice",
-                self.name
-            );
-            anyhow::ensure!(
-                !declared.tools.is_empty(),
-                "ux plugin {:?} declares the data surface {surface:?} with no tools; name the \
-                 tools its pages may run",
-                self.name
-            );
+            if !(!surface.is_empty()
+                && !surface.chars().any(char::is_whitespace)
+                && surface.len() <= MAX_UX_DATA_SURFACE_ID_LEN)
+            {
+                return Err(PackError::UxPluginDataSurface {
+                    name: name.clone(),
+                    surface: surface.to_owned(),
+                });
+            }
+            if !surfaces.insert(surface) {
+                return Err(PackError::UxPluginDataSurfaceDuplicate {
+                    name: name.clone(),
+                    surface: surface.to_owned(),
+                });
+            }
+            if declared.tools.is_empty() {
+                return Err(PackError::UxPluginDataSurfaceNoTools {
+                    name: name.clone(),
+                    surface: surface.to_owned(),
+                });
+            }
             let mut tools = BTreeSet::new();
             for tool in &declared.tools {
-                anyhow::ensure!(
-                    is_valid_ux_data_tool_name(tool),
-                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?}; a tool \
-                     name is lowercase letters, digits and underscores, starting with a letter, \
-                     at most 64 characters",
-                    self.name
-                );
-                anyhow::ensure!(
-                    tools.insert(tool.as_str()),
-                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?} twice",
-                    self.name
-                );
+                if !is_valid_ux_data_tool_name(tool) {
+                    return Err(PackError::UxPluginToolName {
+                        name: name.clone(),
+                        tool: tool.clone(),
+                        surface: surface.to_owned(),
+                    });
+                }
+                if !tools.insert(tool.as_str()) {
+                    return Err(PackError::UxPluginToolDuplicate {
+                        name: name.clone(),
+                        tool: tool.clone(),
+                        surface: surface.to_owned(),
+                    });
+                }
             }
         }
         Ok(())
     }
 }
 
-pub fn tool_instructions(plugin: &str, bytes: &[u8]) -> Result<String> {
-    anyhow::ensure!(
-        bytes.len() <= MAX_TOOL_INSTRUCTIONS_BYTES,
-        "plugin {plugin:?}'s TOOL.md is {} bytes; the limit is {} KiB",
-        bytes.len(),
-        MAX_TOOL_INSTRUCTIONS_BYTES / 1024
-    );
-    String::from_utf8(bytes.to_vec())
-        .with_context(|| format!("plugin {plugin:?}'s TOOL.md is not UTF-8 text"))
+pub fn tool_instructions(plugin: &str, bytes: &[u8]) -> Result<String, PackError> {
+    if bytes.len() > MAX_TOOL_INSTRUCTIONS_BYTES {
+        return Err(PackError::ToolInstructionsTooLarge {
+            plugin: plugin.to_owned(),
+            len: bytes.len(),
+            limit_kib: MAX_TOOL_INSTRUCTIONS_BYTES / 1024,
+        });
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|source| PackError::ToolInstructionsNotUtf8 {
+        plugin: plugin.to_owned(),
+        source,
+    })
 }
 
 pub const PLUGIN_ARTIFACT_PREFIX: &str = "plugins/";
@@ -534,7 +535,7 @@ pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
 ];
 
 impl PackPlugin {
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> anyhow::Result<()> {
         if let Some(service) = &self.service {
             anyhow::ensure!(
                 crate::plugin::authority::declared_manifold(self)?.child_process,
@@ -717,64 +718,69 @@ impl PackPlugin {
                 );
             }
         }
-        self.validate_job_manifest_fields()
+        Ok(self.validate_job_manifest_fields()?)
     }
 
     /// The static rules for the `data`, `asset_mounts` and `catalog` fields;
     /// checks against the archive itself belong to install.
-    fn validate_job_manifest_fields(&self) -> Result<()> {
+    fn validate_job_manifest_fields(&self) -> Result<(), PackError> {
         let name = &self.name;
         if let Some(data) = &self.data {
-            anyhow::ensure!(
-                !data.collections.is_empty(),
-                "plugin {name:?} data.collections is empty; list the collections it may use or \
-                 drop data"
-            );
+            if data.collections.is_empty() {
+                return Err(PackError::DataCollectionsEmpty { name: name.clone() });
+            }
             let mut seen = BTreeSet::new();
             for collection in &data.collections {
-                anyhow::ensure!(
-                    seen.insert(collection),
-                    "plugin {name:?} data.collections lists {collection:?} twice; list each once"
-                );
+                if !seen.insert(collection) {
+                    return Err(PackError::DataCollectionDuplicate {
+                        name: name.clone(),
+                        collection: collection.clone(),
+                    });
+                }
             }
             for op in &data.ops {
-                anyhow::ensure!(
-                    DATA_OPS.contains(&op.as_str()),
-                    "plugin {name:?} data.ops has unknown op {op:?}; use {}",
-                    DATA_OPS.join(", ")
-                );
+                if !DATA_OPS.contains(&op.as_str()) {
+                    return Err(PackError::DataOpUnknown {
+                        name: name.clone(),
+                        op: op.clone(),
+                    });
+                }
             }
             for field in data.stamped.keys() {
-                crate::graphql::validate_graphql_name(field).with_context(|| {
-                    format!(
-                        "plugin {name:?} data.stamped key {field:?} must be a GraphQL field name"
-                    )
+                crate::graphql::validate_graphql_name(field).map_err(|source| {
+                    PackError::DataStampedFieldName {
+                        name: name.clone(),
+                        field: field.clone(),
+                        source,
+                    }
                 })?;
-                anyhow::ensure!(
-                    !crate::toolset::is_secret_env_name(field),
-                    "plugin {name:?} data.stamped field {field:?} looks like a secret name; \
-                     rename the field"
-                );
+                if crate::toolset::is_secret_env_name(field) {
+                    return Err(PackError::DataStampedSecretName {
+                        name: name.clone(),
+                        field: field.clone(),
+                    });
+                }
             }
         }
         let mut classes = BTreeSet::new();
         for mount in &self.asset_mounts {
-            anyhow::ensure!(
-                asset_path::is_snake_case_name(&mount.class),
-                "plugin {name:?} asset_mounts class {:?} must be snake_case",
-                mount.class
-            );
-            anyhow::ensure!(
-                classes.insert(&mount.class),
-                "plugin {name:?} asset_mounts lists class {:?} twice; list each once",
-                mount.class
-            );
+            if !asset_path::is_snake_case_name(&mount.class) {
+                return Err(PackError::AssetMountClass {
+                    name: name.clone(),
+                    class: mount.class.clone(),
+                });
+            }
+            if !classes.insert(&mount.class) {
+                return Err(PackError::AssetMountClassDuplicate {
+                    name: name.clone(),
+                    class: mount.class.clone(),
+                });
+            }
         }
         if let Some(catalog) = &self.catalog {
-            anyhow::ensure!(
-                !catalog.argv.is_empty() && catalog.argv.iter().all(|arg| !arg.is_empty()),
-                "plugin {name:?} catalog.argv must be non-empty and hold non-empty strings"
-            );
+            if catalog.argv.is_empty() || catalog.argv.iter().any(|arg| arg.is_empty()) {
+                return Err(PackError::CatalogArgv { name: name.clone() });
+            }
         }
         Ok(())
     }
@@ -865,11 +871,14 @@ pub fn is_distributable_asset_path(path: &str) -> bool {
     asset_path::is_distributable_asset(path) && asset_path::has_canonical_asset_spelling(path)
 }
 
-pub(crate) fn open_pack_asset(root: &std::path::Path, path: &str) -> Result<std::fs::File> {
+pub(crate) fn open_pack_asset(
+    root: &std::path::Path,
+    path: &str,
+) -> Result<std::fs::File, PackAssetError> {
     asset_path::open_pack_asset(root, path)
 }
 
-pub fn validate_manifest(name: &str, manifest: &PackManifest) -> Result<()> {
+pub fn validate_manifest(name: &str, manifest: &PackManifest) -> anyhow::Result<()> {
     anyhow::ensure!(
         manifest.manifest_version == 1 && manifest.name == name,
         "invalid pack identity/version"
@@ -877,7 +886,7 @@ pub fn validate_manifest(name: &str, manifest: &PackManifest) -> Result<()> {
     validate_pack_manifest(manifest)
 }
 
-pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
+pub fn validate_pack_manifest(manifest: &PackManifest) -> anyhow::Result<()> {
     anyhow::ensure!(
         manifest.manifest_version == 1,
         "unsupported pack manifest version"
@@ -1069,7 +1078,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             let config = manifest
                 .config
                 .as_deref()
-                .context("document/graph pack requires a config asset")?;
+                .ok_or_else(|| anyhow::anyhow!("document/graph pack requires a config asset"))?;
             anyhow::ensure!(
                 manifest.metadata.assets.iter().any(|asset| asset == config),
                 "config asset must be declared"
@@ -1118,12 +1127,13 @@ pub fn declared_paths(manifest: &PackManifest) -> Vec<String> {
 
 pub fn digest_declared_assets<'a>(
     manifest: &PackManifest,
-    asset: impl Fn(&str) -> Result<&'a [u8]>,
-) -> Result<String> {
+    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
+) -> anyhow::Result<String> {
     let mut digest = PackDigester::default();
     for path in declared_paths(manifest) {
-        let bytes =
-            asset(&path).with_context(|| format!("pack references missing asset {path:?}"))?;
+        let bytes = anyhow::Context::with_context(asset(&path), || {
+            format!("pack references missing asset {path:?}")
+        })?;
         digest.begin_entry(&path, bytes.len() as u64);
         digest.update(bytes);
     }
@@ -1153,6 +1163,7 @@ impl PackDigester {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::job::StampedField;
 
     fn valid_plugin() -> PackPlugin {
@@ -1233,7 +1244,10 @@ mod tests {
     }
 
     fn refusal(plugin: &PackPlugin) -> String {
-        format!("{:#}", plugin.validate().expect_err("must be refused"))
+        format!(
+            "{}",
+            ErrorChain(plugin.validate().expect_err("must be refused").as_ref())
+        )
     }
 
     #[test]
@@ -1446,10 +1460,10 @@ mod tests {
         let back: PackUxPlugin = serde_json::from_value(bare).unwrap();
         assert!(back.data.is_empty());
 
-        let unknown: Result<UxDataSurface> = serde_json::from_value(serde_json::json!({
-            "surface": "board", "tools": ["list_tasks"], "collection": "Task"
-        }))
-        .map_err(Into::into);
+        let unknown: Result<UxDataSurface, serde_json::Error> =
+            serde_json::from_value(serde_json::json!({
+                "surface": "board", "tools": ["list_tasks"], "collection": "Task"
+            }));
         assert!(
             unknown.is_err(),
             "a data surface takes surface and tools only"
@@ -1461,7 +1475,7 @@ mod tests {
         let error = with_data(vec![surface("board", &["List-Tasks"])])
             .validate(&no_plugins())
             .unwrap_err();
-        let error = format!("{error:#}");
+        let error = format!("{}", ErrorChain(&error));
         assert!(error.contains("\"List-Tasks\""), "{error}");
         assert!(error.contains("\"board\""), "{error}");
         assert!(error.contains("starting with a letter"), "{error}");
@@ -1487,24 +1501,28 @@ mod tests {
         .validate(&no_plugins())
         .unwrap_err();
         assert!(
-            format!("{error:#}").contains("data surface \"board\" twice"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("data surface \"board\" twice"),
+            "{}",
+            ErrorChain(&error)
         );
 
         let error = with_data(vec![surface("board", &["list_tasks", "list_tasks"])])
             .validate(&no_plugins())
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("tool \"list_tasks\" on data surface \"board\" twice"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error))
+                .contains("tool \"list_tasks\" on data surface \"board\" twice"),
+            "{}",
+            ErrorChain(&error)
         );
 
         let error = with_data(vec![surface("board", &[])])
             .validate(&no_plugins())
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("data surface \"board\" with no tools"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("data surface \"board\" with no tools"),
+            "{}",
+            ErrorChain(&error)
         );
 
         for bad in ["", "my board", "board\n", &"s".repeat(129)] {
@@ -1512,8 +1530,9 @@ mod tests {
                 .validate(&no_plugins())
                 .unwrap_err();
             assert!(
-                format!("{error:#}").contains("a surface id is non-empty"),
-                "{bad:?}: {error:#}"
+                format!("{}", ErrorChain(&error)).contains("a surface id is non-empty"),
+                "{bad:?}: {}",
+                ErrorChain(&error)
             );
         }
         with_data(vec![surface(&"s".repeat(128), &["list_tasks"])])
@@ -1532,15 +1551,20 @@ mod tests {
         };
         let error = both.validate(&BTreeSet::from(["gen"])).unwrap_err();
         assert!(
-            format!("{error:#}").contains("both entry and plugin"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("both entry and plugin"),
+            "{}",
+            ErrorChain(&error)
         );
         let neither = PackUxPlugin {
             entry: None,
             ..valid_ux()
         };
         let error = neither.validate(&no_plugins()).unwrap_err();
-        assert!(format!("{error:#}").contains("neither"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(&error)).contains("neither"),
+            "{}",
+            ErrorChain(&error)
+        );
     }
 
     #[test]
@@ -1574,15 +1598,20 @@ mod tests {
             .expect("declared");
         let error = produced.validate(&no_plugins()).unwrap_err();
         assert!(
-            format!("{error:#}").contains("does not declare"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("does not declare"),
+            "{}",
+            ErrorChain(&error)
         );
         let styled = PackUxPlugin {
             css: Some("ux/report/plugin.css".to_owned()),
             ..produced
         };
         let error = styled.validate(&BTreeSet::from(["report_ui"])).unwrap_err();
-        assert!(format!("{error:#}").contains("css"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(&error)).contains("css"),
+            "{}",
+            ErrorChain(&error)
+        );
     }
 
     #[test]
@@ -1596,10 +1625,15 @@ mod tests {
         };
         let error = unknown_area.validate(&no_plugins()).unwrap_err();
         assert!(
-            format!("{error:#}").contains("statusbar.right"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("statusbar.right"),
+            "{}",
+            ErrorChain(&error)
         );
-        assert!(format!("{error:#}").contains("known areas"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(&error)).contains("known areas"),
+            "{}",
+            ErrorChain(&error)
+        );
 
         let no_areas = PackUxPlugin {
             contributes: UxContributions::default(),
@@ -1625,8 +1659,9 @@ mod tests {
         };
         let error = directive_without_area.validate(&no_plugins()).unwrap_err();
         assert!(
-            format!("{error:#}").contains("transcript.directives"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("transcript.directives"),
+            "{}",
+            ErrorChain(&error)
         );
 
         let good = PackUxPlugin {
@@ -1688,7 +1723,11 @@ mod tests {
             vec!["README.md", "plugins/format_check.afb"],
         ))
         .unwrap_err();
-        assert!(format!("{error:#}").contains("not its entry"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("not its entry"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let error = validate_pack_manifest(&ux_pack(
             vec![ux.clone(), ux],
@@ -1699,7 +1738,11 @@ mod tests {
             ],
         ))
         .unwrap_err();
-        assert!(format!("{error:#}").contains("twice"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("twice"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[test]
@@ -1713,8 +1756,9 @@ mod tests {
             .push("ux/board/plugin.js".to_owned());
         let error = validate_pack_manifest(&manifest).unwrap_err();
         assert!(
-            format!("{error:#}").contains("assets or plugins pack"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("assets or plugins pack"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         manifest.metadata.ux.clear();
         validate_pack_manifest(&manifest).expect("a documents pack without ux is unchanged");

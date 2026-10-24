@@ -9,7 +9,9 @@ use defra_node::EmbeddedNode;
 pub(crate) type AgentFactory =
     Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
 
-use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
+use super::{
+    assemble_node_and_agents, runtime, AgentBuildError, AgentError, Gents, ProcessLifecycleObserver,
+};
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 #[cfg(test)]
@@ -150,19 +152,13 @@ impl GentsBuilder {
     }
 
     pub async fn build(self) -> Result<Gents> {
-        let node = self
-            .node
-            .ok_or_else(|| anyhow!("Gents builder is missing node"))?;
-        let identity = self
-            .identity
-            .ok_or_else(|| anyhow!("Gents builder is missing identity"))?;
+        let node = self.node.ok_or(AgentError::BuilderMissingNode)?;
+        let identity = self.identity.ok_or(AgentError::BuilderMissingIdentity)?;
         if node.node_identity_did().is_none() {
-            anyhow::bail!(
-                "Gents runtime requires an EmbeddedNode configured with a node signing DID"
-            );
+            return Err(AgentError::NodeSigningDidRequired.into());
         }
         if self.agents.is_empty() {
-            anyhow::bail!("Gents builder requires at least one agent");
+            return Err(AgentError::BuilderWithoutAgents.into());
         }
 
         let default_agent_id = self
@@ -175,17 +171,17 @@ impl GentsBuilder {
             .map(|agent_config| agent_config.name.clone())
             .collect::<Vec<_>>();
         if !agent_names.iter().any(|name| name == &default_agent_id) {
-            anyhow::bail!(
-                "default agent {} is not present in builder agents",
-                default_agent_id
-            );
+            return Err(AgentError::DefaultAgentNotPresent {
+                agent_id: default_agent_id,
+            }
+            .into());
         }
         let duplicates = find_duplicates(&agent_names);
         if !duplicates.is_empty() {
-            anyhow::bail!(
-                "duplicate agent names in builder: {}",
-                duplicates.into_iter().collect::<Vec<_>>().join(", ")
-            );
+            return Err(AgentError::DuplicateAgentNames {
+                names: duplicates.into_iter().collect::<Vec<_>>().join(", "),
+            }
+            .into());
         }
 
         let mut agent_factories: Vec<AgentFactory> = Vec::with_capacity(self.agents.len());
@@ -213,8 +209,10 @@ impl GentsBuilder {
 
         let mut agents = Vec::with_capacity(agent_results.len());
         for result in agent_results {
-            let agent_arc = result
-                .map_err(|e| anyhow::anyhow!("agent '{}' build failed: {}", e.agent_id, e.error))?;
+            let agent_arc = result.map_err(|e| AgentError::AgentBuildFailed {
+                agent_id: e.agent_id,
+                error: e.error.to_string(),
+            })?;
             agents.push(agent_arc);
         }
         agents.sort_by(|left, right| {
@@ -536,32 +534,33 @@ impl PendingAgent {
         let backend_id = self
             .backend_id
             .as_deref()
-            .ok_or_else(|| anyhow!("agent '{}' is missing backend_id", self.name))?
+            .ok_or_else(|| AgentError::AgentMissingBackendId {
+                name: self.name.clone(),
+            })?
             .to_string();
         let backend = lookup_backend(node, node_did, &backend_id)
             .await?
-            .ok_or_else(|| {
-                anyhow!(
-                    "agent '{}' references missing backend {}",
-                    self.name,
-                    backend_id
-                )
+            .ok_or_else(|| AgentError::BackendReferenceMissing {
+                name: self.name.clone(),
+                backend_id: backend_id.clone(),
             })?;
         let observation =
             crate::backend_registry::lookup_backend_observation(node, node_did, &backend_id)
                 .await?
-                .ok_or_else(|| anyhow!("backend {} disappeared during assembly", backend_id))?;
+                .ok_or_else(|| AgentError::BackendDisappeared {
+                    backend_id: backend_id.clone(),
+                })?;
         let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)?
             .with_measured_unhealthy(backend_health.measured_blocks_routing(&backend_id).await);
         if !admission_config.is_available() {
-            anyhow::bail!(
-                "agent '{}' backend {} is unavailable (enabled={} probe_status={} measured_unhealthy={})",
-                self.name,
-                backend_id,
-                backend.enabled,
-                admission_config.probe_status,
-                admission_config.measured_unhealthy,
-            );
+            return Err(AgentError::AgentBackendUnavailable {
+                name: self.name.clone(),
+                backend_id: backend_id.clone(),
+                enabled: backend.enabled.to_string(),
+                probe_status: admission_config.probe_status.to_string(),
+                measured_unhealthy: admission_config.measured_unhealthy.to_string(),
+            }
+            .into());
         }
 
         let agent_name = self.name.clone();

@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn provision_initializes_home_binds_manifest_and_diff_exact() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let target_home_env = tempdir.path().join("target-env");
     let target_home = tempdir.path().join("target-home");
     let root = tempdir
@@ -75,8 +76,8 @@ async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provision_rejects_initialized_home_without_loadable_identity() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn provision_rejects_initialized_home_without_loadable_identity() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_env = tempdir.path().join("home-env");
     let home = tempdir.path().join("secure-enclave-home");
     let root = tempdir
@@ -128,8 +129,8 @@ async fn provision_rejects_initialized_home_without_loadable_identity() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provision_rejects_uninitialized_home_without_bootstrap_flag() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn provision_rejects_uninitialized_home_without_bootstrap_flag() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_env = tempdir.path().join("home-env");
     let home = tempdir.path().join("uninitialized-home");
     let root = tempdir
@@ -174,7 +175,7 @@ fn write_portable_manifest_root(
     temp_root: &Path,
     root: &Path,
     placeholder_did: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let source_home_env = temp_root.join(format!("source-{}", Uuid::new_v4().simple()));
     fs::create_dir_all(&source_home_env)?;
     let model_name = format!("mock-provision-model-{}", Uuid::new_v4().simple());
@@ -208,12 +209,12 @@ fn write_portable_manifest_root(
     Ok(())
 }
 
-fn node_did_from_report(report: &Value) -> Result<String> {
+fn node_did_from_report(report: &Value) -> TestResult<String> {
     let node_did = report
         .get("node_did")
         .and_then(Value::as_str)
-        .context("provision report missing node_did")?;
-    anyhow::ensure!(
+        .expect("provision report missing node_did");
+    assert!(
         !node_did.starts_with("did:test:"),
         "provision returned placeholder DID: {node_did}"
     );

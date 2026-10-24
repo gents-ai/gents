@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
@@ -422,7 +423,7 @@ impl NativeCanonicalExecution {
             .context("native completed tool source query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| {
                 matches!(&row.segment.source,
@@ -452,7 +453,7 @@ impl NativeCanonicalExecution {
             .context("native completed tool result query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| {
                 matches!(&row.message.publication,
@@ -673,7 +674,7 @@ impl NativeCanonicalExecution {
             .context("native segment query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         decoded_segments.sort_by_key(|row| {
             self.segment_ids
                 .get(&row.doc_id)
@@ -709,7 +710,7 @@ impl NativeCanonicalExecution {
             .context("native message query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         decoded_messages.sort_by_key(|row| row.message.sequence);
         self.messages = decoded_messages
             .iter()
@@ -1758,9 +1759,15 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await;
                     match attempted {
                         Err(error)
-                            if error
-                                .downcast_ref::<crate::config_client::ReentrantEmbeddedWrite>()
-                                .is_some() =>
+                            if crate::config_client::TransactionFailure::config_client_error(
+                                &error,
+                            )
+                            .is_some_and(|error| {
+                                matches!(
+                                    error,
+                                    crate::config_client::ConfigClientError::Reentrant(_)
+                                )
+                            }) =>
                         {
                             native.observe(false).await
                         }
@@ -2118,7 +2125,7 @@ impl NativeCanonicalExecution {
         let matching = rows
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| row.segment == prepared)
             .collect::<Vec<_>>();
@@ -2234,7 +2241,7 @@ impl NativeCanonicalExecution {
         let closing_row = rows
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .find(|row| row.segment.close.is_some())
             .context("accepted partial close did not persist its closure")?;
@@ -2400,7 +2407,10 @@ impl NativeCanonicalExecution {
                 return self.observe(false).await;
             }
             Err(error) => {
-                let detail = format!("native provider publication owner failed: {error:#}");
+                let detail = format!(
+                    "native provider publication owner failed: {}",
+                    ErrorChain(error.as_ref())
+                );
                 return Err(error.context(detail));
             }
         };
@@ -3048,7 +3058,8 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
             let error = changed.expect_err("DateTime schema must reject malformed deadline input");
             assert!(
                 error.to_string().contains("Invalid DateTime format"),
-                "malformed deadline must fail at the schema boundary: {error:#}"
+                "malformed deadline must fail at the schema boundary: {}",
+                ErrorChain(&error)
             );
             assert_eq!(native.observe(true).await.unwrap(), before);
             continue;
@@ -3070,14 +3081,16 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         .await
         .expect_err("invalid durable deadline cannot authorize a fresh append");
         assert!(
-            format!("{error:#}").contains("no accepted deadline"),
-            "missing deadline must fail at the deadline integrity check: {error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("no accepted deadline"),
+            "missing deadline must fail at the deadline integrity check: {}",
+            ErrorChain(error.as_ref())
         );
         assert!(
             error
                 .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
                 .is_none(),
-            "{label} deadline is an integrity error, not a modeled rejection: {error:#}"
+            "{label} deadline is an integrity error, not a modeled rejection: {}",
+            ErrorChain(error.as_ref())
         );
         let mut expected_unchanged = before.clone();
         expected_unchanged.accepted = false;

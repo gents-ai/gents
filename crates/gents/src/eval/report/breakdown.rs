@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
+use crate::eval::documents::EvalError;
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
 use serde::Serialize;
 
 use crate::document_config::EvalTier;

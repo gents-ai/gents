@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -6,6 +5,24 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceRecoveryError {
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error("querying parent request for inference recovery request_id={request_id}")]
+    ParentRequestQuery {
+        request_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("recover inference call mutation")]
+    RecoverCallMutation(#[source] crate::config_client::ConfigClientError),
+}
+
+type Result<T, E = InferenceRecoveryError> = std::result::Result<T, E>;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct InferenceCallRecoveryReport {
@@ -132,8 +149,9 @@ async fn lookup_parent_request(
         "querying parent request for inference recovery",
     )
     .await
-    .with_context(|| {
-        format!("querying parent request for inference recovery request_id={request_id}")
+    .map_err(|source| InferenceRecoveryError::ParentRequestQuery {
+        request_id: request_id.to_owned(),
+        source,
     })?;
 
     let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
@@ -193,7 +211,7 @@ async fn recover_inference_call_row(
         &mutation,
     )
     .await
-    .context("recover inference call mutation")?;
+    .map_err(InferenceRecoveryError::RecoverCallMutation)?;
     Ok(!crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty())
 }
 

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -397,23 +398,25 @@ impl TaskHookExec for ManagedTaskHookExec {
         }
         let refusal = if hook.phase != TaskHookPhase::Finally {
             match &self.execution {
-                Some((node, request_doc_id, lease)) => match lease
-                    .owns_execution(node, request_doc_id)
-                    .await
-                {
-                    Ok(true) => None,
-                    Ok(false) => {
-                        self.cancellation.interrupt();
-                        Some(refused(
-                            HookCommandResult::Interrupted,
-                            "execution ownership lost before launch".to_owned(),
-                        ))
+                Some((node, request_doc_id, lease)) => {
+                    match lease.owns_execution(node, request_doc_id).await {
+                        Ok(true) => None,
+                        Ok(false) => {
+                            self.cancellation.interrupt();
+                            Some(refused(
+                                HookCommandResult::Interrupted,
+                                "execution ownership lost before launch".to_owned(),
+                            ))
+                        }
+                        Err(error) => Some(refused(
+                            HookCommandResult::LaunchFailed,
+                            format!(
+                                "could not verify execution ownership before launch: {}",
+                                ErrorChain(&error)
+                            ),
+                        )),
                     }
-                    Err(error) => Some(refused(
-                        HookCommandResult::LaunchFailed,
-                        format!("could not verify execution ownership before launch: {error:#}"),
-                    )),
-                },
+                }
                 None => None,
             }
         } else {

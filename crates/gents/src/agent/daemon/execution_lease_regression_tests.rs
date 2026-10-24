@@ -271,7 +271,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         let error = result.expect_err("failed drain must be reported to the daemon caller");
         assert!(
             error.is::<super::ShutdownDrainFailure>(),
-            "unexpected failure: {error:#}"
+            "unexpected failure: {}", ErrorChain(error.as_ref())
         );
         let persisted = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state terminal_output }} }}"#)).await;
         assert!(!persisted.has_errors(), "{:?}", persisted.errors);
@@ -1006,7 +1006,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
                     "mutation {{ create_AgentSession(input: {session_input}) {{_docID}} }}"
                 ))
                 .await?;
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         })
         .await
@@ -1087,7 +1087,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
                     &serde_json::json!({"input": wake_input}),
                 )
                 .await?;
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         },
     )

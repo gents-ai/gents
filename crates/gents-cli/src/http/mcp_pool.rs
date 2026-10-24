@@ -1,8 +1,8 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents::config_client::ConfigClientError;
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::post_graphql;
+
+type Result<T, E = McpPoolError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct McpPoolSnapshot {
@@ -67,7 +69,7 @@ struct McpPoolEnvelope {
 pub(crate) async fn load_mcp_pool_snapshot(
     graphql: &GraphqlEndpoint,
     node_did: &str,
-) -> Result<McpPoolSnapshot> {
+) -> Result<McpPoolSnapshot, McpPoolError> {
     let generated_at = Utc::now();
     let response = post_graphql(graphql, &mcp_pool_query(node_did)).await?;
     let envelope = decode_mcp_pool_response(response)?;
@@ -118,13 +120,25 @@ fn mcp_pool_query(node_did: &str) -> String {
     )
 }
 
-fn decode_mcp_pool_response(response: Value) -> Result<McpPoolEnvelope> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum McpPoolError {
+    #[error(transparent)]
+    Graphql(#[from] ConfigClientError),
+    #[error("mcp pool query response missing object data: {response}")]
+    MissingData { response: Value },
+    #[error("decoding mcp pool query response")]
+    Decode(#[source] serde_json::Error),
+}
+
+fn decode_mcp_pool_response(response: Value) -> Result<McpPoolEnvelope, McpPoolError> {
     let data = response
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("mcp pool query response missing object data: {response}"))?;
-    serde_json::from_value(data).context("decoding mcp pool query response")
+        .ok_or_else(|| McpPoolError::MissingData {
+            response: response.clone(),
+        })?;
+    serde_json::from_value(data).map_err(McpPoolError::Decode)
 }
 
 fn build_mcp_pool_snapshot(

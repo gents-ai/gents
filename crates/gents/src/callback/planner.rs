@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 
 use base64::engine::general_purpose::STANDARD;
@@ -177,7 +178,7 @@ pub fn invoke_plugin_planner(
     };
     let outcome =
         crate::plugin::executor::PluginExecutor::call_sealed_artifact(artifact, input, budget)
-            .map_err(|error| format!("callback plugin denied: {error:#}"))?;
+            .map_err(|error| format!("callback plugin denied: {}", ErrorChain(error.as_ref())))?;
     if outcome.verdict != crate::plugin::PluginVerdict::Success {
         return Err(format!(
             "callback plugin {:?}: {}",
@@ -199,7 +200,10 @@ fn require_artifact_size(artifact: &[u8]) -> Result<(), String> {
 fn require_artifact(artifact: &[u8]) -> Result<(), String> {
     require_artifact_size(artifact)?;
     crate::plugin::executor::PluginExecutor::validate_sealed_artifact(artifact).map_err(|error| {
-        format!("callback requires a bounded Afterburner .afb artifact: {error:#}")
+        format!(
+            "callback requires a bounded Afterburner .afb artifact: {}",
+            ErrorChain(error.as_ref())
+        )
     })
 }
 

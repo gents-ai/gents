@@ -65,7 +65,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
     existing_notification_doc_id: Option<&str>,
     native: &ToolNotificationPublication,
     wake: crate::lifecycle::RequestHopCause,
-) -> Result<EnqueuedBackgroundCompletionInput> {
+) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
     anyhow::ensure!(
         queue.source == QueueSource::BackgroundCompletion && queue.policy == QueuePolicy::Coalesce,
         "atomic background completion enqueue requires coalescing background queue input"
@@ -147,7 +147,7 @@ pub(crate) async fn persist_background_completion_with_message(
     wake_content: &str,
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
-) -> Result<EnqueuedBackgroundCompletionInput> {
+) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
     persist_background_completion_with_message_waking(
         node,
         parent,
@@ -172,7 +172,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
     wake: crate::lifecycle::RequestHopCause,
-) -> Result<EnqueuedBackgroundCompletionInput> {
+) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
     use gents_protocol::output::{
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload,
@@ -214,7 +214,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                         let close = rows
                             .iter()
                             .map(crate::session::canonical_rows::decode_output_segment_row)
-                            .collect::<Result<Vec<_>>>()?
+                            .collect::<Result<Vec<_>, _>>()?
                             .into_iter()
                             .find(|row| row.segment.source == source && row.segment.close.is_some())
                             .context("fixture tool closure")?;
@@ -325,7 +325,7 @@ async fn background_completion_transaction_attempt(
     txn: &ConfigApplyTxn<'_>,
     parent: &AgentRequest,
     attempt: CompletionAttempt<'_>,
-) -> Result<EnqueuedBackgroundCompletionInput> {
+) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
     use sha2::{Digest, Sha256};
 
     let CompletionAttempt {
@@ -619,7 +619,7 @@ async fn publish_native_tool_notification(
     message_key: &str,
     expected_content: &str,
     native: &ToolNotificationPublication,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     use crate::session::canonical_rows::{
         transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
     };
@@ -808,5 +808,5 @@ pub(super) fn append_sequence_query(node_did: &str, session_id: &str) -> String 
 }
 
 pub(super) fn transaction_created_doc_id(response: &Value, collection: &str) -> Result<String> {
-    crate::graphql::created_doc_id(response, collection)
+    Ok(crate::graphql::created_doc_id(response, collection)?)
 }

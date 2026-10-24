@@ -15,6 +15,8 @@ use crate::run_timeline::{
 use crate::run_timeline_fetch::event_loaders::resolve_timeline_messages_for_session;
 use gents_protocol::graphql::graphql_rows_from_response;
 
+mod error;
+
 const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
 
 #[cfg(test)]

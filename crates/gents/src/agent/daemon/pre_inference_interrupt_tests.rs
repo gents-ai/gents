@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use tracing::instrument::WithSubscriber;
 
 #[derive(Clone, Default)]
@@ -613,7 +614,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
             crate::workspace::adapter::working_tree_hash(&dest),
         )
         .await
-        .map(|hashed| hashed.map_err(|error| format!("{error:#}")))
+        .map(|hashed| hashed.map_err(|error| ErrorChain(&error).to_string()))
     });
 
     let filter_pid = tokio::time::timeout(Duration::from_secs(20), async {

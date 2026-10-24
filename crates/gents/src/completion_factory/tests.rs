@@ -624,10 +624,7 @@ fn prior_usage_blocks_dispatch_when_already_at_limit() {
 fn prior_usage_decode_fails_closed_on_malformed_payload() {
     let err = super::prior_usage_rows_from_response(Some(&serde_json::json!({"not": "an-array"})))
         .expect_err("object payload must not decode as empty usage");
-    assert!(
-        err.to_string().contains("not a row array"),
-        "unexpected error: {err}"
-    );
+    assert!(err.is_data(), "unexpected error: {err}");
     assert!(super::prior_usage_rows_from_response(None)
         .unwrap()
         .is_empty());

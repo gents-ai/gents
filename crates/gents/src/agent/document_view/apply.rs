@@ -1,6 +1,5 @@
-use super::{ControlUpdateOutcome, DocumentRuntimeView};
+use super::{ControlUpdateOutcome, DocumentRuntimeView, DocumentViewError};
 use crate::collection::Collection;
-use anyhow::Result;
 
 /// Runtime-observed collections that are not themselves configuration.
 /// PackInstallation is not itself configuration: a pack install or remove
@@ -28,11 +27,10 @@ pub(crate) async fn apply_control_update(
     collection_name: &str,
     _doc_id: &str,
     view: &mut DocumentRuntimeView,
-) -> Result<ControlUpdateOutcome> {
-    anyhow::ensure!(
-        view.node.value.node_did == node_did,
-        "runtime view owner mismatch"
-    );
+) -> Result<ControlUpdateOutcome, DocumentViewError> {
+    if view.node.value.node_did != node_did {
+        return Err(DocumentViewError::OwnerMismatch);
+    }
     if control_collection_names().any(|name| name == collection_name) {
         Ok(ControlUpdateOutcome::FullReload)
     } else {

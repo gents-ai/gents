@@ -1,6 +1,27 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
 use defra_node::EmbeddedNode;
 use std::sync::Arc;
+
+use crate::config_client::ConfigClientError;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionControlError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error("session execution query omitted AgentToolCall rows; retry resume")]
+    ToolCallRowsOmitted,
+}
+
+impl crate::config_client::TransactionFailure for SessionControlError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = SessionControlError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SessionStopReceipt {
@@ -15,7 +36,7 @@ pub async fn stop_session(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<SessionStopReceipt> {
+) -> anyhow::Result<SessionStopReceipt> {
     anyhow::ensure!(
         !session_id.trim().is_empty() && !node_did.trim().is_empty(),
         "session stop requires exact session and node identity"
@@ -111,7 +132,7 @@ pub async fn resume_session(
     requester_did: Option<&str>,
     background_executions: crate::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::plugin_job::driver::JobDriver>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         !session_id.trim().is_empty() && !node_did.trim().is_empty(),
         "session resume requires exact session and node identity"
@@ -194,7 +215,7 @@ async fn ensure_session_executions_settled_in_txn(
     requester_did: Option<&str>,
     background_executions: &crate::hook::BackgroundExecutionRegistry,
     job_driver: &crate::plugin_job::driver::JobDriver,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let unsettled = session_tool_call_exists_in_txn(
         txn,
@@ -269,6 +290,6 @@ async fn session_tool_call_exists_in_txn(
     Ok(!response
         .pointer("/data/AgentToolCall")
         .and_then(serde_json::Value::as_array)
-        .context("session execution query omitted AgentToolCall rows; retry resume")?
+        .ok_or(SessionControlError::ToolCallRowsOmitted)?
         .is_empty())
 }

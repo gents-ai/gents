@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
 use gents::document_config::{EvalCapture, EvalDefinition};
@@ -27,7 +28,7 @@ fn definitions() -> Vec<EvalDefinition> {
             &|path| Ok(std::fs::read(dir.join(path))?),
             &|_| None,
         )
-        .unwrap_or_else(|error| panic!("{}: {error:#}", dir.display()));
+        .unwrap_or_else(|error| panic!("{}: {}", dir.display(), ErrorChain(error.as_ref())));
         definitions.extend(config.eval_definitions);
     }
     definitions

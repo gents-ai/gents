@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -20,6 +19,25 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::node_readiness::{
     effective_agent_readiness_admission, EffectiveAgentReadinessAdmission,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RuntimeSnapshotError {
+    #[error("default agent {agent_id:?} is not a canonical agent identifier")]
+    NonCanonicalDefaultAgent { agent_id: String },
+    #[error("runtime agent identifiers must be non-empty and trimmed")]
+    NonCanonicalAgentId,
+    #[error("runnable agent/tool-surface keysets differ (missing={missing:?}, extra={extra:?})")]
+    ToolSurfaceKeysetMismatch {
+        missing: Vec<String>,
+        extra: Vec<String>,
+    },
+    #[error("default agent {agent_id:?} is not assigned to the resolved runtime")]
+    DefaultAgentUnassigned { agent_id: String },
+    #[error(transparent)]
+    Cron(#[from] crate::schedule_cron::ScheduleCronError),
+}
+
+type Result<T, E = RuntimeSnapshotError> = std::result::Result<T, E>;
 
 pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
 
@@ -167,7 +185,7 @@ pub(crate) fn seed_schedule_next_run_at(
             expression,
             timezone,
             ..
-        } => next_cron_run_after(expression, timezone, now),
+        } => Ok(next_cron_run_after(expression, timezone, now)?),
     }
 }
 
@@ -186,7 +204,7 @@ pub(crate) fn advance_schedule_next_run_at(
             missed_run_policy,
         } => match missed_run_policy {
             None | Some(CronMissedRunPolicy::LatestOnly) => {
-                next_cron_run_after(expression, timezone, now)
+                Ok(next_cron_run_after(expression, timezone, now)?)
             }
         },
     }
@@ -212,10 +230,9 @@ impl ResolvedRuntimeSnapshot {
     pub(crate) fn validate_node_readiness_source(&self) -> Result<()> {
         let canonical = |value: &str| !value.is_empty() && value == value.trim();
         if !canonical(&self.default_agent_id) {
-            anyhow::bail!(
-                "default agent {:?} is not a canonical agent identifier",
-                self.default_agent_id
-            );
+            return Err(RuntimeSnapshotError::NonCanonicalDefaultAgent {
+                agent_id: self.default_agent_id.clone(),
+            });
         }
         if self
             .agents
@@ -223,7 +240,7 @@ impl ResolvedRuntimeSnapshot {
             .chain(self.unavailable_agents.keys())
             .any(|agent_id| !canonical(agent_id))
         {
-            anyhow::bail!("runtime agent identifiers must be non-empty and trimmed");
+            return Err(RuntimeSnapshotError::NonCanonicalAgentId);
         }
         let runnable_agent_ids = self.agents.keys().collect::<BTreeSet<_>>();
         let tool_surface_agent_ids = self.tool_surfaces.keys().collect::<BTreeSet<_>>();
@@ -236,17 +253,17 @@ impl ResolvedRuntimeSnapshot {
                 .difference(&runnable_agent_ids)
                 .map(|agent_id| agent_id.as_str())
                 .collect::<Vec<_>>();
-            anyhow::bail!(
-                "runnable agent/tool-surface keysets differ (missing={missing:?}, extra={extra:?})"
-            );
+            return Err(RuntimeSnapshotError::ToolSurfaceKeysetMismatch {
+                missing: missing.into_iter().map(str::to_owned).collect(),
+                extra: extra.into_iter().map(str::to_owned).collect(),
+            });
         }
         if !self.agents.contains_key(&self.default_agent_id)
             && !self.unavailable_agents.contains_key(&self.default_agent_id)
         {
-            anyhow::bail!(
-                "default agent {:?} is not assigned to the resolved runtime",
-                self.default_agent_id
-            );
+            return Err(RuntimeSnapshotError::DefaultAgentUnassigned {
+                agent_id: self.default_agent_id.clone(),
+            });
         }
         Ok(())
     }

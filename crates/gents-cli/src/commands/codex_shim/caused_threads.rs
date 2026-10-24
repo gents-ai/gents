@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 use anyhow::Result;
@@ -6,6 +7,14 @@ use gents_protocol::row::AgentRequestRow;
 
 use super::bound_behavior::load_bound_model_selection_id;
 use super::ShimState;
+
+#[derive(Debug, thiserror::Error)]
+enum CausedThreadsError {
+    #[error("ambiguous Codex thread label across canonical session scopes: {session_id}")]
+    AmbiguousLabel { session_id: String },
+    #[error("ambiguous Codex root/caused thread label across canonical scopes: {session_id}")]
+    AmbiguousRootLabel { session_id: String },
+}
 use crate::caused_sessions::{
     load_caused_session, load_caused_sessions, load_session_head, CausedSession, SessionScope,
 };
@@ -108,20 +117,23 @@ pub(super) async fn load_caused_threads_for_root_ids(
     let mut models = RapidHashMap::<(String, String), Option<String>>::new();
     for session in sessions {
         if let Some(existing) = labels.get(&session.scope.session_id) {
-            anyhow::ensure!(
-                existing == &session.scope,
-                "ambiguous Codex thread label across canonical session scopes: {}",
-                session.scope.session_id
-            );
+            if existing != &session.scope {
+                return Err(CausedThreadsError::AmbiguousLabel {
+                    session_id: session.scope.session_id.clone(),
+                }
+                .into());
+            }
             continue;
         }
         if root_session_ids.contains(&session.scope.session_id) {
-            anyhow::ensure!(
-                session.scope.node_did == state.node_did.as_ref()
-                    && session.scope.requester_did.as_deref() == Some(state.local_requester_did()),
-                "ambiguous Codex root/caused thread label across canonical scopes: {}",
-                session.scope.session_id
-            );
+            if !(session.scope.node_did == state.node_did.as_ref()
+                && session.scope.requester_did.as_deref() == Some(state.local_requester_did()))
+            {
+                return Err(CausedThreadsError::AmbiguousRootLabel {
+                    session_id: session.scope.session_id.clone(),
+                }
+                .into());
+            }
             continue;
         }
         labels.insert(session.scope.session_id.clone(), session.scope.clone());
@@ -141,7 +153,7 @@ async fn bound_model(state: &ShimState, node_did: &str, agent_id: &str) -> Optio
         Ok(model) => Some(model),
         Err(error) => {
             tracing::debug!(
-                error = format!("{error:#}"),
+                error = format!("{}", ErrorChain(error.as_ref())),
                 node_did,
                 agent_id,
                 "Codex caused thread has no locally bound model"

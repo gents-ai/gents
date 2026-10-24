@@ -1,8 +1,7 @@
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::Result;
-use gents::plugin::approval::{self, Answer, Request};
+use gents::plugin::approval::{self, Answer, PluginApprovalError, Request};
 
 pub(super) fn parse_answer(line: &str) -> Answer {
     match line.trim().to_ascii_lowercase().as_str() {
@@ -20,7 +19,7 @@ pub(super) fn mine(request: &Request, session_id: &str) -> bool {
         .is_none_or(|id| id == session_id)
 }
 
-pub(super) fn has_pending(home: &Path, session_id: &str) -> Result<bool> {
+pub(super) fn has_pending(home: &Path, session_id: &str) -> Result<bool, PluginApprovalError> {
     Ok(approval::pending(home)?
         .iter()
         .any(|request| mine(request, session_id)))
@@ -30,7 +29,7 @@ pub(super) fn answer_pending(
     home: &Path,
     session_id: &str,
     mut read: impl FnMut(&Request) -> Answer,
-) -> Result<bool> {
+) -> Result<bool, PluginApprovalError> {
     let mut asked = false;
     for request in approval::pending(home)? {
         if !mine(&request, session_id) {

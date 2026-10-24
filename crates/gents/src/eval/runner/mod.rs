@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -49,12 +49,14 @@ use tokio_util::sync::CancellationToken;
 use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalCase, EvalFixtures, EvalSplit};
 use crate::eval::checks::CheckRegistry;
+use crate::eval::documents::EvalError;
 use crate::eval::runner::freeze::thaw;
 use crate::eval::runner::progress::ProgressWriter;
 use crate::eval::{
     OutcomeKind, RunRecord, StageCompletion, TrialCompletion, TrialIdentity, TrialRecord,
     VerdictDraft,
 };
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutcome {
@@ -84,27 +86,35 @@ impl std::fmt::Display for ProviderDown {
 
 impl std::error::Error for ProviderDown {}
 
-pub fn provider_down(error: &anyhow::Error) -> Option<&ProviderDown> {
-    error.downcast_ref::<ProviderDown>()
+pub fn provider_down<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a ProviderDown> {
+    std::iter::successors(Some(error), |error| error.source()).find_map(|error| {
+        match error.downcast_ref::<EvalError>() {
+            Some(EvalError::ProviderDown(found)) => Some(found),
+            _ => error.downcast_ref::<ProviderDown>(),
+        }
+    })
 }
 
 pub const CANCEL_MARKER: &str = "cancel";
 
-pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
+pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf, EvalError> {
     freeze::directory_name("run_id", run_id)?;
     Ok(runs_dir.join(run_id))
 }
 
-pub fn request_cancel(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
+pub fn request_cancel(runs_dir: &Path, run_id: &str) -> Result<PathBuf, EvalError> {
     let dir = run_dir(runs_dir, run_id)?;
     if !dir.is_dir() {
-        return Err(anyhow::Error::from(FreezeRefused(format!(
+        return Err(EvalError::FreezeRefused(FreezeRefused(format!(
             "run {run_id} has no directory {}",
             dir.display()
         ))));
     }
     let marker = dir.join(CANCEL_MARKER);
-    std::fs::write(&marker, b"").with_context(|| format!("writing {}", marker.display()))?;
+    std::fs::write(&marker, b"").map_err(|source| EvalError::WriteFile {
+        path: marker.clone(),
+        source,
+    })?;
     tracing::warn!(run_id, marker = %marker.display(), "eval run cancel requested");
     Ok(marker)
 }
@@ -124,7 +134,7 @@ fn cancel_requested(run_dir: &Path, cancel: &CancellationToken) -> bool {
     false
 }
 
-fn clear_cancel(run_dir: &Path) -> Result<()> {
+fn clear_cancel(run_dir: &Path) -> Result<(), EvalError> {
     refuse_if_held(run_dir)?;
     let marker = run_dir.join(CANCEL_MARKER);
     match std::fs::remove_file(&marker) {
@@ -136,13 +146,16 @@ fn clear_cancel(run_dir: &Path) -> Result<()> {
             Ok(())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("removing {}", marker.display())),
+        Err(source) => Err(EvalError::RemovePath {
+            path: marker,
+            source,
+        }),
     }
 }
 
-fn refuse_if_held(run_dir: &Path) -> Result<()> {
+fn refuse_if_held(run_dir: &Path) -> Result<(), EvalError> {
     if running_elsewhere(run_dir) {
-        return Err(anyhow::Error::from(FreezeRefused(format!(
+        return Err(EvalError::FreezeRefused(FreezeRefused(format!(
             "run {} is still running in another process",
             run_dir.display()
         ))));
@@ -192,12 +205,12 @@ pub fn run_finished(record: &RunRecord, trials: &[TrialRecord], run_dir: &Path) 
 pub struct TrialBudget(Arc<tokio::sync::Semaphore>);
 
 impl TrialBudget {
-    pub fn new(limit: usize) -> Result<Self> {
-        anyhow::ensure!(
-            limit > 0 && limit <= tokio::sync::Semaphore::MAX_PERMITS,
-            "trial concurrency must be between 1 and {}",
-            tokio::sync::Semaphore::MAX_PERMITS
-        );
+    pub fn new(limit: usize) -> Result<Self, EvalError> {
+        if limit == 0 || limit > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err(EvalError::TrialConcurrency {
+                max: tokio::sync::Semaphore::MAX_PERMITS,
+            });
+        }
         Ok(Self(Arc::new(tokio::sync::Semaphore::new(limit))))
     }
 }
@@ -367,7 +380,7 @@ pub(crate) async fn execute_frozen(
                     Some(Err(error)) => {
                         tracing::error!(
                             run_id,
-                            error = %format!("{error:#}"),
+                            error = %ErrorChain(error.as_ref()),
                             "eval trial failed; draining in-flight trials"
                         );
                         failed.get_or_insert(error);
@@ -411,10 +424,11 @@ pub(crate) async fn execute_frozen(
                 consecutive_not_evidence,
                 "eval run stopped: the provider is producing no evidence"
             );
-            return Err(anyhow::Error::from(ProviderDown {
+            return Err(EvalError::ProviderDown(ProviderDown {
                 outcome,
                 consecutive_not_evidence,
-            }));
+            })
+            .into());
         }
         if cancel_requested(&frozen.run_dir, &cancel) {
             break;
@@ -505,7 +519,7 @@ async fn execute_trial(
             biased;
             _ = cancel.cancelled() => return Ok(Slot::Skipped),
             _ = admission_stopped.cancelled() => return Ok(Slot::Skipped),
-            permit = budget.0.acquire() => permit.context("trial budget closed")?,
+            permit = budget.0.acquire() => permit.map_err(|source| EvalError::TrialBudgetClosed { source })?,
         };
         Some(permit)
     } else {
@@ -521,12 +535,18 @@ async fn execute_trial(
         .cases
         .iter()
         .find(|case| case.case_id == planned.case_id)
-        .with_context(|| format!("run {run_id} froze no case {:?}", planned.case_id))?;
+        .ok_or_else(|| EvalError::UnfrozenCase {
+            run_id: run_id.to_owned(),
+            case_id: planned.case_id.to_owned(),
+        })?;
     let cell = frozen
         .cells
         .iter()
         .find(|cell| cell.spec.cell_id == planned.cell_id)
-        .with_context(|| format!("run {run_id} froze no cell {:?}", planned.cell_id))?;
+        .ok_or_else(|| EvalError::UnfrozenCell {
+            run_id: run_id.to_owned(),
+            cell_id: planned.cell_id.to_owned(),
+        })?;
     let mut spec = trial_spec(frozen, planned, case, cell, executor.wants_script_key())?;
     let goal = case_goal(case, &frozen.captures);
 
@@ -646,7 +666,7 @@ fn write_evidence_sidecar(trial_dir: &Path, record: EvidenceRecord) {
     }
     if let Err(error) = view::write_evidence_record(trial_dir, &record) {
         tracing::warn!(
-            error = %format!("{error:#}"),
+            error = %gents_protocol::error_chain::ErrorChain(&error).to_string(),
             "eval trial evidence digest was not recorded beside its home"
         );
     }
@@ -669,7 +689,7 @@ impl ViewWriter {
             Err(error) => {
                 tracing::debug!(
                     run_id,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "eval run report was not derived for watchers"
                 );
                 return;
@@ -680,7 +700,7 @@ impl ViewWriter {
         {
             tracing::warn!(
                 run_id,
-                error = %format!("{error:#}"),
+                error = %gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 "eval run report was not written for watchers"
             );
         }
@@ -771,27 +791,33 @@ fn fixtures(
     Ok(fixtures)
 }
 
-fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>> {
-    anyhow::ensure!(
-        Path::new(asset)
-            .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_))),
-        "fixture asset {asset:?} must be a path inside the pack"
-    );
+fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>, EvalError> {
+    if !Path::new(asset)
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(EvalError::FixtureAssetInvalid {
+            asset: asset.to_owned(),
+        });
+    }
     let path = pack_dir.join(asset);
     if !path.is_dir() {
         return Ok(vec![FixtureFile {
             path: asset.to_owned(),
-            contents: std::fs::read(&path)
-                .with_context(|| format!("reading fixture asset {}", path.display()))?,
+            contents: std::fs::read(&path).map_err(|source| EvalError::ReadFixture {
+                path: path.clone(),
+                source,
+            })?,
         }]);
     }
     let mut files = Vec::new();
     let mut pending = vec![path];
     while let Some(dir) = pending.pop() {
-        for entry in std::fs::read_dir(&dir)
-            .with_context(|| format!("reading fixture asset directory {}", dir.display()))?
-        {
+        let entries = std::fs::read_dir(&dir).map_err(|source| EvalError::ReadFixtureDir {
+            path: dir.clone(),
+            source,
+        })?;
+        for entry in entries {
             let entry = entry?;
             let entry_path = entry.path();
             if entry.file_type()?.is_dir() {
@@ -800,14 +826,18 @@ fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>> {
             }
             let relative = entry_path
                 .strip_prefix(pack_dir)
-                .context("fixture asset outside the pack")?
+                .map_err(|source| EvalError::FixtureOutsidePack { source })?
                 .to_str()
-                .with_context(|| format!("{} is not UTF-8", entry_path.display()))?
+                .ok_or_else(|| EvalError::NotUtf8 {
+                    path: entry_path.clone(),
+                })?
                 .to_owned();
             files.push(FixtureFile {
                 path: relative,
-                contents: std::fs::read(&entry_path)
-                    .with_context(|| format!("reading fixture asset {}", entry_path.display()))?,
+                contents: std::fs::read(&entry_path).map_err(|source| EvalError::ReadFixture {
+                    path: entry_path.clone(),
+                    source,
+                })?,
             });
         }
     }
@@ -1632,8 +1662,9 @@ mod tests {
         };
         let error = fixtures(pack.path(), Some(&escaping), None).unwrap_err();
         assert!(
-            format!("{error:#}").contains("inside the pack"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("inside the pack"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         let absent = EvalFixtures {
@@ -1785,7 +1816,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("injected"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("injected"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let trials = load_trials(&launching.access, OWNER, "run-1")
             .await
@@ -1851,7 +1886,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("injected"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("injected"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let owed = plan(&frozen.record.origin, "run-1", &[], 1);
         assert_eq!(owed.len(), 1);
@@ -2049,8 +2088,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let down =
-            provider_down(&error).unwrap_or_else(|| panic!("expected ProviderDown: {error:#}"));
+        let down = provider_down(error.as_ref())
+            .unwrap_or_else(|| panic!("expected ProviderDown: {}", ErrorChain(error.as_ref())));
         assert_eq!(
             (down.outcome.run_id.as_str(), down.consecutive_not_evidence),
             ("run-1", 2)
@@ -2120,8 +2159,12 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let reason = freeze_refused(&error)
-            .unwrap_or_else(|| panic!("expected a FreezeRefused, got {error:#}"));
+        let reason = freeze_refused(error.as_ref()).unwrap_or_else(|| {
+            panic!(
+                "expected a FreezeRefused, got {}",
+                ErrorChain(error.as_ref())
+            )
+        });
         assert!(
             reason.0.contains("monitor-tools") && reason.0.contains("Unrestricted"),
             "{reason}"
@@ -2157,8 +2200,12 @@ mod tests {
         .await
         .unwrap_err();
 
-        let down = provider_down(&error)
-            .unwrap_or_else(|| panic!("expected a ProviderDown, got {error:#}"));
+        let down = provider_down(error.as_ref()).unwrap_or_else(|| {
+            panic!(
+                "expected a ProviderDown, got {}",
+                ErrorChain(error.as_ref())
+            )
+        });
         assert_eq!(down.consecutive_not_evidence, 2);
         assert!(down.outcome.breaker_tripped);
         assert_eq!(
@@ -2378,7 +2425,8 @@ mod tests {
             self.inner
                 .complete_trial(owner, trial_id, completion)
                 .await?;
-            request_cancel(&self.runs_dir, "run-late").map(|_| ())
+            request_cancel(&self.runs_dir, "run-late")?;
+            Ok(())
         }
 
         async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>> {
@@ -2464,7 +2512,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("injected"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("injected"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert_eq!(
             executor.settled.load(Ordering::SeqCst),
             1,
@@ -2518,8 +2570,10 @@ mod tests {
         .unwrap_err();
         for error in [ran, resumed] {
             assert!(
-                freeze_refused(&error).is_some_and(|refusal| refusal.0.contains("still running")),
-                "{error:#}"
+                freeze_refused(error.as_ref())
+                    .is_some_and(|refusal| refusal.0.contains("still running")),
+                "{}",
+                ErrorChain(error.as_ref())
             );
         }
         holder.heartbeat(Duration::ZERO);
@@ -2542,13 +2596,15 @@ mod tests {
         let missing = request_cancel(dir.path(), "absent").unwrap_err();
         assert!(
             freeze_refused(&missing).is_some_and(|refusal| refusal.0.contains("has no directory")),
-            "{missing:#}"
+            "{}",
+            ErrorChain(&missing)
         );
         let escaping = request_cancel(dir.path(), "../elsewhere").unwrap_err();
         assert!(
             freeze_refused(&escaping)
                 .is_some_and(|refusal| refusal.0.contains("one ordinary path component")),
-            "{escaping:#}"
+            "{}",
+            ErrorChain(&escaping)
         );
         assert_eq!(
             run_dir(dir.path(), "run-1").unwrap(),
@@ -2580,7 +2636,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let reason = format!("{error:#}");
+        let reason = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             reason.contains("run-1") && reason.contains("invalidated"),
             "{reason}"

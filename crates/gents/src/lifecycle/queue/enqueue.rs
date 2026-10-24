@@ -6,7 +6,7 @@ pub async fn enqueue_local_steering_request(
     parent_request_doc_id: &str,
     content: &str,
     input: RequestInput,
-) -> Result<EnqueuedAgentRequest> {
+) -> anyhow::Result<EnqueuedAgentRequest> {
     let parent = crate::request_binding::load_agent_request_by_doc_id(node, parent_request_doc_id)
         .await?
         .with_context(|| format!("steering parent request {parent_request_doc_id} not found"))?;
@@ -22,7 +22,7 @@ pub(crate) async fn enqueue_steering_request(
     parent: &AgentRequest,
     content: &str,
     input: RequestInput,
-) -> Result<EnqueuedAgentRequest> {
+) -> anyhow::Result<EnqueuedAgentRequest> {
     let queue = input
         .queue
         .as_ref()
@@ -70,7 +70,7 @@ pub(crate) async fn enqueue_steering_request(
                     },
                 )
                 .await?;
-                steering_transaction_attempt(txn, parent, request_id, &mutation).await
+                Ok(steering_transaction_attempt(txn, parent, request_id, &mutation).await?)
             })
         },
     )

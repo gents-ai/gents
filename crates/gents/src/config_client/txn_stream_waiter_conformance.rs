@@ -43,7 +43,7 @@ struct Case {
     generator_dropped: bool,
 }
 
-type AcquireFuture = Pin<Box<dyn Future<Output = anyhow::Result<MutationWriteGuard>>>>;
+type AcquireFuture = Pin<Box<dyn Future<Output = super::Result<MutationWriteGuard>>>>;
 struct GeneratorDropProbe(Arc<AtomicBool>);
 
 impl Drop for GeneratorDropProbe {

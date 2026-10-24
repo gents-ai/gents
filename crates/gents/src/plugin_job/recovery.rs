@@ -1,5 +1,6 @@
 //! The observer's wake arm and recovery sweep for plugin job rows.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -114,7 +115,7 @@ pub async fn redrive_running_jobs(driver: &Arc<JobDriver>) -> Result<usize> {
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 row_doc_id,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "plugin job recovery tick failed; the next sweep retries"
             ),
         }

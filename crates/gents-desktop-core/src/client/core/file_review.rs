@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use super::bootstrap::normalize_required;
 use super::writes::{ensure_peer_chat_ready_at, find_request_in_scope};
-use super::ClientCore;
+use super::{ClientCore, ClientCoreError};
 
 const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
 
@@ -257,20 +257,23 @@ fn demand_query(demand: &FileImageDemand) -> String {
     )
 }
 
-fn demand_row(response: &Value) -> Result<Option<&Value>> {
+fn demand_row(response: &Value) -> Result<Option<&Value>, ClientCoreError> {
     let rows = response["data"]["FileImageHydrationRequest"]
         .as_array()
-        .context("file review lookup omitted demand rows")?;
-    anyhow::ensure!(rows.len() <= 1, "file review demand has conflicting rows");
+        .ok_or(ClientCoreError::FileReviewLookupOmittedRows)?;
+    if rows.len() > 1 {
+        return Err(ClientCoreError::FileReviewConflictingRows);
+    }
     Ok(rows.first())
 }
 
-fn ensure_demand(row: &Value, demand: &FileImageDemand) -> Result<()> {
+fn ensure_demand(row: &Value, demand: &FileImageDemand) -> Result<(), ClientCoreError> {
     for (field, expected) in demand.reference_fields() {
-        anyhow::ensure!(
-            row[field].as_str() == Some(expected),
-            "file review demand {field} differs from the selected tool"
-        );
+        if row[field].as_str() != Some(expected) {
+            return Err(ClientCoreError::FileReviewDemandDiffers {
+                field: field.to_owned(),
+            });
+        }
     }
     Ok(())
 }

@@ -1,7 +1,6 @@
 use crate::llm::message::Message;
 #[cfg(test)]
 use crate::llm::message::{Text, UserContent};
-use anyhow::Result;
 use gents_loop::loop_stream::TaggedMessage;
 
 use crate::config::ResolvedAgent;
@@ -65,7 +64,7 @@ pub trait PromptBuilder: Send + Sync {
         &self,
         messages: &[TaggedMessage],
         compaction_summaries: &[String],
-    ) -> impl std::future::Future<Output = Result<BuiltPrompt>> + Send;
+    ) -> impl std::future::Future<Output = BuiltPrompt> + Send;
 }
 
 pub struct LayeredPromptBuilder {
@@ -153,7 +152,7 @@ impl PromptBuilder for LayeredPromptBuilder {
         &self,
         messages: &[TaggedMessage],
         compaction_summaries: &[String],
-    ) -> Result<BuiltPrompt> {
+    ) -> BuiltPrompt {
         let mut assembled = Vec::new();
 
         if let Some(summary_message) = compaction_summary_message(compaction_summaries) {
@@ -162,10 +161,10 @@ impl PromptBuilder for LayeredPromptBuilder {
 
         assembled.extend_from_slice(messages);
 
-        Ok(BuiltPrompt {
+        BuiltPrompt {
             preamble: self.preamble.clone(),
             messages: assembled,
-        })
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::hook::HookError;
 use anyhow::Context;
 
 #[derive(Debug, thiserror::Error)]
@@ -13,9 +14,9 @@ struct BackgroundedRow {
 
 /// A pending spawned child is a durable admission reservation created in the
 /// same transaction as its slot check; pending provider calls are not admitted.
-fn decode_live_backgrounded_rows(value: serde_json::Value) -> anyhow::Result<usize> {
+fn decode_live_backgrounded_rows(value: serde_json::Value) -> Result<usize, HookError> {
     let rows: Vec<BackgroundedRow> =
-        serde_json::from_value(value).context("decode background row count")?;
+        serde_json::from_value(value).map_err(HookError::DecodeBackgroundRowCount)?;
     Ok(rows
         .into_iter()
         .filter(|row| row.lifecycle_state == "running" || row.spawned_by_tool_call_doc_id.is_some())
@@ -46,7 +47,7 @@ where
         }}"#
     );
     let response = reader.execute_read(&query).await.map_err(|error| {
-        error.context(format!(
+        anyhow::Error::from(error).context(format!(
             "query live backgrounded tool count for request document {request_doc_id} failed"
         ))
     })?;
@@ -54,7 +55,7 @@ where
         .pointer("/data/AgentToolCall")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("background row count omitted AgentToolCall rows"))?;
-    decode_live_backgrounded_rows(value)
+    Ok(decode_live_backgrounded_rows(value)?)
 }
 
 /// How an admission's own row stands in the live count it checks.
@@ -431,22 +432,22 @@ pub(super) fn service_unavailable_payload(
 impl DefraSessionHook {
     pub(super) async fn ensure_assistant_turn_sequence(
         &self,
-    ) -> anyhow::Result<(String, String, chrono::DateTime<chrono::Utc>, u32)> {
+    ) -> Result<(String, String, chrono::DateTime<chrono::Utc>, u32), HookError> {
         let mut state = self.state.lock().await;
         let session_id = state
             .session_id
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+            .ok_or(HookError::MissingSessionId)?;
         let request_id = state
             .current_request_id
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("tool call is missing its active request id"))?;
+            .ok_or(HookError::MissingActiveRequestId)?;
         if state.current_request_doc_id.is_none() {
-            anyhow::bail!("tool call is missing its active request document id");
+            return Err(HookError::MissingActiveRequestDocId);
         }
         let deadline_at = state
             .request_deadline_at
-            .ok_or_else(|| anyhow::anyhow!("tool call is missing its request deadline"))?;
+            .ok_or(HookError::MissingRequestDeadline)?;
 
         let sequence = state.begin_or_continue_assistant_turn();
 

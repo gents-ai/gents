@@ -5,10 +5,12 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use gents::default_agent_id_for_node;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 use uuid::Uuid;
+
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn generated_backend_id_for_agent(node_did: &str) -> String {
     format!("{node_did}:backend")
@@ -19,16 +21,16 @@ fn generated_tools_id_for_agent(node_did: &str) -> String {
     format!("{default_agent_id}-tools")
 }
 
-fn add_principal_skill_pair(root: &Path, node_did: &str) -> Result<()> {
+fn add_principal_skill_pair(root: &Path, node_did: &str) -> TestResult<()> {
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
     let skills = config
         .as_object_mut()
-        .context("exported config is not an object")?
+        .expect("exported config is not an object")
         .entry("skills")
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
-        .context("exported skills is not an array")?;
+        .expect("exported skills is not an array");
     for suffix in ["alpha", "zeta"] {
         let skill_id = format!("{node_did}:skill-{suffix}");
         skills.push(serde_json::json!({
@@ -47,8 +49,8 @@ fn add_principal_skill_pair(root: &Path, node_did: &str) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -91,7 +93,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
             Duration::from_secs(30),
         ))
         .await
-        .context("initial boot readiness")?;
+        .expect("initial boot readiness");
 
     assert_runtime_init_state(
         &graphql,
@@ -131,7 +133,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
             Duration::from_secs(30),
         ))
         .await
-        .context("restart readiness after idempotent init")?;
+        .expect("restart readiness after idempotent init");
 
     assert_runtime_init_state(
         &graphql,
@@ -217,7 +219,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         None
     );
     let preset: Value = serde_json::from_str(gents_protocol::ENGINEER_SELF_CONFIG_JSON)?;
-    for (field, expected) in preset.as_object().context("preset object")? {
+    for (field, expected) in preset.as_object().expect("preset object") {
         assert_eq!(
             tools.pointer(&format!("/self_config/{field}")),
             Some(expected),
@@ -235,8 +237,8 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn server_apply_root_reports_post_apply_default_readiness() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let pack_root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
@@ -263,7 +265,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
             "config",
             "export",
             "--root",
-            pack_root.to_str().context("pack root utf8")?,
+            pack_root.to_str().expect("pack root utf8"),
         ],
     )?;
     let config_path = pack_root.join("pack_config.json");
@@ -271,27 +273,27 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     let original_agent_id = config["node"]
         .get("default_agent_id")
         .and_then(Value::as_str)
-        .context("exported principal missing default agent")?
+        .expect("exported principal missing default agent")
         .to_string();
     let applied_agent_id = format!("{node_did}:applied-default");
     let mut applied_agent = config["agents"]
         .as_array()
-        .context("agents is not an array")?
+        .expect("agents is not an array")
         .iter()
         .find(|agent| agent["agent_id"] == original_agent_id)
-        .context("exported default agent is missing")?
+        .expect("exported default agent is missing")
         .clone();
     applied_agent["agent_id"] = Value::String(applied_agent_id.clone());
     applied_agent["display_name"] = Value::String("Applied default".to_string());
     config["agents"]
         .as_array_mut()
-        .context("agents is not an array")?
+        .expect("agents is not an array")
         .push(applied_agent);
     config["node"]["default_agent_id"] = Value::String(applied_agent_id.clone());
     write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
-    let pack_root_arg = pack_root.to_str().context("pack root utf8")?;
+    let pack_root_arg = pack_root.to_str().expect("pack root utf8");
     let (serve, readiness) =
         spawn_server_with_ready_json(&home_dir, port, &["--apply-root", pack_root_arg], &[])?;
 
@@ -323,8 +325,9 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn server_apply_root_accepts_metadata_only_change_without_generation_advance() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn server_apply_root_accepts_metadata_only_change_without_generation_advance(
+) -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let pack_root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
@@ -348,7 +351,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             "config",
             "export",
             "--root",
-            pack_root.to_str().context("pack root utf8")?,
+            pack_root.to_str().expect("pack root utf8"),
         ],
     )?;
     add_principal_skill_pair(&pack_root, &node_did)?;
@@ -358,7 +361,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             "config",
             "apply",
             "--root",
-            pack_root.to_str().context("pack root utf8")?,
+            pack_root.to_str().expect("pack root utf8"),
         ],
     )?;
     let config_path = pack_root.join("pack_config.json");
@@ -370,10 +373,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
     let (serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         port,
-        &[
-            "--apply-root",
-            pack_root.to_str().context("pack root utf8")?,
-        ],
+        &["--apply-root", pack_root.to_str().expect("pack root utf8")],
         &[],
     )?;
 
@@ -389,8 +389,8 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn server_apply_root_waits_for_task_only_runtime_generation() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let pack_root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
@@ -414,7 +414,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             "config",
             "export",
             "--root",
-            pack_root.to_str().context("pack root utf8")?,
+            pack_root.to_str().expect("pack root utf8"),
         ],
     )?;
     add_principal_skill_pair(&pack_root, &node_did)?;
@@ -424,7 +424,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             "config",
             "apply",
             "--root",
-            pack_root.to_str().context("pack root utf8")?,
+            pack_root.to_str().expect("pack root utf8"),
         ],
     )?;
     let config_path = pack_root.join("pack_config.json");
@@ -432,16 +432,16 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     let agent_id = config["node"]
         .get("default_agent_id")
         .and_then(Value::as_str)
-        .context("exported principal missing default agent")?
+        .expect("exported principal missing default agent")
         .to_string();
     let task_id = format!("post-apply-task-{}", Uuid::new_v4().simple());
     config
         .as_object_mut()
-        .context("exported config is not an object")?
+        .expect("exported config is not an object")
         .entry("tasks")
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
-        .context("tasks is not an array")?
+        .expect("tasks is not an array")
         .push(serde_json::json!({
             "task_id": task_id,
             "display_name": "Post-apply task",
@@ -457,10 +457,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     let (serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         port,
-        &[
-            "--apply-root",
-            pack_root.to_str().context("pack root utf8")?,
-        ],
+        &["--apply-root", pack_root.to_str().expect("pack root utf8")],
         &[],
     )?;
 
@@ -476,8 +473,8 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_supports_provider_auth_backend_fields() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_supports_provider_auth_backend_fields() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -544,8 +541,8 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_openrouter_preset_applies_hosted_defaults() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -581,8 +578,8 @@ async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
 }
 
 #[test]
-fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -595,7 +592,7 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
         .arg("--backend-preset")
         .arg("openai")
         .output()
-        .context("running gents init with hosted preset and no model")?;
+        .expect("running gents init with hosted preset and no model");
 
     assert!(!output.status.success(), "init should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -606,8 +603,8 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
 
     let runtime_home = home_dir.join(".gents");
     let stored = read_json_file(&runtime_home.join("init.json"))?;
-    let node_did = stored["node_did"].as_str().context("recorded identity")?;
-    let identity_path = stored["key_path"].as_str().context("recorded key path")?;
+    let node_did = stored["node_did"].as_str().expect("recorded identity");
+    let identity_path = stored["key_path"].as_str().expect("recorded key path");
     let identity_bytes = fs::read(identity_path)?;
     let store_key_path = gents::store_key::home_key_file(&runtime_home);
     let store_key_bytes = fs::read(&store_key_path)?;
@@ -622,8 +619,8 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -641,7 +638,7 @@ async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> Result<(
     let key_path = init
         .get("key_path")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing key_path: {init}"))?;
+        .ok_or_else(|| format!("init output missing key_path: {init}"))?;
     assert!(
         Path::new(key_path).exists(),
         "init should create the identity key at {key_path}"
@@ -674,8 +671,8 @@ async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -711,8 +708,8 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -730,7 +727,7 @@ async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
         .arg("--inference-url")
         .arg("http://127.0.0.1:65535/v1")
         .output()
-        .context("running gents init with conflicting backend auth flags")?;
+        .expect("running gents init with conflicting backend auth flags");
 
     assert!(!output.status.success(), "init should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -743,8 +740,8 @@ async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_dangerously_overwrite_replaces_existing_home() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -766,7 +763,7 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
 
     let runtime_home = home_dir.join(".gents");
     let stale_path = runtime_home.join("stale.txt");
-    fs::write(&stale_path, "stale").context("writing stale file into runtime home")?;
+    fs::write(&stale_path, "stale").expect("writing stale file into runtime home");
     assert!(stale_path.exists(), "expected stale file to exist");
 
     run_init_json(
@@ -795,8 +792,8 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_accepts_explicit_backend_and_model_together() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -847,8 +844,8 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
 }
 
 #[test]
-fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn init_accepts_tool_root_for_readonly_defaults() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let readonly_root = tempdir.path().join("readonly-root");
     fs::create_dir_all(&home_dir)?;
@@ -889,7 +886,7 @@ async fn pin_default_tools_root(
     node_did: &str,
     root: &str,
     scratch_dir: &Path,
-) -> Result<()> {
+) -> TestResult<()> {
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let mut serve = spawn_server_with_env(home_dir, port, &[], &[])?;
@@ -907,7 +904,7 @@ async fn pin_default_tools_root(
     let mut tools = response
         .pointer("/data/Tools")
         .and_then(Value::as_array)
-        .context("Tools rows")?
+        .expect("Tools rows")
         .iter()
         .map(|row| {
             row.as_object()
@@ -925,7 +922,7 @@ async fn pin_default_tools_root(
                 .collect::<serde_json::Map<_, _>>()
         })
         .find(|row| row.get("tools_id").and_then(Value::as_str) == Some(&tools_id))
-        .context("the Tools document init created for the default agent")?;
+        .expect("the Tools document init created for the default agent");
     tools["host"]["root"] = Value::from(root);
     let tools_path = scratch_dir.join("tools.json");
     write_json_file(&tools_path, &Value::Object(tools))?;
@@ -938,7 +935,7 @@ async fn pin_default_tools_root(
             "--graphql",
             &graphql,
             "--file",
-            tools_path.to_str().context("utf-8 tools path")?,
+            tools_path.to_str().expect("utf-8 tools path"),
         ],
     )?;
     serve.child.kill()?;
@@ -947,16 +944,16 @@ async fn pin_default_tools_root(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let recorded_root = tempdir.path().join("recorded-root");
     let explicit_root = tempdir.path().join("explicit-root");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&recorded_root)?;
     fs::create_dir_all(&explicit_root)?;
-    let recorded_root = recorded_root.to_str().context("utf-8 recorded root")?;
-    let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
+    let recorded_root = recorded_root.to_str().expect("utf-8 recorded root");
+    let explicit_root = explicit_root.to_str().expect("utf-8 explicit root");
 
     let model_name = format!("tool-root-conflict-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
@@ -1001,16 +998,16 @@ async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let recorded_root = tempdir.path().join("recorded-root");
     let explicit_root = tempdir.path().join("explicit-root");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&recorded_root)?;
     fs::create_dir_all(&explicit_root)?;
-    let recorded_root = recorded_root.to_str().context("utf-8 recorded root")?;
-    let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
+    let recorded_root = recorded_root.to_str().expect("utf-8 recorded root");
+    let explicit_root = explicit_root.to_str().expect("utf-8 explicit root");
 
     let model_name = format!("service-diagnostic-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
@@ -1056,15 +1053,15 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let workspace_root = tempdir.path().join("workspace");
     let project_root = workspace_root.join("project");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&project_root)?;
-    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
-    let project_root = project_root.to_str().context("utf-8 project root")?;
+    let workspace_root = workspace_root.to_str().expect("utf-8 workspace root");
+    let project_root = project_root.to_str().expect("utf-8 project root");
 
     let model_name = format!("moved-tool-root-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
@@ -1099,15 +1096,15 @@ async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let workspace_root = tempdir.path().join("workspace");
     let project_root = workspace_root.join("project");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&project_root)?;
-    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
-    let project_root = project_root.to_str().context("utf-8 project root")?;
+    let workspace_root = workspace_root.to_str().expect("utf-8 workspace root");
+    let project_root = project_root.to_str().expect("utf-8 project root");
 
     let model_name = format!("clamped-tool-root-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
@@ -1142,13 +1139,13 @@ async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let workspace_root = tempdir.path().join("workspace");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&workspace_root)?;
-    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
+    let workspace_root = workspace_root.to_str().expect("utf-8 workspace root");
 
     let expected_reply = format!("pinned-root-{}", Uuid::new_v4().simple());
     let model_name = format!("pinned-root-model-{}", Uuid::new_v4().simple());
@@ -1217,7 +1214,7 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
     let pinned_root = response
         .pointer("/data/Tools")
         .and_then(Value::as_array)
-        .context("Tools rows")?
+        .expect("Tools rows")
         .iter()
         .find(|row| row.get("tools_id").and_then(Value::as_str) == Some(&tools_id))
         .and_then(|row| {
@@ -1229,7 +1226,7 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
             decoded.get("root").cloned()
         })
         .and_then(|root| root.as_str().map(str::to_string))
-        .context("the Tools document init re-authored under explicit policy")?;
+        .expect("the Tools document init re-authored under explicit policy");
     assert_eq!(
         pinned_root, workspace_root,
         "init must pin the resolved operator root into Tools.host.root under explicit policy"
@@ -1238,8 +1235,8 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_with_write_tools_bootstraps_write_defaults() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -1324,7 +1321,8 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
 }
 
 #[tokio::test]
-async fn readiness_wait_survives_preflight_listener_closing_before_server_start() -> Result<()> {
+async fn readiness_wait_survives_preflight_listener_closing_before_server_start() -> TestResult<()>
+{
     let port = allocate_port()?;
     let endpoint = graphql_url(port);
     let did = "did:key:readiness-startup";
@@ -1358,8 +1356,8 @@ async fn readiness_wait_survives_preflight_listener_closing_before_server_start(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let home = home_dir.join(".gents");
@@ -1381,7 +1379,7 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
     let mut legacy = read_json_file(&config_path)?;
     legacy
         .as_object_mut()
-        .context("init.json object")?
+        .expect("init.json object")
         .remove("store_encryption");
     write_json_file(&config_path, &legacy)?;
     let output = Command::new(cli_bin())
@@ -1390,7 +1388,7 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
         .args(["config", "export", "--root"])
         .arg(tempdir.path().join("export"))
         .output()
-        .context("opening a home with unrecorded store custody")?;
+        .expect("opening a home with unrecorded store custody");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
     assert!(stderr.contains("unrecorded file"), "{stderr}");
@@ -1405,7 +1403,7 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
 }
 
 #[test]
-fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> Result<()> {
+fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let home_dir = temp.path().join("home");
     let key_path = gents::store_key::home_key_file(&home_dir.join(".gents"));
@@ -1416,13 +1414,16 @@ fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> 
         &[
             "--identity-only",
             "--key-path",
-            key_path.to_str().context("key path")?,
+            key_path.to_str().expect("key path"),
         ],
     )
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("refusing to replace"),
-        "{error:#}"
+        ErrorChain(&*error)
+            .to_string()
+            .contains("refusing to replace"),
+        "{}",
+        ErrorChain(&*error)
     );
     assert_eq!(fs::read(&key_path)?, original);
     gents::identity::load_file_identity(&key_path)?;

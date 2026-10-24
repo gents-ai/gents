@@ -2,13 +2,52 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::oauth_credential::{oauth_credential_id, OAuthCredential};
 use crate::xai_oauth_refresh::XAI_OAUTH_CLIENT_ID;
+
+#[derive(Debug, thiserror::Error)]
+pub enum XaiOAuthError {
+    #[error("xAI device-code request failed")]
+    DeviceCodeRequest(#[source] reqwest::Error),
+    #[error("reading xAI device-code response")]
+    ReadDeviceCodeResponse(#[source] reqwest::Error),
+    #[error("xAI device-code request failed with HTTP {status}: {body}")]
+    DeviceCodeHttp {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("decoding xAI device-code response")]
+    DecodeDeviceCode(#[source] serde_json::Error),
+    #[error("xAI device-code login was cancelled")]
+    Cancelled,
+    #[error("xAI device-code authorization timed out before approval")]
+    TimedOut,
+    #[error("xAI device-code token poll failed")]
+    TokenPoll(#[source] reqwest::Error),
+    #[error("reading xAI device-code token response")]
+    ReadTokenResponse(#[source] reqwest::Error),
+    #[error("decoding xAI device-code token response")]
+    DecodeTokenResponse(#[source] serde_json::Error),
+    #[error("xAI device-code authorization was denied")]
+    AccessDenied,
+    #[error("xAI device-code expired before approval")]
+    Expired,
+    #[error("xAI device-code token poll failed with HTTP {status}: {body}")]
+    TokenPollHttp {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("xAI device-code token poll failed ({error}): {body}")]
+    TokenPollRejected { error: String, body: String },
+    #[error("xAI polling interval exceeds the host clock range")]
+    IntervalOverflow,
+}
+
+type Result<T, E = XaiOAuthError> = std::result::Result<T, E>;
 
 const DEVICE_CODE_URL: &str = "https://auth.x.ai/oauth2/device/code";
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
@@ -95,18 +134,18 @@ pub async fn request_device_code(http: &reqwest::Client) -> Result<DeviceCodeCha
         ])
         .send()
         .await
-        .context("xAI device-code request failed")?;
+        .map_err(XaiOAuthError::DeviceCodeRequest)?;
 
     let status = response.status();
     let body = response
         .text()
         .await
-        .context("reading xAI device-code response")?;
+        .map_err(XaiOAuthError::ReadDeviceCodeResponse)?;
     if !status.is_success() {
-        anyhow::bail!("xAI device-code request failed with HTTP {status}: {body}");
+        return Err(XaiOAuthError::DeviceCodeHttp { status, body });
     }
     let parsed: DeviceCodeResponse =
-        serde_json::from_str(&body).context("decoding xAI device-code response")?;
+        serde_json::from_str(&body).map_err(XaiOAuthError::DecodeDeviceCode)?;
     Ok(DeviceCodeChallenge {
         device_code: parsed.device_code,
         user_code: parsed.user_code,
@@ -137,10 +176,10 @@ pub async fn poll_device_token(
             .as_ref()
             .is_some_and(|flag| flag.load(Ordering::SeqCst))
         {
-            anyhow::bail!("xAI device-code login was cancelled");
+            return Err(XaiOAuthError::Cancelled);
         }
         if Instant::now() >= deadline {
-            anyhow::bail!("xAI device-code authorization timed out before approval");
+            return Err(XaiOAuthError::TimedOut);
         }
 
         let response = http
@@ -154,17 +193,17 @@ pub async fn poll_device_token(
             ])
             .send()
             .await
-            .context("xAI device-code token poll failed")?;
+            .map_err(XaiOAuthError::TokenPoll)?;
 
         let status = response.status();
         let body = response
             .text()
             .await
-            .context("reading xAI device-code token response")?;
+            .map_err(XaiOAuthError::ReadTokenResponse)?;
 
         if status.is_success() {
             let success: TokenSuccess =
-                serde_json::from_str(&body).context("decoding xAI device-code token response")?;
+                serde_json::from_str(&body).map_err(XaiOAuthError::DecodeTokenResponse)?;
             return Ok(XaiLoginTokens {
                 access_token: success.access_token,
                 refresh_token: success.refresh_token,
@@ -195,16 +234,19 @@ pub async fn poll_device_token(
                 wait_poll_interval(interval, cancel.as_deref()).await?;
             }
             "access_denied" | "authorization_denied" => {
-                anyhow::bail!("xAI device-code authorization was denied");
+                return Err(XaiOAuthError::AccessDenied);
             }
             "expired_token" => {
-                anyhow::bail!("xAI device-code expired before approval");
+                return Err(XaiOAuthError::Expired);
             }
             "" => {
-                anyhow::bail!("xAI device-code token poll failed with HTTP {status}: {body}");
+                return Err(XaiOAuthError::TokenPollHttp { status, body });
             }
             other => {
-                anyhow::bail!("xAI device-code token poll failed ({other}): {body}");
+                return Err(XaiOAuthError::TokenPollRejected {
+                    error: other.to_owned(),
+                    body,
+                });
             }
         }
     }
@@ -219,10 +261,10 @@ async fn wait_poll_interval(interval: Duration, cancel: Option<&AtomicBool>) -> 
     };
     let deadline = Instant::now()
         .checked_add(interval)
-        .context("xAI polling interval exceeds the host clock range")?;
+        .ok_or(XaiOAuthError::IntervalOverflow)?;
     loop {
         if cancel.load(Ordering::SeqCst) {
-            anyhow::bail!("xAI device-code login was cancelled");
+            return Err(XaiOAuthError::Cancelled);
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {

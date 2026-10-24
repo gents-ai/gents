@@ -3,12 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation() -> TestResult<()>
+{
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let port = allocate_port()?;
@@ -57,7 +59,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
         ],
     )?;
     assert_eq!(created["collection"], "Goal");
-    let doc_id = created["doc_id"].as_str().context("doc_id")?;
+    let doc_id = created["doc_id"].as_str().expect("doc_id");
 
     let rows = run_cli_json(
         &home_dir,
@@ -134,8 +136,8 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn document_create_cannot_write_to_a_home_it_does_not_own() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("served");
     let other_dir = tempdir.path().join("other");
     fs::create_dir_all(&home_dir)?;

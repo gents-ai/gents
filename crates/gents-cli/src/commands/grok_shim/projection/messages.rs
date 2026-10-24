@@ -102,7 +102,10 @@ struct NodeSink<'a> {
 
 impl QuerySink for NodeSink<'_> {
     async fn execute(&self, query: &str) -> Result<defra_node::QueryResponse> {
-        graphql_with_transaction_retry(self.node, query, "grok canonical message projection").await
+        Ok(
+            graphql_with_transaction_retry(self.node, query, "grok canonical message projection")
+                .await?,
+        )
     }
 }
 
@@ -186,11 +189,11 @@ where
     let headers = header_values
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let segments = segment_values
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let observed = segments
         .iter()
         .map(|row| ObservedSegment {
@@ -442,6 +445,7 @@ fn streamable_owned(value: &str) -> Option<String> {
 #[cfg(test)]
 mod canonical_selection_tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     struct Facts {
@@ -473,7 +477,7 @@ mod canonical_selection_tests {
         let error = project_messages_with_sink(&FailingSink, None, &request(), 8192)
             .await
             .expect_err("sink failure");
-        assert!(format!("{error:#}").contains("canonical read owner rejected"));
+        assert!(format!("{}", ErrorChain(error.as_ref())).contains("canonical read owner rejected"));
     }
 
     fn request() -> gents_protocol::row::AgentRequestRow {

@@ -128,43 +128,55 @@ fn supersedes_assignment(left: &super::GoalVersion, right: &super::GoalVersion) 
                 && right.goal.assignment_root_request_doc_id.is_some())
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GoalHistoryError {
+    #[error("Goal history has an invalid native revision or status")]
+    InvalidRevision,
+    #[error("Goal history contains a duplicate native revision")]
+    DuplicateRevision,
+    #[error("Goal history is incomplete at revision {commit_cid}")]
+    IncompleteRevision { commit_cid: String },
+    #[error("Goal history has a cyclic or invalid native parent")]
+    InvalidParent,
+    #[error(
+        "Goal assignment has concurrent native revisions; refresh before observing its outcome"
+    )]
+    ConcurrentRevisions,
+}
+
 pub(crate) fn latest_assignment_goals(
     versions: &[super::GoalVersion],
-) -> anyhow::Result<Vec<GoalDocument>> {
+) -> Result<Vec<GoalDocument>, GoalHistoryError> {
     use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
     let mut by_commit = RapidHashMap::new();
     for version in versions {
-        anyhow::ensure!(
-            version.height >= 0
-                && !version.commit_cid.is_empty()
-                && !version.goal.doc_id.is_empty()
-                && version.goal.parsed_status().is_some(),
-            "Goal history has an invalid native revision or status"
-        );
-        anyhow::ensure!(
-            by_commit
-                .insert(
-                    (version.goal.doc_id.as_str(), version.commit_cid.as_str()),
-                    version
-                )
-                .is_none(),
-            "Goal history contains a duplicate native revision"
-        );
+        if !(version.height >= 0
+            && !version.commit_cid.is_empty()
+            && !version.goal.doc_id.is_empty()
+            && version.goal.parsed_status().is_some())
+        {
+            return Err(GoalHistoryError::InvalidRevision);
+        }
+        if by_commit
+            .insert(
+                (version.goal.doc_id.as_str(), version.commit_cid.as_str()),
+                version,
+            )
+            .is_some()
+        {
+            return Err(GoalHistoryError::DuplicateRevision);
+        }
     }
     for version in versions {
         for parent in &version.parent_commit_cids {
             let prior = by_commit
                 .get(&(version.goal.doc_id.as_str(), parent.as_str()))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Goal history is incomplete at revision {}",
-                        version.commit_cid
-                    )
+                .ok_or_else(|| GoalHistoryError::IncompleteRevision {
+                    commit_cid: version.commit_cid.clone(),
                 })?;
-            anyhow::ensure!(
-                prior.height < version.height,
-                "Goal history has a cyclic or invalid native parent"
-            );
+            if prior.height >= version.height {
+                return Err(GoalHistoryError::InvalidParent);
+            }
         }
     }
     let mut superseded = RapidHashSet::new();
@@ -193,16 +205,15 @@ pub(crate) fn latest_assignment_goals(
             continue;
         }
         let goal = &version.goal;
-        anyhow::ensure!(
-            unique_assignments.insert((
-                &goal.doc_id,
-                &goal.node_did,
-                &goal.session_id,
-                &goal.goal_id,
-                &goal.assignment_root_request_doc_id
-            )),
-            "Goal assignment has concurrent native revisions; refresh before observing its outcome"
-        );
+        if !unique_assignments.insert((
+            &goal.doc_id,
+            &goal.node_did,
+            &goal.session_id,
+            &goal.goal_id,
+            &goal.assignment_root_request_doc_id,
+        )) {
+            return Err(GoalHistoryError::ConcurrentRevisions);
+        }
         goals.push(goal.clone());
     }
     Ok(goals)

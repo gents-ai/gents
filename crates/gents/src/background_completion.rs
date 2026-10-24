@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -30,18 +30,30 @@ pub fn is_background_completion_notification_message_key(message_key: &str) -> b
     message_key.starts_with(BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX)
 }
 
-pub(crate) fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BackgroundCompletionError {
+    #[error("invalid wake notification receipt")]
+    InvalidReceipt(#[source] serde_json::Error),
+    #[error("wake receipt names a non-notification message")]
+    NonNotificationReceipt,
+    #[error("wake receipt contains duplicate notification keys")]
+    DuplicateReceiptKey,
+}
+
+pub(crate) fn notification_receipt_keys(
+    encoded: &str,
+) -> std::result::Result<Vec<String>, BackgroundCompletionError> {
     let keys: Vec<String> =
-        serde_json::from_str(encoded).context("invalid wake notification receipt")?;
-    anyhow::ensure!(
-        keys.iter()
-            .all(|key| is_background_completion_notification_message_key(key)),
-        "wake receipt names a non-notification message"
-    );
-    anyhow::ensure!(
-        keys.iter().collect::<std::collections::BTreeSet<_>>().len() == keys.len(),
-        "wake receipt contains duplicate notification keys"
-    );
+        serde_json::from_str(encoded).map_err(BackgroundCompletionError::InvalidReceipt)?;
+    if !keys
+        .iter()
+        .all(|key| is_background_completion_notification_message_key(key))
+    {
+        return Err(BackgroundCompletionError::NonNotificationReceipt);
+    }
+    if keys.iter().collect::<std::collections::BTreeSet<_>>().len() != keys.len() {
+        return Err(BackgroundCompletionError::DuplicateReceiptKey);
+    }
     Ok(keys)
 }
 

@@ -38,25 +38,25 @@ pub(super) async fn start_gents_turn(
         .await?
         .is_some_and(|record| record.is_caused())
     {
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
             "GENTS caused threads accept no user input; the session that started them messages them with agent_message"
                 .to_string(),
         )
-        .await;
+        .await?);
     }
     let user_text = user_text_from_input(&input);
     let selected_skill_ids = selected_skill_ids_from_input(&input);
     if user_text.trim().is_empty() && selected_skill_ids.is_empty() {
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_REQUEST,
             "Codex turn input did not contain text for GENTS".to_string(),
         )
-        .await;
+        .await?);
     }
 
     let cwd = state.thread_cwd(&thread_id).await;
@@ -76,13 +76,13 @@ pub(super) async fn start_gents_turn(
     {
         Ok(submitted) => submitted,
         Err(err) => {
-            return send_error(
+            return Ok(send_error(
                 &connection.outbound,
                 request_id,
                 JSONRPC_INTERNAL_ERROR,
                 format!("failed to submit GENTS AgentRequest: {err}"),
             )
-            .await;
+            .await?);
         }
     };
 
@@ -116,7 +116,7 @@ pub(super) async fn start_gents_turn(
     .await
     {
         stream_registration.clear().await;
-        return Err(err);
+        return Err(err.into());
     }
 
     send_notification(
@@ -183,7 +183,7 @@ pub(super) async fn start_gents_turn(
     };
 
     stream_registration.clear().await;
-    result
+    Ok(result?)
 }
 
 pub(super) async fn steer_gents_turn(
@@ -196,50 +196,50 @@ pub(super) async fn steer_gents_turn(
         .await?
         .is_some_and(|record| record.is_caused())
     {
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
             "GENTS caused threads accept no user input; the session that started them messages them with agent_message"
                 .to_string(),
         )
-        .await;
+        .await?);
     }
     if params.expected_turn_id.trim().is_empty() {
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_REQUEST,
             "expectedTurnId must not be empty".to_string(),
         )
-        .await;
+        .await?);
     }
 
     let user_text = user_text_from_input(&params.input);
     let selected_skill_ids = selected_skill_ids_from_input(&params.input);
     if user_text.trim().is_empty() && selected_skill_ids.is_empty() {
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_REQUEST,
             "input must not be empty".to_string(),
         )
-        .await;
+        .await?);
     }
 
     let cwd = state.thread_cwd(&params.thread_id).await;
 
     let Some(active_turn) = load_active_codex_turn(state, &params.thread_id).await? else {
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
             "no active turn to steer".to_string(),
         )
-        .await;
+        .await?);
     };
     if active_turn.turn_id != params.expected_turn_id {
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
@@ -248,7 +248,7 @@ pub(super) async fn steer_gents_turn(
                 params.expected_turn_id, active_turn.turn_id
             ),
         )
-        .await;
+        .await?);
     }
 
     let turn_id = active_turn.turn_id.clone();
@@ -266,36 +266,36 @@ pub(super) async fn steer_gents_turn(
     {
         Ok(submitted) => submitted,
         Err(err) => {
-            return send_error(
+            return Ok(send_error(
                 &connection.outbound,
                 request_id,
                 JSONRPC_INTERNAL_ERROR,
                 format!("failed to submit GENTS steering AgentRequest: {err}"),
             )
-            .await;
+            .await?);
         }
     };
 
     let Some(current_active) = load_active_codex_turn(state, &params.thread_id).await? else {
         cancel_abandoned_steering_request(state, &submitted);
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
             "active turn ended while submitting steering request".to_string(),
         )
-        .await;
+        .await?);
     };
     if current_active.turn_id != turn_id {
         let current_turn_id = current_active.turn_id.clone();
         cancel_abandoned_steering_request(state, &submitted);
-        return send_error(
+        return Ok(send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
             format!("active turn changed from `{turn_id}` to `{current_turn_id}`"),
         )
-        .await;
+        .await?);
     }
 
     connection

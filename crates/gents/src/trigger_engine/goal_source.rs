@@ -783,7 +783,7 @@ impl GoalSource {
             .context("goal activity query omitted canonical output records")?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         let provider_output = segments.iter().any(|row| {
             row.segment.request_doc_id == physical_id
                 && matches!(&row.segment.source,

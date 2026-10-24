@@ -21,6 +21,7 @@ use super::super::bound_behavior::model_selection_id;
 use super::super::protocol::{
     absolute_path, backend_model_summary, send_error, send_typed_json_result,
 };
+use super::super::CodexShimError;
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::config_writes::ConfigAccess;
 
@@ -37,30 +38,30 @@ pub(super) async fn apply_config_writes(
         let new_model_id = match value.as_str() {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     "ConfigValueWrite for `model` requires a non-empty string".to_string(),
                 )
-                .await;
+                .await?);
             }
         };
         let selection = match resolve_model_selection(state, &new_model_id).await {
             Ok(selection) => selection,
             Err(err) => {
-                return send_error(
+                return Ok(send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     err.to_string(),
                 )
-                .await;
+                .await?);
             }
         };
         apply_model_to_bound_agent(state, &selection).await?;
     }
-    send_typed_json_result::<codex::ConfigWriteResponse>(
+    Ok(send_typed_json_result::<codex::ConfigWriteResponse>(
         outbound,
         request_id,
         json!({
@@ -70,7 +71,7 @@ pub(super) async fn apply_config_writes(
             "overriddenMetadata": null
         }),
     )
-    .await
+    .await?)
 }
 
 pub(super) struct BoundAgent {
@@ -87,15 +88,23 @@ async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocu
     let agent_id = state.agent_id.as_ref();
     let raw = ConfigAccess::transact_local_write(&state.node, None, "codex.bound_agent", |txn| {
         Box::pin(async move {
-            read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
-                .await?
-                .map(|(_, value)| value)
-                .ok_or_else(|| anyhow::anyhow!("bound Agent {agent_id:?} missing for {node_did:?}"))
+            let value =
+                read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
+                    .await?
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| CodexShimError::BoundAgentMissing {
+                        agent_id: agent_id.to_owned(),
+                        node_did: node_did.to_owned(),
+                    })?;
+            Ok::<_, anyhow::Error>(value)
         })
     })
     .await?;
-    let agent: gents::AgentDocument = serde_json::from_value(raw)
-        .with_context(|| format!("decoding bound Agent {agent_id:?}"))?;
+    let agent: gents::AgentDocument =
+        serde_json::from_value(raw).map_err(|source| CodexShimError::DecodeBoundAgent {
+            agent_id: agent_id.to_owned(),
+            source,
+        })?;
     Ok(agent)
 }
 
@@ -105,15 +114,13 @@ pub(super) async fn load_bound_agent(state: &ShimState) -> Result<BoundAgent> {
     let inference_profile =
         load_inference_profile(&state.node, node_did, &agent.inference_profile_id)
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "bound inference profile {:?} missing for {node_did:?}",
-                    agent.inference_profile_id
-                )
+            .ok_or_else(|| CodexShimError::BoundInferenceProfileMissing {
+                profile_id: agent.inference_profile_id.clone(),
+                node_did: node_did.to_owned(),
             })?;
     inference_profile
         .validate()
-        .context("bound inference profile is invalid")?;
+        .map_err(|error| CodexShimError::BoundInferenceProfileInvalid(Box::new(error)))?;
     Ok(BoundAgent { inference_profile })
 }
 
@@ -294,22 +301,21 @@ async fn resolve_model_selection(
     requested_model: &str,
 ) -> Result<ModelSelection> {
     let bound = load_bound_agent(state).await?;
-    select_advertised_model(
+    Ok(select_advertised_model(
         &available_model_backends(state).await?,
         &bound.inference_profile.backend_id,
         requested_model,
-    )
+    )?)
 }
 
 fn select_advertised_model(
     backends: &[AvailableBackend],
     current_backend: &str,
     requested_model: &str,
-) -> Result<ModelSelection> {
-    anyhow::ensure!(
-        !requested_model.trim().is_empty(),
-        "model selection must be nonempty"
-    );
+) -> Result<ModelSelection, CodexShimError> {
+    if requested_model.trim().is_empty() {
+        return Err(CodexShimError::ModelSelectionEmpty);
+    }
     let explicit =
         requested_model.contains(super::super::bound_behavior::MODEL_SELECTION_SEPARATOR);
     let mut matches = backends
@@ -336,14 +342,16 @@ fn select_advertised_model(
     {
         matches.retain(|(backend, _)| backend.backend.backend_id == current_backend);
     }
-    anyhow::ensure!(
-        !matches.is_empty(),
-        "no backend advertises model {requested_model:?} in this node's credential scope"
-    );
-    anyhow::ensure!(
-        matches.len() == 1,
-        "ambiguous advertised model {requested_model:?}; specify backend::model"
-    );
+    if matches.is_empty() {
+        return Err(CodexShimError::ModelNotAdvertised {
+            model: requested_model.to_owned(),
+        });
+    }
+    if matches.len() != 1 {
+        return Err(CodexShimError::ModelAmbiguous {
+            model: requested_model.to_owned(),
+        });
+    }
     let (backend, model) = matches[0];
     Ok(ModelSelection {
         backend_id: backend.backend.backend_id.clone(),
@@ -384,9 +392,11 @@ async fn apply_model_selection(
                 let (_, value) =
                     read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_id)
                         .await?
-                        .context("bound agent does not exist for this node")?;
+                        .ok_or(CodexShimError::BoundAgentNotFoundForNode)?;
                 let mut agent: gents::AgentDocument = serde_json::from_value(value)?;
-                anyhow::ensure!(agent.enabled, "bound agent is disabled");
+                if !agent.enabled {
+                    return Err(CodexShimError::BoundAgentDisabled.into());
+                }
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceProfile,
@@ -394,36 +404,42 @@ async fn apply_model_selection(
                     &agent.inference_profile_id,
                 )
                 .await?
-                .context("bound inference profile does not exist for this node")?;
+                .ok_or(CodexShimError::BoundInferenceProfileNotFoundForNode)?;
                 let mut profile: InferenceProfile = serde_json::from_value(value)?;
                 let backend = load_inference_backend_in_txn(txn, owner, &selection.backend_id)
                     .await?
-                    .context("selected backend does not exist for this node")?;
+                    .ok_or(CodexShimError::SelectedBackendNotFound)?;
                 backend.validate()?;
-                anyhow::ensure!(backend.enabled, "selected backend is disabled");
+                if !backend.enabled {
+                    return Err(CodexShimError::SelectedBackendDisabled.into());
+                }
                 let observation =
                     lookup_backend_observation_in_txn(txn, owner, &selection.backend_id)
                         .await?
-                        .context("selected backend has no discovery observation")?;
+                        .ok_or(CodexShimError::SelectedBackendNoObservation)?;
                 let scope = matches!(backend.auth, BackendAuth::NodeOAuth { .. }).then_some(owner);
                 let catalog = observation
                     .catalog_for(scope)?
-                    .context("selected backend has no catalog in this credential scope")?;
+                    .ok_or(CodexShimError::SelectedBackendNoCatalog)?;
                 let mut models = catalog
                     .models
                     .iter()
                     .filter(|model| model.model_name == selection.model_name);
                 let model = models
                     .next()
-                    .context("selected backend does not advertise requested model")?;
-                anyhow::ensure!(models.next().is_none(), "ambiguous advertised model");
+                    .ok_or(CodexShimError::SelectedModelNotAdvertised)?;
+                if models.next().is_some() {
+                    return Err(CodexShimError::SelectedModelAmbiguous.into());
+                }
                 if let (Some(effort), Some(supported)) =
                     (profile.reasoning_effort, model.reasoning_efforts.as_ref())
                 {
-                    anyhow::ensure!(
-                        gents::config::admits_reasoning_effort(&backend, effort, supported),
-                        "selected model does not advertise configured reasoning effort {effort:?}"
-                    );
+                    if !gents::config::admits_reasoning_effort(&backend, effort, supported) {
+                        return Err(CodexShimError::ReasoningEffortUnsupported {
+                            effort: format!("{effort:?}"),
+                        }
+                        .into());
+                    }
                 }
                 if profile.backend_id == selection.backend_id
                     && profile.model_name == selection.model_name
@@ -464,6 +480,7 @@ mod tests {
     use gents::defra_node::EmbeddedNode;
     use gents::document_config::AdvertisedModel;
     use gents::{record_model_catalog_in_txn, BackendProviderKind};
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::row::{
         AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
         NodeReadinessProcessState, NodeReadinessRow, NodeReadinessSnapshot,
@@ -773,8 +790,9 @@ mod tests {
             .await
             .expect_err("an unadvertised model must be rejected");
         assert!(
-            format!("{error:#}").contains("does not advertise"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("does not advertise"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

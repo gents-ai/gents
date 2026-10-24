@@ -5,16 +5,15 @@ impl RequestLifecycle {
         &self,
         expected: &[LocalLifecycleState],
         action: &str,
-    ) -> Result<()> {
+    ) -> Result<(), LifecycleError> {
         if expected.contains(&self.state) {
             return Ok(());
         }
 
-        anyhow::bail!(
-            "cannot {} request_id={} while lifecycle is in {:?}",
-            action,
-            self.request.request_id,
-            self.state
-        )
+        Err(LifecycleError::LifecycleStateRejected {
+            action: action.to_owned(),
+            request_id: self.request.request_id.clone(),
+            state: format!("{:?}", self.state),
+        })
     }
 }

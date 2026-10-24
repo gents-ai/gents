@@ -1,4 +1,5 @@
 use crate::types::*;
+use gents_protocol::error_chain::ErrorChain;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 use tauri::State;
@@ -18,7 +19,7 @@ fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
 }
 
 fn failed(error: anyhow::Error) -> BridgeError {
-    BridgeError::untyped(format!("{error:#}"))
+    BridgeError::untyped(ErrorChain(error.as_ref()).to_string())
 }
 
 /// Runs a pack operation on a blocking thread that drives it to completion:

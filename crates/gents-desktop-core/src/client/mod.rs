@@ -13,7 +13,7 @@ mod sync_projection;
 
 pub(crate) use query::load_inference_configuration;
 
-pub use collection_resolver::CollectionResolver;
+pub use collection_resolver::{CollectionResolver, CollectionResolverError};
 pub use core::{
     ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
     ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentRequestResult,
@@ -22,16 +22,20 @@ pub use core::{
 };
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
-pub use mutations::{DeliveryUnconfirmed, SubmissionOutcomeUnknown, UnresolvedSubmission};
+pub use mutations::{
+    DeliveryUnconfirmed, ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
+};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
     StoreUpdateNotice,
 };
-pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
+pub use paths::{DesktopPaths, PathsError, DESKTOP_HOME_ENV};
 pub(crate) use peer_directory::PeerDirectory;
-pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
-pub use principal_identity::PrincipalIdentity;
+pub use peer_directory::{
+    initialize_local_standard_peer, load_peer_records, PeerDirectoryError, PeerRecord,
+};
+pub use principal_identity::{PrincipalIdentity, PrincipalIdentityError};
 pub(crate) use query::load_request_documents_on;
 pub use query::{
     fetch_doc_patch, load_node_scoped_snapshot, load_request_prompt_ownership,
@@ -42,8 +46,9 @@ pub use query::{
     load_session_transcript_page_on, load_session_transcript_window,
     load_session_transcript_window_on, session_transcript_requester_scope,
     session_unreadable_reason, session_unsendable_reason, CanonicalTranscriptDependencies,
-    RequestPromptFact, RequestPromptOwnership, SessionTranscriptQueryPage, TranscriptSpan,
-    TranscriptWindow, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
+    ClientQueryError, RequestPromptFact, RequestPromptOwnership, SessionTranscriptQueryPage,
+    TranscriptSpan, TranscriptWindow, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE,
+    MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use schema::subscribed_collection_names;
 pub use store::{

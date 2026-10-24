@@ -1,9 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SchemaContractError {
+    #[error("collection schema field is missing Name")]
+    FieldNameMissing,
+    #[error("collection index field is missing Name")]
+    IndexFieldNameMissing,
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("collection constraints do not match requested schema")]
+    ConstraintsMismatch,
+    #[error("field {name:?} does not match requested schema")]
+    FieldMismatch { name: String },
+}
+
+type Result<T, E = SchemaContractError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct SchemaFieldContract {
@@ -41,7 +56,7 @@ fn collection_schema_contract(version: &Value) -> Result<CollectionSchemaContrac
         let name = field
             .get("Name")
             .and_then(Value::as_str)
-            .context("collection schema field is missing Name")?;
+            .ok_or(SchemaContractError::FieldNameMissing)?;
         if name == "_docID" {
             continue;
         }
@@ -69,18 +84,18 @@ fn collection_schema_contract(version: &Value) -> Result<CollectionSchemaContrac
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|index| {
+        .map(|index| -> Result<SchemaIndexContract> {
             let fields = index
                 .get("Fields")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .map(|field| {
+                .map(|field| -> Result<(String, bool)> {
                     Ok((
                         field
                             .get("Name")
                             .and_then(Value::as_str)
-                            .context("collection index field is missing Name")?
+                            .ok_or(SchemaContractError::IndexFieldNameMissing)?
                             .to_owned(),
                         field
                             .get("Descending")
@@ -133,18 +148,17 @@ pub(crate) fn collection_schema_field_delta(
 ) -> Result<SchemaFieldDelta> {
     let expected = collection_schema_contract(expected)?;
     let live = collection_schema_contract(live)?;
-    ensure!(
-        expected.indexes == live.indexes
-            && expected.branchable == live.branchable
-            && expected.embedded_only == live.embedded_only,
-        "collection constraints do not match requested schema"
-    );
+    if expected.indexes != live.indexes
+        || expected.branchable != live.branchable
+        || expected.embedded_only != live.embedded_only
+    {
+        return Err(SchemaContractError::ConstraintsMismatch);
+    }
     for (name, field) in &expected.fields {
         if let Some(existing) = live.fields.get(name) {
-            ensure!(
-                existing == field,
-                "field {name:?} does not match requested schema"
-            );
+            if existing != field {
+                return Err(SchemaContractError::FieldMismatch { name: name.clone() });
+            }
         }
     }
     Ok(SchemaFieldDelta {

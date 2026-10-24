@@ -20,43 +20,46 @@ pub(crate) async fn pending_rows_in_txn(
         ))
         .await?;
     serde_json::from_value(response["data"]["AgentRequest"].clone())
-        .context("decode pending session requests")
+        .map_err(QueueError::DecodePendingRequests)
 }
 
 pub(crate) async fn pending_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<Vec<AgentRequestRow>> {
+) -> anyhow::Result<Vec<AgentRequestRow>> {
     let rows = pending_rows_in_txn(txn, node_did, session_id).await?;
     let ids = rows
         .iter()
         .map(|row| {
             row.doc_id
                 .clone()
-                .context("pending message has no physical identity")
+                .ok_or(QueueError::PendingMessageMissingDocId)
         })
         .collect::<Result<Vec<_>>>()?;
     let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
-    anyhow::ensure!(
-        order.len() == ids.len(),
-        "pending queue arrival is incomplete"
-    );
+    if order.len() != ids.len() {
+        return Err(QueueError::PendingQueueArrivalIncomplete.into());
+    }
     let mut by_id = rows
         .into_iter()
         .map(|row| (row.doc_id.clone().unwrap(), row))
         .collect::<rapidhash::RapidHashMap<_, _>>();
-    order
+    Ok(order
         .into_iter()
-        .map(|id| by_id.remove(&id).context("pending queue arrival changed"))
-        .collect()
+        .map(|id| {
+            by_id
+                .remove(&id)
+                .ok_or(QueueError::PendingQueueArrivalChanged)
+        })
+        .collect::<Result<Vec<_>>>()?)
 }
 
 pub(crate) async fn steering_snapshot(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
-) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
+) -> anyhow::Result<gents_loop::loop_stream::SteeringSnapshot> {
     let rows = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -96,7 +99,7 @@ pub(crate) async fn steering_inputs(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
-) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
+) -> anyhow::Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
     Ok(steering_snapshot(node, head, verifier).await?.inputs)
 }
 
@@ -108,7 +111,7 @@ pub(crate) async fn pending_ids_in_txn(
     let mut ids = pending_rows_in_txn(txn, node_did, session_id)
         .await?
         .into_iter()
-        .map(|row| row.doc_id.context("pending input lacks physical identity"))
+        .map(|row| row.doc_id.ok_or(QueueError::PendingInputMissingDocId))
         .collect::<Result<Vec<_>>>()?;
     ids.sort();
     Ok(ids)

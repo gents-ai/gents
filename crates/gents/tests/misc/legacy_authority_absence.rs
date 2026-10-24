@@ -168,7 +168,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     }
 
     let background = include_str!("../../src/lifecycle/background_wake_recovery.rs");
-    assert!(background.contains("create.graphql_input_fields()"));
+    assert!(background.contains("let create = build_signed_request("));
+    assert_eq!(background.matches(".graphql_input_fields()").count(), 1);
     assert_eq!(background.matches("create_AgentRequest(input:").count(), 1);
 
     let materialize = include_str!("../../src/lifecycle/materialize.rs");
@@ -242,6 +243,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
 #[test]
 fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
     let policy = include_str!("../../src/agent/p2p_reconcile/policy.rs");
+    let errors = include_str!("../../src/agent/p2p_reconcile/error.rs");
     let desired = include_str!("../../src/agent/p2p_reconcile/engine/desired.rs");
     let topology = include_str!("../../src/agent/p2p_reconcile/engine/remote_topology.rs");
     let observer = include_str!("../../../gents-desktop-core/src/client/observe.rs");
@@ -253,7 +255,10 @@ fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
     assert!(!observer.contains("selected_is_legacy_remote"));
     assert!(!merges.contains("replace_remote_agent_scope"));
     assert!(!writes.contains("machines.next()?.clone()"));
-    assert!(policy.contains("client pairing id has no recognized direction suffix"));
+    assert!(policy.contains("P2pReconcileError::UnrecognizedClientPairingDirection"));
+    assert!(errors.contains(
+        "#[error(\"client pairing id has no recognized direction suffix\")]\n    UnrecognizedClientPairingDirection,"
+    ));
 }
 
 #[test]

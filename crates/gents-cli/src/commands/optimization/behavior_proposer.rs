@@ -1,10 +1,16 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use gents::optimization::{Proposal, ProposalInput, Proposer};
 use tokio::sync::Mutex;
 
 use crate::commands::eval::init::draft::json_blocks;
 use crate::commands::eval::init::turn::Turn;
 use crate::commands::eval::render::percent;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BehaviorProposerError {
+    #[error("the agent's second reply is not a proposal: {problem}")]
+    SecondReplyNotProposal { problem: String },
+}
 
 pub(crate) struct AgentProposer<T> {
     turn: Mutex<T>,
@@ -43,8 +49,9 @@ where
                 "Reply with exactly one fenced json block with text and rationale; {problem}"
             ))
             .await?;
-        parse_reply(&reply)
-            .map_err(|problem| anyhow!("the agent's second reply is not a proposal: {problem}"))
+        parse_reply(&reply).map_err(|problem| {
+            anyhow::Error::from(BehaviorProposerError::SecondReplyNotProposal { problem })
+        })
     }
 }
 

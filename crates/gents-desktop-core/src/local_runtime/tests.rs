@@ -8,6 +8,7 @@ use super::{
     StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use serde_json::json;
 
@@ -52,7 +53,9 @@ fn configured_runtime_missing_key_is_not_created_by_desktop_read() {
     let error = load_standard_runtime_identity(tempdir.path())
         .err()
         .expect("missing configured key must be rejected");
-    assert!(format!("{error:#}").contains("identity key does not exist"));
+    assert!(ErrorChain(&error)
+        .to_string()
+        .contains("identity key does not exist"));
     assert!(!key_path.exists());
 }
 
@@ -76,7 +79,9 @@ fn configured_runtime_wrong_existing_key_is_preserved() {
     let error = load_standard_runtime_identity(tempdir.path())
         .err()
         .expect("wrong configured key must be rejected");
-    assert!(format!("{error:#}").contains("identity does not match configured node DID"));
+    assert!(ErrorChain(&error)
+        .to_string()
+        .contains("identity does not match configured node DID"));
     assert_eq!(std::fs::read(&key_path).unwrap(), original);
 }
 
@@ -285,7 +290,11 @@ async fn discovery_rejects_a_bad_live_did_without_touching_the_peer_store() {
         })
         .await
         .expect_err("a live identity other than the initialized one is rejected");
-        assert!(error.to_string().contains("serves"), "{error:#}");
+        assert!(
+            error.to_string().contains("serves"),
+            "{}",
+            ErrorChain(&error)
+        );
         assert!(
             !paths.peer_directory_path().exists(),
             "no route is saved for {live}"
@@ -353,7 +362,8 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
     .unwrap_err();
     assert!(
         error.to_string().contains("v0.18.2) predates this app"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
     server.abort();
 }
@@ -468,7 +478,8 @@ fn operator_node_identity_requires_the_homes_own_runtime_endpoint() {
         .expect_err("an endpoint the home does not serve");
     assert!(
         elsewhere.to_string().contains("does not serve"),
-        "{elsewhere:#}"
+        "{}",
+        ErrorChain(&elsewhere)
     );
 
     let mut remote = record(served);
@@ -494,7 +505,8 @@ fn operator_signer_is_the_hosted_runtimes_own_identity() {
         .expect("an endpoint the home does not serve");
     assert!(
         elsewhere.to_string().contains("does not serve"),
-        "{elsewhere:#}"
+        "{}",
+        ErrorChain(&elsewhere)
     );
 
     let mut remote = record(HOSTED_GRAPHQL);

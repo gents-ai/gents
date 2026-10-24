@@ -1,6 +1,4 @@
-use anyhow::Result;
-
-use super::runtime::graph_trigger_id;
+use super::runtime::{graph_trigger_id, GraphPipelineError};
 use super::types::{GraphPlan, PlannedEdge, PlannedEntry, StageTarget};
 use crate::Collection;
 
@@ -10,7 +8,10 @@ pub(super) struct PlannedRoute<'a> {
     pub(super) target: &'a StageTarget,
 }
 
-pub(super) fn entry_route_id(digest: &str, entry: &PlannedEntry) -> Result<String> {
+pub(super) fn entry_route_id(
+    digest: &str,
+    entry: &PlannedEntry,
+) -> Result<String, GraphPipelineError> {
     graph_trigger_id(
         digest,
         &format!(
@@ -20,7 +21,11 @@ pub(super) fn entry_route_id(digest: &str, entry: &PlannedEntry) -> Result<Strin
     )
 }
 
-pub(super) fn edge_route_id(digest: &str, index: usize, edge: &PlannedEdge) -> Result<String> {
+pub(super) fn edge_route_id(
+    digest: &str,
+    index: usize,
+    edge: &PlannedEdge,
+) -> Result<String, GraphPipelineError> {
     graph_trigger_id(
         digest,
         &format!(
@@ -30,7 +35,9 @@ pub(super) fn edge_route_id(digest: &str, index: usize, edge: &PlannedEdge) -> R
     )
 }
 
-pub(super) fn planned_routes(plan: &GraphPlan) -> Result<Vec<PlannedRoute<'_>>> {
+pub(super) fn planned_routes(
+    plan: &GraphPlan,
+) -> Result<Vec<PlannedRoute<'_>>, GraphPipelineError> {
     let mut routes = Vec::with_capacity(plan.entries.len() + plan.edges.len());
     for entry in &plan.entries {
         routes.push(PlannedRoute {
@@ -49,7 +56,9 @@ pub(super) fn planned_routes(plan: &GraphPlan) -> Result<Vec<PlannedRoute<'_>>> 
     Ok(routes)
 }
 
-pub(crate) fn revision_artifact_ids(plan: &GraphPlan) -> Result<Vec<(Collection, String)>> {
+pub(crate) fn revision_artifact_ids(
+    plan: &GraphPlan,
+) -> Result<Vec<(Collection, String)>, GraphPipelineError> {
     let mut ids = Vec::new();
     for route in planned_routes(plan)? {
         ids.push((Collection::EventSource, route.id.clone()));

@@ -5,6 +5,15 @@ use serde_json::json;
 
 use super::store;
 use crate::cli::args::{PluginBindArgs, PluginUnbindArgs};
+use crate::request_helpers::RequestHelpersError;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PluginBindError {
+    #[error(transparent)]
+    Install(#[from] gents::plugin::install::PluginInstallError),
+    #[error(transparent)]
+    Print(#[from] RequestHelpersError),
+}
 
 pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
     anyhow::ensure!(
@@ -30,20 +39,25 @@ pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
         .await
         .with_context(|| format!("profile {:?} cannot serve {coordinate}", binding.profile_id))?;
     let record = set_model_binding(&home, &coordinate, Some(binding))?;
-    crate::print_json(&json!({ "bound": record.model_binding, "plugin": coordinate }))
+    Ok(crate::print_json(
+        &json!({ "bound": record.model_binding, "plugin": coordinate }),
+    )?)
 }
 
-pub(super) fn unbind(args: PluginUnbindArgs) -> Result<()> {
+pub(super) fn unbind(args: PluginUnbindArgs) -> Result<(), PluginBindError> {
     let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     set_model_binding(&home, &coordinate, None)?;
-    crate::print_json(&json!({ "bound": null, "plugin": coordinate }))
+    Ok(crate::print_json(
+        &json!({ "bound": null, "plugin": coordinate }),
+    )?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     fn install_record(home: &std::path::Path, model_slot: Option<&str>, bound: bool) {
@@ -92,7 +106,13 @@ mod tests {
         })
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("local host"), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("local host"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -101,8 +121,9 @@ mod tests {
         install_record(home.path(), None, false);
         let error = unbind(unbind_args(home.path())).unwrap_err();
         assert!(
-            format!("{error:#}").contains("no slot to bind"),
-            "{error:#}"
+            ErrorChain(&error).to_string().contains("no slot to bind"),
+            "{}",
+            ErrorChain(&error)
         );
         let error = bind(PluginBindArgs {
             name: "team/ocr".to_owned(),
@@ -116,8 +137,11 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            format!("{error:#}").contains("no slot to bind"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("no slot to bind"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(unbind(PluginUnbindArgs {
             name: "team/missing".to_owned(),

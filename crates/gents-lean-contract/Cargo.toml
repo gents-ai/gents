@@ -7,9 +7,9 @@ repository.workspace = true
 description = "Test helper for loading Gents Lean conformance contracts"
 
 [dependencies]
-anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true

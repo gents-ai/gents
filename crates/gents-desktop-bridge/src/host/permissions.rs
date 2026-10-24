@@ -5,6 +5,14 @@ use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
 
+#[derive(Debug, thiserror::Error)]
+enum PermissionsError {
+    #[error(transparent)]
+    Approval(#[from] gents::plugin::approval::PluginApprovalError),
+    #[error("The workspace path must be valid UTF-8.")]
+    NonUtf8Path,
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspacePermissionsRequest {
@@ -151,7 +159,7 @@ pub(super) async fn save(
     })
     .await
     .map_err(|error| super::backend_error(error.into()))?
-    .map_err(super::backend_error)?;
+    .map_err(|error| super::backend_error(error.into()))?;
     local.settings = Some(settings);
     Ok(local.view())
 }
@@ -169,7 +177,7 @@ async fn target(
     let record = super::approvals::peer(core, &request.node_did).await?;
     let support = gents_desktop_core::local_runtime::workspace_permission_support(&record)
         .await
-        .map_err(super::backend_error)?;
+        .map_err(|error| super::backend_error(error.into()))?;
     if record.operator_graphql().is_none() || record.local_node_home.is_none() {
         return Ok(Target::Unavailable(
             WorkspacePermissionsState::RemoteUnavailable { support },
@@ -181,14 +189,14 @@ async fn target(
         ));
     };
     let home = gents_desktop_core::local_runtime::hosted_runtime_home(&record)
-        .map_err(super::backend_error)?
+        .map_err(|error| super::backend_error(error.into()))?
         .to_owned();
     let requester = core.node_identity().did().to_owned();
     tokio::task::spawn_blocking(move || local_target(&home, &requester, &request, support))
         .await
         .map_err(|error| super::backend_error(error.into()))?
         .map(|local| Target::Local(Box::new(local)))
-        .map_err(super::backend_error)
+        .map_err(|error| super::backend_error(error.into()))
 }
 
 fn local_target(
@@ -196,17 +204,16 @@ fn local_target(
     requester: &str,
     request: &WorkspacePermissionsRequest,
     support: Support,
-) -> anyhow::Result<LocalTarget> {
+) -> Result<LocalTarget, PermissionsError> {
     let key = WorkspaceKey::canonical(
         &request.node_did,
         requester,
         &request.agent_id,
         std::path::Path::new(&request.workspace_path),
     )?;
-    anyhow::ensure!(
-        key.path.to_str().is_some(),
-        "The workspace path must be valid UTF-8."
-    );
+    if key.path.to_str().is_none() {
+        return Err(PermissionsError::NonUtf8Path);
+    }
     let settings = workspace::get(home, &key)?;
     Ok(LocalTarget {
         support,
@@ -243,7 +250,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             })
             .await

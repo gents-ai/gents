@@ -2,12 +2,12 @@ use crate::support::*;
 
 use std::{fs, time::Duration};
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_tools_list_show_and_remove_canonical_document() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
     let port = allocate_port()?;
@@ -51,7 +51,7 @@ async fn agent_set_rejects_missing_context() -> Result<()> {
     let owner = node_did_from_init(&init)?;
     let profile = init["init"]["inference_profile_id"]
         .as_str()
-        .context("profile")?;
+        .expect("profile");
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;

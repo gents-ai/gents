@@ -8,8 +8,7 @@
 use anyhow::Result;
 
 use super::super::super::mutations::{
-    reconcile_unretained_submission, resolve_unresolved_submission, SubmissionOutcomeUnknown,
-    SubmittedRequest,
+    reconcile_unretained_submission, resolve_unresolved_submission, ReceiptError, SubmittedRequest,
 };
 use super::{observe_submitted_request, ClientCore};
 
@@ -56,7 +55,10 @@ impl ClientCore {
     /// send for identical replay. An unknown outcome is not recorded as a
     /// mutation failure: the request may have been delivered.
     pub(super) fn submit_failure(&self, error: anyhow::Error) -> anyhow::Error {
-        if !error.is::<SubmissionOutcomeUnknown>() {
+        if !error
+            .downcast_ref::<ReceiptError>()
+            .is_some_and(|error| matches!(error, ReceiptError::OutcomeUnknown(_)))
+        {
             return self.record_mutation_error("submit request", error);
         }
         error
@@ -100,7 +102,7 @@ impl ClientCore {
                         .await;
                         Some(receipt)
                     }
-                    Err(error) if error.is::<SubmissionOutcomeUnknown>() => return Err(error),
+                    Err(error @ ReceiptError::OutcomeUnknown(_)) => return Err(error.into()),
                     // The receipt proved absence and the owner definitely
                     // rejected the identical replay, so it holds nothing with
                     // this identity.

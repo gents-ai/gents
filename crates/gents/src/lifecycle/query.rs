@@ -1,7 +1,8 @@
 use super::*;
-use anyhow::Context;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+
+type Result<T, E = LifecycleError> = std::result::Result<T, E>;
 
 const CLAIM_QUEUE_PAGE_SIZE: usize = 64;
 
@@ -53,7 +54,7 @@ pub(super) async fn request_view(
 pub(super) async fn claim_queue_allows(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
-) -> Result<bool> {
+) -> anyhow::Result<bool> {
     let owner = escape_graphql_string(&request.node_did);
     let nonterminal = RequestLifecycleState::graphql_list(
         RequestLifecycleState::ALL
@@ -104,10 +105,9 @@ pub(super) async fn claim_queue_allows(
         let (mut page, next) = cursor_page::<AgentRequestRow>(&response, "AgentRequest")?;
         session_requests.append(&mut page);
         let Some(next) = next else { break };
-        anyhow::ensure!(
-            after.as_deref() != Some(next.as_str()),
-            "claim session cursor did not advance"
-        );
+        if after.as_deref() == Some(next.as_str()) {
+            return Err(LifecycleError::ClaimSessionCursorStalled.into());
+        }
         after = Some(next);
     }
 
@@ -181,10 +181,9 @@ pub(super) async fn claim_queue_allows(
             let Some(next_request) = next_request else {
                 break;
             };
-            anyhow::ensure!(
-                after_request.as_deref() != Some(next_request.as_str()),
-                "claim request cursor did not advance"
-            );
+            if after_request.as_deref() == Some(next_request.as_str()) {
+                return Err(LifecycleError::ClaimRequestCursorStalled.into());
+            }
             after_request = Some(next_request);
         }
     }
@@ -250,10 +249,9 @@ async fn claim_receipts_for_request_ids(
                 receipts.insert(receipt.request_id.clone(), receipt);
             }
             let Some(next) = next else { break };
-            anyhow::ensure!(
-                after.as_deref() != Some(next.as_str()),
-                "claim receipt cursor did not advance"
-            );
+            if after.as_deref() == Some(next.as_str()) {
+                return Err(LifecycleError::ClaimReceiptCursorStalled);
+            }
             after = Some(next);
         }
     }
@@ -292,7 +290,7 @@ fn cursor_after_arg(after: Option<&str>) -> String {
 fn cursor_page<T>(
     response: &defra_node::QueryResponse,
     collection: &str,
-) -> Result<(Vec<T>, Option<String>)>
+) -> Result<(Vec<T>, Option<String>), LifecycleError>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -300,29 +298,32 @@ where
         .data
         .as_ref()
         .and_then(|data| data.get("_cursor"))
-        .context("cursor query omitted _cursor")?;
+        .ok_or(LifecycleError::CursorMissing)?;
     let rows = cursor
         .get(collection)
-        .context("cursor query omitted collection rows")?;
-    let page: Vec<T> = serde_json::from_value(rows.clone())
-        .with_context(|| format!("decode {collection} cursor page"))?;
+        .ok_or(LifecycleError::CursorRowsMissing)?;
+    let page: Vec<T> = serde_json::from_value(rows.clone()).map_err(|source| {
+        LifecycleError::CursorPageDecode {
+            collection: collection.to_owned(),
+            source,
+        }
+    })?;
     let page_info = cursor
         .get("_pageInfo")
-        .context("cursor query omitted _pageInfo")?;
+        .ok_or(LifecycleError::CursorPageInfoMissing)?;
     let has_next = page_info
         .get("hasNext")
         .and_then(serde_json::Value::as_bool)
-        .context("cursor query omitted hasNext")?;
+        .ok_or(LifecycleError::CursorHasNextMissing)?;
     let next = if has_next {
-        anyhow::ensure!(
-            !page.is_empty(),
-            "cursor query returned an empty page with hasNext"
-        );
+        if page.is_empty() {
+            return Err(LifecycleError::CursorEmptyPageWithNext);
+        }
         Some(
             page_info
                 .get("endCursor")
                 .and_then(serde_json::Value::as_str)
-                .context("cursor query omitted endCursor")?
+                .ok_or(LifecycleError::CursorEndMissing)?
                 .to_owned(),
         )
     } else {

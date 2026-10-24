@@ -3,13 +3,13 @@ mod collections;
 mod connect;
 mod documents;
 pub(crate) mod enrollment_admin;
+mod error;
 mod network;
 mod output;
 mod pairings;
 mod replicators;
 mod templates;
 
-use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::{
@@ -17,15 +17,17 @@ use crate::cli::args::{
     P2pNetworkCommand, P2pPairingsCommand, P2pReplicatorsCommand, P2pTemplatesCommand,
 };
 
+use error::{P2pCommandError, Result};
+
 pub(crate) use output::{
     fetch_live_http_p2p_status, flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status,
 };
 
-pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
+pub(crate) async fn dispatch(command: P2pCommand) -> anyhow::Result<()> {
     match command {
-        P2pCommand::Status(args) => access::p2p_status(args).await,
-        P2pCommand::Peers(args) => access::p2p_peers(args).await,
-        P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
+        P2pCommand::Status(args) => Ok(access::p2p_status(args).await?),
+        P2pCommand::Peers(args) => Ok(access::p2p_peers(args).await?),
+        P2pCommand::Diagnose(args) => Ok(connect::p2p_diagnose(args).await?),
         P2pCommand::Pairings { command } => match command {
             P2pPairingsCommand::List(args) => pairings::p2p_pairings_list(args).await,
         },
@@ -61,35 +63,45 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pNetworkCommand::Rm(args) => network::p2p_network_rm(args).await,
         },
         P2pCommand::Templates { command } => match command {
-            P2pTemplatesCommand::List(args) => templates::p2p_templates_list(args).await,
+            P2pTemplatesCommand::List(args) => Ok(templates::p2p_templates_list(args).await?),
         },
         P2pCommand::Admin { command } => match command {
-            P2pAdminCommand::Connect(args) => connect::p2p_connect(args).await,
+            P2pAdminCommand::Connect(args) => Ok(connect::p2p_connect(args).await?),
             P2pAdminCommand::Collections { command } => match command {
-                P2pCollectionsCommand::List(args) => collections::p2p_collections_list(args).await,
-                P2pCollectionsCommand::Add(args) => collections::p2p_collections_add(args).await,
+                P2pCollectionsCommand::List(args) => {
+                    Ok(collections::p2p_collections_list(args).await?)
+                }
+                P2pCollectionsCommand::Add(args) => {
+                    Ok(collections::p2p_collections_add(args).await?)
+                }
                 P2pCollectionsCommand::Remove(args) => {
-                    collections::p2p_collections_remove(args).await
+                    Ok(collections::p2p_collections_remove(args).await?)
                 }
                 P2pCollectionsCommand::SyncBranchable(args) => {
-                    collections::p2p_collections_sync_branchable(args).await
+                    Ok(collections::p2p_collections_sync_branchable(args).await?)
                 }
                 P2pCollectionsCommand::SyncVersions(args) => {
-                    collections::p2p_collections_sync_versions(args).await
+                    Ok(collections::p2p_collections_sync_versions(args).await?)
                 }
             },
             P2pAdminCommand::Replicators { command } => match command {
-                P2pReplicatorsCommand::List(args) => replicators::p2p_replicators_list(args).await,
-                P2pReplicatorsCommand::Add(args) => replicators::p2p_replicators_add(args).await,
+                P2pReplicatorsCommand::List(args) => {
+                    Ok(replicators::p2p_replicators_list(args).await?)
+                }
+                P2pReplicatorsCommand::Add(args) => {
+                    Ok(replicators::p2p_replicators_add(args).await?)
+                }
                 P2pReplicatorsCommand::Remove(args) => {
-                    replicators::p2p_replicators_remove(args).await
+                    Ok(replicators::p2p_replicators_remove(args).await?)
                 }
             },
             P2pAdminCommand::Documents { command } => match command {
-                P2pDocumentsCommand::List(args) => documents::p2p_documents_list(args).await,
-                P2pDocumentsCommand::Add(args) => documents::p2p_documents_add(args).await,
-                P2pDocumentsCommand::Remove(args) => documents::p2p_documents_remove(args).await,
-                P2pDocumentsCommand::Sync(args) => documents::p2p_documents_sync(args).await,
+                P2pDocumentsCommand::List(args) => Ok(documents::p2p_documents_list(args).await?),
+                P2pDocumentsCommand::Add(args) => Ok(documents::p2p_documents_add(args).await?),
+                P2pDocumentsCommand::Remove(args) => {
+                    Ok(documents::p2p_documents_remove(args).await?)
+                }
+                P2pDocumentsCommand::Sync(args) => Ok(documents::p2p_documents_sync(args).await?),
             },
         },
     }
@@ -112,9 +124,11 @@ pub(super) async fn p2p_probe_get(
     graphql: &gents::config_client::GraphqlEndpoint,
     url: &str,
 ) -> Value {
-    let request = p2p_http_client().and_then(|client| graphql.authorize(client.get(url)));
+    let request = p2p_http_client().and_then(|client| Ok(graphql.authorize(client.get(url))?));
     let response = match request {
-        Ok(request) => crate::http_get_json::<Value>(request).await,
+        Ok(request) => crate::http_get_json::<Value>(request)
+            .await
+            .map_err(P2pCommandError::from),
         Err(error) => Err(error),
     };
     match response {

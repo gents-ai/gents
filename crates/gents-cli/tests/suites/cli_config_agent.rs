@@ -2,13 +2,13 @@ use crate::support::*;
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     std::fs::create_dir_all(&home_dir)?;
 
@@ -33,7 +33,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     let profile_id = init
         .get("inference_profile_id")
         .and_then(Value::as_str)
-        .context("init output missing inference_profile_id")?
+        .expect("init output missing inference_profile_id")
         .to_string();
 
     let mut serve = spawn_server(&home_dir, port)?;
@@ -67,7 +67,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     let agent_id = created
         .get("agent_id")
         .and_then(Value::as_str)
-        .context("create output missing agent_id")?
+        .expect("create output missing agent_id")
         .to_string();
     assert_eq!(agent_id, format!("{node_did}:research-assistant"));
 
@@ -90,7 +90,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     let cloned_id = cloned
         .get("agent_id")
         .and_then(Value::as_str)
-        .context("clone output missing agent_id")?
+        .expect("clone output missing agent_id")
         .to_string();
     assert_eq!(cloned_id, format!("{node_did}:cloned-assistant"));
 
@@ -166,7 +166,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     let readonly_id = readonly_created
         .get("agent_id")
         .and_then(Value::as_str)
-        .context("create output missing agent_id")?
+        .expect("create output missing agent_id")
         .to_string();
 
     let readonly_show = run_cli_json(
@@ -190,7 +190,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     let _tools_id = readonly_show
         .pointer("/resolved/tools/tools_id")
         .and_then(Value::as_str)
-        .context("show output missing tools_id")?
+        .expect("show output missing tools_id")
         .to_string();
 
     let mut tools = readonly_show["resolved"]["tools"].clone();

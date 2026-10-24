@@ -7,6 +7,20 @@ use gents_desktop_core::client::{
 
 use super::agent::LiveAgentDocs;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ReplicationError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("timed out waiting for ready peer status {peer_id} on {label}; observed={observed}")]
+    ReadyPeerTimeout {
+        peer_id: String,
+        label: String,
+        observed: String,
+    },
+}
+
 pub(super) async fn wait_for_connectable_iroh_addr(
     core: &ClientCore,
     label: &str,
@@ -127,7 +141,7 @@ pub(super) async fn wait_for_ready_peer_status(
     core: &ClientCore,
     peer_id: &str,
     label: &str,
-) -> Result<()> {
+) -> std::result::Result<(), ReplicationError> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let snapshot = core.sync_state();
@@ -144,9 +158,11 @@ pub(super) async fn wait_for_ready_peer_status(
         }
         if Instant::now() >= deadline {
             let observed = snapshot.peers.iter().find(|peer| peer.peer_id == peer_id);
-            anyhow::bail!(
-                "timed out waiting for ready peer status {peer_id} on {label}; observed={observed:?}"
-            );
+            return Err(ReplicationError::ReadyPeerTimeout {
+                peer_id: peer_id.to_owned(),
+                label: label.to_owned(),
+                observed: format!("{observed:?}"),
+            });
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -185,7 +201,7 @@ async fn set_replicator_with_retry(
 pub(super) fn write_peer_directory_records(
     paths: &DesktopPaths,
     records: &[PeerRecord],
-) -> Result<()> {
+) -> std::result::Result<(), ReplicationError> {
     std::fs::create_dir_all(paths.root())?;
     let payload = serde_json::json!({ "peers": records });
     std::fs::write(

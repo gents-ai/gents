@@ -46,15 +46,32 @@ pub(crate) async fn load_caused_request_terminals(
         .await
 }
 
-fn query_rows<T>(response: &serde_json::Value, collection: &str) -> Result<Vec<T>>
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum QueryRowsError {
+    #[error("caused terminal {collection} query omitted rows")]
+    Omitted { collection: String },
+    #[error("decoding caused terminal {collection}")]
+    Decode {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+fn query_rows<T>(response: &serde_json::Value, collection: &str) -> Result<Vec<T>, QueryRowsError>
 where
     T: serde::de::DeserializeOwned,
 {
     let rows = response
         .pointer(&format!("/data/{collection}"))
         .cloned()
-        .with_context(|| format!("caused terminal {collection} query omitted rows"))?;
-    serde_json::from_value(rows).with_context(|| format!("decoding caused terminal {collection}"))
+        .ok_or_else(|| QueryRowsError::Omitted {
+            collection: collection.to_owned(),
+        })?;
+    serde_json::from_value(rows).map_err(|source| QueryRowsError::Decode {
+        collection: collection.to_owned(),
+        source,
+    })
 }
 
 pub(crate) async fn caused_request_terminals_in_txn(

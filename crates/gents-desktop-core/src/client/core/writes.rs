@@ -28,7 +28,7 @@ use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
-use super::ClientCore;
+use super::{ClientCore, ClientCoreError};
 mod pending_submissions;
 
 #[cfg(test)]
@@ -235,7 +235,7 @@ pub(super) fn find_request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
-) -> Result<Option<AgentRequestRow>> {
+) -> Result<Option<AgentRequestRow>, ClientCoreError> {
     let mut matches = rows.iter().filter(|row| {
         row.request_id == request_id
             && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
@@ -243,10 +243,11 @@ pub(super) fn find_request_in_scope(
     let Some(row) = matches.next() else {
         return Ok(None);
     };
-    anyhow::ensure!(
-        matches.next().is_none(),
-        "request {request_id} is ambiguous across node scopes"
-    );
+    if matches.next().is_some() {
+        return Err(ClientCoreError::RequestAmbiguousAcrossNodeScopes {
+            request_id: request_id.to_owned(),
+        });
+    }
     Ok(Some(row.clone()))
 }
 
@@ -254,9 +255,12 @@ fn request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
-) -> Result<AgentRequestRow> {
-    find_request_in_scope(rows, request_id, node_did)?
-        .with_context(|| format!("request {request_id} not found"))
+) -> Result<AgentRequestRow, ClientCoreError> {
+    find_request_in_scope(rows, request_id, node_did)?.ok_or_else(|| {
+        ClientCoreError::RequestNotFound {
+            request_id: request_id.to_owned(),
+        }
+    })
 }
 
 fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
@@ -390,7 +394,8 @@ impl ClientCore {
         graphql: &str,
         node_home: &str,
     ) -> Result<PeerRecord> {
-        self.sync_state
+        Ok(self
+            .sync_state
             .upsert_local_standard_peer(
                 normalize_required("label", label)?,
                 normalize_required("addr", addr)?,
@@ -398,7 +403,7 @@ impl ClientCore {
                 normalize_required("graphql", graphql)?,
                 normalize_required("node_home", node_home)?,
             )
-            .await
+            .await?)
     }
 
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
@@ -549,7 +554,7 @@ impl ClientCore {
         delivery: gents_protocol::request_input::QueueDelivery,
     ) -> Result<gents_protocol::request_input::RequestInput> {
         let input = self.prepare_goal_input(node_did, session_id, input).await?;
-        gents::lifecycle::prepare_user_message_input(
+        Ok(gents::lifecycle::prepare_user_message_input(
             &self
                 .operator_observation_graphql(node_did)
                 .map(ConfigAccess::Graphql)
@@ -559,7 +564,7 @@ impl ClientCore {
             input,
             delivery,
         )
-        .await
+        .await?)
     }
 
     pub async fn pending_user_queue(
@@ -1113,7 +1118,7 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("rename session", error)),
+            Err(error) => Err(self.record_mutation_error("rename session", error.into())),
         }
     }
 
@@ -1459,7 +1464,11 @@ impl ClientCore {
         request_id: &str,
         node_did: Option<&str>,
     ) -> Result<AgentRequestRow> {
-        request_in_scope(&self.store.snapshot().requests, request_id, node_did)
+        Ok(request_in_scope(
+            &self.store.snapshot().requests,
+            request_id,
+            node_did,
+        )?)
     }
 
     pub async fn resend_request_in_scope(
@@ -1699,7 +1708,7 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no runtime record for this node")?;
-        crate::local_runtime::operator_signer(&record)
+        crate::local_runtime::operator_signer(&record).map_err(anyhow::Error::from)
     }
 
     pub fn operator_access(&self, node_did: &str) -> Result<ConfigAccess> {
@@ -2998,6 +3007,7 @@ fn complete_confirmed_delete(
 mod delete_source_tests {
     use super::*;
     use anyhow::anyhow;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     #[test]
@@ -3013,8 +3023,11 @@ mod delete_source_tests {
         let error = local_hydration_start_evidence_from_response(&response)
             .expect_err("unknown lifecycle state must fail at the row boundary");
         assert!(
-            format!("{error:#}").contains("notARequestState"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("notARequestState"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

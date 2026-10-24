@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
@@ -1220,7 +1221,7 @@ async fn create_work_unit(
     access
         .write("workspace_cycle.seed_work", &mutation)
         .await
-        .unwrap_or_else(|error| panic!("create work unit for {owner}: {error:#}"));
+        .unwrap_or_else(|error| panic!("create work unit for {owner}: {}", ErrorChain(&error)));
 }
 
 async fn wait_integrator_outcome(
@@ -1364,7 +1365,7 @@ async fn cycle_failure_diagnostics(
                 .and_then(|message| gents::tool_call_lifecycle::render_tool_result(&message));
                 tool_results.push(json!({
                     "tool": tool,
-                    "result": result.unwrap_or_else(|error| format!("<unavailable: {error:#}>") )
+                    "result": result.unwrap_or_else(|error| format!("<unavailable: {}>", ErrorChain(error.as_ref())) )
                 }));
             }
         }

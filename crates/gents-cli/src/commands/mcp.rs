@@ -17,6 +17,34 @@ use crate::{
     print_json, resolve_config_access,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum McpCommandError {
+    #[error("SERVICE must be a non-empty service id")]
+    EmptyServiceId,
+    #[error("parsing --endpoint URL")]
+    EndpointUrl(#[source] url::ParseError),
+    #[error("--endpoint must use http; the MCP registry currently stores HTTP endpoints")]
+    EndpointScheme,
+    #[error("--endpoint must not contain credentials")]
+    EndpointCredentials,
+    #[error("--endpoint must not contain a query string or fragment")]
+    EndpointQuery,
+    #[error("--endpoint must contain a host")]
+    EndpointHost,
+    #[error("--endpoint must contain a port")]
+    EndpointPort,
+    #[error("--timeout must be greater than zero")]
+    ZeroTimeout,
+    #[error("no online MCP service matched {service_id}")]
+    NoMatchingService { service_id: String },
+    #[error("parsing ToolServiceRegistry row")]
+    ParseRegistryRow(#[source] serde_json::Error),
+    #[error("provide either <service> or --all, not both")]
+    ProbeTargetBoth,
+    #[error("provide a service id or --all")]
+    ProbeTargetNeither,
+}
+
 pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
     match command {
         McpCommand::Register(args) => mcp_register(args).await,
@@ -27,25 +55,25 @@ pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
 async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     let service_id = args.service.trim();
     if service_id.is_empty() {
-        anyhow::bail!("SERVICE must be a non-empty service id");
+        return Err(McpCommandError::EmptyServiceId.into());
     }
-    let endpoint = url::Url::parse(args.endpoint.trim()).context("parsing --endpoint URL")?;
+    let endpoint = url::Url::parse(args.endpoint.trim()).map_err(McpCommandError::EndpointUrl)?;
     if endpoint.scheme() != "http" {
-        anyhow::bail!("--endpoint must use http; the MCP registry currently stores HTTP endpoints");
+        return Err(McpCommandError::EndpointScheme.into());
     }
     if !endpoint.username().is_empty() || endpoint.password().is_some() {
-        anyhow::bail!("--endpoint must not contain credentials");
+        return Err(McpCommandError::EndpointCredentials.into());
     }
     if endpoint.query().is_some() || endpoint.fragment().is_some() {
-        anyhow::bail!("--endpoint must not contain a query string or fragment");
+        return Err(McpCommandError::EndpointQuery.into());
     }
     let host = endpoint
         .host_str()
         .filter(|host| !host.trim().is_empty())
-        .context("--endpoint must contain a host")?;
+        .ok_or(McpCommandError::EndpointHost)?;
     let port = endpoint
         .port_or_known_default()
-        .context("--endpoint must contain a port")?;
+        .ok_or(McpCommandError::EndpointPort)?;
     let path = match endpoint.path().trim() {
         "" | "/" => "/mcp",
         path => path,
@@ -117,16 +145,16 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     let target = ProbeTarget::from_args(&args)?;
     let timeout = parse_duration_suffix(&args.timeout)?;
     if timeout.is_zero() {
-        anyhow::bail!("--timeout must be greater than zero");
+        return Err(McpCommandError::ZeroTimeout.into());
     }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let services = load_mcp_services(&access, target.service_id()).await?;
     if matches!(target, ProbeTarget::Single(_)) && services.is_empty() {
-        anyhow::bail!(
-            "no online MCP service matched {}",
-            target.service_id().unwrap_or_default()
-        );
+        return Err(McpCommandError::NoMatchingService {
+            service_id: target.service_id().unwrap_or_default().to_owned(),
+        }
+        .into());
     }
 
     let local_hostname = hostname::get()
@@ -144,7 +172,7 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
         .output
         .ensure_supported("mcp probe", &[OutputFormat::Text, OutputFormat::Json])?
     {
-        OutputFormat::Json => print_json(&serde_json::to_value(report)?),
+        OutputFormat::Json => Ok(print_json(&serde_json::to_value(report)?)?),
         OutputFormat::Text => {
             print_probe_table(&report.items);
             Ok(())
@@ -181,9 +209,11 @@ async fn load_mcp_services(
     let rows = graphql_rows_or_empty_if_collection_missing(access, "ToolServiceRegistry", &query)
         .await
         .context("loading online MCP service registry rows")?;
-    rows.into_iter()
-        .map(|row| serde_json::from_value(row).context("parsing ToolServiceRegistry row"))
-        .collect()
+    let services = rows
+        .into_iter()
+        .map(|row| serde_json::from_value(row).map_err(McpCommandError::ParseRegistryRow))
+        .collect::<Result<Vec<McpHealthCheckService>, McpCommandError>>()?;
+    Ok(services)
 }
 
 async fn probe_services(
@@ -352,13 +382,13 @@ enum ProbeTarget {
 }
 
 impl ProbeTarget {
-    fn from_args(args: &McpProbeArgs) -> Result<Self> {
+    fn from_args(args: &McpProbeArgs) -> Result<Self, McpCommandError> {
         let service = normalize_optional_string(args.service.as_deref());
         match (args.all, service) {
             (true, None) => Ok(Self::All),
             (false, Some(service_id)) => Ok(Self::Single(service_id)),
-            (true, Some(_)) => anyhow::bail!("provide either <service> or --all, not both"),
-            (false, None) => anyhow::bail!("provide a service id or --all"),
+            (true, Some(_)) => Err(McpCommandError::ProbeTargetBoth),
+            (false, None) => Err(McpCommandError::ProbeTargetNeither),
         }
     }
 

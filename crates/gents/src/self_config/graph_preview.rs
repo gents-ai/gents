@@ -137,6 +137,7 @@ impl Tool for PreviewGraphTool {
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     use serde_json::{json, Value};
@@ -374,9 +375,11 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            format!("{conflict:#}")
+            ErrorChain(conflict.as_ref())
+                .to_string()
                 .contains("stored graph revision does not match compiled plan identity"),
-            "unexpected foreign-owner conflict: {conflict:#}"
+            "unexpected foreign-owner conflict: {}",
+            ErrorChain(conflict.as_ref())
         );
         node.shutdown().await;
     }

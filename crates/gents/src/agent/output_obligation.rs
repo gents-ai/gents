@@ -1,7 +1,7 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -12,6 +12,50 @@ use crate::graphql::{
 
 use gents_loop::output_obligation::OutputObligationCheck;
 pub(crate) use gents_loop::output_obligation::{continuation_message, UnmetOutputObligation};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OutputObligationError {
+    #[error("output obligation ancestry query omitted requests")]
+    AncestryRequestsMissing,
+    #[error("output obligations require a physical request document id")]
+    RequestDocIdMissing,
+    #[error("completed output query omitted AgentToolCall rows")]
+    CompletedRowsMissing,
+    #[error("completed output write lacks exact request membership")]
+    RequestMembershipMismatch,
+    #[error("completed output write references a missing request")]
+    RequestMissing,
+    #[error("completed output write crossed its physical request ownership scope")]
+    OwnershipScopeCrossed,
+    #[error("accepted output write has no physical tool ID")]
+    AcceptedToolIdMissing,
+    #[error("completed output write has no unique physical tool binding")]
+    ToolBindingNotUnique,
+    #[error("completed output write changed its accepted identity or terminal state")]
+    AcceptedIdentityChanged,
+    #[error("output obligation for `{tool_name}` has {completed} completed writes but declares expected count {expected:?} with minimum {minimum}")]
+    ExpectedCountRejected {
+        tool_name: String,
+        completed: usize,
+        expected: Option<usize>,
+        minimum: usize,
+    },
+    #[error("completed `{tool_name}` write has invalid durable arguments: {error}")]
+    InvalidDurableArguments {
+        tool_name: String,
+        error: serde_json::Error,
+    },
+    #[error("completed `{tool_name}` write is missing expected_count_field `{field}`")]
+    ExpectedCountFieldMissing { tool_name: String, field: String },
+    #[error("completed `{tool_name}` write expected_count_field `{field}` must be a canonical positive integer <= {maximum}")]
+    ExpectedCountInvalid {
+        tool_name: String,
+        field: String,
+        maximum: usize,
+    },
+    #[error("completed `{tool_name}` writes disagree on expected_count_field `{field}`")]
+    ExpectedCountDisagrees { tool_name: String, field: String },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveOutputObligation {
@@ -100,7 +144,7 @@ impl OutputObligationGate {
                     .as_ref()
                     .and_then(|data| data.get("AgentRequest"))
                     .cloned()
-                    .context("output obligation ancestry query omitted requests")?,
+                    .ok_or(OutputObligationError::AncestryRequestsMissing)?,
             )?;
             let members = crate::goal::authenticated_goal_request_members(
                 &request.node_did,
@@ -127,7 +171,7 @@ impl OutputObligationGate {
         if self.request_doc_ids.is_empty()
             || self.request_doc_ids.iter().any(|id| id.trim().is_empty())
         {
-            bail!("output obligations require a physical request document id");
+            return Err(OutputObligationError::RequestDocIdMissing.into());
         }
 
         let query = format!(
@@ -153,7 +197,7 @@ impl OutputObligationGate {
                 .as_ref()
                 .and_then(|data| data.get("AgentToolCall"))
                 .cloned()
-                .context("completed output query omitted AgentToolCall rows")?,
+                .ok_or(OutputObligationError::CompletedRowsMissing)?,
         )?;
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let mut requests = RapidHashMap::new();
@@ -167,26 +211,25 @@ impl OutputObligationGate {
             {
                 continue;
             }
-            anyhow::ensure!(
-                !row.doc_id.trim().is_empty() && self.request_doc_ids.contains(&row.request_doc_id),
-                "completed output write lacks exact request membership"
-            );
+            if row.doc_id.trim().is_empty() || !self.request_doc_ids.contains(&row.request_doc_id) {
+                return Err(OutputObligationError::RequestMembershipMismatch.into());
+            }
             if !requests.contains_key(&row.request_doc_id) {
                 let request = crate::request_binding::load_agent_request_by_doc_id(
                     &self.node,
                     &row.request_doc_id,
                 )
                 .await?
-                .context("completed output write references a missing request")?;
+                .ok_or(OutputObligationError::RequestMissing)?;
                 requests.insert(row.request_doc_id.clone(), request);
             }
             let request = &requests[&row.request_doc_id];
-            anyhow::ensure!(
-                request.node_did == row.node_did
-                    && request.session_id == row.session_id
-                    && request.requester_did == row.requester_did,
-                "completed output write crossed its physical request ownership scope"
-            );
+            if request.node_did != row.node_did
+                || request.session_id != row.session_id
+                || request.requester_did != row.requester_did
+            {
+                return Err(OutputObligationError::OwnershipScopeCrossed.into());
+            }
             scoped_rows
                 .entry((
                     row.node_did.clone(),
@@ -216,7 +259,7 @@ impl OutputObligationGate {
                 let doc_id = call
                     .doc_id
                     .clone()
-                    .context("accepted output write has no physical tool ID")?;
+                    .ok_or(OutputObligationError::AcceptedToolIdMissing)?;
                 calls_by_doc.entry(doc_id).or_default().push(call);
             }
             for row in rows {
@@ -224,18 +267,16 @@ impl OutputObligationGate {
                     .get(&row.doc_id)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                anyhow::ensure!(
-                    matches.len() == 1,
-                    "completed output write has no unique physical tool binding"
-                );
-                let call = &matches[0];
-                anyhow::ensure!(
-                    call.session_id == row.session_id
-                        && call.request_doc_id.as_deref() == Some(row.request_doc_id.as_str())
-                        && call.tool_name == row.tool_name
-                        && call.lifecycle_state.as_deref() == Some("completed"),
-                    "completed output write changed its accepted identity or terminal state"
-                );
+                let [call] = matches else {
+                    return Err(OutputObligationError::ToolBindingNotUnique.into());
+                };
+                if call.session_id != row.session_id
+                    || call.request_doc_id.as_deref() != Some(row.request_doc_id.as_str())
+                    || call.tool_name != row.tool_name
+                    || call.lifecycle_state.as_deref() != Some("completed")
+                {
+                    return Err(OutputObligationError::AcceptedIdentityChanged.into());
+                }
                 writes
                     .entry(row.tool_name.clone())
                     .or_default()
@@ -265,13 +306,13 @@ impl OutputObligationGate {
                 }),
                 OutputObligationDecision::Complete => {}
                 OutputObligationDecision::Reject => {
-                    bail!(
-                        "output obligation for `{}` has {} completed writes but declares expected count {:?} with minimum {}",
-                        obligation.tool_name,
-                        completed.len(),
+                    return Err(OutputObligationError::ExpectedCountRejected {
+                        tool_name: obligation.tool_name.clone(),
+                        completed: completed.len(),
                         expected,
-                        obligation.contract.minimum_writes,
-                    );
+                        minimum: obligation.contract.minimum_writes,
+                    }
+                    .into());
                 }
             }
         }
@@ -292,40 +333,37 @@ impl OutputObligationCheck for OutputObligationGate {
 fn expected_write_count(
     obligation: &ActiveOutputObligation,
     completed: &[CompletedWriteRow],
-) -> Result<Option<usize>> {
+) -> Result<Option<usize>, OutputObligationError> {
     let Some(field) = obligation.contract.expected_count_field.as_deref() else {
         return Ok(None);
     };
     let mut expected = None;
     for row in completed {
         let args: serde_json::Value = serde_json::from_str(&row.args).map_err(|error| {
-            anyhow::anyhow!(
-                "completed `{}` write has invalid durable arguments: {error}",
-                obligation.tool_name
-            )
+            OutputObligationError::InvalidDurableArguments {
+                tool_name: obligation.tool_name.clone(),
+                error,
+            }
         })?;
-        let value = args.get(field).ok_or_else(|| {
-            anyhow::anyhow!(
-                "completed `{}` write is missing expected_count_field `{field}`",
-                obligation.tool_name
-            )
-        })?;
-        let count = canonical_positive_count(
-            value,
-            crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
-        )
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "completed `{}` write expected_count_field `{field}` must be a canonical positive integer <= {}",
-                obligation.tool_name,
-                crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
-            )
+        let value =
+            args.get(field)
+                .ok_or_else(|| OutputObligationError::ExpectedCountFieldMissing {
+                    tool_name: obligation.tool_name.clone(),
+                    field: field.to_owned(),
+                })?;
+        let maximum = crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        let count = canonical_positive_count(value, maximum).ok_or_else(|| {
+            OutputObligationError::ExpectedCountInvalid {
+                tool_name: obligation.tool_name.clone(),
+                field: field.to_owned(),
+                maximum,
+            }
         })?;
         if expected.is_some_and(|prior| prior != count) {
-            bail!(
-                "completed `{}` writes disagree on expected_count_field `{field}`",
-                obligation.tool_name
-            );
+            return Err(OutputObligationError::ExpectedCountDisagrees {
+                tool_name: obligation.tool_name.clone(),
+                field: field.to_owned(),
+            });
         }
         expected = Some(count);
     }

@@ -166,6 +166,8 @@ impl IdentityDecideError {
 
 #[cfg(test)]
 mod tests {
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     use std::{net::SocketAddr, sync::Arc};
 
     use acp::{
@@ -250,7 +252,7 @@ mod tests {
 
     async fn build_local_acp_from_lean_case(
         case: &LeanIdentityPermissionCase,
-    ) -> anyhow::Result<LocalDocumentACP> {
+    ) -> TestResult<LocalDocumentACP> {
         let store = Arc::new(MemoryAcpStore::new());
         let acp = LocalDocumentACP::new(store.clone());
         let row_owner = did_from_lean_case(&case.row_owner, case, "row_owner");
@@ -288,7 +290,7 @@ mod tests {
         })
     }
 
-    async fn spawn_mock_defradb(acp: LocalDocumentACP) -> anyhow::Result<String> {
+    async fn spawn_mock_defradb(acp: LocalDocumentACP) -> TestResult<String> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let router = Router::new()
@@ -300,7 +302,7 @@ mod tests {
         Ok(format!("http://{addr}"))
     }
 
-    async fn spawn_runtime_router(graphql: String) -> anyhow::Result<SocketAddr> {
+    async fn spawn_runtime_router(graphql: String) -> TestResult<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let (activation_runtime, activation_observation) =
@@ -335,7 +337,7 @@ mod tests {
         actor: &str,
         permission: &str,
         resource: &str,
-    ) -> anyhow::Result<IdentityDecideResponse> {
+    ) -> TestResult<IdentityDecideResponse> {
         let response = reqwest::Client::new()
             .post(format!("http://{runtime_addr}/identity/decide"))
             .json(&json!({
@@ -352,8 +354,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identity_decide_endpoint_matches_resolved_lean_permission_cases() -> anyhow::Result<()>
-    {
+    async fn identity_decide_endpoint_matches_resolved_lean_permission_cases() -> TestResult<()> {
         let cases = lean_identity_permission_cases();
         assert!(!cases.is_empty());
 

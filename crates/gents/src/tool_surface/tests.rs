@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 fn temp_root(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
@@ -388,7 +389,8 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
 
     assert!(
         error.to_string().contains("escapes operator tool root"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -447,7 +449,8 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
 
     assert!(
         error.to_string().contains("escapes operator tool root"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -1093,7 +1096,8 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
         error
             .to_string()
             .contains("not a registered backgroundable tool"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -1155,7 +1159,8 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
 
     assert!(
         error.to_string().contains("escapes operator tool root"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -1339,8 +1344,11 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         Err(error) => error,
     };
     assert!(
-        format!("{error:#}").contains("unsupported bounded write field type"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("unsupported bounded write field type"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -2076,7 +2084,8 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
     };
     assert!(
         error.to_string().contains("current WorkspaceRoot policy"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -2117,7 +2126,11 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
         Ok(_) => panic!("active legacy Tools must not bypass explicit WorkspaceRoot policy"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("no explicit root"), "{error:#}");
+    assert!(
+        error.to_string().contains("no explicit root"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
 }
 
 fn explanation_has_warning(explanation: &ToolSurfaceExplanation, code: &str) -> bool {

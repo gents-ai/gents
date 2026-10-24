@@ -2,9 +2,67 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use tokio::sync::Mutex;
+
+#[derive(Debug, thiserror::Error)]
+pub enum StreamingError {
+    #[error("blank closing identity")]
+    BlankClosingIdentity,
+    #[error("tool identity count changed")]
+    ToolIdentityCountChanged,
+    #[error("tool identity missing")]
+    ToolIdentityMissing,
+    #[error("authored publication requires native user text, image or document blocks")]
+    AuthoredUserBlockUnsupported,
+    #[error("native user message has no blocks")]
+    NativeUserMessageEmpty,
+    #[error("unsupported native authored role")]
+    UnsupportedAuthoredRole,
+    #[error("native assistant message has no blocks")]
+    NativeAssistantMessageEmpty,
+    #[error(transparent)]
+    IntegerOverflow(std::num::TryFromIntError),
+    #[error("native block index exceeds u32")]
+    NativeBlockIndexOverflow(#[source] std::num::TryFromIntError),
+    #[error("reasoning part index exceeds u32")]
+    ReasoningPartIndexOverflow(#[source] std::num::TryFromIntError),
+    #[error("encoding exact native tool arguments")]
+    EncodeToolArguments(#[source] serde_json::Error),
+    #[error("authored publication is missing request deadline")]
+    AuthoredRequestDeadlineMissing,
+    #[error("provider attempt is not active")]
+    ProviderAttemptInactive,
+    #[error("provider attempt omitted capture scope")]
+    ProviderAttemptCaptureScopeMissing,
+    #[error("pending provider flush disagrees with its acknowledged cursor")]
+    PendingFlushDisagrees,
+    #[error("provider flush lost its prepared record")]
+    ProviderFlushLostRecord,
+    #[error("provider close has no exact active attempt")]
+    ProviderCloseNoActiveAttempt,
+    #[error("provider close omitted capture scope")]
+    ProviderCloseCaptureScopeMissing,
+    #[error("provider acceptance has no exact active attempt")]
+    ProviderAcceptanceNoActiveAttempt,
+    #[error("provider acceptance omitted capture scope")]
+    ProviderAcceptanceCaptureScopeMissing,
+    #[error("provider turn exceeds u32")]
+    ProviderTurnOverflow(#[source] std::num::TryFromIntError),
+    #[error("accepted tool call is missing its request deadline")]
+    AcceptedToolRequestDeadlineMissing,
+    #[error("provider attempt ended during acceptance")]
+    ProviderAttemptEndedDuringAcceptance,
+    #[error("no buffer for doc_id={doc_id}")]
+    NoBuffer { doc_id: String },
+    #[error("no output buffer for audit")]
+    NoOutputBufferForAudit,
+    #[error("provider stream rewrote acknowledged bytes")]
+    ProviderStreamRewroteAcknowledged,
+    #[error("provider stream structure shrank")]
+    ProviderStreamShrank,
+}
 
 pub(crate) mod auxiliary;
 #[cfg(test)]
@@ -181,7 +239,7 @@ impl DefraStreamWriter {
             expected: Arc::new(message.clone()),
             tool_deadline_at: lifecycle
                 .claimed_deadline_at()
-                .context("authored publication is missing request deadline")?
+                .ok_or(StreamingError::AuthoredRequestDeadlineMissing)?
                 .to_rfc3339(),
             background_calls: Vec::new(),
             consumes_folded: crate::lifecycle::queue::FoldedConsumption::for_key(
@@ -242,13 +300,13 @@ impl DefraStreamWriter {
         let mut tails = self.provider_tails.lock().await;
         let tail = tails
             .get_mut(&request.doc_id)
-            .context("provider attempt is not active")?;
+            .ok_or(StreamingError::ProviderAttemptInactive)?;
         let acknowledged = self.acknowledge_provider_flush(tail, generation).await?;
         let turn = tail.turn;
         let attempt = tail.attempt;
         let capture_scope = tail
             .capture_scope
-            .context("provider attempt omitted capture scope")?;
+            .ok_or(StreamingError::ProviderAttemptCaptureScopeMissing)?;
         let ordinal = tail.next_ordinal;
         let delta = provider_flush_delta(&tail.streams, &encoded)?;
         if !delta.grew {
@@ -288,15 +346,14 @@ impl DefraStreamWriter {
         let Some(pending) = tail.pending_flush.as_ref() else {
             return Ok(false);
         };
-        anyhow::ensure!(
-            pending.segment.ordinal == Some(tail.next_ordinal),
-            "pending provider flush disagrees with its acknowledged cursor"
-        );
+        if pending.segment.ordinal != Some(tail.next_ordinal) {
+            return Err(StreamingError::PendingFlushDisagrees.into());
+        }
         canonical::append_provider_segment(&self.node, generation, &pending.segment).await?;
         let pending = tail
             .pending_flush
             .take()
-            .context("provider flush lost its prepared record")?;
+            .ok_or(StreamingError::ProviderFlushLostRecord)?;
         tail.streams = pending.streams;
         tail.next_ordinal += 1;
         Ok(true)
@@ -332,11 +389,11 @@ impl DefraStreamWriter {
         let tail = tails
             .get_mut(&request.doc_id)
             .filter(|tail| tail.turn == turn && tail.attempt == attempt)
-            .context("provider close has no exact active attempt")?;
+            .ok_or(StreamingError::ProviderCloseNoActiveAttempt)?;
         self.acknowledge_provider_flush(tail, generation).await?;
         let scope = tail
             .capture_scope
-            .context("provider close omitted capture scope")?;
+            .ok_or(StreamingError::ProviderCloseCaptureScopeMissing)?;
         let segment = OutputSegment {
             node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
@@ -385,16 +442,16 @@ impl DefraStreamWriter {
         let tail = tails
             .get_mut(&request.doc_id)
             .filter(|tail| tail.turn == turn && tail.attempt == attempt)
-            .context("provider acceptance has no exact active attempt")?;
+            .ok_or(StreamingError::ProviderAcceptanceNoActiveAttempt)?;
         self.acknowledge_provider_flush(tail, lifecycle.execution_generation()?)
             .await?;
         let created_at = chrono::Utc::now().to_rfc3339();
         let capture_scope = tail
             .capture_scope
-            .context("provider acceptance omitted capture scope")?;
+            .ok_or(StreamingError::ProviderAcceptanceCaptureScopeMissing)?;
         let source = OutputSource::ProviderTurn {
             scope: capture_scope,
-            turn_index: u32::try_from(turn).context("provider turn exceeds u32")?,
+            turn_index: u32::try_from(turn).map_err(StreamingError::ProviderTurnOverflow)?,
             attempt,
         };
         let delta = provider_flush_delta(&tail.streams, &encoded)?;
@@ -445,7 +502,7 @@ impl DefraStreamWriter {
                 expected,
                 tool_deadline_at: lifecycle
                     .claimed_deadline_at()
-                    .context("accepted tool call is missing its request deadline")?
+                    .ok_or(StreamingError::AcceptedToolRequestDeadlineMissing)?
                     .to_rfc3339(),
                 background_calls: canonical::session_message_call_ids(message),
                 consumes_folded: None,
@@ -455,7 +512,7 @@ impl DefraStreamWriter {
         let tail = tails
             .get_mut(&request.doc_id)
             .filter(|tail| tail.turn == turn && tail.attempt == attempt)
-            .context("provider attempt ended during acceptance")?;
+            .ok_or(StreamingError::ProviderAttemptEndedDuringAcceptance)?;
         tail.streams = std::sync::Arc::unwrap_or_clone(encoded).streams;
         tail.next_ordinal += u32::from(delta.grew);
         drop(tails);
@@ -534,7 +591,9 @@ impl DefraStreamWriter {
         let mut buffers = self.buffers.lock().await;
         let buf = buffers
             .get_mut(doc_id)
-            .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+            .ok_or_else(|| StreamingError::NoBuffer {
+                doc_id: doc_id.to_owned(),
+            })?;
         let first_visible_content = buf.current.first_visible_since(&buf.persisted);
         if !force
             && !first_visible_content
@@ -550,7 +609,9 @@ impl DefraStreamWriter {
         let mut buffers = self.buffers.lock().await;
         let buf = buffers
             .get_mut(doc_id)
-            .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+            .ok_or_else(|| StreamingError::NoBuffer {
+                doc_id: doc_id.to_owned(),
+            })?;
         if buf.current.content_bytes == 0
             && !buf.current.reasoning_marked
             && buf.persisted.content_bytes == 0
@@ -602,7 +663,14 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
     ) -> Result<Option<String>> {
         match DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await {
             Ok(id) => Ok(Some(id)),
-            Err(error) if error.is::<crate::lifecycle::queue::PendingInputChanged>() => Ok(None),
+            Err(error)
+                if matches!(
+                    error.downcast_ref::<crate::lifecycle::queue::QueueError>(),
+                    Some(crate::lifecycle::queue::QueueError::PendingInputChanged(_))
+                ) =>
+            {
+                Ok(None)
+            }
             Err(error) => Err(error),
         }
     }
@@ -683,7 +751,7 @@ impl StreamWriter for DefraStreamWriter {
             .lock()
             .await
             .get_mut(doc_id)
-            .context("no output buffer for audit")?
+            .ok_or(StreamingError::NoOutputBufferForAudit)?
             .current
             .mark(output);
         let Some(snapshot) = self.pending_snapshot(doc_id, false).await? else {
@@ -722,7 +790,9 @@ impl DefraStreamWriter {
             let mut buffers = self.buffers.lock().await;
             let buf = buffers
                 .get_mut(doc_id)
-                .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+                .ok_or_else(|| StreamingError::NoBuffer {
+                    doc_id: doc_id.to_owned(),
+                })?;
             buf.current.record_content(tokens);
         }
 
@@ -743,7 +813,9 @@ impl DefraStreamWriter {
             let mut buffers = self.buffers.lock().await;
             let buf = buffers
                 .get_mut(doc_id)
-                .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+                .ok_or_else(|| StreamingError::NoBuffer {
+                    doc_id: doc_id.to_owned(),
+                })?;
             buf.current.record_reasoning(reasoning);
         }
 
@@ -781,26 +853,25 @@ fn provider_flush_delta(
     for (index, stream) in encoded.streams.iter().enumerate() {
         let old = prior.get(index);
         if let Some(old) = old {
-            anyhow::ensure!(
-                old.declaration == stream.declaration && stream.payload.starts_with(&old.payload),
-                "provider stream rewrote acknowledged bytes"
-            );
+            if !(old.declaration == stream.declaration && stream.payload.starts_with(&old.payload))
+            {
+                return Err(StreamingError::ProviderStreamRewroteAcknowledged.into());
+            }
         }
         let offset = old.map_or(0, |value| value.payload.len());
         let delta = &stream.payload[offset..];
         if old.is_none() || !delta.is_empty() {
             payload.push_str(delta);
             runs.push(SegmentRun {
-                stream: u32::try_from(index)?,
-                bytes: u32::try_from(delta.len())?,
+                stream: u32::try_from(index).map_err(StreamingError::IntegerOverflow)?,
+                bytes: u32::try_from(delta.len()).map_err(StreamingError::IntegerOverflow)?,
                 declaration: old.is_none().then(|| stream.declaration.clone()),
             });
         }
     }
-    anyhow::ensure!(
-        encoded.streams.len() >= prior.len(),
-        "provider stream structure shrank"
-    );
+    if !(encoded.streams.len() >= prior.len()) {
+        return Err(StreamingError::ProviderStreamShrank.into());
+    }
     Ok(ProviderStreamDelta {
         grew: !runs.is_empty(),
         payload,

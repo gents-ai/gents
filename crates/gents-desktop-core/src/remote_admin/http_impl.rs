@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -101,7 +102,10 @@ impl HttpRemoteP2pAdmin {
             let signed_path = signed_admin_path(&self.api_base_path, path);
             let payload = signing_payload(method.as_str(), &signed_path, body_bytes);
             let signature = actor.sign(&payload).map_err(|error| {
-                RemoteP2pAdminError::LocalError(format!("signing remote admin request: {error:#}"))
+                RemoteP2pAdminError::LocalError(format!(
+                    "signing remote admin request: {}",
+                    ErrorChain(&error)
+                ))
             })?;
             request = request
                 .header(ACTOR_DID_HEADER, actor.did())
@@ -112,7 +116,8 @@ impl HttpRemoteP2pAdmin {
         if let Some(endpoint) = self.node_identity.as_ref() {
             request = endpoint.authorize(request).map_err(|error| {
                 RemoteP2pAdminError::LocalError(format!(
-                    "authenticating remote admin request: {error:#}"
+                    "authenticating remote admin request: {}",
+                    ErrorChain(&error)
                 ))
             })?;
         }
@@ -259,7 +264,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         let body = AddReplicatorBody {
             collections,
             addresses,
-            filters: to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?,
+            filters: to_replication_filters(filters)?,
         };
         let resp = self
             .json_request(Method::POST, "/p2p/replicators", &body)?

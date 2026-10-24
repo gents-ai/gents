@@ -240,12 +240,12 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
                 .await
                 .unwrap();
         }
-        let rollback: Result<()> = access
+        let rollback: Result<(), Box<dyn std::error::Error + Send + Sync>> = access
             .transact_write("test.retained_outcome_rollback", |txn| {
                 let owner = identity.did();
                 Box::pin(async move {
                     recover_outcomes_in_txn(txn, owner).await?;
-                    anyhow::bail!("injected outcome publication rollback")
+                    Err("injected outcome publication rollback".into())
                 })
             })
             .await;

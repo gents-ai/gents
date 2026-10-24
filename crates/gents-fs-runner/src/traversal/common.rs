@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use std::io::Result;
 
 use crate::context::RunnerContext;
 use crate::model::{WalkStats, DEFAULT_IGNORED_NAMES};
@@ -111,7 +111,7 @@ pub(super) fn sorted_children(
     let read_dir = match std::fs::read_dir(dir) {
         Ok(read_dir) => read_dir,
         Err(error) if should_skip_io_error(&error) => return Ok(Vec::new()),
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(error),
     };
     let mut children = Vec::new();
     for entry in read_dir {
@@ -121,7 +121,7 @@ pub(super) fn sorted_children(
         match entry {
             Ok(entry) => children.push(entry),
             Err(error) if should_skip_io_error(&error) => continue,
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         }
     }
     children.sort_by_key(|entry| entry.file_name());

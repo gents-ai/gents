@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1631,8 +1632,11 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
         .expect("supervisor shutdown must join retired slot")
         .expect_err("retired slot drain failure cannot become clean shutdown");
     assert!(
-        format!("{error:#}").contains("injected retired slot drain failure"),
-        "supervisor lost retired slot drain failure: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("injected retired slot drain failure"),
+        "supervisor lost retired slot drain failure: {}",
+        ErrorChain(error.as_ref())
     );
     runtime_status_owner.close().await.unwrap();
     node.shutdown().await;

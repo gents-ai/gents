@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use crate::tool_call_lifecycle::FailureClass;
 
+use super::error::{EthError, Result};
 use super::methods::validate_query_methods;
 use super::rpc::HttpEthRpc;
 
@@ -35,13 +35,17 @@ impl ResolvedEthQuery {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("EthTool {} has an empty rpc_url", doc.tool_id))?
+            .ok_or_else(|| EthError::EthToolEmptyRpcUrl {
+                tool_id: doc.tool_id.clone(),
+            })?
             .to_string();
-        let chain_id = doc
-            .chain_id
-            .ok_or_else(|| anyhow!("EthTool {} has no chain_id", doc.tool_id))?;
+        let chain_id = doc.chain_id.ok_or_else(|| EthError::EthToolNoChainId {
+            tool_id: doc.tool_id.clone(),
+        })?;
         if chain_id <= 0 {
-            anyhow::bail!("EthTool {} chain_id must be positive", doc.tool_id);
+            return Err(EthError::EthToolChainIdNotPositive {
+                tool_id: doc.tool_id.clone(),
+            });
         }
         Ok(Some(Self {
             tool_id: doc.tool_id.clone(),

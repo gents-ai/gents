@@ -15,8 +15,11 @@ fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     })
 }
 
-fn failed(error: anyhow::Error) -> BridgeError {
-    BridgeError::untyped(format!("{error:#}"))
+fn failed<E>(error: E) -> BridgeError
+where
+    E: std::error::Error,
+{
+    BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
 }
 
 fn view(home: &std::path::Path) -> Result<AllowedFoldersView, BridgeError> {

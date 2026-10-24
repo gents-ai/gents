@@ -221,7 +221,7 @@ impl Driver {
                 txn.execute(&format!(r#"mutation {{ update_AgentSessionGoalControl(docID: "{}", input: {{ receipt_json: null }}) {{ _docID }} }}"#,
                     escape_graphql_string(id))).await?;
             }
-            Ok(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })).await.unwrap();
     }
 

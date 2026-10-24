@@ -1,5 +1,6 @@
 mod support;
 
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
 use gents::config_client::{
@@ -148,7 +149,7 @@ impl Fixture {
             &JobTarget::Context,
         )
         .unwrap_or_else(|error| {
-            panic!("assumption failed: the M3 pack loads as the subject of behavior {behavior:?}: {error:#}")
+            panic!("assumption failed: the M3 pack loads as the subject of behavior {behavior:?}: {}", ErrorChain(error.as_ref()))
         });
         let golden_prompt = gents::optimization::baseline_text(&golden).expect(
             "assumption failed: the M3 pack's subject context carries a readable system prompt",

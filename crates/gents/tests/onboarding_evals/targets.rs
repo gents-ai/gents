@@ -1,4 +1,5 @@
 use crate::support::live_inference::{parse_selection, targets_dir, InferenceTarget};
+use gents_protocol::error_chain::ErrorChain;
 
 #[test]
 fn checked_in_targets_decode_through_runtime_configuration() {
@@ -14,7 +15,8 @@ fn checked_in_targets_decode_through_runtime_configuration() {
     names.sort();
     assert!(!names.is_empty(), "no checked-in inference targets");
     for name in names {
-        let target = InferenceTarget::load(&name).unwrap_or_else(|error| panic!("{error:#}"));
+        let target = InferenceTarget::load(&name)
+            .unwrap_or_else(|error| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(target.name, name);
         assert!(
             !matches!(
@@ -125,8 +127,11 @@ fn targets_are_literal_and_never_hold_inline_keys() {
     )
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("NodeOAuth targets are not supported for fresh-node evals"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("NodeOAuth targets are not supported for fresh-node evals"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(InferenceTarget::decode(
         "t".into(),
@@ -135,5 +140,5 @@ fn targets_are_literal_and_never_hold_inline_keys() {
             serde_json::json!({"kind": "unauthenticated"})
         )
     )
-    .is_err_and(|error| format!("{error:#}").contains("PATH")));
+    .is_err_and(|error| ErrorChain(error.as_ref()).to_string().contains("PATH")));
 }

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::os::windows::ffi::OsStrExt;
@@ -7,7 +8,6 @@ use std::path::Path;
 use std::time::Duration;
 use std::{io, ptr};
 
-use anyhow::{ensure, Context, Result};
 use gents_desktop_core::client::DesktopPaths;
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
@@ -21,7 +21,31 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 
 mod security;
-use security::{descriptor, require_private_file, Sid};
+use security::{descriptor, require_private_file, Sid, WindowsSecurityError};
+
+#[derive(Debug, thiserror::Error)]
+pub enum WindowsLocalError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    Security(#[from] WindowsSecurityError),
+    #[error("client installation is not accepting attachments")]
+    NotAccepting(#[source] tokio::time::error::Elapsed),
+    #[error("client installation belongs to another Windows user")]
+    InstallationOwner,
+    #[error("client home must be a directory")]
+    HomeNotDirectory,
+    #[error("client files must not be junctions, symbolic links or reparse points")]
+    ReparsePoint,
+    #[error("client files must be regular files or directories")]
+    NotRegularEntry,
+    #[error("client lock files must not be symbolic links or reparse points")]
+    LockReparsePoint,
+    #[error("reserving the private client pipe")]
+    ReservePipe(#[source] Box<WindowsLocalError>),
+}
+
+type Result<T, E = WindowsLocalError> = std::result::Result<T, E>;
 
 pub(super) struct Listener {
     next: NamedPipeServer,
@@ -43,21 +67,19 @@ pub async fn connect(paths: &DesktopPaths) -> Result<NamedPipeClient> {
         }
     })
     .await
-    .context("client installation is not accepting attachments")??;
+    .map_err(WindowsLocalError::NotAccepting)??;
     let mut pid = 0;
     // SAFETY: stream owns a live named-pipe handle; pid is writable for the returned process ID.
-    ensure!(
-        unsafe { GetNamedPipeServerProcessId(stream.as_raw_handle(), &mut pid) } != 0,
-        io::Error::last_os_error()
-    );
-    ensure!(
-        Sid::current()?.matches(&Sid::for_process(pid)?),
-        "client installation belongs to another Windows user"
-    );
+    if unsafe { GetNamedPipeServerProcessId(stream.as_raw_handle(), &mut pid) } == 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    if !Sid::current()?.matches(&Sid::for_process(pid)?) {
+        return Err(WindowsLocalError::InstallationOwner);
+    }
     Ok(stream)
 }
 
-pub(super) async fn prepare_home(paths: &DesktopPaths) -> Result<()> {
+pub(super) async fn prepare_home(paths: &DesktopPaths) -> anyhow::Result<()> {
     paths.ensure_root_dirs().await?;
     private_directory(paths.root())?;
     let mut directories = vec![paths.root().to_owned()];
@@ -73,7 +95,9 @@ pub(super) async fn prepare_home(paths: &DesktopPaths) -> Result<()> {
 }
 
 fn private_directory(path: &Path) -> Result<()> {
-    ensure!(private_entry(path)?, "client home must be a directory");
+    if !private_entry(path)? {
+        return Err(WindowsLocalError::HomeNotDirectory);
+    }
     Ok(())
 }
 
@@ -83,14 +107,12 @@ fn private_entry(path: &Path) -> Result<bool> {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
     let metadata = file.metadata()?;
-    ensure!(
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0,
-        "client files must not be junctions, symbolic links or reparse points"
-    );
-    ensure!(
-        metadata.is_dir() || metadata.is_file(),
-        "client files must be regular files or directories"
-    );
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(WindowsLocalError::ReparsePoint);
+    }
+    if !(metadata.is_dir() || metadata.is_file()) {
+        return Err(WindowsLocalError::NotRegularEntry);
+    }
     require_private_file(&file)?;
     Ok(metadata.is_dir())
 }
@@ -103,10 +125,9 @@ pub(super) fn lock_file(paths: &DesktopPaths, name: &str) -> Result<File> {
         .truncate(false)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(paths.root().join(name))?;
-    ensure!(
-        file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0,
-        "client lock files must not be symbolic links or reparse points"
-    );
+    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(WindowsLocalError::LockReparsePoint);
+    }
     require_private_file(&file)?;
     Ok(file)
 }
@@ -121,14 +142,13 @@ impl Listener {
         let next = loop {
             match create_pipe(&name, true) {
                 Ok(next) => break next,
-                Err(error)
-                    if error.downcast_ref::<io::Error>().is_some_and(|error| {
-                        error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
-                    }) && tokio::time::Instant::now() < deadline =>
+                Err(WindowsLocalError::Io(error))
+                    if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
+                        && tokio::time::Instant::now() < deadline =>
                 {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                Err(error) => return Err(error).context("reserving the private client pipe"),
+                Err(error) => return Err(WindowsLocalError::ReservePipe(Box::new(error))),
             }
         };
         Ok(Self { next, name })
@@ -327,7 +347,11 @@ mod tests {
                 0
             );
             let error = prepare_home(&paths).await.unwrap_err();
-            assert!(error.to_string().contains("grant access"), "{error:#}");
+            assert!(
+                error.to_string().contains("grant access"),
+                "{}",
+                ErrorChain(error.as_ref())
+            );
             assert_eq!(std::fs::read(&record).unwrap(), b"keep");
         }
     }

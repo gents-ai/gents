@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures_util::future::BoxFuture;
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
@@ -183,18 +183,15 @@ pub(crate) struct AcpRequest {
 }
 
 impl AcpRequest {
-    pub(crate) fn from_payload(payload: &str) -> Result<Self> {
-        let value: Value = serde_json::from_str(payload)
-            .with_context(|| "decoding Grok shim ACP payload".to_string())?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("ACP payload is not a JSON object"))?;
+    pub(crate) fn from_payload(payload: &str) -> Result<Self, AcpError> {
+        let value: Value = serde_json::from_str(payload).map_err(AcpError::DecodePayload)?;
+        let object = value.as_object().ok_or(AcpError::PayloadNotObject)?;
         let method = object
             .get("method")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("ACP payload has no method"))?
+            .ok_or(AcpError::PayloadWithoutMethod)?
             .to_string();
         let method = internal_method(&method).to_owned();
         let id = match object.get("id") {
@@ -539,17 +536,19 @@ impl AcpService {
             other if other.starts_with("terminal/") => {
                 let error = super::projection::tools::handle_terminal_client_method(other)
                     .expect_err("terminal client methods are never supported");
-                Err(anyhow::Error::new(ShapedMethodNotFound {
+                Err(AcpError::ShapedMethodNotFound {
                     message: error
                         .get("message")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string(),
-                }))
+                }
+                .into())
             }
-            other => Err(anyhow::Error::new(ShapedMethodNotFound {
+            other => Err(AcpError::ShapedMethodNotFound {
                 message: format!("method {other:?} is not supported by the Gents Grok shim"),
-            })),
+            }
+            .into()),
         }
     }
 
@@ -800,7 +799,7 @@ impl AcpService {
         {
             let sessions = self.sessions.lock().await;
             if !sessions.contains_key(&session_id) {
-                anyhow::bail!("unknown session {session_id:?}");
+                return Err(AcpError::UnknownSession { session_id }.into());
             }
         }
 
@@ -832,7 +831,7 @@ impl AcpService {
         {
             let sessions = self.sessions.lock().await;
             if !sessions.contains_key(&session_id) {
-                anyhow::bail!("unknown session {session_id:?}");
+                return Err(AcpError::UnknownSession { session_id }.into());
             }
         }
 
@@ -891,7 +890,7 @@ impl AcpService {
             let sessions = self.sessions.lock().await;
             let session = sessions
                 .get(&parsed.session_id)
-                .context("session must be created or loaded before prompting")?;
+                .ok_or(AcpError::SessionNotLoaded)?;
             if session.resume_from.is_some() {
                 return Err(invalid_params(
                     "session replay has not handed off to live observation",
@@ -1034,18 +1033,23 @@ impl AcpService {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct ShapedMethodNotFound {
-    pub(crate) message: String,
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AcpError {
+    #[error("{message}")]
+    ShapedMethodNotFound { message: String },
+    #[error("{message}")]
+    InvalidParams { message: String },
+    #[error("decoding Grok shim ACP payload")]
+    DecodePayload(#[source] serde_json::Error),
+    #[error("ACP payload is not a JSON object")]
+    PayloadNotObject,
+    #[error("ACP payload has no method")]
+    PayloadWithoutMethod,
+    #[error("unknown session {session_id:?}")]
+    UnknownSession { session_id: String },
+    #[error("session must be created or loaded before prompting")]
+    SessionNotLoaded,
 }
-
-impl std::fmt::Display for ShapedMethodNotFound {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ShapedMethodNotFound {}
 
 fn shaped_stub_error(method: &str, params: &Value) -> anyhow::Error {
     let session = optional_session_id(params).unwrap_or_default();
@@ -1066,36 +1070,22 @@ fn shaped_stub_error(method: &str, params: &Value) -> anyhow::Error {
         ),
         other => format!("method {other:?} is not supported by the Gents Grok shim"),
     };
-    anyhow::Error::new(ShapedMethodNotFound { message })
+    AcpError::ShapedMethodNotFound { message }.into()
 }
 
 fn error_code_for(error: &anyhow::Error) -> i64 {
-    if error.downcast_ref::<ShapedMethodNotFound>().is_some() {
-        JSONRPC_METHOD_NOT_FOUND
-    } else if error.downcast_ref::<InvalidParams>().is_some() {
-        JSONRPC_INVALID_PARAMS
-    } else {
-        JSONRPC_INTERNAL_ERROR
+    match error.downcast_ref::<AcpError>() {
+        Some(AcpError::ShapedMethodNotFound { .. }) => JSONRPC_METHOD_NOT_FOUND,
+        Some(AcpError::InvalidParams { .. }) => JSONRPC_INVALID_PARAMS,
+        Some(_) | None => JSONRPC_INTERNAL_ERROR,
     }
 }
-
-#[derive(Debug)]
-struct InvalidParams {
-    message: String,
-}
-
-impl std::fmt::Display for InvalidParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for InvalidParams {}
 
 fn invalid_params(message: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::new(InvalidParams {
+    AcpError::InvalidParams {
         message: message.into(),
-    })
+    }
+    .into()
 }
 
 fn required_session_id(params: &Value) -> Result<String> {
@@ -1309,6 +1299,7 @@ mod tests {
     };
     use crate::commands::grok_shim::turn::PromptBlock;
     use gents::graphql::ensure_no_errors;
+    use gents_protocol::error_chain::ErrorChain;
     use tokio::sync::Mutex;
 
     fn bound_model() -> BoundModel {
@@ -2572,7 +2563,9 @@ mod tests {
                         )
                         .await
                         .map(|value| format!("{value:?}"))
-                        .unwrap_or_else(|error| format!("presentation error: {error:#}"))
+                        .unwrap_or_else(|error| {
+                            format!("presentation error: {}", ErrorChain(error.as_ref()))
+                        })
                     } else {
                         "parent request scope unavailable".into()
                     }
@@ -2900,9 +2893,10 @@ mod tests {
     fn shaped_stub_maps_to_method_not_found_code() {
         let error = shaped_stub_error(SESSION_LOAD_METHOD, &json!({ "sessionId": "s1" }));
         assert_eq!(error_code_for(&error), -32601);
-        let unknown = anyhow::Error::new(ShapedMethodNotFound {
+        let unknown: anyhow::Error = AcpError::ShapedMethodNotFound {
             message: "unsupported".to_string(),
-        });
+        }
+        .into();
         assert_eq!(error_code_for(&unknown), -32601);
     }
 

@@ -1,8 +1,9 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use anyhow::{ensure, Context, Result};
+use crate::support::{TestError, TestResult};
 use tokio::process::{Child, Command};
 
 /// Descendants can inherit output handles after the CLI has exited. File capture
@@ -16,7 +17,7 @@ pub struct Initialization {
 }
 
 impl Initialization {
-    pub fn spawn(command: &mut Command, root: &Path) -> Result<Self> {
+    pub fn spawn(command: &mut Command, root: &Path) -> TestResult<Self> {
         let stdout = root.join("init.stdout");
         let stderr = root.join("init.stderr");
         let child = command
@@ -25,7 +26,7 @@ impl Initialization {
             .stderr(Stdio::from(std::fs::File::create(&stderr)?))
             .kill_on_drop(true)
             .spawn()
-            .context("starting fixture initialization")?;
+            .expect("starting fixture initialization");
         Ok(Self {
             child,
             stdout,
@@ -34,32 +35,42 @@ impl Initialization {
         })
     }
 
-    pub async fn wait(mut self, deadline: Duration) -> Result<Vec<u8>> {
+    pub async fn wait(mut self, deadline: Duration) -> TestResult<Vec<u8>> {
         let result = async {
             let status = match tokio::time::timeout(deadline, self.child.wait()).await {
-                Ok(status) => status.context("waiting for fixture initialization")?,
+                Ok(status) => status.expect("waiting for fixture initialization"),
                 Err(error) => {
                     self.child
                         .kill()
                         .await
-                        .context("terminating timed-out fixture initialization")?;
-                    return Err(error).context("initializing the fixture runtime timed out");
+                        .expect("terminating timed-out fixture initialization");
+                    return Err(TestError::from(format!(
+                        "initializing the fixture runtime timed out: {error}"
+                    )));
                 }
             };
-            ensure!(
+            assert!(
                 status.success(),
                 "fixture initialization exited with {status}"
             );
-            std::fs::read(&self.stdout).context("reading fixture initialization output")
+            std::fs::read(&self.stdout).map_err(|error| {
+                TestError::from(format!("reading fixture initialization output: {error}"))
+            })
         }
         .await;
-        result.with_context(|| {
-            format!(
-                "fixture initialization after {:.3}s\ninit.stdout:\n{}\ninit.stderr:\n{}",
-                self.started.elapsed().as_secs_f64(),
-                diagnostic(&self.stdout),
-                diagnostic(&self.stderr),
-            )
+        result.map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    format!(
+                        "fixture initialization after {:.3}s\ninit.stdout:\n{}\ninit.stderr:\n{}",
+                        self.started.elapsed().as_secs_f64(),
+                        diagnostic(&self.stdout),
+                        diagnostic(&self.stderr),
+                    )
+                },
+                ErrorChain(error.as_ref())
+            ))
         })
     }
 }
@@ -183,7 +194,7 @@ mod tests {
             Initialization::spawn(&mut command(root.path(), "waiting"), root.path()).unwrap();
         ready(root.path()).await;
         let error = init.wait(Duration::ZERO).await.unwrap_err();
-        let error = format!("{error:#}");
+        let error = ErrorChain(error.as_ref()).to_string();
         assert!(error.contains("initializing the fixture runtime timed out"));
         assert!(error.contains("initialization stdout marker"));
         assert!(error.contains("initialization stderr marker"));
@@ -195,7 +206,7 @@ mod tests {
         let init =
             Initialization::spawn(&mut command(root.path(), "failure"), root.path()).unwrap();
         let error = init.wait(Duration::from_secs(30)).await.unwrap_err();
-        let error = format!("{error:#}");
+        let error = ErrorChain(error.as_ref()).to_string();
         assert!(error.contains("fixture initialization exited with"));
         assert!(error.contains("initialization stdout marker"));
         assert!(error.contains("initialization stderr marker"));

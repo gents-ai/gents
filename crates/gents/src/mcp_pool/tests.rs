@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,6 +8,16 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::lean_vocab_test::lean_tool_retry_case;
+
+fn connection_refused() -> McpPoolError {
+    McpPoolError::Handshake {
+        service_id: String::new(),
+        endpoint: String::new(),
+        error: Box::new(rmcp::service::ClientInitializeError::ConnectionClosed(
+            "connection refused".to_owned(),
+        )),
+    }
+}
 
 #[tokio::test]
 async fn list_tools_transport_failure_retries_generated_safe_read_case() {
@@ -37,13 +48,21 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
                         Box::pin(async move {
                             list_calls.fetch_add(1, Ordering::SeqCst);
                             if attempt == 1 {
-                                anyhow::bail!("transport dropped while listing tools")
+                                return Err(McpPoolError::ListTools {
+                                    error: super::test_service_error(
+                                        "transport dropped while listing tools",
+                                    ),
+                                });
                             }
                             Ok(ListToolsResult::default())
                         })
                     }),
                     call_tool_fn: Box::new(|_params| {
-                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                        Box::pin(async {
+                            Err(McpPoolError::CallTool {
+                                error: super::test_service_error("call_tool was not expected"),
+                            })
+                        })
                     }),
                 })
             }
@@ -86,7 +105,9 @@ async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idem
                     let calls = Arc::clone(&calls_for_fn);
                     Box::pin(async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        anyhow::bail!("transport dropped after dispatch")
+                        Err(McpPoolError::CallTool {
+                            error: super::test_service_error("transport dropped after dispatch"),
+                        })
                     })
                 }),
             }),
@@ -578,7 +599,7 @@ fn mcp_http_response(method: &str, id: Option<serde_json::Value>) -> String {
 
 fn pending_connect_pool() -> McpPool {
     McpPool::new_with_connector(|_service_id, _endpoint, _node_did, _trace_headers| async {
-        std::future::pending::<anyhow::Result<McpConnection>>().await
+        std::future::pending::<Result<McpConnection, McpPoolError>>().await
     })
 }
 
@@ -592,7 +613,7 @@ async fn hung_connect_is_internally_bounded() {
     .await
     .expect("list_tools must internally bound a hung MCP connect");
     let error = result.expect_err("hung connect must surface an error");
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(&error));
     assert!(
         message.contains("timed out"),
         "expected a timeout error, got: {message}"
@@ -602,7 +623,7 @@ async fn hung_connect_is_internally_bounded() {
 #[tokio::test(start_paused = true)]
 async fn hung_list_call_is_internally_bounded() {
     let pool = McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async {
-        std::future::pending::<anyhow::Result<ListToolsResult>>().await
+        std::future::pending::<Result<ListToolsResult, McpPoolError>>().await
     });
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(3600),
@@ -611,7 +632,7 @@ async fn hung_list_call_is_internally_bounded() {
     .await
     .expect("list_tools must internally bound a hung tools/list call");
     let error = result.expect_err("hung list call must surface an error");
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(&error));
     assert!(
         message.contains("timed out"),
         "expected a timeout error, got: {message}"
@@ -631,7 +652,11 @@ async fn hung_connect_does_not_wedge_other_services() {
                 trace_context_headers: trace_headers,
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpPoolError::CallTool {
+                            error: super::test_service_error("call_tool was not expected"),
+                        })
+                    })
                 }),
                 last_used: super::fresh_last_used(),
                 resume_policy: SessionResumePolicy::detached(&service_id),
@@ -690,7 +715,11 @@ fn counting_pool(
                 resume_policy,
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpPoolError::CallTool {
+                            error: super::test_service_error("call_tool was not expected"),
+                        })
+                    })
                 }),
             })
         }
@@ -746,7 +775,7 @@ async fn repeated_connect_failures_park_the_service() {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                anyhow::bail!("connection refused")
+                Err(connection_refused())
             }
         });
 
@@ -756,7 +785,7 @@ async fn repeated_connect_failures_park_the_service() {
             .list_tools("down-service", "http://mcp.test/mcp")
             .await
             .expect_err("connects to a dead service must fail");
-        if format!("{error:#}").contains("parked") {
+        if format!("{}", ErrorChain(&error)).contains("parked") {
             parked_failures += 1;
         }
         tokio::time::advance(std::time::Duration::from_secs(30)).await;
@@ -805,7 +834,7 @@ async fn concurrent_callers_to_struck_service_share_one_dial() {
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                anyhow::bail!("connection refused")
+                Err(connection_refused())
             }
         });
 
@@ -829,7 +858,7 @@ async fn concurrent_callers_to_struck_service_share_one_dial() {
             .await
             .expect("task join")
             .expect_err("dials to a dead service must fail");
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(&error));
         if message.contains("parked") || message.contains("already in flight") {
             fast_failures += 1;
         }
@@ -863,7 +892,11 @@ async fn healthy_service_concurrent_cold_connects_stay_benign() {
                 resume_policy: SessionResumePolicy::detached(&service_id),
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpPoolError::CallTool {
+                            error: super::test_service_error("call_tool was not expected"),
+                        })
+                    })
                 }),
             })
         }
@@ -914,13 +947,21 @@ async fn poison_recovery_preserves_list_tools_safe_read_retry() {
                 list_tools_fn: Box::new(move || {
                     Box::pin(async move {
                         if attempt == 2 {
-                            anyhow::bail!("transport dropped after poison recovery")
+                            return Err(McpPoolError::ListTools {
+                                error: super::test_service_error(
+                                    "transport dropped after poison recovery",
+                                ),
+                            });
                         }
                         Ok(ListToolsResult::default())
                     })
                 }),
                 call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    Box::pin(async {
+                        Err(McpPoolError::CallTool {
+                            error: super::test_service_error("call_tool was not expected"),
+                        })
+                    })
                 }),
             })
         }
@@ -951,7 +992,7 @@ async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                anyhow::bail!("connection refused")
+                Err(connection_refused())
             }
         });
 
@@ -966,8 +1007,9 @@ async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
         .expect_err("new endpoint still fails in this test connector");
 
     assert!(
-        format!("{error:#}").contains("connection refused"),
-        "new endpoint should dial and surface connector error, not inherit old endpoint park: {error:#}"
+        format!("{}", ErrorChain(&error)).contains("connection refused"),
+        "new endpoint should dial and surface connector error, not inherit old endpoint park: {}",
+        ErrorChain(&error)
     );
     assert_eq!(
         connect_attempts.load(Ordering::SeqCst),
@@ -985,7 +1027,7 @@ async fn parked_node_did_does_not_block_different_node_did_for_same_service_endp
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                anyhow::bail!("connection refused")
+                Err(connection_refused())
             }
         });
 
@@ -1008,8 +1050,8 @@ async fn parked_node_did_does_not_block_different_node_did_for_same_service_endp
         .expect_err("second node still fails in this test connector");
 
     assert!(
-        format!("{error:#}").contains("connection refused"),
-        "different node DID should dial and surface connector error, not inherit the first node's park: {error:#}"
+        format!("{}", ErrorChain(&error)).contains("connection refused"),
+        "different node DID should dial and surface connector error, not inherit the first node's park: {}", ErrorChain(&error)
     );
     assert_eq!(
         connect_attempts.load(Ordering::SeqCst),
@@ -1027,7 +1069,7 @@ async fn park_strikes_decay_after_quiet_period() {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                anyhow::bail!("connection refused")
+                Err(connection_refused())
             }
         });
 

@@ -5,6 +5,7 @@ pub use chain_key_binding::preserve_chain_key_binding_update_fields;
 mod compaction;
 mod context;
 mod datastore_tool_surface;
+mod error;
 mod eth_tool;
 mod eval_definition;
 mod event_trigger;
@@ -41,6 +42,7 @@ pub use callback::{
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
+pub use error::DocumentConfigError;
 pub use eval_definition::{
     EvalCapture, EvalCase, EvalCheckRef, EvalContinuation, EvalDefinition, EvalFixtureDocument,
     EvalFixtureFile, EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind,
@@ -134,7 +136,9 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
 pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-    anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
+    if node_did.trim().is_empty() {
+        return Err(DocumentConfigError::NodeDidBlank.into());
+    }
     let owner = node_did.to_owned();
     let existing: Option<Node> =
         ConfigAccess::transact_local_readonly(node, None, "ensure_node.read", |txn| {
@@ -147,7 +151,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
                     owner,
                 )
                 .await?
-                .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
+                .map(|(_, value)| serde_json::from_value(value).map_err(anyhow::Error::from))
                 .transpose()
             })
         })

@@ -7,6 +7,12 @@ use serde_json::{Map, Value};
 
 pub use p2p::ReplicationFilter as FilterPredicate;
 
+#[derive(Debug, thiserror::Error)]
+#[error("ACP filter for {collection} is not supported by the replication API")]
+pub struct UnsupportedReplicationFilter {
+    pub collection: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
     Push,
@@ -96,13 +102,14 @@ pub fn filter_conditions(filter: &FilterPredicate) -> Option<Map<String, Value>>
 
 pub fn to_replication_filters(
     filters: &PairingFilters,
-) -> Result<defra_p2p_adapter::ReplicationFilters, String> {
+) -> Result<defra_p2p_adapter::ReplicationFilters, UnsupportedReplicationFilter> {
     filters
         .iter()
         .map(|(collection, filter)| {
-            let conditions = filter_conditions(filter).ok_or_else(|| {
-                format!("ACP filter for {collection} is not supported by the replication API")
-            })?;
+            let conditions =
+                filter_conditions(filter).ok_or_else(|| UnsupportedReplicationFilter {
+                    collection: collection.clone(),
+                })?;
             Ok((
                 collection.clone(),
                 defra_p2p_adapter::ReplicationFilter::predicate(conditions),
@@ -613,6 +620,7 @@ pub fn scope_filter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
@@ -720,7 +728,11 @@ mod tests {
         let error = read_client_replicated_schema(node.clone())
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("is not registered"), "{error:#}");
+        assert!(
+            error.to_string().contains("is not registered"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         crate::migration::ensure_all_runtime_migrations(node.clone())
             .await

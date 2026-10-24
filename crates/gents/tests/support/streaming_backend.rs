@@ -14,6 +14,12 @@ use axum::Router;
 use serde_json::json;
 use tokio::sync::{oneshot, Notify};
 
+#[derive(Debug, thiserror::Error)]
+pub enum StreamingBackendError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 #[derive(Clone, Debug)]
 pub enum StreamChunk {
     Text(String),
@@ -195,14 +201,20 @@ pub struct MockStreamingBackend {
 }
 
 impl MockStreamingBackend {
-    pub fn start(model_name: &str, scripts: Vec<StreamScript>) -> anyhow::Result<Self> {
+    pub fn start(
+        model_name: &str,
+        scripts: Vec<StreamScript>,
+    ) -> Result<Self, StreamingBackendError> {
         Self::start_with_plans(
             model_name,
             scripts.into_iter().map(StreamPlan::repeat_stream).collect(),
         )
     }
 
-    pub fn start_with_plans(model_name: &str, plans: Vec<StreamPlan>) -> anyhow::Result<Self> {
+    pub fn start_with_plans(
+        model_name: &str,
+        plans: Vec<StreamPlan>,
+    ) -> Result<Self, StreamingBackendError> {
         let stop = Arc::new(AtomicBool::new(false));
         let state = Arc::new(StreamingState::new(
             model_name.to_string(),

@@ -24,8 +24,8 @@ pub use command::{
     workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
 };
-pub(crate) use context::ToolContext;
 pub(super) use context::ToolError;
+pub(crate) use context::{ContextError, ToolContext};
 pub(super) use filesystem::{cap_output, render_file_contents};
 
 pub(super) fn resolve_command_timeout(

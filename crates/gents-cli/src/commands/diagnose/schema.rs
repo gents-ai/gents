@@ -1,4 +1,4 @@
-use anyhow::Result;
+use gents::config_client::ConfigClientError;
 use serde_json::{json, Value};
 
 use crate::config_writes::ConfigAccess;
@@ -33,7 +33,7 @@ pub(super) async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value
 pub(super) async fn load_runtime_row(
     access: &ConfigAccess,
     node_did: &str,
-) -> Result<Option<Value>> {
+) -> Result<Option<Value>, ConfigClientError> {
     use gents::graphql::escape_graphql_string;
     let query = format!(
         r#"{{

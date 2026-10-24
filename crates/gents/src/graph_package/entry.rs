@@ -12,36 +12,39 @@ use crate::graph_pipeline::{
 };
 use crate::plugin::executor::PluginExecutor;
 
+use super::catalog::GraphPackageError;
+
 const PREPARE_DOCUMENTS_BATCH_LIMIT: usize = 32;
 const PREPARE_DOCUMENTS_BATCH_BYTES: usize = 1024 * 1024;
 
-fn git_output_bytes(repo: &Path, arguments: &[&str]) -> Result<Vec<u8>> {
+fn git_output_bytes(repo: &Path, arguments: &[&str]) -> Result<Vec<u8>, GraphPackageError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(arguments)
         .output()
-        .with_context(|| format!("running git in {}", repo.display()))?;
+        .map_err(|source| GraphPackageError::GitSpawn {
+            repo: repo.to_path_buf(),
+            source,
+        })?;
     if !output.status.success() {
-        anyhow::bail!(
-            "git {} failed in {}: {}",
-            arguments.join(" "),
-            repo.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        return Err(GraphPackageError::GitFailed {
+            arguments: arguments.join(" "),
+            repo: repo.display().to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
     }
     Ok(output.stdout)
 }
 
-fn git_output(repo: &Path, arguments: &[&str]) -> Result<String> {
+fn git_output(repo: &Path, arguments: &[&str]) -> Result<String, GraphPackageError> {
     Ok(String::from_utf8(git_output_bytes(repo, arguments)?)?
         .trim()
         .to_owned())
 }
 
-fn git_output_exact(repo: &Path, arguments: &[&str]) -> Result<String> {
-    String::from_utf8(git_output_bytes(repo, arguments)?)
-        .context("Git emitted non-UTF-8 diff output")
+fn git_output_exact(repo: &Path, arguments: &[&str]) -> Result<String, GraphPackageError> {
+    String::from_utf8(git_output_bytes(repo, arguments)?).map_err(GraphPackageError::GitDiffNotUtf8)
 }
 
 fn resolve_repository(
@@ -151,26 +154,30 @@ pub struct PreparedEntryRun {
 pub(crate) fn select_entry<'a>(
     plan: &'a GraphPlan,
     requested: Option<&str>,
-) -> Result<&'a PlannedEntry> {
+) -> Result<&'a PlannedEntry, GraphPackageError> {
     match requested {
         Some(name) => plan
             .entries
             .iter()
             .find(|entry| entry.name == name)
-            .with_context(|| format!("graph {:?} has no entry named {name:?}", plan.graph_id)),
+            .ok_or_else(|| GraphPackageError::EntryNotNamed {
+                graph_id: plan.graph_id.clone(),
+                name: name.to_owned(),
+            }),
         None => match plan.entries.as_slice() {
             [entry] => Ok(entry),
-            [] => anyhow::bail!("graph {:?} declares no entry", plan.graph_id),
-            entries => anyhow::bail!(
-                "graph {:?} has {} entries; name the entry to start (one of: {})",
-                plan.graph_id,
-                entries.len(),
-                entries
+            [] => Err(GraphPackageError::NoEntries {
+                graph_id: plan.graph_id.clone(),
+            }),
+            entries => Err(GraphPackageError::AmbiguousEntries {
+                graph_id: plan.graph_id.clone(),
+                count: entries.len(),
+                names: entries
                     .iter()
                     .map(|entry| entry.name.as_str())
                     .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+                    .join(", "),
+            }),
         },
     }
 }
@@ -220,11 +227,13 @@ fn required_string_field<'a>(
     admitted: &'a Map<String, Value>,
     entry_name: &str,
     field: &str,
-) -> Result<&'a str> {
-    admitted
-        .get(field)
-        .and_then(Value::as_str)
-        .with_context(|| format!("entry {entry_name:?} input is missing string field {field:?}"))
+) -> Result<&'a str, GraphPackageError> {
+    admitted.get(field).and_then(Value::as_str).ok_or_else(|| {
+        GraphPackageError::RequiredStringField {
+            entry_name: entry_name.to_owned(),
+            field: field.to_owned(),
+        }
+    })
 }
 
 async fn collect_host_facts(

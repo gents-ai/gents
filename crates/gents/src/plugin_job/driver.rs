@@ -1,6 +1,7 @@
 //! Ends a job row: maps a [`Settlement`] onto the row's terminal state and
 //! canonical tool output.
 
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -43,7 +44,7 @@ use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::job_calls::{job_state, JobCaller};
 use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
-use crate::plugin::{GuestTrap, PluginVerdict};
+use crate::plugin::{PluginError, PluginVerdict};
 use crate::session_origin::SessionScope;
 use crate::tool_call_lifecycle::query::load_tool_call_arguments_in_txn;
 use crate::tool_call_lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
@@ -347,11 +348,16 @@ async fn step_on(
     let call = match call {
         Ok(call) => call,
         Err(error) => {
-            let trapped = error
-                .chain()
-                .any(|cause| cause.downcast_ref::<GuestTrap>().is_some());
+            let trapped = error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<PluginError>()
+                    .is_some_and(|error| matches!(error, PluginError::Trap(_)))
+                    || cause
+                        .downcast_ref::<crate::plugin::executor::PluginRunError>()
+                        .is_some_and(crate::plugin::executor::PluginRunError::is_trap)
+            });
             let error = if trapped {
-                anyhow::Error::new(StepFailure::Trap(format!("{error:#}")))
+                anyhow::Error::new(StepFailure::Trap(format!("{}", ErrorChain(error.as_ref()))))
             } else {
                 error
             };
@@ -1044,13 +1050,13 @@ impl JobDriver {
             }
             Err(error) => match error.downcast_ref::<StepFailure>() {
                 None => {
-                    tracing::warn!(row_doc_id, error = %format!("{error:#}"), "job step did not run");
+                    tracing::warn!(row_doc_id, error = %ErrorChain(error.as_ref()), "job step did not run");
                     false
                 }
                 Some(failure) => match self.step_failed(row_doc_id, failure).await {
                     Ok(verdict) => verdict == FailureVerdict::Retry,
                     Err(error) => {
-                        tracing::warn!(row_doc_id, error = %format!("{error:#}"), "job step failure was not settled");
+                        tracing::warn!(row_doc_id, error = %ErrorChain(error.as_ref()), "job step failure was not settled");
                         false
                     }
                 },
@@ -1529,8 +1535,9 @@ pub(crate) mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                format!("{error:#}").contains("no stored progress"),
-                "{settlement:?}: {error:#}"
+                format!("{}", ErrorChain(error.as_ref())).contains("no stored progress"),
+                "{settlement:?}: {}",
+                ErrorChain(error.as_ref())
             );
             assert_eq!(
                 stored_row(&admission).await["lifecycle_state"],
@@ -1904,7 +1911,7 @@ pub(crate) mod tests {
                         pause_reason: None,
                     };
                     write_progress_in_txn(txn, row, 1, running_progress(), host).await?;
-                    Ok(read_step_row_in_txn(txn, row).await?.spent)
+                    Ok::<_, anyhow::Error>(read_step_row_in_txn(txn, row).await?.spent)
                 })
             })
             .await
@@ -2863,7 +2870,8 @@ pub(crate) mod tests {
                 error.downcast_ref::<StepFailure>(),
                 Some(StepFailure::Trap(_))
             ),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         step.close().await;

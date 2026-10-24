@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
@@ -58,7 +59,7 @@ pub struct MemoryToolError(anyhow::Error);
 
 impl std::fmt::Display for MemoryToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 

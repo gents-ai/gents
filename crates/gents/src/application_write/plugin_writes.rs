@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::Result;
 use gents_protocol::job::{DataOp, DataWrite};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -7,6 +7,36 @@ use crate::config_client::ConfigApplyTxn;
 use crate::plugin::data::{
     admit_write, insert_note, AdmittedWrite, InsertOutcome, OnConflict, PluginData, StampContext,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PluginWritesError {
+    #[error("{name} affected {count} documents, expected 1; check the doc_id")]
+    AffectedCount { name: String, count: usize },
+    #[error("an update needs at least one field")]
+    UpdateNeedsField,
+    #[error("collection {collection} is not installed")]
+    CollectionNotInstalled { collection: String },
+    #[error("internal field {name:?} cannot be written")]
+    InternalField { name: String },
+    #[error("unknown field {name:?} in {collection}")]
+    UnknownField { name: String, collection: String },
+    #[error("invalid field `{name}`")]
+    InvalidField {
+        name: String,
+        #[source]
+        source: crate::defra_write::DefraWriteFailure,
+    },
+    #[error(
+        "on_conflict needs a collection with exactly one unique key; {collection} has {count}"
+    )]
+    UniqueKeyCount { collection: String, count: usize },
+    #[error("on_conflict needs the unique key field {field:?} in fields")]
+    MissingKeyField { field: String },
+    #[error("row is not an object")]
+    RowNotObject,
+    #[error("duplicate {collection} {label}")]
+    DuplicateRow { collection: String, label: String },
+}
 
 /// Applies a plugin's data writes in the caller's transaction and returns one
 /// receipt per write. Any refused or failed write fails the whole output; the
@@ -68,39 +98,46 @@ async fn apply_one(
         row if row.is_object() => vec![row.clone()],
         _ => Vec::new(),
     };
-    ensure!(
-        rows.len() == 1,
-        "{name} affected {} documents, expected 1; check the doc_id",
-        rows.len()
-    );
+    if rows.len() != 1 {
+        return Err(PluginWritesError::AffectedCount {
+            name,
+            count: rows.len(),
+        }
+        .into());
+    }
     Ok(rows[0].clone())
 }
 
 async fn input(txn: &ConfigApplyTxn<'_>, write: &DataWrite) -> Result<String> {
     let collection = write.collection.as_str();
-    ensure!(
-        write.op == DataOp::Insert || !write.fields.is_empty(),
-        "an update needs at least one field"
-    );
-    let version: ::schema::CollectionVersion = serde_json::from_value(
-        txn.collection_version(collection)
-            .await?
-            .with_context(|| format!("collection {collection} is not installed"))?,
-    )?;
+    if write.op != DataOp::Insert && write.fields.is_empty() {
+        return Err(PluginWritesError::UpdateNeedsField.into());
+    }
+    let version: ::schema::CollectionVersion =
+        serde_json::from_value(txn.collection_version(collection).await?.ok_or_else(|| {
+            PluginWritesError::CollectionNotInstalled {
+                collection: collection.to_owned(),
+            }
+        })?)?;
     let mut parts = Vec::with_capacity(write.fields.len());
     for (name, value) in &write.fields {
         crate::graphql::validate_graphql_name(name)?;
-        ensure!(
-            !name.starts_with('_'),
-            "internal field {name:?} cannot be written"
-        );
+        if name.starts_with('_') {
+            return Err(PluginWritesError::InternalField { name: name.clone() }.into());
+        }
         let field = version
             .fields
             .iter()
             .find(|f| &f.name == name)
-            .with_context(|| format!("unknown field {name:?} in {collection}"))?;
+            .ok_or_else(|| PluginWritesError::UnknownField {
+                name: name.clone(),
+                collection: collection.to_owned(),
+            })?;
         let literal = crate::defra_write::field_literal(field.kind.graphql_type_name(), value)
-            .with_context(|| format!("invalid field `{name}`"))?;
+            .map_err(|source| PluginWritesError::InvalidField {
+                name: name.clone(),
+                source,
+            })?;
         parts.push(format!("{name}: {literal}"));
     }
     Ok(parts.join(", "))
@@ -123,17 +160,21 @@ async fn resolve_conflict(
         .map(Vec::as_slice)
         .unwrap_or_default();
     let [key] = keys else {
-        bail!(
-            "on_conflict needs a collection with exactly one unique key; {collection} has {}",
-            keys.len()
-        );
+        return Err(PluginWritesError::UniqueKeyCount {
+            collection: collection.to_owned(),
+            count: keys.len(),
+        }
+        .into());
     };
     let mut filter = Map::new();
     let mut label = Vec::with_capacity(key.len());
     for field in key {
-        let value = write.fields.get(field).with_context(|| {
-            format!("on_conflict needs the unique key field {field:?} in fields")
-        })?;
+        let value = write
+            .fields
+            .get(field)
+            .ok_or_else(|| PluginWritesError::MissingKeyField {
+                field: field.clone(),
+            })?;
         filter.insert(field.clone(), json!({"_eq": value}));
         label.push(match value {
             Value::String(text) => text.clone(),
@@ -185,7 +226,7 @@ async fn resolve_conflict(
     let new = fingerprint(&write.fields)?;
     let old = match existing {
         Some(row) => Some(fingerprint(
-            row.as_object().context("row is not an object")?,
+            row.as_object().ok_or(PluginWritesError::RowNotObject)?,
         )?),
         None => None,
     };
@@ -195,7 +236,13 @@ async fn resolve_conflict(
             Some(json!({"_docID": existing.map(|row| &row["_docID"])}))
         }
         InsertOutcome::Unchanged => Some(json!({"duplicate": true})),
-        InsertOutcome::AbortStep => bail!("duplicate {collection} {}", label.join(",")),
+        InsertOutcome::AbortStep => {
+            return Err(PluginWritesError::DuplicateRow {
+                collection: collection.to_owned(),
+                label: label.join(","),
+            }
+            .into())
+        }
     })
 }
 

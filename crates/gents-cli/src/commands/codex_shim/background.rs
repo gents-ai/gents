@@ -22,7 +22,7 @@ use super::progress::{
     tool_completed_at_ms, GentsToolCallProgress,
 };
 use super::projection_state::ProjectionStatus;
-use super::protocol::{now_millis, send_notification};
+use super::protocol::{now_millis, send_notification, ProtocolError};
 use super::store::query_node_json;
 use super::{ConnectionState, ShimState};
 
@@ -198,6 +198,22 @@ fn spawn_background_tool_watcher_handle(
     }))
 }
 
+#[derive(Debug, thiserror::Error)]
+enum BackgroundError {
+    #[error("GENTS background tool `{tool_call_key}` is not owned by this runtime; it was settled as lost without verifying termination")]
+    Lost { tool_call_key: String },
+    #[error(
+        "GENTS background tool `{tool_call_key}` is still running after termination was requested"
+    )]
+    Unverified { tool_call_key: String },
+    #[error("unknown GENTS background tool `{tool_call_key}`")]
+    NotFound { tool_call_key: String },
+    #[error("GENTS tool `{tool_call_key}` is not a background tool")]
+    NotBackground { tool_call_key: String },
+    #[error("Codex process id `{tool_call_key}` is not a GENTS background tool key")]
+    UnrecognizedKey { tool_call_key: String },
+}
+
 async fn send_background_tool_completion(
     outbound: &super::Outbound,
     state: &ShimState,
@@ -206,7 +222,7 @@ async fn send_background_tool_completion(
     tool: &GentsToolCallProgress,
     status: codex::CommandExecutionStatus,
     cwd: &Path,
-) -> Result<()> {
+) -> std::result::Result<(), ProtocolError> {
     if let ToolProjectionStatus::Agent(projection) = tool_projection_status(tool) {
         return send_notification(
             outbound,
@@ -277,18 +293,22 @@ pub(super) async fn cancel_projected_background_tool_key(
     match &outcome {
         CancelBackgroundToolCallOutcome::Cancelled { .. }
         | CancelBackgroundToolCallOutcome::AlreadyTerminal { .. } => Ok(outcome),
-        CancelBackgroundToolCallOutcome::Lost => anyhow::bail!(
-            "GENTS background tool `{tool_call_key}` is not owned by this runtime; it was settled as lost without verifying termination"
-        ),
-        CancelBackgroundToolCallOutcome::Unverified => anyhow::bail!(
-            "GENTS background tool `{tool_call_key}` is still running after termination was requested"
-        ),
-        CancelBackgroundToolCallOutcome::NotFound => {
-            anyhow::bail!("unknown GENTS background tool `{tool_call_key}`")
+        CancelBackgroundToolCallOutcome::Lost => Err(BackgroundError::Lost {
+            tool_call_key: tool_call_key.to_owned(),
         }
-        CancelBackgroundToolCallOutcome::NotBackground => {
-            anyhow::bail!("GENTS tool `{tool_call_key}` is not a background tool")
+        .into()),
+        CancelBackgroundToolCallOutcome::Unverified => Err(BackgroundError::Unverified {
+            tool_call_key: tool_call_key.to_owned(),
         }
+        .into()),
+        CancelBackgroundToolCallOutcome::NotFound => Err(BackgroundError::NotFound {
+            tool_call_key: tool_call_key.to_owned(),
+        }
+        .into()),
+        CancelBackgroundToolCallOutcome::NotBackground => Err(BackgroundError::NotBackground {
+            tool_call_key: tool_call_key.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -313,7 +333,10 @@ async fn background_tool_address(
         }
     }
     let Some((session_id, tool_call_id)) = tool_call_key.split_once(':') else {
-        anyhow::bail!("Codex process id `{tool_call_key}` is not a GENTS background tool key");
+        return Err(BackgroundError::UnrecognizedKey {
+            tool_call_key: tool_call_key.to_owned(),
+        }
+        .into());
     };
     Ok((session_id.to_owned(), tool_call_id.to_owned()))
 }

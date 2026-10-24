@@ -674,6 +674,7 @@ pub async fn build_step_input(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -711,7 +712,7 @@ pub(crate) mod tests {
                 let response = txn
                     .execute_with_variables(&query, &json!({ "input": value }))
                     .await?;
-                gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
+                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
             })
         })
         .await
@@ -732,7 +733,7 @@ pub(crate) mod tests {
                     crate::graphql::escape_graphql_string(state)
                 ))
                 .await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
@@ -2093,7 +2094,11 @@ pub(crate) mod tests {
         absent.plugin_ref = "acme/missing".into();
         job.write_pin(&missing, &absent).await;
         let error = job.later(&missing).await.unwrap_err();
-        assert!(format!("{error:#}").contains("acme/missing"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("acme/missing"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         job.node.shutdown().await;
     }
 

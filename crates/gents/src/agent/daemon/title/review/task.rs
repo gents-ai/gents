@@ -1,10 +1,20 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use crate::document_config::Task;
 use crate::watcher::AgentRequest;
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ReviewTaskError {
+    #[error("access review Task is not configured")]
+    NotConfigured,
+    #[error(
+        "The access review policy changed. Select Approve for me again to use the updated policy."
+    )]
+    PolicyChanged,
+}
 
 pub(super) struct Policy {
     definition: Task,
@@ -19,16 +29,15 @@ pub(super) async fn load(
     let task_id = selection.task_id.as_str();
     let definition = crate::session_message::load_configured_task(node, &parent.node_did, task_id)
         .await?
-        .context("access review Task is not configured")?;
-    anyhow::ensure!(
-        crate::plugin::approval::workspace::review_task_matches_selection(
-            &definition,
-            selection,
-            &parent.node_did,
-            &parent.agent_id,
-        ),
-        "The access review policy changed. Select Approve for me again to use the updated policy."
-    );
+        .ok_or(ReviewTaskError::NotConfigured)?;
+    if !crate::plugin::approval::workspace::review_task_matches_selection(
+        &definition,
+        selection,
+        &parent.node_did,
+        &parent.agent_id,
+    ) {
+        return Err(ReviewTaskError::PolicyChanged.into());
+    }
     let text = crate::plugin::approval::workspace::review_task_policy(
         &definition,
         &parent.node_did,

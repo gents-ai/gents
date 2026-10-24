@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use serde::Deserialize;
@@ -24,11 +23,51 @@ struct ToolDocument {
     row: AgentToolCallRow,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TerminalToolsError {
+    #[error("tool has ambiguous accepted header membership")]
+    AmbiguousHeaderMembership,
+    #[error("physical tool disagrees with accepted native intent")]
+    NativeIntentMismatch,
+    #[error("request has no physical identity")]
+    RequestIdentityMissing,
+    #[error("request missing agent")]
+    RequestAgentMissing,
+    #[error("request missing session")]
+    RequestSessionMissing,
+    #[error("accepted tool lifecycle is missing or ambiguous")]
+    ToolMembershipAmbiguous,
+    #[error("plugin effect has no direct parent in request")]
+    PluginParentMissing,
+    #[error("plugin effect parent is not direct")]
+    PluginParentNotDirect,
+    #[error("invalid spawned execution provenance")]
+    SpawnProvenanceInvalid,
+    #[error("owned tool missing lifecycle")]
+    LifecycleMissing,
+    #[error("owned tool has invalid lifecycle")]
+    LifecycleInvalid,
+    #[error("accepted tool intent disappeared")]
+    IntentDisappeared,
+    #[error("started invocation has no unique durable reply: tool_doc_id={tool_doc_id}, accepted_id={accepted_id}, accepted_call_id={accepted_call_id}, exact_replies={exact_replies}, physical_delivery_candidates={physical_delivery_candidates}")]
+    NoUniqueDurableReply {
+        tool_doc_id: String,
+        accepted_id: String,
+        accepted_call_id: String,
+        exact_replies: usize,
+        physical_delivery_candidates: String,
+    },
+    #[error("owned tool accounting lost lifecycle CAS")]
+    LifecycleCasLost,
+}
+
+type Result<T, E = TerminalToolsError> = std::result::Result<T, E>;
+
 fn directly_bound<'a>(
     headers: &'a [TranscriptMessageRow],
     tool: &ToolDocument,
     generation: &str,
-) -> Result<Option<(&'a TranscriptMessageRow, &'a str)>> {
+) -> Result<Option<(&'a TranscriptMessageRow, &'a str)>, TerminalToolsError> {
     let mut found = None;
     for header in headers {
         let message = &header.message;
@@ -52,15 +91,14 @@ fn directly_bound<'a>(
             } = block
             {
                 if tool_call_doc_id == &tool.doc_id {
-                    anyhow::ensure!(
-                        found.is_none(),
-                        "tool has ambiguous accepted header membership"
-                    );
-                    anyhow::ensure!(
-                        tool.row.tool_call_id.as_deref() == Some(id.as_str())
-                            && tool.row.tool_name.as_deref() == Some(name.as_str()),
-                        "physical tool disagrees with accepted native intent"
-                    );
+                    if found.is_some() {
+                        return Err(TerminalToolsError::AmbiguousHeaderMembership);
+                    }
+                    if !(tool.row.tool_call_id.as_deref() == Some(id.as_str())
+                        && tool.row.tool_name.as_deref() == Some(name.as_str()))
+                    {
+                        return Err(TerminalToolsError::NativeIntentMismatch);
+                    }
                     found = Some((header, name.as_str()));
                 }
             }
@@ -77,19 +115,19 @@ pub(super) async fn account_tools_in_txn(
     generation: &str,
     completed: bool,
     timestamp: &str,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let request_id = request
         .doc_id
         .as_deref()
-        .context("request has no physical identity")?;
+        .ok_or(TerminalToolsError::RequestIdentityMissing)?;
     let agent = request
         .node_did
         .as_deref()
-        .context("request missing agent")?;
+        .ok_or(TerminalToolsError::RequestAgentMissing)?;
     let session = request
         .session_id
         .as_deref()
-        .context("request missing session")?;
+        .ok_or(TerminalToolsError::RequestSessionMissing)?;
     let scope =
         crate::session::session_scope_filter(agent, session, request.requester_did.as_deref());
     let escaped_request = escape_graphql_string(request_id);
@@ -111,8 +149,9 @@ pub(super) async fn account_tools_in_txn(
         && h.message.outcome == OutputOutcome::Complete && h.message.role == MessageRole::Assistant) {
         for block in &header.message.blocks {
             if let MessageBlock::ToolCall { tool_call_doc_id, .. } = block {
-                anyhow::ensure!(tools.iter().filter(|tool| &tool.doc_id == tool_call_doc_id).count() == 1,
-                    "accepted tool lifecycle is missing or ambiguous");
+                if tools.iter().filter(|tool| &tool.doc_id == tool_call_doc_id).count() != 1 {
+                    return Err(TerminalToolsError::ToolMembershipAmbiguous.into());
+                }
             }
         }
     }
@@ -129,13 +168,13 @@ pub(super) async fn account_tools_in_txn(
             let parent = tools
                 .iter()
                 .find(|candidate| candidate.doc_id == effect.parent_tool_call_doc_id)
-                .context("plugin effect has no direct parent in request")?;
-            anyhow::ensure!(
-                parent.row.spawned_by_tool_call_doc_id.is_none()
-                    && parent.row.plugin_parent_tool_call_doc_id.is_none()
-                    && parent.row.plugin_effect_ordinal.is_none(),
-                "plugin effect parent is not direct"
-            );
+                .ok_or(TerminalToolsError::PluginParentMissing)?;
+            if !(parent.row.spawned_by_tool_call_doc_id.is_none()
+                && parent.row.plugin_parent_tool_call_doc_id.is_none()
+                && parent.row.plugin_effect_ordinal.is_none())
+            {
+                return Err(TerminalToolsError::PluginParentNotDirect.into());
+            }
             let binding = directly_bound(headers, parent, generation)?;
             if binding.is_some() {
                 crate::tool_call_lifecycle::query::load_tool_call_arguments_in_txn(
@@ -172,11 +211,11 @@ pub(super) async fn account_tools_in_txn(
             }
             let binding = directly_bound(headers, parent, generation)?;
             if let Some(binding) = &binding {
-                anyhow::ensure!(
-                    binding.1 == "spawn_process"
-                        && tool.row.await_mode.as_deref() == Some("background"),
-                    "invalid spawned execution provenance"
-                );
+                if !(binding.1 == "spawn_process"
+                    && tool.row.await_mode.as_deref() == Some("background"))
+                {
+                    return Err(TerminalToolsError::SpawnProvenanceInvalid.into());
+                }
             }
             binding
         } else {
@@ -189,14 +228,13 @@ pub(super) async fn account_tools_in_txn(
             .row
             .lifecycle_state
             .as_deref()
-            .context("owned tool missing lifecycle")?;
-        anyhow::ensure!(
-            matches!(
-                state,
-                "pending" | "running" | "completed" | "failed" | "timedOut" | "cancelled"
-            ),
-            "owned tool has invalid lifecycle"
-        );
+            .ok_or(TerminalToolsError::LifecycleMissing)?;
+        if !matches!(
+            state,
+            "pending" | "running" | "completed" | "failed" | "timedOut" | "cancelled"
+        ) {
+            return Err(TerminalToolsError::LifecycleInvalid.into());
+        }
         if completed && state != "pending" {
             if state == "running" && tool.row.await_mode.as_deref() != Some("background") {
                 return Err(ToolAccountingRejection::ForegroundRunning.into());
@@ -218,7 +256,7 @@ pub(super) async fn account_tools_in_txn(
                         } if tool_call_doc_id == &tool.doc_id => Some((id, call_id)),
                         _ => None,
                     })
-                    .context("accepted tool intent disappeared")?;
+                    .ok_or(TerminalToolsError::IntentDisappeared)?;
                 let deliveries = headers
                     .iter()
                     .filter(|header| {
@@ -244,14 +282,14 @@ pub(super) async fn account_tools_in_txn(
                             _ => None,
                         })
                         .collect::<Vec<_>>();
-                    anyhow::bail!(
-                        "started invocation has no unique durable reply: tool_doc_id={}, accepted_id={}, accepted_call_id={:?}, exact_replies={}, physical_delivery_candidates={:?}",
-                        tool.doc_id,
-                        intent.0,
-                        intent.1,
-                        deliveries.len(),
-                        candidates
-                    );
+                    return Err(TerminalToolsError::NoUniqueDurableReply {
+                        tool_doc_id: tool.doc_id.clone(),
+                        accepted_id: intent.0.to_string(),
+                        accepted_call_id: format!("{:?}", intent.1),
+                        exact_replies: deliveries.len(),
+                        physical_delivery_candidates: format!("{candidates:?}"),
+                    }
+                    .into());
                 }
                 reader.load_message(&deliveries[0].doc_id).await?;
             }
@@ -272,14 +310,14 @@ pub(super) async fn account_tools_in_txn(
                 request_doc_id: {{ _eq: "{escaped_request}" }}, lifecycle_state: {{ _eq: "{state}" }} }},
                 input: {{ {input} }}) {{ _docID }}
         }}"#)).await?;
-        anyhow::ensure!(
-            response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("update_AgentToolCall"))
-                .is_some_and(response_has_documents),
-            "owned tool accounting lost lifecycle CAS"
-        );
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            return Err(TerminalToolsError::LifecycleCasLost.into());
+        }
     }
     Ok(())
 }

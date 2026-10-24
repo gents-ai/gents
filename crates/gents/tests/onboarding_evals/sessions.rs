@@ -4,6 +4,8 @@ use gents::document_config::EvalSplit;
 use gents::eval::checks::CheckRegistry;
 use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 #[test]
 fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
     let root =
@@ -106,10 +108,9 @@ fn session_model_fixtures_expect_public_cross_agent_visibility() {
 
 #[tokio::test]
 #[ignore = "requires GENTS_SESSION_METRICS_RUN and GENTS_SESSION_METRICS_OUTPUT retained eval paths"]
-async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> anyhow::Result<()> {
+async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> Result<()> {
     use std::sync::Arc;
 
-    use anyhow::Context;
     use gents::config_client::ConfigAccess;
     use gents::defra_node::EmbeddedNode;
     use gents::session::load_tool_call_presentation;
@@ -137,7 +138,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
         let rows = access.execute("{ AgentToolCall(filter: {tool_name: {_eq: \"sessions\"}}) { _docID node_did session_id requester_did lifecycle_state } }").await?;
         let calls = rows["data"]["AgentToolCall"]
             .as_array()
-            .context("missing canonical tool calls")?;
+            .ok_or("missing canonical tool calls")?;
         let mut bytes = 0usize;
         let mut errors = 0usize;
         let mut undelivered = 0usize;
@@ -147,9 +148,9 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
         for call in calls {
             let presentation = load_tool_call_presentation(
                 &access,
-                call["_docID"].as_str().context("missing tool identity")?,
-                call["node_did"].as_str().context("missing principal")?,
-                call["session_id"].as_str().context("missing session")?,
+                call["_docID"].as_str().ok_or("missing tool identity")?,
+                call["node_did"].as_str().ok_or("missing principal")?,
+                call["session_id"].as_str().ok_or("missing session")?,
                 call["requester_did"].as_str(),
             )
             .await?;
@@ -166,7 +167,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
             errors += usize::from(call["lifecycle_state"] == "failed");
         }
         metrics.push(json!({
-            "trial": trial.file_name().context("missing trial name")?.to_string_lossy(),
+            "trial": trial.file_name().ok_or("missing trial name")?.to_string_lossy(),
             "session_tool_calls": calls.len(), "delivered_output_bytes": bytes,
             "undelivered_calls": undelivered, "failed_calls": errors,
             "oversized_results_over_64000_bytes": oversized, "errors_naming_next_call": actionable_errors,
@@ -184,10 +185,9 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
 
 #[tokio::test]
 #[ignore = "requires GENTS_EVAL_TRACE_HOME, GENTS_EVAL_TRACE_DID and GENTS_EVAL_TRACE_OUTPUT"]
-async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()> {
+async fn retained_tool_trace_uses_native_canonical_reader() -> Result<()> {
     use std::sync::Arc;
 
-    use anyhow::Context;
     use gents::config_client::ConfigAccess;
     use gents::defra_node::EmbeddedNode;
     use gents::graphql::escape_graphql_string;
@@ -198,12 +198,12 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
     let home = std::path::PathBuf::from(std::env::var("GENTS_EVAL_TRACE_HOME")?);
     let did = std::env::var("GENTS_EVAL_TRACE_DID")?;
     let output = std::path::PathBuf::from(std::env::var("GENTS_EVAL_TRACE_OUTPUT")?);
-    anyhow::ensure!(
+    assert!(
         home.join("node.key").is_file(),
         "retained trial identity is missing"
     );
     let identity = KeyIdentity::load_or_create(home.join("node.key"), None)?;
-    anyhow::ensure!(
+    assert!(
         identity.did() == did,
         "trace DID does not own retained trial home"
     );
@@ -218,16 +218,16 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
     let response = access.execute(&format!("{{AgentToolCall(filter: {{node_did: {{_eq: \"{}\"}}}}, order: {{started_at: ASC}}) {{_docID node_did session_id requester_did tool_name lifecycle_state started_at}}}}",escape_graphql_string(&did))).await?;
     let rows = response["data"]["AgentToolCall"]
         .as_array()
-        .context("missing canonical tool calls")?;
+        .ok_or("missing canonical tool calls")?;
     let mut calls = Vec::new();
     for row in rows {
         let presentation = load_tool_call_presentation(
             &access,
             row["_docID"]
                 .as_str()
-                .context("missing physical tool identity")?,
+                .ok_or("missing physical tool identity")?,
             &did,
-            row["session_id"].as_str().context("missing tool session")?,
+            row["session_id"].as_str().ok_or("missing tool session")?,
             row["requester_did"].as_str(),
         )
         .await?;

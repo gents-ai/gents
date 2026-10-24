@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use gents::config_client::{
     apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
@@ -22,6 +21,8 @@ use crate::support::fixtures::bind_agent_backend;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{live_target, wait_for_request_terminal};
 use crate::support::{create_session_document, session_document_in_scope, test_db, TestDb};
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 const AGENT: &str = "live-steering";
 const SESSION: &str = "live-steering-session";
@@ -89,10 +90,7 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
     .await?;
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut create).await?;
     let result = ConfigAccess::local(db.node.clone())
-        .write(
-            "test.live_steering.enqueue",
-            &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-        )
+        .write("test.live_steering.enqueue", &create.graphql_mutation()?)
         .await?;
     gents::graphql::created_doc_id(&result, "AgentRequest")
 }
@@ -100,7 +98,7 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: requires GENTS_LIVE_OPENAI=1 and GENTS_EVAL_TARGET"]
 async fn live_steering_edits_reorders_and_removes_before_same_request_continues() -> Result<()> {
-    anyhow::ensure!(
+    assert!(
         std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
         "set GENTS_LIVE_OPENAI=1"
     );

@@ -1,6 +1,7 @@
 #[cfg(test)]
 pub(crate) mod matrix;
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -26,7 +27,7 @@ use crate::optimization::evidence::{
 use crate::optimization::gate::{seed_gate, structural_gate, text_gate};
 use crate::optimization::job::{
     append, append_in_txn, checkpoint, create_job, derive_state, load_job, rounds_used, Budgets,
-    Checkpoint, DecisionSummary, JobOrigin, JobRecord, JobState, JournalEntry,
+    Checkpoint, DecisionSummary, JobOrigin, JobRecord, JobState, JournalEntry, OptimizationError,
 };
 use crate::optimization::policy::{
     alpha_effective_ppm, decide, Decision, DecisionReport, InconclusiveReason, Mode, PolicyV2,
@@ -72,7 +73,7 @@ pub fn validate_job_id(job_id: &str) -> Result<()> {
     if job_id.trim().is_empty() {
         return Err(refused(format!("job_id {job_id:?} must not be blank")));
     }
-    freeze::directory_name("job_id", job_id).map_err(as_job_refusal)
+    freeze::directory_name("job_id", job_id).map_err(|error| as_job_refusal(error.into()))
 }
 
 pub fn job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf {
@@ -127,17 +128,20 @@ fn seed_base_for(base: i64, round: u32, attempt: u32) -> i64 {
         .saturating_add(i64::from(attempt).saturating_mul(ATTEMPT_SEED_STRIDE))
 }
 
-pub(crate) fn check_seed_spacing(request: &JobRequest, policy: &PolicyV2) -> Result<()> {
+pub(crate) fn check_seed_spacing(
+    request: &JobRequest,
+    policy: &PolicyV2,
+) -> Result<(), JobRefused> {
     let trials = i64::from(request.trials_per_case);
     if trials > ATTEMPT_SEED_STRIDE {
-        return Err(refused(format!(
+        return Err(JobRefused(format!(
             "trials_per_case {} exceeds {ATTEMPT_SEED_STRIDE}; a re-run would draw the trial seeds of the attempt before it",
             request.trials_per_case
         )));
     }
     let attempts = i64::from(policy.max_reruns) + 1;
     if attempts * ATTEMPT_SEED_STRIDE > ROUND_SEED_STRIDE {
-        return Err(refused(format!(
+        return Err(JobRefused(format!(
             "policy max_reruns {} exceeds {}; a re-run would draw the trial seeds of the next round",
             policy.max_reruns,
             ROUND_SEED_STRIDE / ATTEMPT_SEED_STRIDE - 1
@@ -149,7 +153,7 @@ pub(crate) fn check_seed_spacing(request: &JobRequest, policy: &PolicyV2) -> Res
         .and_then(|offset| offset.checked_add((trials - 1).max(0)))
         .and_then(|offset| request.seed_base.checked_add(offset));
     if highest.is_none() {
-        return Err(refused(format!(
+        return Err(JobRefused(format!(
             "seed_base {} leaves no room for {} rounds of seeds within an i64",
             request.seed_base, request.budgets.max_rounds
         )));
@@ -455,7 +459,7 @@ fn refused(reason: impl Into<String>) -> anyhow::Error {
 }
 
 fn as_job_refusal(error: anyhow::Error) -> anyhow::Error {
-    match freeze_refused(&error) {
+    match freeze_refused(error.as_ref()) {
         Some(refusal) => refused(refusal.0.clone()),
         None => error,
     }
@@ -473,14 +477,14 @@ pub(crate) fn check_policy(
     request: &JobRequest,
     policy: &PolicyV2,
     definition: &EvalDefinition,
-) -> Result<()> {
+) -> Result<(), JobRefused> {
     check_policy_shape(request, policy)?;
     let validation = split_case_count(definition, EvalSplit::Validation);
     let samples = policy.monte_carlo_samples as u64;
     if validation > EXACT_CASE_LIMIT as u64
         && 1_000_000 > alpha_effective_ppm(policy) * (samples + 1)
     {
-        return Err(refused(format!(
+        return Err(JobRefused(format!(
             "policy monte_carlo_samples {samples} cannot resolve alpha_effective {} ppm over the {validation}-case validation split",
             alpha_effective_ppm(policy)
         )));
@@ -488,14 +492,17 @@ pub(crate) fn check_policy(
     Ok(())
 }
 
-pub(crate) fn check_policy_shape(request: &JobRequest, policy: &PolicyV2) -> Result<()> {
+pub(crate) fn check_policy_shape(
+    request: &JobRequest,
+    policy: &PolicyV2,
+) -> Result<(), JobRefused> {
     if policy.min_pairs == 0 {
-        return Err(refused("policy min_pairs must be at least 1"));
+        return Err(JobRefused("policy min_pairs must be at least 1".to_owned()));
     }
     if policy.max_rounds == request.budgets.max_rounds {
         return Ok(());
     }
-    Err(refused(format!(
+    Err(JobRefused(format!(
         "policy max_rounds {} does not match the budget's max_rounds {}; the Bonferroni divisor must be the number of candidates the job may try",
         policy.max_rounds, request.budgets.max_rounds
     )))
@@ -504,14 +511,14 @@ pub(crate) fn check_policy_shape(request: &JobRequest, policy: &PolicyV2) -> Res
 pub fn check_request(request: &JobRequest, policy: &PolicyV2) -> Result<()> {
     validate_job_id(&request.job_id)?;
     check_policy_shape(request, policy)?;
-    check_seed_spacing(request, policy)
+    Ok(check_seed_spacing(request, policy)?)
 }
 
 pub(crate) fn check_resume(
     request: &JobRequest,
     policy: &PolicyV2,
     origin: &JobOrigin,
-) -> Result<()> {
+) -> Result<(), JobRefused> {
     let mut differs = Vec::new();
     if &origin.policy != policy {
         differs.push("policy");
@@ -552,7 +559,7 @@ pub(crate) fn check_resume(
     if differs.is_empty() {
         return Ok(());
     }
-    Err(refused(format!(
+    Err(JobRefused(format!(
         "job {} was frozen with a different {}; a resume must repeat the request the job was created from",
         request.job_id,
         differs.join(", ")
@@ -566,7 +573,7 @@ pub(crate) fn check_run_matches_plan(
     origin: &JobOrigin,
     plan: &RunPlan,
     digests: &[String],
-) -> Result<()> {
+) -> Result<(), JobRefused> {
     let mut differs = Vec::new();
     if run.purpose != format!("optimization:{job_id}") {
         differs.push("purpose");
@@ -603,7 +610,7 @@ pub(crate) fn check_run_matches_plan(
     if differs.is_empty() {
         return Ok(());
     }
-    Err(refused(format!(
+    Err(JobRefused(format!(
         "eval run {} already exists but was frozen with a different {} than this job plans; it is not resumed as this job's run",
         plan.run_id,
         differs.join(", ")
@@ -757,9 +764,12 @@ fn run_started(journal: &[JournalEntry], run_id: &str) -> bool {
     })
 }
 
-fn remove_if_present(dir: &Path) -> Result<()> {
+fn remove_if_present(dir: &Path) -> Result<(), OptimizationError> {
     if dir.exists() {
-        std::fs::remove_dir_all(dir).with_context(|| format!("removing {}", dir.display()))?;
+        std::fs::remove_dir_all(dir).map_err(|source| OptimizationError::RemoveDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
     }
     Ok(())
 }
@@ -820,7 +830,7 @@ async fn append_all(
                         append_in_txn(txn, &advanced, entry).await?;
                         advanced.journal.push(entry.clone());
                     }
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -1014,8 +1024,8 @@ pub async fn run_job(
 
     let definition = match load_definition(access, owner, &origin.definition.definition_id).await {
         Ok(definition) => definition,
-        Err(error) if freeze_refused(&error).is_some() => {
-            tracing::warn!(job_id = %job_id, error = %format!("{error:#}"), "optimization job's definition is gone or invalid");
+        Err(error) if freeze_refused(error.as_ref()).is_some() => {
+            tracing::warn!(job_id = %job_id, error = %ErrorChain(error.as_ref()), "optimization job's definition is gone or invalid");
             let state = JobState::Failed {
                 reason: "definition_changed".into(),
             };
@@ -1602,11 +1612,7 @@ mod tests {
         let policy = PolicyV2::uncalibrated();
         check_seed_spacing(&request(), &policy).unwrap();
         let refusal = |request: &JobRequest, policy: &PolicyV2| {
-            let error = check_seed_spacing(request, policy).unwrap_err();
-            job_refused(&error)
-                .unwrap_or_else(|| panic!("{error:#}"))
-                .0
-                .clone()
+            check_seed_spacing(request, policy).unwrap_err().0
         };
 
         let mut trials = request();
@@ -1766,8 +1772,7 @@ mod tests {
     fn a_policy_that_disagrees_with_the_round_budget_is_refused() {
         let mut policy = PolicyV2::uncalibrated();
         policy.max_rounds = 5;
-        let error = check_policy(&request(), &policy, &definition()).unwrap_err();
-        let refusal = job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let refusal = check_policy(&request(), &policy, &definition()).unwrap_err();
         assert!(refusal.0.contains("max_rounds"), "{}", refusal.0);
 
         policy.max_rounds = 3;
@@ -1949,18 +1954,12 @@ mod tests {
         let error =
             check_run_matches_plan(&run, captures, "job-1", &origin, &plan, &other_candidate)
                 .unwrap_err();
-        assert!(
-            job_refused(&error).unwrap().0.contains("cells"),
-            "{error:#}"
-        );
+        assert!(error.0.contains("cells"), "{error}");
 
         for frozen in [Some(&[][..]), None] {
             let error = check_run_matches_plan(&run, frozen, "job-1", &origin, &plan, &digests)
                 .unwrap_err();
-            assert!(
-                job_refused(&error).unwrap().0.contains("captures"),
-                "{frozen:?}: {error:#}"
-            );
+            assert!(error.0.contains("captures"), "{frozen:?}: {error}");
         }
 
         let foreign = RunOrigin {
@@ -1970,7 +1969,7 @@ mod tests {
         };
         let error = check_run_matches_plan(&foreign, captures, "job-1", &origin, &plan, &digests)
             .unwrap_err();
-        let refusal = &job_refused(&error).unwrap().0;
+        let refusal = &error.0;
         assert!(
             refusal.contains("purpose") && refusal.contains("seed_base"),
             "{refusal}"
@@ -2019,7 +2018,8 @@ mod tests {
         let error = append_all(&access, &mut stale, pair).await.unwrap_err();
         assert!(
             crate::optimization::job::journal_conflict(&error).is_some(),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         let after = load_job(&access, &origin.owner, "job-1")
             .await
@@ -2049,7 +2049,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let refusal = job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let refusal =
+            job_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert!(refusal.0.contains("job_id"), "{}", refusal.0);
         assert!(std::fs::read_dir(home.path()).unwrap().next().is_none());
         assert!(proposer.calls.lock().unwrap().is_empty());

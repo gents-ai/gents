@@ -1,11 +1,12 @@
 #![cfg(any(unix, windows))]
 
+use gents_protocol::error_chain::ErrorChain;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
+use crate::support::{TestError, TestResult};
 use gents::identity::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::{json, Value};
@@ -109,62 +110,83 @@ const STEERING_INPUT: &str = "Steering input from the installed editor.";
 const STEERING_REPLY: &str = "Steering input received.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> Result<()> {
+async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> TestResult<()>
+{
     let temp = tempfile::tempdir()?;
     let result = exercise(temp.path(), Journey::Conversation).await;
-    result.with_context(|| {
-        ["runtime.log", "runtime.err", "client-host.log"]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+    result.map_err(|error| {
+        TestError::from(format!(
+            "{}: {}",
+            {
+                ["runtime.log", "runtime.err", "client-host.log"]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+            },
+            ErrorChain(error.as_ref())
+        ))
     })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Result<()> {
+async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Goal).await.with_context(|| {
-        ["runtime.log", "runtime.err", "client-host.log"]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+    exercise(temp.path(), Journey::Goal).await.map_err(|error| {
+        TestError::from(format!(
+            "{}: {}",
+            {
+                ["runtime.log", "runtime.err", "client-host.log"]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+            },
+            ErrorChain(error.as_ref())
+        ))
     })
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_preserves_live_session_and_draft_across_window_reload() -> Result<()> {
+async fn editor_preserves_live_session_and_draft_across_window_reload() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Editor)
         .await
-        .with_context(|| {
-            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                { std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default() },
+                ErrorChain(error.as_ref())
+            ))
         })
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
+async fn editor_steers_pending_input_into_the_active_request() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorSteering)
         .await
-        .with_context(|| {
-            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                { std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default() },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Result<()> {
+async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let evidence = editor_history::ProfileEvidence::from_env(temp.path())?;
     let result = exercise(temp.path(), Journey::EditorHistory)
@@ -173,151 +195,188 @@ async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Res
     if let Some(evidence) = evidence {
         evidence.finish(temp.path(), &result)?;
     }
-    result.with_context(|| {
-        [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "editor.log",
-            "editor-history-seed-progress.json",
-            "editor-history-seed-failure.json",
-        ]
-        .map(|name| {
-            format!(
-                "{name}:\n{}",
-                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-            )
-        })
-        .join("\n")
+    result.map_err(|error| {
+        TestError::from(format!(
+            "{}: {}",
+            {
+                [
+                    "runtime.log",
+                    "runtime.err",
+                    "client-host.log",
+                    "editor.log",
+                    "editor-history-seed-progress.json",
+                    "editor-history-seed-failure.json",
+                ]
+                .map(|name| {
+                    format!(
+                        "{name}:\n{}",
+                        std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                    )
+                })
+                .join("\n")
+            },
+            ErrorChain(error.as_ref())
+        ))
     })
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result<()> {
+async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorWorkspace)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-workspace-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Result<()> {
+async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRetry)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-retry-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_reviews_retained_file_images_without_reading_the_working_copy() -> Result<()> {
+async fn editor_reviews_retained_file_images_without_reading_the_working_copy() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorReview)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-review-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_retries_recorded_file_review_after_reenrollment() -> Result<()> {
+async fn editor_retries_recorded_file_review_after_reenrollment() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorReviewPermissions)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-review-permissions-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft() -> Result<()> {
+async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft() -> TestResult<()>
+{
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRecovery)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-goal-recovery-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
-fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
+fn copy_editor_evidence(root: &Path, name: &str) -> TestResult<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
-    let extension = std::env::var_os("GENTS_VSCODE_ROOT").context("extension root")?;
-    ensure!(
+    let extension = std::env::var_os("GENTS_VSCODE_ROOT").expect("extension root");
+    assert!(
         artifacts.starts_with(std::fs::canonicalize(
             Path::new(&extension).join("test-results")
         )?),
@@ -329,72 +388,91 @@ fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_removes_goals_without_cancelling_current_work_or_queued_input() -> Result<()> {
+async fn editor_removes_goals_without_cancelling_current_work_or_queued_input() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRemoval)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-goal-removal-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() -> Result<()> {
+async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalReplacement)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-goal-replacement-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft() -> Result<()> {
+async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft() -> TestResult<()>
+{
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWork)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
@@ -402,29 +480,35 @@ async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_observes_related_worker_failure_without_losing_completed_work_or_the_parent_draft(
-) -> Result<()> {
+) -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWorkFailure)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        .map_err(|error| {
+            TestError::from(format!(
+                "{}: {}",
+                {
+                    [
+                        "runtime.log",
+                        "runtime.err",
+                        "client-host.log",
+                        "editor.log",
+                    ]
+                    .map(|name| {
+                        format!(
+                            "{name}:\n{}",
+                            std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                        )
+                    })
+                    .join("\n")
+                },
+                ErrorChain(error.as_ref())
+            ))
         })?;
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
-async fn exercise(root: &Path, journey: Journey) -> Result<()> {
+async fn exercise(root: &Path, journey: Journey) -> TestResult<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
         .transpose()?;
@@ -579,11 +663,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .wait(Duration::from_secs(30))
         .await?;
     let init: Value = serde_json::from_slice(&output)?;
-    let node_did = init["node_did"].as_str().context("initialized node DID")?;
+    let node_did = init["node_did"].as_str().expect("initialized node DID");
     let identity = gents::KeyIdentity::load_or_create(
         init["key_path"]
             .as_str()
-            .context("initialized identity path")?,
+            .expect("initialized identity path"),
         None,
     )?;
     let port = ports::allocate_port()?;
@@ -614,16 +698,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let ready = wait_ready(&mut runtime, &root.join("runtime.log")).await?;
     let status = wait_for_status(&mut runtime, &cli, &node_home, port).await?;
     #[cfg(unix)]
-    ensure!(
+    assert!(
         status["graphql"] == ready["graphql"] && status["node_did"] == ready["node_did"],
         "runtime readiness output and status command must identify the same runtime"
     );
     #[cfg(windows)]
     let ready = status;
-    ensure!(ready["readiness_status"] == "ready", "{ready}");
-    let graphql = ready["graphql"]
-        .as_str()
-        .context("runtime GraphQL endpoint")?;
+    assert!(ready["readiness_status"] == "ready", "{ready}");
+    let graphql = ready["graphql"].as_str().expect("runtime GraphQL endpoint");
     let paths = DesktopPaths::from_root(root.join("client"));
     let seed = Arc::new(
         ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
@@ -669,9 +751,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }),
             )
             .await;
-        let pending_id = pending["requestId"]
-            .as_str()
-            .context("pending enrollment")?;
+        let pending_id = pending["requestId"].as_str().expect("pending enrollment");
         let pending_query = format!(
             "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
             gents::graphql::escape_graphql_string(pending_id)
@@ -683,13 +763,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     .as_array()
                     .is_some_and(|rows| !rows.is_empty())
                 {
-                    return Ok::<_, anyhow::Error>(());
+                    return Ok::<_, TestError>(());
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
-        .context("runtime did not observe the enrollment request")??;
+        .expect("runtime did not observe the enrollment request")?;
         let approved = Command::new(&cli)
             .current_dir(root)
             .args(["p2p", "enrollment", "approve", pending_id, "--home"])
@@ -697,7 +777,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .kill_on_drop(true)
             .output();
         let approved = tokio::time::timeout(Duration::from_secs(30), approved).await??;
-        ensure!(
+        assert!(
             approved.status.success(),
             "enrollment approval failed: {}",
             String::from_utf8_lossy(&approved.stderr)
@@ -727,14 +807,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }
     })
     .await
-    .with_context(|| {
-        format!("client did not observe its authorized runtime route: {last_snapshot}")
+    .map_err(|error| {
+        TestError::from(format!(
+            "client did not observe its authorized runtime route: {last_snapshot}: {}",
+            ErrorChain(&error)
+        ))
     })?;
     let agent_id = deployment["agents"]
         .as_array()
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
-        .context("runtime default agent")?;
+        .expect("runtime default agent");
     if matches!(journey, Journey::Conversation) {
         configure_inference(
             &mut client,
@@ -768,7 +851,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .call(id, "client_speech_services", json!({"nodeDid":node_did}))
             .await;
         id += 1;
-        ensure!(
+        assert!(
             services.as_array().is_some_and(|services| services
                 .iter()
                 .any(|service| service["serviceId"] == "editor-speech")),
@@ -782,7 +865,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             )
             .await;
         id += 1;
-        ensure!(
+        assert!(
             tools.as_array().is_some_and(|tools| tools.len() == 2),
             "speech adapter tools were not discovered: {tools}"
         );
@@ -799,7 +882,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             id += 1;
             transcript
                 .as_str()
-                .context("configured speech transcript")?
+                .expect("configured speech transcript")
                 .to_owned()
         } else {
             "Return the fixture response.".to_owned()
@@ -822,8 +905,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await
     };
     id += 1;
-    let session = receipt["sessionId"].as_str().context("submitted session")?;
-    let request = receipt["requestId"].as_str().context("submitted request")?;
+    let session = receipt["sessionId"].as_str().expect("submitted session");
+    let request = receipt["requestId"].as_str().expect("submitted request");
     let signed_query = format!(
         "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
         gents::graphql::escape_graphql_string(request),
@@ -837,21 +920,21 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     .as_array()
                     .and_then(|rows| rows.first())
                 {
-                    return serde_json::from_value(row.clone()).map_err(anyhow::Error::from);
+                    return serde_json::from_value(row.clone()).map_err(TestError::from);
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
-        .context("submitted request did not reach the runtime")??;
+        .expect("submitted request did not reach the runtime")?;
     gents::verify_request_receipt_signature(&row)?;
-    let original_doc_id = row.doc_id.clone().context("submitted physical request")?;
-    ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
-    ensure!(client_did != node_did);
-    ensure!(
+    let original_doc_id = row.doc_id.clone().expect("submitted physical request");
+    assert!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
+    assert!(client_did != node_did);
+    assert!(
         row.input
             .and_then(|input| input.queue)
-            .context("signed delivery")?
+            .expect("signed delivery")
             .delivery
             == gents_protocol::request_input::QueueDelivery::Queue
     );
@@ -876,7 +959,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }
     })
     .await
-    .context("the canonical session header was not observed")?;
+    .expect("the canonical session header was not observed");
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let projection = read_session(&mut client, &mut id, node_did, session).await?;
@@ -889,17 +972,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 })
             });
             if live {
-                ensure!(
+                assert!(
                     projection["turnState"] != "completed",
                     "stream bytes must precede completion"
                 );
-                return Ok::<_, anyhow::Error>(());
+                return Ok::<_, TestError>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("live output was not observed before provider completion")??;
+    .expect("live output was not observed before provider completion")?;
     if matches!(journey, Journey::EditorSteering) {
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
@@ -932,7 +1015,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::Goal) {
         let mut view = wait_goal(&mut client, &mut id, node_did, session, "active").await?;
-        ensure!(view["goal"]["goalId"] == receipt["goalId"]);
+        assert!(view["goal"]["goalId"] == receipt["goalId"]);
         for status in ["paused", "active", "paused"] {
             let result = client
                 .call(
@@ -946,7 +1029,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 )
                 .await;
             id += 1;
-            ensure!(
+            assert!(
                 result["goalId"] == receipt["goalId"] && result["requestId"].is_null(),
                 "a goal control while the current turn is running must not publish another request"
             );
@@ -956,8 +1039,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session))).await?;
             let rows = requests["data"]["AgentRequest"]
                 .as_array()
-                .context("goal request rows")?;
-            ensure!(
+                .expect("goal request rows");
+            assert!(
                 rows.len() == 1
                     && rows[0]["lifecycle_state"] == "processing"
                     && rows[0]["interrupt_requested_at"].is_null(),
@@ -965,7 +1048,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             );
         }
         let projection = read_session(&mut client, &mut id, node_did, session).await?;
-        ensure!(
+        assert!(
             projection["sessionId"] == session
                 && projection["nodeDid"] == node_did
                 && projection["goal"].is_null(),
@@ -981,7 +1064,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             gents::graphql::escape_graphql_string(session),
             gents::graphql::escape_graphql_string(session),
         )).await?;
-        ensure!(
+        assert!(
             context["data"]["AgentMessage"]
                 .as_array()
                 .is_some_and(|messages| {
@@ -1039,7 +1122,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }
             })
             .await
-            .context("the editor did not open an approval listener")?;
+            .expect("the editor did not open an approval listener");
             let resolved = gents::plugin::allowed::Resolved {
                 target: approval_path,
                 is_dir: false,
@@ -1074,7 +1157,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await?;
         let stopped = stopped["data"]["AgentRequest"]
             .as_array()
-            .context("stopped editor request rows")?
+            .expect("stopped editor request rows")
             .iter()
             .filter(|row| {
                 matches!(
@@ -1085,7 +1168,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 )
             })
             .collect::<Vec<_>>();
-        ensure!(
+        assert!(
             stopped.len() == 2
                 && stopped[0]["content"] != stopped[1]["content"]
                 && stopped[0]["session_id"] == stopped[1]["session_id"]
@@ -1099,7 +1182,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )).await?;
         let rows = submitted["data"]["AgentRequest"]
             .as_array()
-            .context("editor workspace request")?
+            .expect("editor workspace request")
             .iter()
             .filter(|row| {
                 row["content"]
@@ -1107,7 +1190,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     .is_some_and(|content| content.starts_with("Check this repository"))
             })
             .collect::<Vec<_>>();
-        ensure!(
+        assert!(
             rows.len() == 1,
             "the editor must submit one workspace request: {submitted}"
         );
@@ -1122,8 +1205,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let binding = selected["agentConfigs"]
             .as_array()
             .and_then(|agents| agents.iter().find(|agent| agent["agent_id"] == agent_id))
-            .context("selected agent configuration")?;
-        ensure!(
+            .expect("selected agent configuration");
+        assert!(
             selected["inferenceProfiles"]
                 .as_array()
                 .is_some_and(|profiles| {
@@ -1135,7 +1218,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }),
             "the composer model selection did not reach the selected agent: {selected}"
         );
-        ensure!(
+        assert!(
             provider.captured_chat_requests().iter().any(|request| {
                 request["model"] == "editor-fixture-alternate"
                     && request["service_tier"] == "priority"
@@ -1158,15 +1241,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
         let cwd = rows[0]["input"]["cwd"]
             .as_str()
-            .context("the editor request has no workspace folder")?;
-        ensure!(
+            .expect("the editor request has no workspace folder");
+        assert!(
             std::fs::canonicalize(cwd)? == std::fs::canonicalize(root.join("second-workspace"))?,
             "the editor request used a different project folder"
         );
-        ensure!(tokio::time::timeout(Duration::from_secs(5), approval_wait)
+        assert!(tokio::time::timeout(Duration::from_secs(5), approval_wait)
             .await
-            .context("the editor's approval did not reach the waiting call")???);
-        ensure!(
+            .expect("the editor's approval did not reach the waiting call")??);
+        assert!(
             gents::plugin::allowed::list(&node_home)?.is_empty(),
             "allow-once must not persist a file or folder grant"
         );
@@ -1188,14 +1271,19 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 })
             });
             if projection["turnState"] == "completed" && durable {
-                return Ok::<_, anyhow::Error>(());
+                return Ok::<_, TestError>(());
             }
             last_projection = projection;
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .with_context(|| format!("canonical completed output was not observed: {last_projection}"))??;
+    .map_err(|error| {
+        TestError::from(format!(
+            "canonical completed output was not observed: {last_projection}: {}",
+            ErrorChain(&error)
+        ))
+    })??;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let output = client
@@ -1208,7 +1296,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 )
                 .await;
             id += 1;
-            ensure!(
+            assert!(
                 output["nodeDid"] == node_did
                     && output["sessionId"] == session
                     && output["requestId"] == request,
@@ -1216,16 +1304,20 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             );
             match output["output"]["kind"].as_str() {
                 Some("terminalMessage") => {
-                    ensure!(output["output"]["content"] == expected_reply, "{output}");
-                    break Ok::<_, anyhow::Error>(());
+                    assert!(output["output"]["content"] == expected_reply, "{output}");
+                    break Ok::<_, TestError>(());
                 }
                 Some("loading") => tokio::time::sleep(Duration::from_millis(50)).await,
-                _ => anyhow::bail!("unexpected canonical output: {output}"),
+                _ => {
+                    return Err(TestError::from(format!(
+                        "unexpected canonical output: {output}"
+                    )))
+                }
             }
         }
     })
     .await
-    .context("the exact request's terminal answer was not observed")??;
+    .expect("the exact request's terminal answer was not observed")?;
     let wrong_scope = client
         .try_call(
             id,
@@ -1236,7 +1328,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await;
     id += 1;
-    ensure!(
+    assert!(
         wrong_scope.is_err()
             || wrong_scope
                 .as_ref()
@@ -1256,18 +1348,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await;
         id += 1;
         let clip: gents_protocol::client_media::MediaPcmClip = serde_json::from_value(clip)?;
-        ensure!(clip.sample_rate == 48000 && clip.samples()? == [i16::MIN, i16::MAX]);
+        assert!(clip.sample_rate == 48000 && clip.samples()? == [i16::MIN, i16::MAX]);
         let calls = speech.calls.lock().unwrap();
-        ensure!(
+        assert!(
             calls.len() == 2 && calls.iter().all(|(actor, _)| actor == &client_did),
             "speech calls must use the actual client actor exactly once per operation"
         );
-        ensure!(
+        assert!(
             calls[0].1["arguments"]["audio"]
                 == json!({"data":"AAAAAA==","format":"pcm_s16le","sampleRate":48000,"channels":1})
         );
-        ensure!(calls[1].1["arguments"]["text"] == "First part and final part.");
-        ensure!(
+        assert!(calls[1].1["arguments"]["text"] == "First part and final part.");
+        assert!(
             calls[1].1["arguments"].get("language").is_none()
                 && calls[1].1["arguments"].get("voice").is_none()
         );
@@ -1282,7 +1374,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 gents::graphql::escape_graphql_string(session)
             ))
             .await?;
-        ensure!(
+        assert!(
             requests["data"]["AgentRequest"]
                 .as_array()
                 .is_some_and(|rows| rows.len() == 1),
@@ -1316,7 +1408,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             })
         })
         .count();
-    ensure!(
+    assert!(
         user_rounds
             == if matches!(journey, Journey::EditorGoalRecovery) {
                 7
@@ -1344,7 +1436,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorHistory) {
-        let options = history.context("history options")?;
+        let options = history.expect("history options");
         let evidence = editor_history::populate(
             &mut client,
             &mut id,
@@ -1445,7 +1537,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         if let Err(error) = result {
             let snapshot = client.snapshot(id).await;
             let provenance = client.call(id + 1, "desktop_session_provenance", json!({"request":{"nodeDid":node_did,"sessionId":session,"requesterDid":client_did}})).await;
-            anyhow::bail!("{error:#}; related-work snapshot: {snapshot}; provenance: {provenance}");
+            return Err(TestError::from(format!(
+                "{}; related-work snapshot: {snapshot}; provenance: {provenance}",
+                ErrorChain(error.as_ref())
+            )));
         }
         let evidence = editor_related_work::verify(
             &access,
@@ -1489,7 +1584,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     ) {
         editor_review::prepare(root)?;
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
-        ensure!(
+        assert!(
             client
                 .call(id, "client_runtime_is_local", json!({"nodeDid": node_did}))
                 .await
@@ -1503,9 +1598,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &host_binary,
             session,
             provider.endpoint(),
-            journey
-                .editor_scenario()
-                .context("recorded review journey")?,
+            journey.editor_scenario().expect("recorded review journey"),
         )
         .await;
         std::fs::write(
@@ -1780,17 +1873,15 @@ async fn exercise_message_edit(
     node_did: &str,
     source: &str,
     agent: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let before = read_session(client, id, node_did, source).await?;
     let message = before["timelineItems"]
         .as_array()
         .and_then(|items| items.iter().find(|item| item["kind"] == "userMessage"))
-        .context("completed source has no authored user message")?;
+        .expect("completed source has no authored user message");
     let padded = format!(
         " {} ",
-        message["itemKey"]
-            .as_str()
-            .context("canonical message key")?
+        message["itemKey"].as_str().expect("canonical message key")
     );
     let invalid = client
         .try_call(
@@ -1802,7 +1893,7 @@ async fn exercise_message_edit(
         )
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         invalid.is_err(),
         "message-key whitespace changed canonical identity"
     );
@@ -1816,8 +1907,8 @@ async fn exercise_message_edit(
         )
         .await;
     *id += 1;
-    let child = fork["sessionId"].as_str().context("missing fork receipt")?;
-    ensure!(
+    let child = fork["sessionId"].as_str().expect("missing fork receipt");
+    assert!(
         child != source && fork["nodeDid"] == node_did,
         "fork receipt crossed source scope"
     );
@@ -1838,7 +1929,7 @@ async fn exercise_message_edit(
         }
     })
     .await
-    .context("the fork's signed goal observation did not reach the client")?;
+    .expect("the fork's signed goal observation did not reach the client");
     let sent = client
         .call(
             *id,
@@ -1850,7 +1941,7 @@ async fn exercise_message_edit(
         )
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         sent["sessionId"] == child,
         "edited input was not sent to the branch"
     );
@@ -1860,24 +1951,24 @@ async fn exercise_message_edit(
             if branch["turnState"] == "completed" {
                 let users = branch["timelineItems"]
                     .as_array()
-                    .context("child timeline")?
+                    .expect("child timeline")
                     .iter()
                     .filter(|item| item["kind"] == "userMessage")
                     .collect::<Vec<_>>();
-                ensure!(
+                assert!(
                     users.len() == 1
                         && users[0]["content"] == "Return the edited fixture response.",
                     "the edited branch retained the replaced user turn: {branch}"
                 );
-                return Ok::<_, anyhow::Error>(());
+                return Ok::<_, TestError>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("edited branch did not complete")??;
+    .expect("edited branch did not complete")?;
     let after = read_session(client, id, node_did, source).await?;
-    ensure!(
+    assert!(
         after["timelineItems"] == before["timelineItems"],
         "editing mutated the original conversation"
     );
@@ -1891,16 +1982,16 @@ async fn run_editor_journey(
     session: &str,
     endpoint: &str,
     scenario: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let extension_root = std::env::var_os("GENTS_VSCODE_ROOT")
-        .context("Set GENTS_VSCODE_ROOT to the extension checkout before running editor-e2e")?;
+        .expect("Set GENTS_VSCODE_ROOT to the extension checkout before running editor-e2e");
     let extension_root = Path::new(&extension_root);
-    ensure!(
+    assert!(
         extension_root.is_absolute(),
         "GENTS_VSCODE_ROOT must be absolute"
     );
     let script = extension_root.join("tests/editor.mjs");
-    ensure!(
+    assert!(
         script.is_file(),
         "The extension checkout has no tests/editor.mjs"
     );
@@ -1937,8 +2028,8 @@ async fn run_editor_journey(
         Duration::from_secs(120)
     };
     let status = tokio::time::timeout(timeout, child).await;
-    let status = status.context("editor journey timed out")??;
-    ensure!(status.success(), "editor journey exited with {status}");
+    let status = status.expect("editor journey timed out")?;
+    assert!(status.success(), "editor journey exited with {status}");
     Ok(())
 }
 
@@ -1950,7 +2041,7 @@ async fn verify_editor_steering(
     session: &str,
     original_doc_id: &str,
     client_did: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     use gents_protocol::request_input::QueueDelivery;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -1960,13 +2051,13 @@ async fn verify_editor_steering(
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(result["data"]["AgentRequest"].clone())?;
-    ensure!(
+    assert!(
         rows.len() == 3,
         "steering must retain one active row and two signed versions of the input: {result}"
     );
     for row in &rows {
         gents::verify_request_receipt_signature(row)?;
-        ensure!(
+        assert!(
             row.admission_signer_did.as_deref() == Some(client_did)
                 && row.requester_did.as_deref() == Some(client_did),
             "steering changed the enrolled author"
@@ -1975,7 +2066,7 @@ async fn verify_editor_steering(
     let active = rows
         .iter()
         .find(|row| row.doc_id.as_deref() == Some(original_doc_id))
-        .context("original request")?;
+        .expect("original request");
     let input = |delivery| {
         rows.iter().find(|row| {
             row.content.as_deref() == Some(STEERING_INPUT)
@@ -1986,21 +2077,21 @@ async fn verify_editor_steering(
                     .is_some_and(|queue| queue.delivery == delivery)
         })
     };
-    let queued = input(QueueDelivery::Queue).context("original queued input")?;
-    let steered = input(QueueDelivery::Steer).context("promoted input")?;
+    let queued = input(QueueDelivery::Queue).expect("original queued input");
+    let steered = input(QueueDelivery::Steer).expect("promoted input");
     let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-steering-ui.json"))?)?;
     let captured = &queued
         .input
         .as_ref()
-        .context("queued input")?
+        .expect("queued input")
         .captured_context;
-    ensure!(
+    assert!(
         captured.len() == 1
             && steered.input.as_ref().map(|input| &input.captured_context) == Some(captured),
         "Steer changed or dropped the queued capture"
     );
     let capture = serde_json::to_value(&captured[0])?;
-    ensure!(
+    assert!(
         capture["content"] == "queued captured unsaved context\n"
             && capture["uri"] == ui["contextUri"]
             && capture["kind"] == "selection"
@@ -2011,7 +2102,7 @@ async fn verify_editor_steering(
             && capture["range"]["end"] == json!({"line":1,"character":0}),
         "Steer did not retain the submitted editor observations"
     );
-    ensure!(
+    assert!(
         active.lifecycle_state == Some(RequestLifecycleState::Completed)
             && queued.lifecycle_state == Some(RequestLifecycleState::Superseded)
             && steered.lifecycle_state == Some(RequestLifecycleState::Superseded)
@@ -2025,8 +2116,8 @@ async fn verify_editor_steering(
     )).await?;
     let rendered = rendered["data"]["RenderedRequest"]
         .as_array()
-        .context("rendered steering requests")?;
-    ensure!(
+        .expect("rendered steering requests");
+    assert!(
         rendered.len() == 2
             && rendered
                 .iter()
@@ -2043,7 +2134,7 @@ async fn verify_editor_steering(
         .iter()
         .filter(|body| body["messages"].to_string().contains(STEERING_INPUT))
         .collect::<Vec<_>>();
-    ensure!(
+    assert!(
         steered_rounds.len() == 1
             && steered_rounds[0]["messages"]
                 .to_string()
@@ -2072,7 +2163,7 @@ async fn verify_editor_steering(
     };
     let captured_parts = capture_count(steered_rounds[0]);
     let all_captured_parts = requests.iter().map(capture_count).sum::<usize>();
-    ensure!(
+    assert!(
         captured_parts == 1 && all_captured_parts == 1,
         "the provider lost, duplicated or received the capture before Steer"
     );
@@ -2095,7 +2186,7 @@ async fn read_session(
     id: &mut u32,
     node_did: &str,
     session: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     read_session_page(client, id, node_did, session, None).await
 }
 
@@ -2105,7 +2196,7 @@ async fn read_session_page(
     node_did: &str,
     session: &str,
     before: Option<&str>,
-) -> Result<Value> {
+) -> TestResult<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let result = client
@@ -2126,12 +2217,12 @@ async fn read_session_page(
                 {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-                Err(error) => return Err(anyhow::Error::from(error)),
+                Err(error) => return Err(TestError::from(error)),
             }
         }
     })
     .await
-    .context("session projection did not reach a current read fence")?
+    .expect("session projection did not reach a current read fence")
 }
 
 async fn wait_goal(
@@ -2140,7 +2231,7 @@ async fn wait_goal(
     node_did: &str,
     session: &str,
     status: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let view = client
@@ -2161,7 +2252,11 @@ async fn wait_goal(
         }
     })
     .await
-    .context("the signed goal observation did not reach the client")
+    .map_err(|error| {
+        TestError::from(format!(
+            "the signed goal observation did not reach the client: {error}"
+        ))
+    })
 }
 
 async fn configure_inference(
@@ -2170,12 +2265,12 @@ async fn configure_inference(
     node_did: &str,
     agent_id: &str,
     endpoint: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let local = client
         .call(*id, "client_runtime_is_local", json!({"nodeDid":node_did}))
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         local == true,
         "the enrolled local runtime lost its local home observation"
     );
@@ -2183,7 +2278,7 @@ async fn configure_inference(
         .call(*id, "client_inference_setup_catalog", json!({}))
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         catalog["providers"]
             .as_array()
             .is_some_and(|rows| rows.iter().any(|row| row["id"] == "local")),
@@ -2194,7 +2289,7 @@ async fn configure_inference(
         "authMethod":"optional_api_key", "endpoint":endpoint, "apiKey":null, "accountRef":null,
     }})).await;
     *id += 1;
-    ensure!(
+    assert!(
         discovery["reachable"] == true
             && discovery["models"].as_array().is_some_and(|models| models
                 .iter()
@@ -2209,11 +2304,11 @@ async fn configure_inference(
         )
         .await;
     *id += 1;
-    ensure!(deployment["nodeDid"] == node_did);
+    assert!(deployment["nodeDid"] == node_did);
     let mut agent = deployment["agentConfigs"]
         .as_array()
         .and_then(|rows| rows.iter().find(|row| row["agent_id"] == agent_id))
-        .context("the setup default agent configuration")?
+        .expect("the setup default agent configuration")
         .clone();
     agent["inference_profile_id"] = json!("editor-setup");
     client.call(*id, "client_config_apply", json!({"request":{"document":{
@@ -2235,7 +2330,7 @@ async fn configure_inference(
         )
         .await;
     *id += 1;
-    ensure!(
+    assert!(
         observed["agentConfigs"].as_array().is_some_and(|rows| rows
             .iter()
             .any(
@@ -2247,7 +2342,7 @@ async fn configure_inference(
 }
 
 #[cfg(unix)]
-async fn wait_ready(child: &mut Child, path: &Path) -> Result<Value> {
+async fn wait_ready(child: &mut Child, path: &Path) -> TestResult<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let text = tokio::fs::read_to_string(path).await?;
@@ -2261,7 +2356,7 @@ async fn wait_ready(child: &mut Child, path: &Path) -> Result<Value> {
                     }
                 }
             }
-            ensure!(
+            assert!(
                 child.try_wait()?.is_none(),
                 "runtime exited before readiness"
             );
@@ -2269,14 +2364,19 @@ async fn wait_ready(child: &mut Child, path: &Path) -> Result<Value> {
         }
     })
     .await
-    .context("runtime readiness timed out")?
+    .expect("runtime readiness timed out")
 }
 
-async fn wait_for_status(child: &mut Child, cli: &Path, home: &Path, port: u16) -> Result<Value> {
+async fn wait_for_status(
+    child: &mut Child,
+    cli: &Path,
+    home: &Path,
+    port: u16,
+) -> TestResult<Value> {
     let graphql = ports::graphql_url(port);
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            ensure!(
+            assert!(
                 child.try_wait()?.is_none(),
                 "runtime exited before readiness"
             );
@@ -2298,10 +2398,10 @@ async fn wait_for_status(child: &mut Child, cli: &Path, home: &Path, port: u16) 
         }
     })
     .await
-    .context("runtime readiness timed out")?
+    .expect("runtime readiness timed out")
 }
 
-async fn wait_listener(child: &mut Child, paths: &DesktopPaths) -> Result<()> {
+async fn wait_listener(child: &mut Child, paths: &DesktopPaths) -> TestResult<()> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if gents_desktop_bridge::host::local::connect(paths)
@@ -2310,7 +2410,7 @@ async fn wait_listener(child: &mut Child, paths: &DesktopPaths) -> Result<()> {
             {
                 return Ok(());
             }
-            ensure!(
+            assert!(
                 child.try_wait()?.is_none(),
                 "client host exited before readiness"
             );
@@ -2318,19 +2418,19 @@ async fn wait_listener(child: &mut Child, paths: &DesktopPaths) -> Result<()> {
         }
     })
     .await
-    .context("native listener readiness timed out")?
+    .expect("native listener readiness timed out")
 }
 
-async fn stop(child: &mut Child) -> Result<()> {
+async fn stop(child: &mut Child) -> TestResult<()> {
     #[cfg(unix)]
     {
-        let pid = child.id().context("live fixture child")?;
+        let pid = child.id().expect("live fixture child");
         // SAFETY: the PID belongs to the live child owned by this fixture.
-        ensure!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) } == 0);
+        assert!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) } == 0);
     }
     #[cfg(windows)]
     child.interrupt()?;
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await??;
-    ensure!(status.success(), "fixture child exited with {status}");
+    assert!(status.success(), "fixture child exited with {status}");
     Ok(())
 }

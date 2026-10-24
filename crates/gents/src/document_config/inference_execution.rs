@@ -1,5 +1,6 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+use super::error::DocumentConfigError;
 
 /// Owned-loop execution settings; these are configuration limits only.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -136,12 +137,14 @@ impl InferenceExecution {
         violations
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
         if violations.is_empty() {
             Ok(())
         } else {
-            anyhow::bail!(violations.join("; "))
+            Err(DocumentConfigError::InferenceExecutionViolations {
+                violations: violations.join("; "),
+            })
         }
     }
 }
@@ -178,12 +181,14 @@ impl InferenceRetryPolicy {
         violations
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
         if violations.is_empty() {
             Ok(())
         } else {
-            anyhow::bail!(violations.join("; "))
+            Err(DocumentConfigError::InferenceRetryPolicyViolations {
+                violations: violations.join("; "),
+            })
         }
     }
 }

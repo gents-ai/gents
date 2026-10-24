@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::time::Duration;
 
 use gents::inference_setup::{
@@ -136,13 +137,11 @@ pub fn inference_backend_recommendation(
     })
 }
 
-fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
-    let http_error = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>());
-    let is_decode = error
-        .chain()
-        .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some());
+fn classify_discovery_failure(
+    error: &gents::backend_provider::BackendProviderError,
+) -> (&'static str, bool, bool) {
+    let http_error = error.model_discovery_http();
+    let is_decode = gents_protocol::error_chain::find_source::<serde_json::Error>(error).is_some();
     if let Some(error) = http_error {
         if error.is_auth() {
             ("authentication", true, false)
@@ -181,7 +180,7 @@ pub async fn discover_inference_models_for_core(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did = %request.node_did.trim(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "resolving node configuration access for model discovery failed"
             );
             BridgeError::new(
@@ -200,7 +199,7 @@ pub async fn discover_inference_models_for_core(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did = %request.node_did.trim(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(&error),
                 "reading provider accounts for model discovery failed"
             );
             BridgeError::new(
@@ -258,7 +257,7 @@ pub async fn discover_inference_models_for_core(
                         model,
                     )
                 })
-                .collect::<anyhow::Result<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
             (true, models, None, false)
         }
@@ -269,7 +268,7 @@ pub async fn discover_inference_models_for_core(
                 Vec::new(),
                 Some(InferenceDiscoveryFailure {
                     kind: kind.into(),
-                    message: format!("{error:#}"),
+                    message: gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 }),
                 manual_entry_allowed,
             )
@@ -297,7 +296,10 @@ pub(crate) async fn discovery_account(
     node_did: &str,
     provider: &str,
     account_ref: Option<&str>,
-) -> anyhow::Result<(Option<OAuthCredential>, gents::document_config::BackendAuth)> {
+) -> Result<
+    (Option<OAuthCredential>, gents::document_config::BackendAuth),
+    gents::oauth_credential::OAuthCredentialError,
+> {
     let credential = gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,
@@ -348,7 +350,7 @@ async fn publish_discovered_catalog(
         tracing::warn!(
             target: LOG_TARGET,
             node_did,
-            error = %format!("{error:#}"),
+            error = %ErrorChain(error.as_ref()),
             "publishing the discovered model catalog failed; the previous catalog is kept"
         );
     }

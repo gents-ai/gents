@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 
 fn manifest(graph: bool) -> PackManifest {
@@ -134,8 +135,9 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
         )
         .unwrap_err();
         assert!(
-            !format!("{error:#}").contains("unexpected asset"),
-            "resolver must not receive forbidden path: {error:#}"
+            !format!("{}", ErrorChain(error.as_ref())).contains("unexpected asset"),
+            "resolver must not receive forbidden path: {}",
+            ErrorChain(error.as_ref())
         );
     }
     let mut undeclared = manifest(false);
@@ -214,7 +216,7 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap())
                 .unwrap_or_else(|error| panic!("{name} manifest: {error}"));
         crate::pack::validate_manifest(&manifest.name, &manifest)
-            .unwrap_or_else(|error| panic!("{name} manifest: {error:#}"));
+            .unwrap_or_else(|error| panic!("{name} manifest: {}", ErrorChain(error.as_ref())));
         if manifest.config.is_none() {
             continue;
         }
@@ -226,7 +228,7 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
             &|path| Ok(std::fs::read(root.join(path))?),
             &|_| None,
         )
-        .unwrap_or_else(|error| panic!("{name} config: {error:#}"));
+        .unwrap_or_else(|error| panic!("{name} config: {}", ErrorChain(error.as_ref())));
     }
 }
 
@@ -301,8 +303,10 @@ fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_p
     )
     .unwrap_err();
     assert!(
-        format!("{undeclared:#}").contains("undeclared pack sidecar: config/cases/one.json"),
-        "{undeclared:#}"
+        format!("{}", ErrorChain(undeclared.as_ref()))
+            .contains("undeclared pack sidecar: config/cases/one.json"),
+        "{}",
+        ErrorChain(undeclared.as_ref())
     );
 
     let manifest = eval_manifest(&[
@@ -318,14 +322,17 @@ fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_p
     ] {
         let error = load_eval(&manifest, eval_config(json!([path]))).unwrap_err();
         assert!(
-            !format!("{error:#}").contains("unexpected asset"),
-            "the reader must not receive {path}: {error:#}"
+            !format!("{}", ErrorChain(error.as_ref())).contains("unexpected asset"),
+            "the reader must not receive {path}: {}",
+            ErrorChain(error.as_ref())
         );
     }
     let malformed = load_eval(&manifest, eval_config(json!(["./cases/bad.json"]))).unwrap_err();
     assert!(
-        format!("{malformed:#}").contains("./cases/bad.json is not one EvalCase"),
-        "{malformed:#}"
+        format!("{}", ErrorChain(malformed.as_ref()))
+            .contains("./cases/bad.json is not one EvalCase"),
+        "{}",
+        ErrorChain(malformed.as_ref())
     );
 }
 
@@ -397,12 +404,12 @@ fn a_plugin_node_runs_the_packs_own_artifact() {
 #[test]
 fn a_plugin_node_the_pack_cannot_run_is_refused() {
     let undeclared = plugin_pack_config(json!({"kind":"plugin","plugin":"missing"})).unwrap_err();
-    assert!(format!("{undeclared:#}").contains("does not declare"));
+    assert!(format!("{}", ErrorChain(undeclared.as_ref())).contains("does not declare"));
     let wrong_pin = plugin_pack_config(
         json!({"kind":"plugin","plugin":"lint","digest":format!("sha256:{}", "0".repeat(64))}),
     )
     .unwrap_err();
-    assert!(format!("{wrong_pin:#}").contains("the pack ships"));
+    assert!(format!("{}", ErrorChain(wrong_pin.as_ref())).contains("the pack ships"));
     let external = plugin_pack_config(json!({"kind":"plugin","plugin":"other/tool"})).unwrap();
     assert_eq!(
         external.graph_capabilities[0].target,
@@ -475,8 +482,9 @@ fn an_entry_prepare_plugin_the_pack_cannot_run_is_refused() {
     let prepare = json!({"host": [], "plugin": "missing", "writes": ["FixtureEvidence"]});
     let error = prepare_pack_config(json!({"prepare": prepare})).unwrap_err();
     assert!(
-        format!("{error:#}").contains("does not declare"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("does not declare"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -484,19 +492,24 @@ fn an_entry_prepare_plugin_the_pack_cannot_run_is_refused() {
 fn an_entry_input_schema_must_compile_and_declare_an_object() {
     let error = prepare_pack_config(json!({"input_schema": {"type": "string"}})).unwrap_err();
     assert!(
-        format!("{error:#}").contains("\"type\": \"object\""),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("\"type\": \"object\""),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 
     let too_big = json!({"type": "object", "filler": "a".repeat(70 * 1024)});
     let error = prepare_pack_config(json!({"input_schema": too_big})).unwrap_err();
-    assert!(format!("{error:#}").contains("byte ceiling"), "{error:#}");
+    assert!(
+        format!("{}", ErrorChain(error.as_ref())).contains("byte ceiling"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
 }
 
 #[test]
 fn a_pack_that_selects_the_default_agent_is_refused() {
     let error = load(json!({"node":{"default_agent_id":"worker"}}), false).unwrap_err();
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(error.as_ref()));
     assert!(
         message.contains("must not choose the default agent") && message.contains("worker"),
         "{message}"

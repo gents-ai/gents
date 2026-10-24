@@ -92,7 +92,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                     let closed = session["closed_at"].as_u64().map(time);
                     txn.execute_with_variables("mutation($input: AgentSessionMutationInputArg!) { update_AgentSession(filter: {session_id: {_eq: \"start-session\"}}, input: $input) { _docID } }",
                         &json!({"input":{"closed_at":closed,"tags":tags}})).await?;
-                    Ok(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             }).await.unwrap();
         }

@@ -15,6 +15,34 @@ use crate::provider_usage;
 use crate::rendered_request::CaptureScopeKind;
 use crate::watcher::AgentRequest;
 
+#[derive(Debug, thiserror::Error)]
+pub enum CompletionFactoryError {
+    #[error(transparent)]
+    ExecutionOrigin(#[from] gents_loop::execution_origin::ExecutionOriginError),
+    #[error(transparent)]
+    ProviderSettings(#[from] crate::config::ConfigError),
+    #[error("pinned max_total_tokens must not be negative")]
+    NegativeTokenLimit,
+    #[error("budget rehydration requires the physical request document ID")]
+    MissingRequestDocId,
+    #[error(
+        "decoding InferenceCall usage for request_doc_id={request_doc_id}: usage payload is not a row array"
+    )]
+    UsagePayload {
+        request_doc_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("decoding InferenceCall usage for request_doc_id={request_doc_id}")]
+    ProviderUsage {
+        request_doc_id: String,
+        #[source]
+        source: provider_usage::ProviderUsageError,
+    },
+}
+
+type Result<T, E = CompletionFactoryError> = std::result::Result<T, E>;
+
 fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u64>) -> Option<u64> {
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
@@ -165,7 +193,7 @@ pub(crate) fn loop_config_for_request(
     request: &AgentRequest,
     aggregate_token_budget: Option<AggregateTokenBudget>,
     tool_count: usize,
-) -> anyhow::Result<LoopConfig> {
+) -> Result<LoopConfig> {
     let mut config = loop_config(
         agent_config,
         preamble,
@@ -190,13 +218,11 @@ pub(crate) fn loop_config_for_request(
 
 /// Decode the execution owner's pinned request limit. Zero is a valid
 /// exhausted durable state; configured limits are validated positive before claim.
-pub(crate) fn parse_aggregate_token_limit(
-    max_total_tokens: Option<i64>,
-) -> anyhow::Result<Option<u64>> {
+pub(crate) fn parse_aggregate_token_limit(max_total_tokens: Option<i64>) -> Result<Option<u64>> {
     max_total_tokens
         .map(|limit| {
-            let limit = u64::try_from(limit)
-                .map_err(|_| anyhow::anyhow!("pinned max_total_tokens must not be negative"))?;
+            let limit =
+                u64::try_from(limit).map_err(|_| CompletionFactoryError::NegativeTokenLimit)?;
             Ok(limit)
         })
         .transpose()
@@ -248,10 +274,9 @@ async fn load_prior_charged_tokens(
     node: &EmbeddedNode,
     request_doc_id: &str,
 ) -> anyhow::Result<u64> {
-    anyhow::ensure!(
-        !request_doc_id.trim().is_empty(),
-        "budget rehydration requires the physical request document ID"
-    );
+    if request_doc_id.trim().is_empty() {
+        return Err(CompletionFactoryError::MissingRequestDocId.into());
+    }
     let query = format!(
         r#"{{
             InferenceCall(
@@ -271,26 +296,27 @@ async fn load_prior_charged_tokens(
             .as_ref()
             .and_then(|data| data.get("InferenceCall")),
     )
-    .map_err(|error| {
-        anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
+    .map_err(|source| CompletionFactoryError::UsagePayload {
+        request_doc_id: request_doc_id.to_owned(),
+        source,
     })?;
-    provider_usage::sum_charged_from_persisted_parts(
+    let charged = provider_usage::sum_charged_from_persisted_parts(
         rows.into_iter()
             .map(|row| (row.prompt_tokens, row.completion_tokens)),
     )
-    .map_err(|error| {
-        anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
-    })
+    .map_err(|source| CompletionFactoryError::ProviderUsage {
+        request_doc_id: request_doc_id.to_owned(),
+        source,
+    })?;
+    Ok(charged)
 }
 
 fn prior_usage_rows_from_response(
     value: Option<&serde_json::Value>,
-) -> anyhow::Result<Vec<PriorUsageRow>> {
+) -> serde_json::Result<Vec<PriorUsageRow>> {
     match value {
         None | Some(serde_json::Value::Null) => Ok(Vec::new()),
-        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
-            anyhow::anyhow!("InferenceCall usage payload is not a row array: {error}")
-        }),
+        Some(value) => serde_json::from_value(value.clone()),
     }
 }
 

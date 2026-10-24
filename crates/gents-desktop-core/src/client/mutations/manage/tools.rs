@@ -169,7 +169,7 @@ mod tests {
                     .unwrap();
                     assert_eq!(serde_json::from_value::<Tools>(value)?, *expected);
                 }
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;

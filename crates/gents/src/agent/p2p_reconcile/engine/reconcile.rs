@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use p2p::iroh::parse_public_peer_addr;
 
+use super::super::error::P2pReconcileError;
 use super::super::templates::PairingFilters;
 use super::super::{
     compute_owned_pairing_diff, owned_pairing_live_matches, DiffOp, PairingApplied, PairingDesired,
@@ -329,7 +330,7 @@ pub async fn observe_owned_pairing_live_matches(
     admin: &dyn RemoteP2pAdmin,
     desired: &PairingDesired,
     applied: &PairingApplied,
-) -> Result<bool> {
+) -> std::result::Result<bool, P2pReconcileError> {
     let actual = read_actual(admin, &applied.replicator_addresses).await?;
     Ok(owned_pairing_live_matches(desired, &actual.state, applied))
 }

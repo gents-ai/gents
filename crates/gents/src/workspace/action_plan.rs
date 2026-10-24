@@ -1,8 +1,33 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use super::path_capability::PathCapabilityError;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ActionPlanError {
+    #[error("unsupported ActionPlan abi {abi}")]
+    UnsupportedAbi { abi: u32 },
+    #[error("ActionPlan has no actions")]
+    NoActions,
+    #[error("{field} must be non-empty")]
+    EmptyField { field: &'static str },
+    #[error("missing capability {capability}")]
+    MissingCapability { capability: String },
+    #[error("creation_policy {policy} is not implemented in v1 (only git_worktree_diff)")]
+    UnsupportedCreationPolicy { policy: String },
+    #[error("adapter {adapter} cannot clone artifacts; use make_worktree")]
+    ArtifactsNotClonable { adapter: String },
+    #[error("integrate mode {mode} is not implemented in v1 (git_worktree_diff uses apply_diff; cherry-pick/merge require isolated_clone)")]
+    UnsupportedIntegrateMode { mode: String },
+    #[error("clone artifact must be a relative path, got {path}")]
+    AbsoluteArtifact { path: String },
+    #[error(transparent)]
+    PathCapability(#[from] PathCapabilityError),
+}
+
+type Result<T, E = ActionPlanError> = std::result::Result<T, E>;
 
 pub const CAP_CREATE_WORKSPACE: &str = "create_workspace";
 pub const CAP_OBSERVE_DIRTY_BASE: &str = "observe_dirty_base";
@@ -301,10 +326,10 @@ fn reject_illegal_plan_value(value: &Value) -> Result<(), String> {
 impl ActionPlan {
     pub(crate) fn validate_against(&self, capabilities: &BTreeSet<String>) -> Result<()> {
         if self.abi != ACTION_PLAN_ABI {
-            bail!("unsupported ActionPlan abi {}", self.abi);
+            return Err(ActionPlanError::UnsupportedAbi { abi: self.abi });
         }
         if self.actions.is_empty() {
-            bail!("ActionPlan has no actions");
+            return Err(ActionPlanError::NoActions);
         }
         for action in &self.actions {
             action.validate_against(capabilities)?;
@@ -336,18 +361,16 @@ impl CreateWorkspaceAction {
         require_capability(capabilities, CAP_CREATE_WORKSPACE)?;
         require_capability(capabilities, CAP_OBSERVE_DIRTY_BASE)?;
         if !matches!(self.creation_policy, CreationPolicy::GitWorktreeDiff) {
-            bail!(
-                "creation_policy {} is not implemented in v1 (only git_worktree_diff)",
-                self.creation_policy.as_str()
-            );
+            return Err(ActionPlanError::UnsupportedCreationPolicy {
+                policy: self.creation_policy.as_str().to_owned(),
+            });
         }
         let artifacts = self.effective_clone_artifacts();
         if !artifacts.is_empty() {
             if !self.adapter.clones_artifacts() {
-                bail!(
-                    "adapter {} cannot clone artifacts; use make_worktree",
-                    self.adapter.as_str()
-                );
+                return Err(ActionPlanError::ArtifactsNotClonable {
+                    adapter: self.adapter.as_str().to_owned(),
+                });
             }
             require_capability(capabilities, CAP_CLONE_ARTIFACTS)?;
             for artifact in &artifacts {
@@ -413,10 +436,9 @@ impl IntegrateWorkspaceAction {
         )?;
         require_capability(capabilities, CAP_INTEGRATE_WORKSPACE)?;
         if !matches!(self.mode, IntegrateMode::ApplyDiff) {
-            bail!(
-                "integrate mode {} is not implemented in v1 (git_worktree_diff uses apply_diff; cherry-pick/merge require isolated_clone)",
-                self.mode.as_str()
-            );
+            return Err(ActionPlanError::UnsupportedIntegrateMode {
+                mode: self.mode.as_str().to_owned(),
+            });
         }
         Ok(())
     }
@@ -430,9 +452,9 @@ impl CleanupWorkspaceAction {
     }
 }
 
-fn require_non_empty(field: &str, value: &str) -> Result<()> {
+fn require_non_empty(field: &'static str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
-        bail!("{field} must be non-empty");
+        return Err(ActionPlanError::EmptyField { field });
     }
     Ok(())
 }
@@ -441,7 +463,9 @@ fn require_capability(capabilities: &BTreeSet<String>, cap: &str) -> Result<()> 
     if capabilities.contains(cap) {
         Ok(())
     } else {
-        bail!("missing capability {cap}")
+        Err(ActionPlanError::MissingCapability {
+            capability: cap.to_owned(),
+        })
     }
 }
 
@@ -466,7 +490,9 @@ pub(crate) fn looks_like_host_path(text: &str) -> bool {
 
 fn assert_relative_artifact(path: &str) -> Result<()> {
     if looks_like_host_path(path) {
-        bail!("clone artifact must be a relative path, got {path}");
+        return Err(ActionPlanError::AbsoluteArtifact {
+            path: path.to_owned(),
+        });
     }
     Ok(())
 }

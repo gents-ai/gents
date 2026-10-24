@@ -57,7 +57,7 @@ pub(crate) fn record_current_claim_outcome(outcome: &'static str) {
     tracing::Span::current().record("claim_outcome", outcome);
 }
 
-pub(crate) fn record_current_failure_class(error: &anyhow::Error) {
+pub(crate) fn record_current_failure_class(error: &dyn std::fmt::Display) {
     let error_text = error.to_string();
     let failure_class = crate::trace_export::analyze_request_failure(Some(&error_text))
         .map(|class| class.as_str())

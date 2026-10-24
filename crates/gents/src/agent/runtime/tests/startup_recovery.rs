@@ -1,6 +1,7 @@
 use super::support::*;
 use super::*;
 use crate::identity::NodeIdentity;
+use gents_protocol::error_chain::ErrorChain;
 
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
@@ -330,7 +331,7 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
         .run(shutdown_rx)
         .await
         .expect_err("startup should fail for structurally invalid config");
-    let error_text = format!("{error:#}");
+    let error_text = ErrorChain(error.as_ref()).to_string();
     assert!(
         error_text.contains("no runnable agents at startup due to invalid configuration"),
         "unexpected startup error: {error_text}"
@@ -412,8 +413,11 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
         "injected fatal agent readiness write"
     );
     assert!(
-        format!("{error:#}").contains("durably acknowledge router generation"),
-        "runtime returned the wrong failure: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("durably acknowledge router generation"),
+        "runtime returned the wrong failure: {}",
+        ErrorChain(error.as_ref())
     );
     wait_for_request_state(node.as_ref(), &request_doc_id, "pending").await;
 }
@@ -471,8 +475,11 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
         .expect("run_agent task must join")
         .expect_err("slot drain failure cannot become clean shutdown");
     assert!(
-        format!("{error:#}").contains("injected slot drain failure"),
-        "run_agent lost the slot drain failure: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("injected slot drain failure"),
+        "run_agent lost the slot drain failure: {}",
+        ErrorChain(error.as_ref())
     );
     node.shutdown().await;
 }
@@ -596,8 +603,11 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
         "injected startup source persistence exhaustion"
     );
     assert!(
-        format!("{error:#}").contains("durably publish startup agent_config readiness source"),
-        "runtime returned the wrong failure: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("durably publish startup agent_config readiness source"),
+        "runtime returned the wrong failure: {}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(
         writer
@@ -674,8 +684,11 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
         "injected Ready persistence exhaustion"
     );
     assert!(
-        format!("{error:#}").contains("durably publish runtime Ready state"),
-        "runtime returned the wrong failure: {error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("durably publish runtime Ready state"),
+        "runtime returned the wrong failure: {}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(
         writer

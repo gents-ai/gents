@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
-use anyhow::{bail, Context, Result};
 use p2p::iroh::parse_public_peer_addr;
 
+use super::error::{P2pReconcileError, Result};
 use super::templates::{
     combine_filters, equality_filter, scope_filter, PairingFilters, Scope, ScopeTemplate,
     CLIENT_COLLECTIONS, CLIENT_TO_RUNTIME_COLLECTIONS,
@@ -34,7 +34,9 @@ impl PairingDirection {
         match value.trim() {
             CLIENT_TO_RUNTIME_SUFFIX => Ok(Self::ClientToRuntime),
             RUNTIME_TO_CLIENT_SUFFIX => Ok(Self::RuntimeToClient),
-            other => bail!("unknown pairing direction {other:?}"),
+            other => Err(P2pReconcileError::UnknownPairingDirection {
+                direction: other.to_owned(),
+            }),
         }
     }
 }
@@ -42,7 +44,7 @@ impl PairingDirection {
 pub fn client_route_direction(pairing_id: &str) -> Result<PairingDirection> {
     let pairing_id = pairing_id.trim();
     if pairing_id.is_empty() {
-        bail!("client pairing id must not be blank");
+        return Err(P2pReconcileError::BlankClientPairingId);
     }
     for (suffix, direction) in [
         (CLIENT_TO_RUNTIME_SUFFIX, PairingDirection::ClientToRuntime),
@@ -50,12 +52,12 @@ pub fn client_route_direction(pairing_id: &str) -> Result<PairingDirection> {
     ] {
         if let Some(directory_id) = pairing_id.strip_suffix(&format!(":{suffix}")) {
             if directory_id.trim().is_empty() {
-                bail!("client pairing id has a blank directory identity");
+                return Err(P2pReconcileError::BlankClientPairingDirectory);
             }
             return Ok(direction);
         }
     }
-    bail!("client pairing id has no recognized direction suffix")
+    Err(P2pReconcileError::UnrecognizedClientPairingDirection)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,10 +72,10 @@ impl TransportEndpoint {
         let address = address.into();
         let address = address.trim().to_string();
         let (peer_id, dial_addresses) = parse_public_peer_addr(&address)
-            .context("pairing address is not a dialable Iroh endpoint")?;
+            .map_err(P2pReconcileError::PairingAddressNotDialable)?;
         let peer_id = peer_id.to_string();
         if peer_id.len() != 64 || !peer_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            bail!("pairing address does not contain a valid Iroh transport peer id");
+            return Err(P2pReconcileError::InvalidPairingPeerId);
         }
         let dial_addresses = dial_addresses
             .into_iter()
@@ -81,7 +83,7 @@ impl TransportEndpoint {
             .filter(|address| !address.is_empty())
             .collect::<BTreeSet<_>>();
         if dial_addresses.is_empty() {
-            bail!("pairing address has no dialable Iroh transport address");
+            return Err(P2pReconcileError::NoDialablePairingAddress);
         }
         Ok(Self {
             peer_id,
@@ -129,7 +131,7 @@ impl ClientRouteIdentity {
             || requester_did.trim().is_empty()
             || owner_node_did.trim().is_empty()
         {
-            bail!("client route directory id, requester DID, and owner DID must not be blank");
+            return Err(P2pReconcileError::BlankClientRouteIdentity);
         }
         Ok(Self {
             directory_id,

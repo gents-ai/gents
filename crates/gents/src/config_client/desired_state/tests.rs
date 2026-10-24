@@ -1,6 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
@@ -407,7 +408,7 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
         })
         .await
         .unwrap_err();
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(error.as_ref()));
     assert!(
         message.contains("multiple live InferenceBackend documents"),
         "{message}"
@@ -530,7 +531,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             assert_eq!(after["display_name"], "Changed");
         } else {
             assert_eq!(after, before, "refused replacement changed the principal");
-            let message = format!("{:#}", published.unwrap_err());
+            let message = format!("{}", ErrorChain(published.unwrap_err().as_ref()));
             assert!(message.contains("default_agent_id"), "{message}");
             assert!(message.contains("coding"), "{message}");
         }
@@ -612,7 +613,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         })
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("references missing AgentContext"));
+    assert!(format!("{}", ErrorChain(error.as_ref())).contains("references missing AgentContext"));
     let after = node.execute("{InferenceBackend{_docID node_did name probe_status} AgentContext{_docID node_did context_id}}").await.data;
     assert_eq!(
         before, after,
@@ -676,7 +677,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     )
     .await
     .unwrap_err();
-    assert!(format!("{error:#}").contains("multiple live AgentContext"));
+    assert!(format!("{}", ErrorChain(error.as_ref())).contains("multiple live AgentContext"));
     let rows = node
         .execute("{InferenceBackend{backend_id}}")
         .await
@@ -721,8 +722,9 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         .await
         .unwrap_err();
     assert!(
-        stale_expectation(&error).is_some(),
-        "drifted live row must be rejected: {error:#}"
+        stale_expectation(error.as_ref()).is_some(),
+        "drifted live row must be rejected: {}",
+        ErrorChain(error.as_ref())
     );
     Ok(())
 }
@@ -748,10 +750,15 @@ async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Opt
         .transact_write("test.cas.read", |txn| {
             let (owner, id) = (owner.clone(), id.clone());
             Box::pin(async move {
-                read_desired_state_document_in_txn(txn, Collection::InferenceBackend, &owner, &id)
-                    .await?
-                    .map(|live| desired_state_document_digest(&live))
-                    .transpose()
+                Ok(read_desired_state_document_in_txn(
+                    txn,
+                    Collection::InferenceBackend,
+                    &owner,
+                    &id,
+                )
+                .await?
+                .map(|live| desired_state_document_digest(&live))
+                .transpose()?)
             })
         })
         .await
@@ -809,7 +816,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
         .await
         .unwrap_err();
 
-    let stale = stale_expectation(&error).expect("typed StaleExpectation");
+    let stale = stale_expectation(error.as_ref()).expect("typed StaleExpectation");
     assert_eq!(stale.drifted.len(), 1);
     assert_eq!(stale.drifted[0].id, "other");
     assert_eq!(stale.drifted[0].expected, frozen_other);
@@ -844,7 +851,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         })
         .await
         .unwrap_err();
-    assert!(stale_expectation(&error).is_some());
+    assert!(stale_expectation(error.as_ref()).is_some());
 
     let wrongly_present =
         DesiredStateApplyPlan::new(vec![document(backend(owner, "third"))])?.with_expected(
@@ -857,7 +864,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         })
         .await
         .unwrap_err();
-    let stale = stale_expectation(&error).expect("typed StaleExpectation");
+    let stale = stale_expectation(error.as_ref()).expect("typed StaleExpectation");
     assert_eq!(stale.drifted[0].found, None);
     Ok(())
 }
@@ -875,7 +882,9 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             Collection::InferenceBackend,
             Some(&doc_for(owner, id, content)),
         )?;
-        desired_state_document_digest(&projected.context("projection")?)
+        Ok(desired_state_document_digest(
+            &projected.context("projection")?,
+        )?)
     }
 
     let mut exercised = Vec::new();
@@ -917,9 +926,10 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         assert_eq!(outcome.is_ok(), case.applied, "case {}", case.name);
         if let Err(error) = &outcome {
             assert!(
-                stale_expectation(error).is_some(),
-                "case {}: {error:#}",
-                case.name
+                stale_expectation(error.as_ref()).is_some(),
+                "case {}: {}",
+                case.name,
+                ErrorChain(error.as_ref())
             );
         }
 
@@ -959,9 +969,10 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             );
             if let Err(error) = &replay {
                 assert!(
-                    stale_expectation(error).is_some(),
-                    "case {} replay: {error:#}",
-                    case.name
+                    stale_expectation(error.as_ref()).is_some(),
+                    "case {} replay: {}",
+                    case.name,
+                    ErrorChain(error.as_ref())
                 );
             }
             for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
@@ -1119,8 +1130,10 @@ async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Resu
         .await
         .expect_err("above the advertised maximum");
     assert!(
-        format!("{rejected:#}").contains("exceeds model model advertised maximum 872000"),
-        "{rejected:#}"
+        format!("{}", ErrorChain(rejected.as_ref()))
+            .contains("exceeds model model advertised maximum 872000"),
+        "{}",
+        ErrorChain(rejected.as_ref())
     );
     preview_window(&access, &profile, 500_000).await?;
     preview_window(&access, &profile, 872_000).await?;
@@ -1220,7 +1233,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         )
         .await
         .expect_err("the field can never carry the expected count");
-        let diagnostic = format!("{refused:#}");
+        let diagnostic = format!("{}", ErrorChain(refused.as_ref()));
         assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
         assert!(diagnostic.contains(reported_type), "{diagnostic}");
     }
@@ -1237,8 +1250,10 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
     .await
     .expect_err("the count field must exist on the target collection");
     assert!(
-        format!("{absent_field:#}").contains("does not exist on ObligationOutcome"),
-        "{absent_field:#}"
+        format!("{}", ErrorChain(absent_field.as_ref()))
+            .contains("does not exist on ObligationOutcome"),
+        "{}",
+        ErrorChain(absent_field.as_ref())
     );
 
     let plan = DesiredStateApplyPlan::new(vec![obligation_surface(
@@ -1255,8 +1270,9 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         .await
         .expect_err("preflight refuses the same obligation");
     assert!(
-        format!("{previewed:#}").contains("expected_count_field"),
-        "{previewed:#}"
+        format!("{}", ErrorChain(previewed.as_ref())).contains("expected_count_field"),
+        "{}",
+        ErrorChain(previewed.as_ref())
     );
 
     assert!(
@@ -1299,7 +1315,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
         )
         .await
         {
-            refused.push(format!("{count_field}: {error:#}"));
+            refused.push(format!("{count_field}: {}", ErrorChain(error.as_ref())));
         }
     }
     assert!(refused.is_empty(), "{refused:#?}");
@@ -1396,8 +1412,9 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
     .await
     .expect_err("a creation publishes the add payload, whose count field is a Boolean");
     assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
+        format!("{}", ErrorChain(refused.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(refused.as_ref())
     );
     let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
         owner, "created", "flag", "total",
@@ -1410,8 +1427,9 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         .await
         .expect_err("preflight judges the same add payload");
     assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
+        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(previewed.as_ref())
     );
     assert!(
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner)
@@ -1459,8 +1477,9 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
     .await
     .expect_err("a replacement publishes the update payload, whose count field is a Boolean");
     assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
+        format!("{}", ErrorChain(refused.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(refused.as_ref())
     );
     let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
         owner, "replaced", "amount", "flag",
@@ -1473,8 +1492,9 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         .await
         .expect_err("preflight judges the same update payload");
     assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
+        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(previewed.as_ref())
     );
     assert_eq!(
         published_count_field(&access, owner, "replaced").await?,
@@ -1594,7 +1614,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         )
         .await
         .expect_err("the field can never carry the expected count");
-        let diagnostic = format!("{refused:#}");
+        let diagnostic = format!("{}", ErrorChain(refused.as_ref()));
         assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
         assert!(diagnostic.contains(reported_type), "{diagnostic}");
     }
@@ -1611,8 +1631,10 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
     .await
     .expect_err("the count field must exist on the source collection");
     assert!(
-        format!("{absent_field:#}").contains("does not exist on EventProbeSource"),
-        "{absent_field:#}"
+        format!("{}", ErrorChain(absent_field.as_ref()))
+            .contains("does not exist on EventProbeSource"),
+        "{}",
+        ErrorChain(absent_field.as_ref())
     );
 
     let plan = DesiredStateApplyPlan::new(vec![grouped_event_source(
@@ -1629,8 +1651,9 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         .await
         .expect_err("preflight refuses the same event source");
     assert!(
-        format!("{previewed:#}").contains("expected_count_field"),
-        "{previewed:#}"
+        format!("{}", ErrorChain(previewed.as_ref())).contains("expected_count_field"),
+        "{}",
+        ErrorChain(previewed.as_ref())
     );
 
     assert!(
@@ -1671,7 +1694,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         )
         .await
         {
-            refused.push(format!("{count_field}: {error:#}"));
+            refused.push(format!("{count_field}: {}", ErrorChain(error.as_ref())));
         }
     }
     let correlation_fields = [
@@ -1690,7 +1713,10 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         )
         .await
         {
-            refused.push(format!("{correlation_field}: {error:#}"));
+            refused.push(format!(
+                "{correlation_field}: {}",
+                ErrorChain(error.as_ref())
+            ));
         }
     }
     assert!(refused.is_empty(), "{refused:#?}");
@@ -1730,7 +1756,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
     )
     .await
     .expect_err("a non-String correlation can never correlate");
-    let diagnostic = format!("{mistyped:#}");
+    let diagnostic = format!("{}", ErrorChain(mistyped.as_ref()));
     assert!(
         diagnostic.contains("correlation_field \"expected_total\" must be String, found Int"),
         "{diagnostic}"
@@ -1747,7 +1773,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
     )
     .await
     .expect_err("the correlation field must exist on the source collection");
-    let diagnostic = format!("{absent:#}");
+    let diagnostic = format!("{}", ErrorChain(absent.as_ref()));
     assert!(
         diagnostic.contains("correlation_field \"missing\" does not exist on EventProbeSource"),
         "{diagnostic}"
@@ -1806,8 +1832,9 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
     .await
     .expect_err("a creation publishes the add payload, whose count field is a Boolean");
     assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
+        format!("{}", ErrorChain(refused.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(refused.as_ref())
     );
     let plan = DesiredStateApplyPlan::new(vec![event_source_payloads(
         owner,
@@ -1824,8 +1851,9 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
         .await
         .expect_err("preflight judges the same add payload");
     assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
+        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(previewed.as_ref())
     );
     assert!(published_event_sources(&node).await?.is_empty());
 
@@ -1874,8 +1902,9 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
     .await
     .expect_err("a replacement publishes the update payload, whose count field is a Boolean");
     assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
+        format!("{}", ErrorChain(refused.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(refused.as_ref())
     );
     let plan = DesiredStateApplyPlan::new(vec![event_source_payloads(
         owner,
@@ -1892,8 +1921,9 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
         .await
         .expect_err("preflight judges the same update payload");
     assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
+        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        "{}",
+        ErrorChain(previewed.as_ref())
     );
     assert_eq!(
         published_count_field_of(&node, "replaced").await?,
@@ -1956,7 +1986,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     )
     .await
     .expect_err("a collection without handoff_id can never carry an outcome");
-    let diagnostic = format!("{refused:#}");
+    let diagnostic = format!("{}", ErrorChain(refused.as_ref()));
     let schema = refused.downcast_ref::<OutcomeSourceSchemaError>().unwrap();
     assert_eq!(schema.collection, "PlainPing");
     assert!(schema.missing_handoff);
@@ -1975,8 +2005,10 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     assert_eq!(schema.collection, "NumberedPing");
     assert!(!schema.missing_handoff);
     assert!(
-        format!("{mistyped:#}").contains("NumberedPing.handoff_id is Int, not String"),
-        "{mistyped:#}"
+        format!("{}", ErrorChain(mistyped.as_ref()))
+            .contains("NumberedPing.handoff_id is Int, not String"),
+        "{}",
+        ErrorChain(mistyped.as_ref())
     );
     assert_eq!(triggers().await, 0, "a refused delivery publishes nothing");
 
@@ -1989,16 +2021,18 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         .await
         .expect_err("opting the retained delivery's Task in is the same refusal");
     assert!(
-        format!("{opted_in:#}").contains("has no handoff_id field"),
-        "{opted_in:#}"
+        format!("{}", ErrorChain(opted_in.as_ref())).contains("has no handoff_id field"),
+        "{}",
+        ErrorChain(opted_in.as_ref())
     );
     apply(&access, vec![source("HandoffPing"), task(true)]).await?;
     let rerouted = apply(&access, vec![source("PlainPing")])
         .await
         .expect_err("rerouting the retained opted-in delivery is the same refusal");
     assert!(
-        format!("{rerouted:#}").contains("has no handoff_id field"),
-        "{rerouted:#}"
+        format!("{}", ErrorChain(rerouted.as_ref())).contains("has no handoff_id field"),
+        "{}",
+        ErrorChain(rerouted.as_ref())
     );
     apply(&access, vec![source("LaterPing")]).await?;
     assert_eq!(triggers().await, 1);
@@ -2031,14 +2065,23 @@ fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
         "Work {{ doc.attempt | default('none') }}",
     ] {
         let (trigger, task, source) = rule_documents(prompt, None, false, None, "GapInput")?;
-        validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
-            .unwrap_or_else(|error| panic!("{prompt} resolves against the schema: {error:#}"));
+        validate_event_trigger_document_fields(&trigger, &task, &source, &declared).unwrap_or_else(
+            |error| {
+                panic!(
+                    "{prompt} resolves against the schema: {}",
+                    ErrorChain(&error)
+                )
+            },
+        );
     }
     let (trigger, task, source) =
         rule_documents("Work {{ doc.not_a_field }}", None, false, None, "GapInput")?;
     let message = format!(
-        "{:#}",
-        validate_event_trigger_document_fields(&trigger, &task, &source, &declared).unwrap_err()
+        "{}",
+        ErrorChain(
+            &validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
+                .unwrap_err()
+        )
     );
     assert!(
         message.contains("trigger on-doc prompt_template references doc.not_a_field")
@@ -2049,8 +2092,11 @@ fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
     let (trigger, task, source) =
         rule_documents("Work {{ doc.COUNT }}", None, false, None, "GapInput")?;
     let message = format!(
-        "{:#}",
-        validate_event_trigger_document_fields(&trigger, &task, &source, &declared).unwrap_err()
+        "{}",
+        ErrorChain(
+            &validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
+                .unwrap_err()
+        )
     );
     assert!(
         message.contains("prompt_template references doc.COUNT"),
@@ -2065,14 +2111,16 @@ fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
     let mut session = trigger.clone();
     session.session_id_template = Some("Resume {{ doc.session }}".to_owned());
     let message = format!(
-        "{:#}",
-        validate_event_trigger_document_fields(
-            &session,
-            &task,
-            &source,
-            &schema_fields(&["message"])
+        "{}",
+        ErrorChain(
+            &validate_event_trigger_document_fields(
+                &session,
+                &task,
+                &source,
+                &schema_fields(&["message"])
+            )
+            .unwrap_err()
         )
-        .unwrap_err()
     );
     assert!(
         message.contains("session_id_template references doc.session"),
@@ -2086,14 +2134,16 @@ fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
         "GapInput",
     )?;
     let message = format!(
-        "{:#}",
-        validate_event_trigger_document_fields(
-            &trigger,
-            &task,
-            &source,
-            &schema_fields(&["message"])
+        "{}",
+        ErrorChain(
+            &validate_event_trigger_document_fields(
+                &trigger,
+                &task,
+                &source,
+                &schema_fields(&["message"])
+            )
+            .unwrap_err()
         )
-        .unwrap_err()
     );
     assert!(
         message.contains("goal_objective_template references doc.objective"),

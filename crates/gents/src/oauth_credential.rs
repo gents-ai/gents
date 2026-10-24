@@ -2,13 +2,70 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::OAuthCredentialRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
+
+#[derive(Debug, thiserror::Error)]
+pub enum OAuthCredentialError {
+    #[error("decoding OAuthCredential row")]
+    DecodeRow(#[source] serde_json::Error),
+    #[error("OAuthCredential missing {field}")]
+    MissingField { field: &'static str },
+    #[error("parsing OAuthCredential {field} timestamp {value}")]
+    Timestamp {
+        field: &'static str,
+        value: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("account {credential_id:?} not found for this node")]
+    AccountNotFound { credential_id: String },
+    #[error("an account label cannot be empty")]
+    EmptyLabel,
+    #[error("an account label is at most {MAX_ACCOUNT_LABEL_CHARS} characters")]
+    LabelTooLong,
+    #[error("an account label cannot contain control characters")]
+    LabelControlCharacters,
+    #[error("the label {label:?} is already used by another account of this provider")]
+    LabelTaken { label: String },
+    #[error("stored OAuthCredential has no _docID")]
+    MissingDocId,
+    #[error("no backend reads sign-ins of provider {provider:?}")]
+    NoSignInProvider { provider: String },
+    #[error("{message}")]
+    AccountUnavailable { message: String },
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Setup(#[from] crate::inference_setup::InferenceSetupError),
+    #[error(transparent)]
+    Usage(Box<crate::usage_observation::UsageObservationError>),
+}
+
+impl crate::config_client::TransactionFailure for OAuthCredentialError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Usage(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::usage_observation::UsageObservationError> for OAuthCredentialError {
+    fn from(error: crate::usage_observation::UsageObservationError) -> Self {
+        Self::Usage(Box::new(error))
+    }
+}
+
+type Result<T, E = OAuthCredentialError> = std::result::Result<T, E>;
 
 const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id node_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key label";
 const OAUTH_PICK_FIELDS: &str =
@@ -357,13 +414,13 @@ pub(crate) async fn resolve_oauth_credential_in_txn(
     let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "OAuthCredential")
         .into_iter()
         .map(pick_row_from_value)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     Ok(pick_oauth_credential(&rows, node_did, provider, pick).cloned())
 }
 
-fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
+fn pick_row_from_value(value: Value) -> Result<OAuthCredential, OAuthCredentialError> {
     let row: OAuthCredentialRow =
-        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+        serde_json::from_value(value).map_err(OAuthCredentialError::DecodeRow)?;
     Ok(OAuthCredential {
         doc_id: row.doc_id,
         credential_id: row.credential_id,
@@ -393,7 +450,7 @@ fn pick_from_response(
 ) -> Result<Option<OAuthCredential>> {
     let rows = oauth_credentials_from_response(response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     Ok(pick_oauth_credential(&rows, node_did, provider, pick).cloned())
 }
 
@@ -449,7 +506,7 @@ pub async fn list_oauth_credentials(
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
     oauth_credentials_from_response(&response)
         .into_iter()
-        .collect()
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()
 }
 
 pub async fn list_oauth_credentials_on(
@@ -461,7 +518,7 @@ pub async fn list_oauth_credentials_on(
         .await?;
     let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     rows.sort_by(resolver_order);
     Ok(rows)
 }
@@ -491,7 +548,10 @@ pub async fn upsert_oauth_credential(
     let response =
         crate::config_client::ConfigAccess::write_local(node, "oauth_credential.upsert", &mutation)
             .await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &response,
+        "OAuthCredential",
+    )?)
 }
 
 pub async fn upsert_oauth_credential_on(
@@ -500,7 +560,10 @@ pub async fn upsert_oauth_credential_on(
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
     let response = access.write("oauth_credential.upsert", &mutation).await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &response,
+        "OAuthCredential",
+    )?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -579,7 +642,7 @@ async fn provider_rows_in_txn(
         .await?;
     let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     rows.sort_by(resolver_order);
     Ok(rows)
 }
@@ -611,7 +674,11 @@ pub(crate) fn preset_account_backend(
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => (Id::OpenAi, Auth::ChatGptOauth),
         crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
         crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
-        other => anyhow::bail!("no backend reads sign-ins of provider {other:?}"),
+        other => {
+            return Err(OAuthCredentialError::NoSignInProvider {
+                provider: other.to_owned(),
+            })
+        }
     };
     let spec = crate::inference_setup::connection_spec(provider_id, auth, "")?;
     Ok(crate::InferenceBackend {
@@ -639,7 +706,7 @@ pub(crate) fn preset_account_backend(
 async fn write_account_backend(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     backend: &crate::InferenceBackend,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     crate::config_client::write_inference_backend_in_txn(txn, backend)
         .await
         .context(
@@ -652,7 +719,7 @@ async fn sync_account_backend(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
     old_label: Option<&str>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let Some(account_ref) = credential.account_ref.as_deref() else {
         return Ok(());
     };
@@ -677,17 +744,17 @@ async fn sync_account_backend(
 
 const MAX_ACCOUNT_LABEL_CHARS: usize = 64;
 
-pub fn validate_account_label(label: &str) -> Result<String> {
+pub fn validate_account_label(label: &str) -> Result<String, OAuthCredentialError> {
     let label = label.trim();
-    anyhow::ensure!(!label.is_empty(), "an account label cannot be empty");
-    anyhow::ensure!(
-        label.chars().count() <= MAX_ACCOUNT_LABEL_CHARS,
-        "an account label is at most {MAX_ACCOUNT_LABEL_CHARS} characters"
-    );
-    anyhow::ensure!(
-        !label.chars().any(char::is_control),
-        "an account label cannot contain control characters"
-    );
+    if label.is_empty() {
+        return Err(OAuthCredentialError::EmptyLabel);
+    }
+    if label.chars().count() > MAX_ACCOUNT_LABEL_CHARS {
+        return Err(OAuthCredentialError::LabelTooLong);
+    }
+    if label.chars().any(char::is_control) {
+        return Err(OAuthCredentialError::LabelControlCharacters);
+    }
     Ok(label.to_owned())
 }
 
@@ -699,13 +766,15 @@ pub fn effective_account_label(credential: &OAuthCredential) -> String {
     })
 }
 
-fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<()> {
-    anyhow::ensure!(
-        !others
-            .iter()
-            .any(|row| effective_account_label(row) == label),
-        "the label {label:?} is already used by another account of this provider"
-    );
+fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<(), OAuthCredentialError> {
+    if others
+        .iter()
+        .any(|row| effective_account_label(row) == label)
+    {
+        return Err(OAuthCredentialError::LabelTaken {
+            label: label.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -722,13 +791,14 @@ pub async fn store_sign_in(
     access: &crate::config_client::ConfigAccess,
     credential: OAuthCredential,
     label: Option<&str>,
-) -> Result<SignIn> {
+) -> anyhow::Result<SignIn> {
     let label = label.map(validate_account_label).transpose()?;
-    anyhow::ensure!(
-        sign_in_product(&credential.provider).is_some(),
-        "no backend reads sign-ins of provider {:?}",
-        credential.provider
-    );
+    if sign_in_product(&credential.provider).is_none() {
+        return Err(OAuthCredentialError::NoSignInProvider {
+            provider: credential.provider.clone(),
+        }
+        .into());
+    }
     access
         .transact_write("oauth_credential.sign_in", |txn| {
             let credential = credential.clone();
@@ -784,7 +854,7 @@ async fn store_sign_in_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     mut credential: OAuthCredential,
     label: Option<String>,
-) -> Result<SignIn> {
+) -> anyhow::Result<SignIn> {
     let rows = provider_rows_in_txn(txn, &credential.node_did, &credential.provider).await?;
     let sign_in_keys = identity_keys(&credential);
     let matched = rows
@@ -817,7 +887,7 @@ async fn store_sign_in_in_txn(
         let doc_id = row
             .doc_id
             .clone()
-            .context("stored OAuthCredential has no _docID")?;
+            .ok_or(OAuthCredentialError::MissingDocId)?;
         let fields = oauth_credential_input_fields(&credential);
         let mutation = format!(
             r#"mutation {{
@@ -892,7 +962,7 @@ async fn store_sign_in_in_txn(
 async fn original_account_profiles(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
-) -> Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     use crate::backend_provider::BackendProviderOauthExt;
     let backends: Vec<_> =
         crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
@@ -1070,10 +1140,6 @@ fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
     )
 }
 
-fn account_not_found(credential_id: &str) -> anyhow::Error {
-    anyhow::anyhow!("account {credential_id:?} not found for this node")
-}
-
 pub async fn list_accounts(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -1086,7 +1152,7 @@ pub async fn list_accounts(
         .await?;
     let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     rows.sort_by(resolver_order);
     let defaults: Vec<_> = ACCOUNT_PROVIDERS
         .iter()
@@ -1117,7 +1183,7 @@ pub async fn set_account_label(
     node_did: &str,
     credential_id: &str,
     label: &str,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let label = validate_account_label(label)?;
     access
         .transact_write("oauth_credential.label", |txn| {
@@ -1132,7 +1198,9 @@ pub async fn set_account_label(
                 let row = oauth_credentials_from_response(&response)
                     .into_iter()
                     .next()
-                    .ok_or_else(|| account_not_found(credential_id))??;
+                    .ok_or_else(|| OAuthCredentialError::AccountNotFound {
+                        credential_id: credential_id.to_owned(),
+                    })??;
                 let rows = provider_rows_in_txn(txn, node_did, &row.provider).await?;
                 let others: Vec<_> = rows
                     .iter()
@@ -1142,7 +1210,7 @@ pub async fn set_account_label(
                 let doc_id = row
                     .doc_id
                     .as_deref()
-                    .context("stored OAuthCredential has no _docID")?;
+                    .ok_or(OAuthCredentialError::MissingDocId)?;
                 txn.execute(&format!(
                     r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
                     crate::graphql::escape_graphql_string(doc_id),
@@ -1193,7 +1261,9 @@ pub async fn remove_account_in_txn(
     let row = oauth_credentials_from_response(&response)
         .into_iter()
         .next()
-        .ok_or_else(|| account_not_found(credential_id))??;
+        .ok_or_else(|| OAuthCredentialError::AccountNotFound {
+            credential_id: credential_id.to_owned(),
+        })??;
     let response = txn
         .execute(&format!(
             "mutation {{ delete_OAuthCredential(filter: {filter}) {{ _docID }} }}"
@@ -1203,7 +1273,7 @@ pub async fn remove_account_in_txn(
     let doc_id = row
         .doc_id
         .as_deref()
-        .context("stored OAuthCredential has no _docID")?;
+        .ok_or(OAuthCredentialError::MissingDocId)?;
     let keys: Vec<_> = row
         .provider_account_key
         .iter()
@@ -1213,7 +1283,7 @@ pub async fn remove_account_in_txn(
             doc_id,
         )])
         .collect();
-    crate::usage_observation::delete_usage_in_txn(txn, node_did, &row.provider, &keys).await
+    Ok(crate::usage_observation::delete_usage_in_txn(txn, node_did, &row.provider, &keys).await?)
 }
 
 fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<()> {
@@ -1224,11 +1294,15 @@ fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<
     {
         Ok(())
     } else {
-        Err(account_not_found(credential_id))
+        Err(OAuthCredentialError::AccountNotFound {
+            credential_id: credential_id.to_owned(),
+        })
     }
 }
 
-pub fn oauth_credentials_from_response(response: &Value) -> Vec<Result<OAuthCredential>> {
+pub fn oauth_credentials_from_response(
+    response: &Value,
+) -> Vec<Result<OAuthCredential, OAuthCredentialError>> {
     gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
         .into_iter()
         .map(oauth_credential_from_value)
@@ -1343,9 +1417,11 @@ fn render_oauth_input(fields: &[(&'static str, String)], exclude: &[&str]) -> St
         .join(",\n                    ")
 }
 
-pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredential> {
+pub(crate) fn oauth_credential_from_value(
+    value: Value,
+) -> Result<OAuthCredential, OAuthCredentialError> {
     let row: OAuthCredentialRow =
-        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+        serde_json::from_value(value).map_err(OAuthCredentialError::DecodeRow)?;
     let access_token = required(row.access_token, "access_token")?;
     let refresh_token = required(row.refresh_token, "refresh_token")?;
     Ok(OAuthCredential {
@@ -1372,8 +1448,8 @@ pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredentia
     })
 }
 
-fn required(value: Option<String>, field: &str) -> Result<String> {
-    clean_optional(value).ok_or_else(|| anyhow::anyhow!("OAuthCredential missing {field}"))
+fn required(value: Option<String>, field: &'static str) -> Result<String, OAuthCredentialError> {
+    clean_optional(value).ok_or(OAuthCredentialError::MissingField { field })
 }
 
 fn clean_optional(value: Option<String>) -> Option<String> {
@@ -1383,17 +1459,26 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     })
 }
 
-fn parse_required_datetime(value: Option<String>, field: &str) -> Result<DateTime<Utc>> {
-    parse_optional_datetime(value, field)?
-        .ok_or_else(|| anyhow::anyhow!("OAuthCredential missing {field}"))
+fn parse_required_datetime(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<DateTime<Utc>, OAuthCredentialError> {
+    parse_optional_datetime(value, field)?.ok_or(OAuthCredentialError::MissingField { field })
 }
 
-fn parse_optional_datetime(value: Option<String>, field: &str) -> Result<Option<DateTime<Utc>>> {
+fn parse_optional_datetime(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<Option<DateTime<Utc>>, OAuthCredentialError> {
     value
-        .map(|value| {
-            DateTime::parse_from_rfc3339(&value)
-                .map(|value| value.with_timezone(&Utc))
-                .with_context(|| format!("parsing OAuthCredential {field} timestamp {value}"))
+        .map(|raw| {
+            DateTime::parse_from_rfc3339(&raw)
+                .map(|parsed| parsed.with_timezone(&Utc))
+                .map_err(|source| OAuthCredentialError::Timestamp {
+                    field,
+                    value: raw,
+                    source,
+                })
         })
         .transpose()
 }
@@ -1642,29 +1727,33 @@ impl DbCredentialBearer {
                 || self.product.name.to_owned(),
                 |cached| effective_account_label(&cached),
             );
-            anyhow::bail!(
-                "{} {MOVE_OFF_ACCOUNT} Signing in again adds a new account; it does not restore \
-                 this one.",
-                account_failure(&self.product, &label, "removed from this node"),
-            );
+            return Err(OAuthCredentialError::AccountUnavailable {
+                message: format!(
+                    "{} {MOVE_OFF_ACCOUNT} Signing in again adds a new account; it does not restore \
+                     this one.",
+                    account_failure(&self.product, &label, "removed from this node"),
+                ),
+            });
         };
         if !credential.enabled {
-            anyhow::bail!(
-                "{}\n{}\n{MOVE_OFF_ACCOUNT}",
-                account_failure(
-                    &self.product,
-                    &effective_account_label(&credential),
-                    "disabled"
+            return Err(OAuthCredentialError::AccountUnavailable {
+                message: format!(
+                    "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+                    account_failure(
+                        &self.product,
+                        &effective_account_label(&credential),
+                        "disabled"
+                    ),
+                    classify_oauth_auth_error(
+                        &self.product,
+                        &self.node_did,
+                        &self.provider,
+                        &OAuthAuthProblem::WrongMode {
+                            found_mode: "disabled".to_string(),
+                        },
+                    )
                 ),
-                classify_oauth_auth_error(
-                    &self.product,
-                    &self.node_did,
-                    &self.provider,
-                    &OAuthAuthProblem::WrongMode {
-                        found_mode: "disabled".to_string(),
-                    },
-                )
-            );
+            });
         }
         Ok(credential)
     }
@@ -1726,24 +1815,28 @@ impl DbCredentialBearer {
                 }
             }
         }
-        Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
+        Err(last_error
+            .expect("persist_with_retry ran at least one failing attempt")
+            .into())
     }
 
     fn auth_error(
         &self,
         credential: &OAuthCredential,
         problem: &OAuthAuthProblem,
-    ) -> anyhow::Error {
+    ) -> OAuthCredentialError {
         let state = match problem {
             OAuthAuthProblem::Expired => "signed out (expired or revoked)",
             OAuthAuthProblem::NotEntitled => "not entitled",
             _ => "unusable",
         };
-        anyhow::anyhow!(
-            "{}\n{}\n{MOVE_OFF_ACCOUNT}",
-            account_failure(&self.product, &effective_account_label(credential), state),
-            classify_oauth_auth_error(&self.product, &self.node_did, &self.provider, problem),
-        )
+        OAuthCredentialError::AccountUnavailable {
+            message: format!(
+                "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+                account_failure(&self.product, &effective_account_label(credential), state),
+                classify_oauth_auth_error(&self.product, &self.node_did, &self.provider, problem),
+            ),
+        }
     }
 
     async fn refresh_tokens(
@@ -2646,6 +2739,7 @@ mod lifecycle_tests {
     use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
     use crate::config_client::ConfigAccess;
     use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[derive(Debug, Clone, Copy)]
     enum Product {
@@ -3541,7 +3635,7 @@ mod lifecycle_tests {
         )
         .await
         .expect_err("an invalid config fails the add");
-        let text = format!("{error:#}");
+        let text = format!("{}", ErrorChain(error.as_ref()));
         assert!(text.contains("missing-backend"), "{text}");
         assert!(text.contains("sign in again"), "{text}");
         assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);
@@ -3643,8 +3737,9 @@ mod lifecycle_tests {
                 .unwrap_err(),
             set_account_enabled(&access, did, id, false)
                 .await
-                .unwrap_err(),
-            remove(&access, did, id).await.unwrap_err(),
+                .unwrap_err()
+                .into(),
+            remove(&access, did, id).await.unwrap_err().into(),
         ] {
             assert!(error.to_string().contains("not found"), "{error}");
         }
@@ -3795,8 +3890,9 @@ mod lifecycle_tests {
                 .unwrap_err(),
             set_account_enabled(&access, mine, id, false)
                 .await
-                .unwrap_err(),
-            remove(&access, mine, id).await.unwrap_err(),
+                .unwrap_err()
+                .into(),
+            remove(&access, mine, id).await.unwrap_err().into(),
         ] {
             assert!(error.to_string().contains("not found"), "{error}");
         }

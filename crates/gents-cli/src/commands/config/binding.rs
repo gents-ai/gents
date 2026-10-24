@@ -153,7 +153,7 @@ pub(crate) async fn resolve_target_node_did(
     }
 
     let Some(bind_node_did) = bind_node_did else {
-        return crate::resolve_node_did(home, None);
+        return Ok(crate::resolve_node_did(home, None)?);
     };
 
     resolve_bound_node_did(
@@ -169,7 +169,7 @@ pub(crate) fn rebind_manifest_to_node(
     manifest: &mut DesiredStateManifest,
     target_node_did: &str,
     force_rebind_concrete_did: bool,
-) -> Result<()> {
+) -> std::result::Result<(), super::ConfigCommandError> {
     enforce_manifest_rebind_safety(manifest, target_node_did, force_rebind_concrete_did)?;
     rebind_manifest_node_did(manifest, target_node_did)
 }

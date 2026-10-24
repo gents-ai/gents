@@ -2,6 +2,7 @@ use super::*;
 use crate::ensure_runtime_schemas;
 use crate::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use crate::test_support::first_content;
+use gents_protocol::error_chain::ErrorChain;
 
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
@@ -437,8 +438,11 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     );
     let loser = left.err().unwrap_or_else(|| right.unwrap_err());
     assert!(
-        format!("{loser:#}").contains("stale compaction generation"),
-        "unexpected loser error: {loser:#}"
+        ErrorChain(loser.as_ref())
+            .to_string()
+            .contains("stale compaction generation"),
+        "unexpected loser error: {}",
+        ErrorChain(loser.as_ref())
     );
 
     let entries = load_compaction_entries(&node, "session-race", "did:test:test", None)
@@ -1489,21 +1493,27 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                     let single =
                         output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
                             .await
-                            .map_err(|error| format!("{error:#}"));
+                            .map_err(|error| ErrorChain(error.as_ref()).to_string());
                     let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
                         .load_message(&target)
                         .await
-                        .map_err(|error| format!("{error:#}"));
+                        .map_err(|error| ErrorChain(error.as_ref()).to_string());
                     assert_eq!(single, bulk, "single/bulk mismatch for {case}");
                     assert_eq!(single.is_err(), case == "key", "{case}");
-                    Ok(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             },
         )
         .await;
         if matches!(case, "sequence" | "both") {
             let error = result.expect_err("the existing session sequence is already occupied");
-            assert!(format!("{error:#}").contains("unique index"), "{error:#}");
+            assert!(
+                ErrorChain(error.as_ref())
+                    .to_string()
+                    .contains("unique index"),
+                "{}",
+                ErrorChain(error.as_ref())
+            );
         } else {
             result.unwrap();
         }

@@ -19,7 +19,6 @@ typescript = ["dep:ts-rs"]
 [dependencies]
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "serde-json-impl", "no-serde-warnings"] }
-anyhow = { workspace = true }
 base64.workspace = true
 bs58 = "0.5"
 chrono = { workspace = true }
@@ -30,6 +29,7 @@ reqwest = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
+thiserror = { workspace = true }
 # Not `workspace = true`: the workspace's tokio pins `features = ["full"]`,
 # which is unsupported on wasm32-wasip1 (only sync, macros, io-util, rt, time
 # exist there) and workspace-inherited features only ever union, never

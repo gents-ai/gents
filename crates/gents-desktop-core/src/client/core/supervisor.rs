@@ -19,6 +19,7 @@ use super::p2p_ops::{
 use super::route_manager::ClientRouteManager;
 use super::route_manager::PendingRemovalCleanup;
 use super::sync_state::ClientSyncStateOwner;
+use super::ClientCoreError;
 use super::{
     p2p_health_materially_changed, ClientPeerStatus, P2PHealth, P2PHealthStatus,
     P2PSupervisorCommand, P2P_SUPERVISOR_INTERVAL, P2P_WEDGED_FAILURE_THRESHOLD,
@@ -348,7 +349,7 @@ async fn persist_pairing_readiness(
     sync_state: &ClientSyncStateOwner,
     expected: &PeerRecord,
     ready: bool,
-) -> anyhow::Result<Option<PeerRecord>> {
+) -> Result<Option<PeerRecord>, ClientCoreError> {
     sync_state.set_pairing_ready(expected, ready).await
 }
 
@@ -362,17 +363,17 @@ pub(super) async fn probe_p2p_health(
     let probe = async {
         let peer_id = p2p_local_peer_id(p2p).await?;
         if peer_id.trim().is_empty() {
-            anyhow::bail!("P2P transport reported an empty peer id");
+            return Err(ClientCoreError::P2pEmptyPeerId);
         }
 
         let listen_addresses = p2p_listen_addresses(p2p).await?;
         if listen_addresses.is_empty() {
-            anyhow::bail!("P2P transport reported no listen addresses");
+            return Err(ClientCoreError::P2pNoListenAddresses);
         }
 
         let connected_peers = p2p_connected_peers(p2p).await?;
         let replicators = p2p_get_replicators(p2p).await?;
-        Ok::<(usize, usize), anyhow::Error>((connected_peers.len(), replicators.len()))
+        Ok::<(usize, usize), ClientCoreError>((connected_peers.len(), replicators.len()))
     }
     .await;
 

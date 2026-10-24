@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use crate::provider_input::ProviderInputError;
 use crate::rig_compat::ProviderModel;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::future::BoxFuture;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::message::Message;
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +57,47 @@ pub enum ReductionError {
     InvalidRollingPlan,
     #[error("compaction_cannot_fit_provider_visible_history: the conversation cannot be reduced enough for this model's context budget without removing required history. Start a new session or use a larger context window.")]
     CannotFit,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CompactionError {
+    #[error("exact reduction is not the provider order of its association rows")]
+    AssociationOrder,
+    #[error("projecting compactable provider messages")]
+    ProjectCompactable(#[source] ProviderInputError),
+    #[error("projecting original compaction input")]
+    ProjectOriginal(#[source] ProviderInputError),
+    #[error("projecting normalized compaction input")]
+    ProjectNormalized(#[source] ProviderInputError),
+    #[error("projecting final compacted provider input")]
+    ProjectFinal(#[source] ProviderInputError),
+    #[error("session compaction prefix exceeds the canonical provider history")]
+    PrefixExceedsHistory,
+    #[error("exact reduction does not partition the active session provider view")]
+    ExactPartition,
+    #[error("projecting rolling compaction summary request")]
+    ProjectSummaryRequest(#[source] ProviderInputError),
+    #[error("exact reduction split exceeds its association rows")]
+    SplitExceedsRows,
+    #[error("session compaction provider-prefix count overflow")]
+    PrefixOverflow,
+    #[error(transparent)]
+    Reduction(#[from] ReductionError),
+    #[error(transparent)]
+    EstimateMessages(#[from] ProviderInputError),
+    #[error(transparent)]
+    BuildSummaryRequest(#[from] crate::error::LoopStreamError),
+    #[error("compaction_provider_failure: {deadline_context}{diagnostic}")]
+    GuidedProviderFailure {
+        deadline_context: &'static str,
+        diagnostic: String,
+    },
+    #[error("compaction_provider_failure: guided structured output failed: {guided}; non-guided JSON fallback failed: {fallback}")]
+    FallbackProviderFailure { guided: String, fallback: String },
+    #[error("guided compaction exhausted the request token budget")]
+    GuidedBudgetExhausted(#[source] crate::loop_stream::OneShotError),
+    #[error("non-guided compaction fallback exhausted the request token budget")]
+    FallbackBudgetExhausted(#[source] crate::loop_stream::OneShotError),
 }
 
 pub fn rolling_plan_is_valid(
@@ -263,7 +306,7 @@ enum ReductionResultState {
 }
 
 impl ReductionResult {
-    pub fn provider_messages(&self) -> Result<&[Message]> {
+    pub fn provider_messages(&self) -> Result<&[Message], ReductionError> {
         match &self.state {
             ReductionResultState::ProviderViewRepaired { messages } => Ok(messages),
             ReductionResultState::Decided(outcome) => match outcome {
@@ -271,7 +314,7 @@ impl ReductionResult {
                 ReductionOutcome::Reduced {
                     retained_suffix, ..
                 } => Ok(retained_suffix),
-                ReductionOutcome::CannotFit => Err(ReductionError::CannotFit.into()),
+                ReductionOutcome::CannotFit => Err(ReductionError::CannotFit),
             },
         }
     }
@@ -320,13 +363,10 @@ pub struct ExactReduction<'a> {
 }
 
 impl ExactReduction<'_> {
-    pub fn messages_compacted(&self) -> Result<u32> {
-        u32::try_from(self.compacted_prefix.len()).map_err(|_| {
-            ReductionError::ExactCountOverflow {
-                field: "messages_compacted",
-                value: self.compacted_prefix.len(),
-            }
-            .into()
+    pub fn messages_compacted(&self) -> Result<u32, ReductionError> {
+        u32::try_from(self.compacted_prefix.len()).map_err(|_| ReductionError::ExactCountOverflow {
+            field: "messages_compacted",
+            value: self.compacted_prefix.len(),
         })
     }
 
@@ -364,14 +404,14 @@ impl ExactReduction<'_> {
         profile: ProviderInputProfile,
         compacted_prefix: Vec<Message>,
         retained_suffix: Vec<Message>,
-    ) -> Result<AssociationReduction> {
-        anyhow::ensure!(
-            history::normalize_assistant_content_order(profile, compacted_prefix.clone())
-                == self.compacted_prefix
-                && history::normalize_assistant_content_order(profile, retained_suffix.clone())
-                    == self.retained_suffix,
-            "exact reduction is not the provider order of its association rows"
-        );
+    ) -> Result<AssociationReduction, CompactionError> {
+        if history::normalize_assistant_content_order(profile, compacted_prefix.clone())
+            != self.compacted_prefix
+            || history::normalize_assistant_content_order(profile, retained_suffix.clone())
+                != self.retained_suffix
+        {
+            return Err(CompactionError::AssociationOrder);
+        }
         Ok(AssociationReduction {
             compacted_prefix,
             retained_suffix,
@@ -441,13 +481,13 @@ where
         configured_keep_recent: usize,
         compactable_messages: &[Message],
         admission: ReductionAdmission,
-    ) -> Result<usize> {
+    ) -> Result<usize, CompactionError> {
         let compactable_input_tokens = self
             .source_input_counter
             .as_ref()
             .unwrap_or(&self.config.provider_input_counter)
             .estimate_message_request(compactable_messages)
-            .context("projecting compactable provider messages")?;
+            .map_err(CompactionError::ProjectCompactable)?;
         let fixed_input_tokens = admission
             .input_tokens()
             .saturating_sub(compactable_input_tokens);
@@ -477,7 +517,9 @@ where
         messages: &[Message],
         admission: ReductionAdmission,
     ) -> Result<usize> {
-        ProviderReductionEngine::retention_target(self, configured, messages, admission)
+        Ok(ProviderReductionEngine::retention_target(
+            self, configured, messages, admission,
+        )?)
     }
 
     fn reduce<'a>(
@@ -499,13 +541,13 @@ where
             };
             let original_token_estimate = counter
                 .estimate_message_request(&messages)
-                .context("projecting original compaction input")?;
+                .map_err(CompactionError::ProjectOriginal)?;
 
             let (stripped_messages, stripped_activity) = provider_view(counter.profile(), messages);
 
             let stripped_token_estimate = counter
                 .estimate_message_request(&stripped_messages)
-                .context("projecting normalized compaction input")?;
+                .map_err(CompactionError::ProjectNormalized)?;
             if matches!(options.mode, ReductionMode::StripOnly) {
                 return Ok(ReductionResult {
                     state: ReductionResultState::provider_view_repaired(stripped_messages),
@@ -584,7 +626,7 @@ where
             while consumed < old_messages.len() {
                 // A prior chunk may have consumed the shared request deadline
                 if deadline_elapsed(summary_config.deadline, self.now.as_ref()) {
-                    return Err(ReductionError::DeadlineElapsed.into());
+                    return Err(CompactionError::Reduction(ReductionError::DeadlineElapsed).into());
                 }
                 let remaining = &old_messages[consumed..];
                 let (chunk_len, chunk_input_tokens) = largest_fitting_summary_chunk(
@@ -614,13 +656,14 @@ where
                     self.now.clone(),
                 )
                 .await?;
-                consumed =
-                    consumed
-                        .checked_add(chunk_len)
-                        .ok_or(ReductionError::ExactCountOverflow {
+                consumed = consumed
+                    .checked_add(chunk_len)
+                    .ok_or(CompactionError::Reduction(
+                        ReductionError::ExactCountOverflow {
                             field: "messages_compacted",
                             value: old_messages.len(),
-                        })?;
+                        },
+                    ))?;
                 chunk_messages.push(chunk_len);
                 chunk_pair_closed.push(pair_closed);
                 chunk_can_dispatch.push(crate::provider_input::budget::can_dispatch(
@@ -648,7 +691,7 @@ where
                 .trim()
                 .to_string();
             if summary.is_empty() {
-                return Err(ReductionError::InvalidRollingPlan.into());
+                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
             }
             if !rolling_plan_is_valid(
                 old_messages.len(),
@@ -657,7 +700,7 @@ where
                 &chunk_can_dispatch,
                 consumed,
             ) {
-                return Err(ReductionError::InvalidRollingPlan.into());
+                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
             }
             let mut compacted_projection =
                 crate::prompt::compaction_summary_message(std::slice::from_ref(&summary))
@@ -666,18 +709,20 @@ where
             compacted_projection.extend(recent_messages.iter().cloned());
             let compacted_token_estimate = counter
                 .estimate_message_request(&compacted_projection)
-                .context("projecting final compacted provider input")?;
+                .map_err(CompactionError::ProjectFinal)?;
             let prefix_len = old_messages.len();
-            u32::try_from(prefix_len).map_err(|_| ReductionError::ExactCountOverflow {
-                field: "messages_compacted",
-                value: prefix_len,
+            u32::try_from(prefix_len).map_err(|_| {
+                CompactionError::Reduction(ReductionError::ExactCountOverflow {
+                    field: "messages_compacted",
+                    value: prefix_len,
+                })
             })?;
             let outcome = apply_reduction_decision(
                 stripped_messages,
                 admission.decision(true, prefix_len, summary),
             );
             if matches!(outcome, ReductionOutcome::CannotFit) {
-                return Err(ReductionError::InvalidRollingPlan.into());
+                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
             }
             Ok(ReductionResult {
                 state: ReductionResultState::decided(outcome),
@@ -698,7 +743,7 @@ async fn largest_fitting_summary_chunk<M>(
     options: &ReductionOptions,
     absolute_start: usize,
     context_window: usize,
-) -> Result<(usize, usize)>
+) -> Result<(usize, usize), CompactionError>
 where
     M: ProviderModel,
 {
@@ -790,7 +835,7 @@ async fn summary_candidate_tokens<M>(
     prior_summary: Option<&str>,
     summary_config: &crate::loop_stream::LoopConfig,
     options: &ReductionOptions,
-) -> Result<usize>
+) -> Result<usize, CompactionError>
 where
     M: ProviderModel,
 {
@@ -809,11 +854,11 @@ where
         summary_config,
     )
     .await
-    .map_err(anyhow::Error::new)?;
+    .map_err(crate::rig_compat::loop_stream_error)?;
     summary_config
         .provider_input_counter
         .estimate_request(&request)
-        .context("projecting rolling compaction summary request")
+        .map_err(CompactionError::ProjectSummaryRequest)
 }
 
 async fn summarize_checkpoint<M>(
@@ -821,7 +866,7 @@ async fn summarize_checkpoint<M>(
     prepared_history: Vec<Message>,
     summary_config: crate::loop_stream::LoopConfig,
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
-) -> Result<ContinuationCheckpoint>
+) -> Result<ContinuationCheckpoint, CompactionError>
 where
     M: ProviderModel,
 {
@@ -843,7 +888,7 @@ where
                 && !deadline_elapsed(summary_config.deadline, now.as_ref()) =>
         {
             tracing::warn!(
-                error = %bounded_error_diagnostic(&format!("{guided_error:#}")),
+                error = %bounded_error_diagnostic(&ErrorChain(&guided_error).to_string()),
                 "guided compaction output exhausted recovery; trying one strict non-guided JSON fallback"
             );
             let mut fallback_config = summary_config;
@@ -871,46 +916,42 @@ where
                 if crate::loop_stream::aggregate_token_budget_exhaustion_message(&fallback_error)
                     .is_some()
                 {
-                    fallback_error.context(
-                        "non-guided compaction fallback exhausted the request token budget",
-                    )
+                    CompactionError::FallbackBudgetExhausted(fallback_error)
                 } else {
-                    anyhow::anyhow!(
-                        "compaction_provider_failure: guided structured output failed: {}; \
-                         non-guided JSON fallback failed: {}",
-                        bounded_error_diagnostic(&format!("{guided_error:#}")),
-                        bounded_error_diagnostic(&format!("{fallback_error:#}"))
-                    )
+                    CompactionError::FallbackProviderFailure {
+                        guided: bounded_error_diagnostic(&ErrorChain(&guided_error).to_string()),
+                        fallback: bounded_error_diagnostic(
+                            &ErrorChain(&fallback_error).to_string(),
+                        ),
+                    }
                 }
             })?;
             parse_fallback_checkpoint(&raw).map_err(|fallback_error| {
-                anyhow::anyhow!(
-                    "compaction_provider_failure: guided structured output failed: {}; \
-                     non-guided JSON fallback failed: {}",
-                    bounded_error_diagnostic(&format!("{guided_error:#}")),
-                    bounded_error_diagnostic(&fallback_error)
-                )
+                CompactionError::FallbackProviderFailure {
+                    guided: bounded_error_diagnostic(&ErrorChain(&guided_error).to_string()),
+                    fallback: bounded_error_diagnostic(&fallback_error),
+                }
             })
         }
         Err(error) => {
             if crate::loop_stream::aggregate_token_budget_exhaustion_message(&error).is_some() {
-                return Err(error.context("guided compaction exhausted the request token budget"));
+                return Err(CompactionError::GuidedBudgetExhausted(error));
             }
             let deadline_context = if deadline_elapsed(summary_config.deadline, now.as_ref()) {
                 "compaction deadline elapsed after "
             } else {
                 ""
             };
-            Err(anyhow::anyhow!(
-                "compaction_provider_failure: {deadline_context}{}",
-                bounded_error_diagnostic(&format!("{error:#}"))
-            ))
+            Err(CompactionError::GuidedProviderFailure {
+                deadline_context,
+                diagnostic: bounded_error_diagnostic(&ErrorChain(&error).to_string()),
+            })
         }
     }
 }
 
-fn is_guided_output_failure(error: &anyhow::Error) -> bool {
-    let diagnostic = format!("{error:#}");
+fn is_guided_output_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let diagnostic = ErrorChain(error).to_string();
     diagnostic.contains("structured-output validation failed")
         || diagnostic.contains("completion produced no visible output")
 }
@@ -1021,30 +1062,29 @@ pub fn session_cursor_for_reduction(
     rows: &[(u32, Message)],
     prior_provider_prefix: usize,
     reduction: ExactReduction<'_>,
-) -> Result<Option<u32>> {
+) -> Result<Option<u32>, CompactionError> {
     let durable_messages = rows
         .iter()
         .map(|(_, message)| message.clone())
         .collect::<Vec<_>>();
     let mut full_provider_view = provider_view(profile, durable_messages).0;
-    anyhow::ensure!(
-        prior_provider_prefix <= full_provider_view.len(),
-        "session compaction prefix exceeds the canonical provider history"
-    );
+    if prior_provider_prefix > full_provider_view.len() {
+        return Err(CompactionError::PrefixExceedsHistory);
+    }
     let active =
         sanitize_history_for_provider(profile, full_provider_view.split_off(prior_provider_prefix));
-    anyhow::ensure!(
-        reduction
-            .compacted_prefix
-            .iter()
-            .chain(reduction.retained_suffix.iter())
-            .eq(active.iter()),
-        "exact reduction does not partition the active session provider view"
-    );
+    if !reduction
+        .compacted_prefix
+        .iter()
+        .chain(reduction.retained_suffix.iter())
+        .eq(active.iter())
+    {
+        return Err(CompactionError::ExactPartition);
+    }
 
     let cumulative_prefix = prior_provider_prefix
         .checked_add(reduction.compacted_prefix.len())
-        .context("session compaction provider-prefix count overflow")?;
+        .ok_or(CompactionError::PrefixOverflow)?;
     let candidate = compacted_through_sequence(profile, rows, cumulative_prefix);
     Ok(candidate.filter(|cursor| {
         let suffix = rows
@@ -1066,7 +1106,7 @@ pub fn split_for_summary(
     provider: crate::backend_provider::BackendProviderKind,
     wire: crate::openai_wire::OpenAiWireApi,
     model: &str,
-) -> Result<(Vec<Message>, Vec<Message>)> {
+) -> Result<(Vec<Message>, Vec<Message>), CompactionError> {
     let counter = crate::provider_input::ProviderInputCounter::new(provider, wire, model);
     history::split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)
 }

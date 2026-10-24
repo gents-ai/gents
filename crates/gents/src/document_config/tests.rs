@@ -1,6 +1,8 @@
 use super::*;
 use crate::config_client::write_tools_document;
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[test]
 fn tools_document_accepts_empty_string_arrays_and_null_groups() {
     let document: Tools = serde_json::from_value(serde_json::json!({
@@ -496,7 +498,8 @@ async fn tools_document_round_trips_defra_query_fields() {
                 )
                 .await?
                 .map(|(_, value)| {
-                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                    serde_json::from_value::<Tools>(value)
+                        .map_err(Box::<dyn std::error::Error + Send + Sync>::from)
                 })
                 .transpose()
             })
@@ -546,7 +549,7 @@ async fn tools_update_can_clear_lsp_config() {
 
     let doc = lsp(Some(r#"{"idle_timeout_ms":1000}"#.to_string()));
     write_tools_document(&access, &doc).await.unwrap();
-    async fn read(access: &crate::config_client::ConfigAccess) -> anyhow::Result<Option<Tools>> {
+    async fn read(access: &crate::config_client::ConfigAccess) -> TestResult<Option<Tools>> {
         access
             .transact_write("test.tools.read", |txn| {
                 Box::pin(async move {
@@ -558,7 +561,8 @@ async fn tools_update_can_clear_lsp_config() {
                     )
                     .await?
                     .map(|(_, value)| {
-                        serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                        serde_json::from_value::<Tools>(value)
+                            .map_err(Box::<dyn std::error::Error + Send + Sync>::from)
                     })
                     .transpose()
                 })
@@ -628,7 +632,8 @@ async fn tools_document_round_trips_read_only_commands() {
                 )
                 .await?
                 .map(|(_, value)| {
-                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                    serde_json::from_value::<Tools>(value)
+                        .map_err(Box::<dyn std::error::Error + Send + Sync>::from)
                 })
                 .transpose()
             })
@@ -720,7 +725,7 @@ async fn tools_document_round_trips_write_tools() {
                     merged.write_tools, *decls,
                     "write_tools must expand from the referenced surface through the desired-state owner"
                 );
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         })
         .await
@@ -758,7 +763,8 @@ async fn tools_document_round_trips_session_message_enablement() {
                 )
                 .await?
                 .map(|(_, value)| {
-                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                    serde_json::from_value::<Tools>(value)
+                        .map_err(Box::<dyn std::error::Error + Send + Sync>::from)
                 })
                 .transpose()
             })
@@ -1147,6 +1153,7 @@ fn default_agent_publication_matches_lean() {
             ),
         ];
         let accepted = ConfigReferences::from_documents(scope, documents)
+            .map_err(anyhow::Error::from)
             .and_then(|refs| refs.validate())
             .is_ok();
         assert_eq!(
@@ -1324,7 +1331,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
                     == crate::Collection::InferenceBackend
                     && id == "good"));
                 assert!(!refs.documents().any(|((_, id), _)| id == "bad"));
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         },
     )

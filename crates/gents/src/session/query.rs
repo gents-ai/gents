@@ -1,6 +1,5 @@
 use super::rows::SessionOwnerRow;
 use super::*;
-use anyhow::Context;
 
 /// Fields for one canonical `AgentSession` read. Nested values are DefraDB
 /// JSON scalar columns: read the bare field name, never an object subselection.
@@ -22,18 +21,20 @@ pub(crate) async fn session_stopped_in_txn(
     let rows = response
         .pointer("/data/AgentSession")
         .and_then(serde_json::Value::as_array)
-        .context("session stop-latch query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "session stop-latch scope is ambiguous");
+        .ok_or(SessionError::StopLatchRowsOmitted)?;
+    if rows.len() > 1 {
+        return Err(SessionError::StopLatchAmbiguous);
+    }
     let Some(row) = rows.first() else {
         return Ok(false);
     };
     match row
         .get("stopped_at")
-        .context("session stop-latch query omitted stopped_at")?
+        .ok_or(SessionError::StopLatchOmitted)?
     {
         serde_json::Value::Null => Ok(false),
         serde_json::Value::String(value) if !value.trim().is_empty() => Ok(true),
-        _ => anyhow::bail!("session stopped_at is malformed"),
+        _ => Err(SessionError::StopLatchMalformed),
     }
 }
 
@@ -59,64 +60,66 @@ pub(crate) async fn session_is_stopped(
     .await
 }
 
+fn parse_timestamp(field: &'static str, value: &str) -> Result<(), SessionError> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|_| ())
+        .map_err(|source| SessionError::InvalidTimestamp { field, source })
+}
+
 pub(super) fn validate_agent_session(
     session: &gents_protocol::session::AgentSession,
-) -> Result<()> {
+) -> Result<(), SessionError> {
     for (name, value) in [
         ("session_id", session.session_id.as_str()),
         ("node_did", session.node_did.as_str()),
         ("agent_id", session.agent_id.as_str()),
     ] {
-        anyhow::ensure!(!value.trim().is_empty(), "session {name} must be nonblank");
+        if value.trim().is_empty() {
+            return Err(SessionError::BlankField { name });
+        }
     }
     if let Some(requester) = session.requester_did.as_deref() {
-        anyhow::ensure!(
-            !requester.trim().is_empty(),
-            "session requester_did must be nonblank when present"
-        );
+        if requester.trim().is_empty() {
+            return Err(SessionError::BlankRequester);
+        }
     }
-    chrono::DateTime::parse_from_rfc3339(&session.created_at)
-        .context("session created_at is invalid")?;
+    parse_timestamp("created_at", &session.created_at)?;
     if let Some(closed_at) = session.closed_at.as_deref() {
-        chrono::DateTime::parse_from_rfc3339(closed_at).context("session closed_at is invalid")?;
+        parse_timestamp("closed_at", closed_at)?;
     }
     if let Some(stopped_at) = session.stopped_at.as_deref() {
-        chrono::DateTime::parse_from_rfc3339(stopped_at)
-            .context("session stopped_at is invalid")?;
+        parse_timestamp("stopped_at", stopped_at)?;
     }
     if let Some(observation) = session.observation.as_ref() {
-        chrono::DateTime::parse_from_rfc3339(&observation.last_activity_at)
-            .context("session last_activity_at is invalid")?;
+        parse_timestamp("last_activity_at", &observation.last_activity_at)?;
         if let Some(preview) = observation.preview.as_deref() {
-            anyhow::ensure!(
-                preview.chars().count() <= 240,
-                "session preview exceeds the 240-character bound"
-            );
+            if preview.chars().count() > 240 {
+                return Err(SessionError::PreviewTooLong);
+            }
         }
     }
     if let Some(title) = session.title.as_ref() {
-        anyhow::ensure!(
-            !title.text.trim().is_empty(),
-            "session title text must be nonblank"
-        );
+        if title.text.trim().is_empty() {
+            return Err(SessionError::BlankTitle);
+        }
     }
     Ok(())
 }
 
-pub fn decode_session_row(row: &serde_json::Value) -> Result<SessionOwnerRow> {
+pub fn decode_session_row(row: &serde_json::Value) -> Result<SessionOwnerRow, SessionError> {
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .context("AgentSession row omitted _docID")?
+        .ok_or(SessionError::MissingDocId)?
         .to_string();
     let mut document = row.clone();
     document
         .as_object_mut()
-        .context("AgentSession row is not an object")?
+        .ok_or(SessionError::RowNotAnObject)?
         .remove("_docID");
     let session: gents_protocol::session::AgentSession =
-        serde_json::from_value(document).context("decoding canonical AgentSession")?;
+        serde_json::from_value(document).map_err(SessionError::DecodeRow)?;
     validate_agent_session(&session)?;
     Ok(SessionOwnerRow { doc_id, session })
 }
@@ -155,12 +158,11 @@ pub(super) async fn load_agent_session_row(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionOwnerRow>> {
-    load_agent_session_rows(node, node_did, session_id, requester_did)
-        .await
-        .and_then(|mut rows| {
-            anyhow::ensure!(rows.len() <= 1, "duplicate AgentSession rows for one label");
-            Ok(rows.pop())
-        })
+    let mut rows = load_agent_session_rows(node, node_did, session_id, requester_did).await?;
+    if rows.len() > 1 {
+        return Err(SessionError::DuplicateAgentSessionRows);
+    }
+    Ok(rows.pop())
 }
 
 pub(super) async fn load_agent_session_rows(
@@ -207,10 +209,8 @@ pub(super) async fn require_agent_session(
 ) -> Result<gents_protocol::session::AgentSession> {
     load_agent_session(node, node_did, session_id, requester_did)
         .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "loading session for completion: no AgentSession for session_id={session_id}"
-            )
+        .ok_or_else(|| SessionError::AgentSessionMissing {
+            session_id: session_id.to_owned(),
         })
 }
 
@@ -234,7 +234,9 @@ pub(crate) async fn load_session_requester_scope(
     )
     .await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentSession")?;
-    anyhow::ensure!(rows.len() <= 1, "duplicate AgentSession rows for one label");
+    if rows.len() > 1 {
+        return Err(SessionError::DuplicateAgentSessionRows);
+    }
     Ok(match rows.first() {
         Some(row) => decode_session_row(row)?.session.requester_did,
         None => None,

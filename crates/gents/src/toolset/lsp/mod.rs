@@ -24,6 +24,7 @@ pub use writethrough::{LspWritethrough, MutationKind};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -140,6 +141,16 @@ fn artifact_scope_denied() -> bool {
 }
 const ARTIFACT_SCOPE_DENIAL: &str = "persistent LSP and supplementary linters are unavailable in artifact-scoped requests; use the sandboxed Bash compiler path";
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LspToolError {
+    #[error("reading matched diagnostic file {}", path.display())]
+    ReadDiagnosticFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 #[derive(Clone)]
 pub(crate) struct LspTool {
     config: LspToolConfig,
@@ -148,7 +159,7 @@ pub(crate) struct LspTool {
 }
 
 impl LspTool {
-    pub fn new(config: LspToolConfig, pool: LspPool) -> Result<Self, anyhow::Error> {
+    pub fn new(config: LspToolConfig, pool: LspPool) -> Result<Self, ToolError> {
         let context = ToolContext::new(config.workspace.clone(), false)?;
         Ok(Self {
             config,
@@ -351,7 +362,7 @@ impl Tool for LspTool {
                         .map_err(|error| {
                         ToolError::reported_failure(
                             FailureClass::PolicyDenied,
-                            format!("{error:#}"),
+                            ErrorChain(&error).to_string(),
                         )
                     })?,
                 };

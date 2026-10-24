@@ -1,5 +1,5 @@
 use super::{fake_llm, ChatAction};
-use anyhow::{ensure, Context, Result};
+use crate::support::{TestError, TestResult};
 use gents::{graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
 use gents_protocol::{
     goal_control::{
@@ -47,7 +47,7 @@ const COMPLETION_EVIDENCE: &str = "Second goal completed through its signed foll
 const COMPLETE_CALL: &str = "goal-replacement-complete-second";
 const BUSY_REASON: &str = "wait for this session to finish before starting a goal";
 
-pub fn prepare(root: &Path) -> Result<()> {
+pub fn prepare(root: &Path) -> TestResult<()> {
     std::fs::create_dir_all(root.join("goal-observer"))?;
     std::fs::write(root.join(CAPTURE_FILE), CAPTURE_DISK)?;
     std::fs::write(root.join(OBSERVER_CAPTURE_FILE), OBSERVER_CAPTURE_DISK)?;
@@ -162,7 +162,7 @@ pub async fn verify(
     session: &str,
     author: &str,
     identity: &dyn NodeIdentity,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let owner = escape_graphql_string(node);
     let session_literal = escape_graphql_string(session);
     let scope =
@@ -193,39 +193,39 @@ pub async fn verify(
                         })
                 })
             {
-                return Ok::<_, anyhow::Error>(value);
+                return Ok::<_, TestError>(value);
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
-    .context(
+    .expect(
         "same-chat replacement did not settle as six owned requests and three retained Goals",
-    )??;
+    )?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value["data"]["AgentRequest"].clone())?;
     let sessions = value["data"]["AgentSession"]
         .as_array()
-        .context("session rows")?;
-    ensure!(
+        .expect("session rows");
+    assert!(
         sessions.len() == 1 && sessions[0]["requester_did"] == author,
         "replacement changed its physical AgentSession: {value}"
     );
-    let session_doc = sessions[0]["_docID"].as_str().context("physical session")?;
+    let session_doc = sessions[0]["_docID"].as_str().expect("physical session");
     for row in &rows {
         gents::verify_request_receipt_signature(row)?;
-        ensure!(
+        assert!(
             row.node_did.as_deref() == Some(node)
                 && row.session_id.as_deref() == Some(session)
                 && row.requester_did.as_deref() == Some(author)
                 && row.admission_signer_did.as_deref() == Some(author),
             "replacement changed signed request scope"
         );
-        ensure!(
+        assert!(
             row.lifecycle_state == Some(RequestLifecycleState::Completed)
                 && row.interrupt_requested_at.is_none(),
             "replacement interrupted owned work"
         );
-        ensure!(
+        assert!(
             row.input
                 .as_ref()
                 .and_then(|input| input.goal_continuation.as_ref())
@@ -233,12 +233,12 @@ pub async fn verify(
             "replacement admitted autonomous continuation"
         );
     }
-    let request = |content: &str| -> Result<&AgentRequestRow> {
+    let request = |content: &str| -> TestResult<&AgentRequestRow> {
         let matching: Vec<_> = rows
             .iter()
             .filter(|row| row.content.as_deref() == Some(content))
             .collect();
-        ensure!(
+        assert!(
             matching.len() == 1,
             "expected one immutable authored request for {content:?}"
         );
@@ -250,24 +250,24 @@ pub async fn verify(
     let openings = OBJECTIVES
         .map(request)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<TestResult<Vec<_>>>()?;
     let goals: Vec<gents::goal::GoalDocument> =
         serde_json::from_value(value["data"]["Goal"].clone())?;
     let selected_goals = OBJECTIVES
-        .map(|objective| -> Result<&gents::goal::GoalDocument> {
+        .map(|objective| -> TestResult<&gents::goal::GoalDocument> {
             let matching: Vec<_> = goals
                 .iter()
                 .filter(|goal| goal.objective == objective)
                 .collect();
-            ensure!(
+            assert!(
                 matching.len() == 1,
                 "expected one retained Goal for {objective:?}"
             );
             Ok(matching[0])
         })
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
-    ensure!(
+        .collect::<TestResult<Vec<_>>>()?;
+    assert!(
         selected_goals
             .iter()
             .map(|goal| &goal.goal_id)
@@ -282,7 +282,7 @@ pub async fn verify(
                 == 3,
         "replacement reused a logical or physical Goal identity"
     );
-    ensure!(
+    assert!(
         openings
             .iter()
             .map(|row| &row.doc_id)
@@ -292,8 +292,8 @@ pub async fn verify(
         "replacement reused an opening request"
     );
     for (index, (goal, opening)) in selected_goals.iter().zip(&openings).enumerate() {
-        let opening_doc = opening.doc_id.as_deref().context("physical Goal opening")?;
-        ensure!(
+        let opening_doc = opening.doc_id.as_deref().expect("physical Goal opening");
+        assert!(
             goal.node_did == node
                 && goal.session_id == session
                 && goal.assignment_root_request_doc_id.as_deref() == Some(opening_doc),
@@ -303,16 +303,16 @@ pub async fn verify(
             .input
             .as_ref()
             .and_then(|input| input.goal_assignment.as_ref())
-            .context("signed Goal opening assignment")?;
-        ensure!(
+            .expect("signed Goal opening assignment");
+        assert!(
             reference.goal_id == goal.goal_id && reference.root_request_doc_id.is_none(),
             "Goal {index} opening borrowed another assignment"
         );
-        ensure!(
+        assert!(
             goal.status == if index == 1 { "complete" } else { "stopped" },
             "Goal {index} lost its terminal state"
         );
-        ensure!(
+        assert!(
             goal.completion_evidence.as_deref()
                 == if index == 1 {
                     Some(COMPLETION_EVIDENCE)
@@ -327,14 +327,14 @@ pub async fn verify(
             .input
             .as_ref()
             .and_then(|input| input.goal_assignment.as_ref())
-            .context("signed ordinary follow-up assignment")?;
-        ensure!(
+            .expect("signed ordinary follow-up assignment");
+        assert!(
             reference.goal_id == selected_goals[index].goal_id
                 && reference.root_request_doc_id == openings[index].doc_id,
             "ordinary follow-up escaped its captured assignment"
         );
     }
-    ensure!(
+    assert!(
         initial
             .input
             .as_ref()
@@ -357,7 +357,7 @@ pub async fn verify(
     let timeline =
         gents::run_timeline_fetch::load_run_timeline_rows(access, &openings[2].request_id).await?;
     for goal in &selected_goals {
-        ensure!(
+        assert!(
             timeline
                 .goal_versions
                 .iter()
@@ -373,7 +373,7 @@ pub async fn verify(
         .iter()
         .filter(|call| call.tool_call_id == COMPLETE_CALL)
         .collect();
-    ensure!(
+    assert!(
         completed.len() == 1
             && completed[0].tool_name == gents::goal::UPDATE_GOAL_TOOL_NAME
             && completed[0].request_doc_id == followup.doc_id
@@ -384,9 +384,9 @@ pub async fn verify(
         completed[0]
             .result
             .as_deref()
-            .context("Goal completion tool result")?,
+            .expect("Goal completion tool result"),
     )?;
-    ensure!(
+    assert!(
         result["accepted"] == true && result["status"] == "complete",
         "Goal completion was refused: {result}"
     );
@@ -398,7 +398,7 @@ pub async fn verify(
     ];
     let charged = groups
         .iter()
-        .map(|group| -> Result<u64> {
+        .map(|group| -> TestResult<u64> {
             timeline
                 .inference_calls
                 .iter()
@@ -408,28 +408,29 @@ pub async fn verify(
                         .any(|request| request.doc_id == call.request_doc_id)
                 })
                 .try_fold(0u64, |total, call| {
-                    ensure!(
+                    assert!(
                         call.call_state == "completed",
                         "fixture inference did not complete"
                     );
-                    let prompt =
-                        u64::try_from(call.prompt_tokens.context("fixture prompt usage")?)?;
+                    let prompt = u64::try_from(call.prompt_tokens.expect("fixture prompt usage"))?;
                     let completion =
-                        u64::try_from(call.completion_tokens.context("fixture completion usage")?)?;
+                        u64::try_from(call.completion_tokens.expect("fixture completion usage"))?;
                     total
                         .checked_add(prompt)
                         .and_then(|total| total.checked_add(completion))
-                        .context("fixture usage exceeded the native token range")
+                        .ok_or(TestError::from(
+                            "fixture usage exceeded the native token range",
+                        ))
                 })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<TestResult<Vec<_>>>()?;
     for (index, goal) in selected_goals.iter().enumerate() {
         let baseline: u64 = charged[..=index].iter().sum();
-        ensure!(
+        assert!(
             goal.token_usage_baseline == Some(i64::try_from(baseline)?),
             "Goal {index} inherited another assignment's usage baseline"
         );
-        ensure!(
+        assert!(
             goal.tokens_used.unwrap_or_default() >= 0
                 && u64::try_from(goal.tokens_used.unwrap_or_default())? <= charged[index + 1],
             "Goal {index} charged another assignment's usage"
@@ -438,8 +439,8 @@ pub async fn verify(
     let observation =
         gents::goal::load_session_goal_observation(access, identity, node, session, Some(author))
             .await?
-            .context("verified final Goal observation")?;
-    ensure!(
+            .expect("verified final Goal observation");
+    assert!(
         observation.session_doc_id == session_doc
             && observation.goal.as_ref().is_some_and(|goal| {
                 goal.snapshot.goal_id == selected_goals[2].goal_id
@@ -456,7 +457,7 @@ pub async fn verify(
         OBSERVER_CAPTURE,
         &format!("{CAPTURE} changed after capture"),
     ] {
-        ensure!(
+        assert!(
             !captured
                 .iter()
                 .any(|call| call.to_string().contains(forbidden)),
@@ -466,15 +467,15 @@ pub async fn verify(
     let second = captured
         .iter()
         .position(|call| current_input_is(call, OBJECTIVES[1]))
-        .context("second Goal provider request")?;
-    ensure!(
+        .expect("second Goal provider request");
+    assert!(
         !captured[..second]
             .iter()
             .any(|call| call.to_string().contains(CAPTURE))
             && captured[second].to_string().matches(CAPTURE).count() == 1,
         "busy refusal submitted its capture or the opening duplicated it"
     );
-    ensure!(
+    assert!(
         captured
             .iter()
             .filter(|call| current_input_is(call, QUEUED))
@@ -490,7 +491,7 @@ pub async fn verify(
     let ui: Value = serde_json::from_slice(&std::fs::read(
         root.join("editor-goal-replacement-ui.json"),
     )?)?;
-    ensure!(ui["sessionId"] == session, "UI replacement changed chats");
+    assert!(ui["sessionId"] == session, "UI replacement changed chats");
     for field in [
         "twoWindowsObserved",
         "staleGoalEditPreserved",
@@ -502,7 +503,7 @@ pub async fn verify(
         "busyReplacementRefused",
         "reloadPreserved",
     ] {
-        ensure!(ui[field] == true, "replacement UI evidence omitted {field}");
+        assert!(ui[field] == true, "replacement UI evidence omitted {field}");
     }
     Ok(
         json!({"nodeDid":node,"sessionId":session,"sessionDocument":session_doc,
@@ -512,7 +513,11 @@ pub async fn verify(
     )
 }
 
-fn verify_captures(rows: &[AgentRequestRow], second: &AgentRequestRow, root: &Path) -> Result<()> {
+fn verify_captures(
+    rows: &[AgentRequestRow],
+    second: &AgentRequestRow,
+    root: &Path,
+) -> TestResult<()> {
     let root_uri = |path: &Path| {
         let text = path.to_string_lossy().replace('\\', "/");
         if text.starts_with('/') {
@@ -529,13 +534,13 @@ fn verify_captures(rows: &[AgentRequestRow], second: &AgentRequestRow, root: &Pa
             .map(|input| input.captured_context.as_slice())
             .unwrap_or_default();
         if row.request_id != second.request_id {
-            ensure!(
+            assert!(
                 captures.is_empty(),
                 "an unrelated signed request captured private editor input"
             );
             continue;
         }
-        ensure!(
+        assert!(
             captures.len() == 1,
             "second Goal opening must retain exactly one frozen capture"
         );
@@ -543,9 +548,9 @@ fn verify_captures(rows: &[AgentRequestRow], second: &AgentRequestRow, root: &Pa
         let workspace = capture
             .workspace_uri
             .as_deref()
-            .context("captured workspace URI")?
+            .expect("captured workspace URI")
             .trim_end_matches('/');
-        ensure!(
+        assert!(
             capture.kind == CapturedContextKind::Selection
                 && capture.source == CapturedContextSource::Editor
                 && capture.content == CAPTURE
@@ -562,7 +567,7 @@ fn verify_captures(rows: &[AgentRequestRow], second: &AgentRequestRow, root: &Pa
             "second opening replaced its frozen unsaved selection: {capture:?}"
         );
     }
-    ensure!(
+    assert!(
         std::fs::read_to_string(root.join(CAPTURE_FILE))? == CAPTURE_DISK
             && std::fs::read_to_string(root.join(OBSERVER_CAPTURE_FILE))? == OBSERVER_CAPTURE_DISK,
         "capturing editor context overwrote the workspace files"
@@ -580,32 +585,29 @@ async fn verify_controls(
     session_doc: &str,
     author: &str,
     identity: &dyn NodeIdentity,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let mut applied_starts = BTreeSet::new();
     let mut stops = BTreeSet::new();
     let mut busy = 0;
     let mut refused_capture = None;
     for row in value["data"]["AgentSessionGoalControl"]
         .as_array()
-        .context("Goal controls")?
+        .expect("Goal controls")
     {
         let command: SessionGoalControl =
-            serde_json::from_str(row["intent_json"].as_str().context("signed Goal intent")?)?;
-        let receipt: SessionGoalControlReceipt = serde_json::from_str(
-            row["receipt_json"]
-                .as_str()
-                .context("signed Goal receipt")?,
-        )?;
+            serde_json::from_str(row["intent_json"].as_str().expect("signed Goal intent"))?;
+        let receipt: SessionGoalControlReceipt =
+            serde_json::from_str(row["receipt_json"].as_str().expect("signed Goal receipt"))?;
         command.validate_shape()?;
         receipt.validate_for(&command)?;
-        ensure!(
+        assert!(
             command.node_did == node
                 && command.session_id == session
                 && command.session_doc_id.as_deref() == Some(session_doc)
                 && command.requester_did == author,
             "Goal control crossed the original AgentSession"
         );
-        ensure!(
+        assert!(
             identity
                 .verify(author, &command.signing_payload()?, &command.signature)
                 .await?
@@ -625,20 +627,20 @@ async fn verify_controls(
                 let index = OBJECTIVES
                     .iter()
                     .position(|expected| expected == objective)
-                    .context("unexpected created objective")?;
-                ensure!(
+                    .expect("unexpected created objective");
+                assert!(
                     applied_starts.insert(index) && goal_id == &goals[index].goal_id,
                     "Goal creation was replayed or retargeted"
                 );
                 let initial = command
                     .initial_request
                     .as_ref()
-                    .context("signed Goal opening")?;
+                    .expect("signed Goal opening");
                 let stored = rows
                     .iter()
                     .find(|row| Some(&row.request_id) == request_id.as_ref())
-                    .context("applied Goal request")?;
-                ensure!(
+                    .expect("applied Goal request");
+                assert!(
                     initial.request_id == stored.request_id
                         && stored.content.as_ref() == Some(&initial.content)
                         && stored.input.as_ref() == Some(&initial.input),
@@ -646,15 +648,15 @@ async fn verify_controls(
                 );
             }
             (GoalOperation::Create { objective, .. }, GoalControlOutcome::Rejected { reason }) => {
-                ensure!(
+                assert!(
                     objective == OBJECTIVES[1] && reason == BUSY_REASON,
                     "unexpected replacement refusal: {receipt:?}"
                 );
                 let initial = command
                     .initial_request
                     .as_ref()
-                    .context("refused Goal request")?;
-                ensure!(
+                    .expect("refused Goal request");
+                assert!(
                     !rows.iter().any(|row| row.request_id == initial.request_id),
                     "busy replacement leaked its signed request"
                 );
@@ -668,7 +670,7 @@ async fn verify_controls(
                     request_id,
                 },
             ) => {
-                ensure!(
+                assert!(
                     request_id.is_none()
                         && [0, 2]
                             .into_iter()
@@ -678,29 +680,33 @@ async fn verify_controls(
                 );
             }
             (GoalOperation::Edit { .. }, GoalControlOutcome::Rejected { .. }) => {}
-            _ => anyhow::bail!("unexpected Goal control outcome: {receipt:?}"),
+            _ => {
+                return Err(TestError::from(format!(
+                    "unexpected Goal control outcome: {receipt:?}"
+                )))
+            }
         }
     }
-    ensure!(
+    assert!(
         applied_starts.len() == 3 && stops.len() == 2 && busy == 1,
         "expected three starts, two Stops and one busy replacement refusal"
     );
     let second_capture = &rows
         .iter()
         .find(|row| row.content.as_deref() == Some(OBJECTIVES[1]))
-        .context("second opening after refusal")?
+        .expect("second opening after refusal")
         .input
         .as_ref()
-        .context("second opening input")?
+        .expect("second opening input")
         .captured_context;
-    ensure!(
+    assert!(
         refused_capture.as_ref() == Some(second_capture) && second_capture.len() == 1,
         "busy refusal did not preserve the exact frozen capture through resubmission"
     );
     let claims = value["data"]["GoalCreationClaim"]
         .as_array()
-        .context("Goal creation claims")?;
-    ensure!(
+        .expect("Goal creation claims");
+    assert!(
         claims.len() == 3
             && goals.iter().all(|goal| claims
                 .iter()

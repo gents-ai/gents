@@ -14,6 +14,7 @@ use crate::eval::runner::freeze::{definition_ref, load_definition, read_frozen_d
 use crate::eval::runner::{freeze_refused, run_dir};
 use crate::eval::{load_run, load_trials, load_verdicts, RunHeader, RunRecord};
 use crate::graphql::escape_graphql_string;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 
 /// Every run `owner` has, oldest first (`created_at`, then `run_id`).
 pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>> {
@@ -68,14 +69,15 @@ pub async fn load_report_among(
     peers: &[RunHeader],
 ) -> Result<EvalReport> {
     let frozen = &record.origin.definition;
-    let run_dir = run_dir(runs_dir, &record.run_id).map_err(definition_refused)?;
+    let run_dir =
+        run_dir(runs_dir, &record.run_id).map_err(|error| definition_refused(error.into()))?;
     let live = load_definition(access, owner, &frozen.definition_id).await;
     let copy = read_frozen_definition(&run_dir, frozen).map_err(definition_refused)?;
     let (definition, definition_changed) = match copy {
         Some(definition) => {
             let changed = match live {
                 Ok(live) => definition_ref(&live)?.digest != frozen.digest,
-                Err(error) if unresolvable(&error) => true,
+                Err(error) if unresolvable(error.as_ref()) => true,
                 Err(error) => return Err(error),
             };
             (definition, changed)
@@ -93,16 +95,16 @@ pub async fn load_report_among(
 /// [`ReportRefused`](super::ReportRefused) carrying the reason. Transport and
 /// database errors pass through unchanged.
 fn definition_refused(error: anyhow::Error) -> anyhow::Error {
-    if unresolvable(&error) {
-        refused(format!("{error:#}"))
+    if unresolvable(error.as_ref()) {
+        refused(format!("{}", ErrorChain(error.as_ref()))).into()
     } else {
         error
     }
 }
 
 /// A definition that is missing, invalid, tampered with or does not parse.
-fn unresolvable(error: &anyhow::Error) -> bool {
-    freeze_refused(error).is_some() || error.chain().any(|cause| cause.is::<serde_json::Error>())
+fn unresolvable(error: &(dyn std::error::Error + 'static)) -> bool {
+    freeze_refused(error).is_some() || find_source::<serde_json::Error>(error).is_some()
 }
 
 /// `run_id`'s report, read fresh from the documents.
@@ -286,9 +288,8 @@ mod tests {
         let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
             .await
             .unwrap_err();
-        assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests"))
-        );
+        assert!(report_refused(error.as_ref())
+            .is_some_and(|refusal| refusal.0.contains("no longer digests")));
     }
 
     #[tokio::test]
@@ -331,15 +332,14 @@ mod tests {
         let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
             .await
             .unwrap_err();
-        assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests"))
-        );
+        assert!(report_refused(error.as_ref())
+            .is_some_and(|refusal| refusal.0.contains("no longer digests")));
 
         std::fs::write(&path, b"{\"definition_id\": ").unwrap();
         let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
             .await
             .unwrap_err();
-        assert!(report_refused(&error).is_some_and(|refusal| refusal.0.contains("parsing")));
+        assert!(report_refused(error.as_ref()).is_some_and(|refusal| refusal.0.contains("parsing")));
     }
 
     #[tokio::test]
@@ -355,9 +355,8 @@ mod tests {
         let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-old")
             .await
             .unwrap_err();
-        assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no eval definition"))
-        );
+        assert!(report_refused(error.as_ref())
+            .is_some_and(|refusal| refusal.0.contains("no eval definition")));
     }
 
     #[tokio::test]
@@ -382,7 +381,7 @@ mod tests {
         let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "absent")
             .await
             .unwrap_err();
-        let reason = &report_refused(&error).expect("a ReportRefused").0;
+        let reason = &report_refused(error.as_ref()).expect("a ReportRefused").0;
         assert_eq!(reason, &format!("no eval run \"absent\" for {OWNER}"));
     }
 }

@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 pub use gents_loop::account_usage;
@@ -24,6 +23,44 @@ use crate::graphql::escape_graphql_string;
 use crate::oauth_credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum UsageObservationError {
+    #[error(transparent)]
+    OAuthCredential(#[from] crate::oauth_credential::OAuthCredentialError),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
+    #[error(transparent)]
+    ChatGptCodexHeaders(#[from] crate::chatgpt_codex::ChatGptCodexHeaderError),
+    #[error(transparent)]
+    XaiGrokHeaders(#[from] crate::xai_grok_oauth::XaiGrokHeaderError),
+    #[error("sign-in without _docID")]
+    SignInMissingDocId,
+    #[error("usage row without _docID")]
+    UsageRowMissingDocId,
+    #[error("backend has no usage read")]
+    NoUsageRead,
+    #[error("deleting provider usage failed: {errors}")]
+    DeleteFailed { errors: Value },
+    #[error("writing provider usage failed: {errors}")]
+    WriteFailed { errors: Value },
+}
+
+type Result<T, E = UsageObservationError> = std::result::Result<T, E>;
+
+impl crate::config_client::TransactionFailure for UsageObservationError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::OAuthCredential(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
 
 /// The provider account usage belongs to, per agent. Provider clients bind
 /// the credential's physical row, so replacement sign-ins cannot inherit
@@ -226,7 +263,9 @@ fn credential_target(
     }
     let reference = fallback_key(
         account_ref,
-        row.doc_id.as_deref().context("sign-in without _docID")?,
+        row.doc_id
+            .as_deref()
+            .ok_or(UsageObservationError::SignInMissingDocId)?,
     );
     Ok(Some(Target {
         credential_doc_id: row.doc_id.clone(),
@@ -266,11 +305,11 @@ pub(crate) async fn delete_usage_in_txn(
             crate::graphql::graphql_string_list_literal(keys.iter().map(String::as_str)),
         ))
         .await?;
-    anyhow::ensure!(
-        response.get("errors").is_none_or(Value::is_null),
-        "deleting provider usage failed: {}",
-        response["errors"]
-    );
+    if !response.get("errors").is_none_or(Value::is_null) {
+        return Err(UsageObservationError::DeleteFailed {
+            errors: response["errors"].clone(),
+        });
+    }
     Ok(())
 }
 
@@ -290,7 +329,9 @@ fn stored_row(response: &Value) -> Result<Option<(String, StoredUsage)>> {
     else {
         return Ok(None);
     };
-    let doc_id = row["_docID"].as_str().context("usage row without _docID")?;
+    let doc_id = row["_docID"]
+        .as_str()
+        .ok_or(UsageObservationError::UsageRowMissingDocId)?;
     let report: UsageReport = serde_json::from_value(row["report"].clone()).unwrap_or_default();
     let read_at = row["read_at"]
         .as_str()
@@ -413,11 +454,11 @@ async fn write(
                         .await?
                     }
                 };
-                anyhow::ensure!(
-                    response.get("errors").is_none_or(Value::is_null),
-                    "writing provider usage failed: {}",
-                    response["errors"]
-                );
+                if !response.get("errors").is_none_or(Value::is_null) {
+                    return Err(UsageObservationError::WriteFailed {
+                        errors: response["errors"].clone(),
+                    });
+                }
                 Ok(())
             })
         })
@@ -547,7 +588,9 @@ pub async fn read_account_usage(
             account_usage::openrouter_key,
         ),
         None => {
-            let provider = kind.oauth_provider().context("backend has no usage read")?;
+            let provider = kind
+                .oauth_provider()
+                .ok_or(UsageObservationError::NoUsageRead)?;
             let bootstrap = crate::oauth_http::bootstrap_oauth_client(
                 node.clone(),
                 node_did,
@@ -640,7 +683,7 @@ pub async fn read_node_usage(
     provider: Option<&str>,
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
-) -> Result<Vec<AccountUsageRead>> {
+) -> anyhow::Result<Vec<AccountUsageRead>> {
     let access = ConfigAccess::local(node.clone());
     let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
     let backends = access

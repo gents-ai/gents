@@ -1,38 +1,56 @@
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::DesktopPaths;
 use tokio::net::{UnixListener, UnixStream};
+
+#[derive(Debug, thiserror::Error)]
+pub enum UnixLocalError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("connecting to the client installation")]
+    Connect(#[source] std::io::Error),
+    #[error("client home permissions must exclude other users")]
+    HomePermissions,
+    #[error("client endpoint must be a socket owned by the current user")]
+    EndpointNotSocket,
+    #[error("client installation belongs to another user")]
+    InstallationOwner,
+    #[error("client home must be a directory owned by the current user")]
+    HomeNotOwned,
+    #[error("client endpoint is occupied by a non-socket path")]
+    EndpointOccupied,
+    #[error("client home is too long for a local socket; select a shorter client home")]
+    EndpointTooLong,
+}
+
+type Result<T, E = UnixLocalError> = std::result::Result<T, E>;
 
 pub(super) struct Listener {
     listener: UnixListener,
     path: PathBuf,
 }
 
-pub async fn connect(paths: &DesktopPaths) -> Result<UnixStream> {
+pub async fn connect(paths: &DesktopPaths) -> Result<UnixStream, UnixLocalError> {
     let metadata = owned_home(paths)?;
-    anyhow::ensure!(
-        metadata.mode() & 0o077 == 0,
-        "client home permissions must exclude other users"
-    );
+    if metadata.mode() & 0o077 != 0 {
+        return Err(UnixLocalError::HomePermissions);
+    }
     let path = endpoint(paths)?;
     let metadata = std::fs::symlink_metadata(&path)?;
-    anyhow::ensure!(
-        metadata.file_type().is_socket() && metadata.uid() == current_user(),
-        "client endpoint must be a socket owned by the current user"
-    );
+    if !(metadata.file_type().is_socket() && metadata.uid() == current_user()) {
+        return Err(UnixLocalError::EndpointNotSocket);
+    }
     let stream = UnixStream::connect(path)
         .await
-        .context("connecting to the client installation")?;
-    anyhow::ensure!(
-        stream.peer_cred()?.uid() == current_user(),
-        "client installation belongs to another user"
-    );
+        .map_err(UnixLocalError::Connect)?;
+    if stream.peer_cred()?.uid() != current_user() {
+        return Err(UnixLocalError::InstallationOwner);
+    }
     Ok(stream)
 }
 
-pub(super) async fn prepare_home(paths: &DesktopPaths) -> Result<()> {
+pub(super) async fn prepare_home(paths: &DesktopPaths) -> anyhow::Result<()> {
     paths.ensure_root_dirs().await?;
     owned_home(paths)?;
     std::fs::set_permissions(paths.root(), std::fs::Permissions::from_mode(0o700))?;
@@ -44,15 +62,15 @@ fn current_user() -> libc::uid_t {
     unsafe { libc::geteuid() }
 }
 
-fn owned_home(paths: &DesktopPaths) -> Result<std::fs::Metadata> {
+fn owned_home(paths: &DesktopPaths) -> Result<std::fs::Metadata, UnixLocalError> {
     let metadata = std::fs::symlink_metadata(paths.root())?;
     if !metadata.is_dir() || metadata.uid() != current_user() {
-        bail!("client home must be a directory owned by the current user");
+        return Err(UnixLocalError::HomeNotOwned);
     }
     Ok(metadata)
 }
 
-pub(super) fn lock_file(paths: &DesktopPaths, name: &str) -> Result<std::fs::File> {
+pub(super) fn lock_file(paths: &DesktopPaths, name: &str) -> Result<std::fs::File, UnixLocalError> {
     Ok(std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -64,11 +82,11 @@ pub(super) fn lock_file(paths: &DesktopPaths, name: &str) -> Result<std::fs::Fil
 }
 
 impl Listener {
-    pub(super) async fn bind(paths: &DesktopPaths) -> Result<Self> {
+    pub(super) async fn bind(paths: &DesktopPaths) -> Result<Self, UnixLocalError> {
         let path = endpoint(paths)?;
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(&path)?,
-            Ok(_) => bail!("client endpoint is occupied by a non-socket path"),
+            Ok(_) => return Err(UnixLocalError::EndpointOccupied),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
@@ -77,7 +95,7 @@ impl Listener {
         Ok(Self { listener, path })
     }
 
-    pub(super) async fn accept(&mut self) -> Result<UnixStream> {
+    pub(super) async fn accept(&mut self) -> Result<UnixStream, UnixLocalError> {
         Ok(self.listener.accept().await?.0)
     }
 }
@@ -91,12 +109,12 @@ impl Drop for Listener {
     }
 }
 
-fn endpoint(paths: &DesktopPaths) -> Result<PathBuf> {
+fn endpoint(paths: &DesktopPaths) -> Result<PathBuf, UnixLocalError> {
     use std::os::unix::ffi::OsStrExt;
     let root = std::fs::canonicalize(paths.root())?;
     let path = root.join("client.sock");
     if path.as_os_str().as_bytes().len() > 100 {
-        bail!("client home is too long for a local socket; select a shorter client home");
+        return Err(UnixLocalError::EndpointTooLong);
     }
     Ok(path)
 }

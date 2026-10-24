@@ -9,7 +9,7 @@ pub use chat::{
 };
 pub use chat::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionOutcomeUnknown, UnresolvedSubmission,
+    ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
 pub use manage::{
     apply_config_components_on, delete_agent_context_on, delete_agent_on, delete_event_source_on,

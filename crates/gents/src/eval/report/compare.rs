@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use crate::eval::documents::EvalError;
 use serde::Serialize;
 
 use crate::eval::report::build::{
@@ -15,6 +15,8 @@ use crate::optimization::policy::{
     cost_ok, decide, evidence_from_pairs, no_case_regression, sufficient, CaseEvidence,
     DecisionReport, Evidence, Mode, PolicyV2,
 };
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CaseComparison {
@@ -341,6 +343,7 @@ mod tests {
     use crate::eval::report::report_refused;
     use crate::eval::OutcomeKind;
     use crate::optimization::policy::permutation_p_ppm;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn report(definition: &EvalDefinition, rows: &Rows, cells: &[&str], trials: u32) -> EvalReport {
         let run = record(RUN, definition, cells, trials);
@@ -366,7 +369,7 @@ mod tests {
     fn refusal(result: Result<Comparison>) -> String {
         let error = result.expect_err("expected a refusal");
         report_refused(&error)
-            .unwrap_or_else(|| panic!("expected a ReportRefused, got {error:#}"))
+            .unwrap_or_else(|| panic!("expected a ReportRefused, got {}", ErrorChain(&error)))
             .0
             .clone()
     }

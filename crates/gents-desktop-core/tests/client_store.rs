@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents_desktop_core::client::{
     load_session_transcript_page, ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows,
     DesktopPaths,
@@ -36,8 +35,11 @@ fn request_lifecycle_is_the_only_turn_state_owner() {
     );
 }
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn local_request_refresh_preserves_projection_boundaries_and_database_truth() -> Result<()> {
+async fn local_request_refresh_preserves_projection_boundaries_and_database_truth() -> TestResult<()>
+{
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
@@ -69,7 +71,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .and_then(|rows| rows.first())
         .and_then(|row| row.get("_docID"))
         .and_then(|value| value.as_str())
-        .context("created request doc id")?;
+        .ok_or("created request doc id")?;
     let request_doc_id = gents::graphql::escape_graphql_string(request_doc_id);
     let output = core.node().execute(&format!(r#"mutation {{
         segment: create_AgentOutputSegment(input: {{
@@ -93,7 +95,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .and_then(|v| v.first())
         .and_then(|v| v.get("_docID"))
         .and_then(|v| v.as_str())
-        .context("created close doc id")?;
+        .ok_or("created close doc id")?;
     let close_doc_id = gents::graphql::escape_graphql_string(close_doc_id);
     let header = core.node().execute(&format!(r#"mutation {{
         create_AgentMessage(input: {{
@@ -135,7 +137,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Result<()> {
+async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> TestResult<()> {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -304,7 +306,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         }
     })
     .await
-    .context("scoped resync must recover operator configuration after stale publication")?;
+    .map_err(|_| "scoped resync must recover operator configuration after stale publication")?;
 
     let local_node = core
         .node()
@@ -336,7 +338,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
+async fn observer_loads_initial_snapshot_and_ticks_on_update() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
@@ -363,25 +365,28 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
 
     timeout(Duration::from_secs(5), async {
         loop {
-            updates.changed().await.context("watch channel closed")?;
+            updates
+                .changed()
+                .await
+                .map_err(|error| format!("watch channel closed: {error}"))?;
             if *updates.borrow() > baseline {
-                return Ok::<(), anyhow::Error>(());
+                return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
             }
         }
     })
     .await
-    .context("timed out waiting for store update")??;
+    .map_err(|_| "timed out waiting for store update")??;
 
     timeout(Duration::from_secs(5), async {
         loop {
             if store.snapshot().nodes.len() == 1 {
-                return Ok::<(), anyhow::Error>(());
+                return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
             }
             sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("timed out waiting for refreshed snapshot")??;
+    .map_err(|_| "timed out waiting for refreshed snapshot")??;
 
     assert_eq!(store.snapshot().nodes[0].node_did, "did:test:test-agent");
     Arc::new(core).shutdown().await?;
@@ -389,7 +394,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
+async fn bootstrap_then_observer_no_lost_writes() -> TestResult<()> {
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path());
 
@@ -417,13 +422,13 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     timeout(Duration::from_secs(5), async {
         loop {
             if core.store().snapshot().nodes.len() >= 20 {
-                return Ok::<(), anyhow::Error>(());
+                return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
             }
             sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("timed out waiting for all 20 nodes to appear in store")??;
+    .map_err(|_| "timed out waiting for all 20 nodes to appear in store")??;
 
     let snap = core.store().snapshot();
     let dids: rapidhash::RapidHashSet<&str> =
@@ -438,7 +443,7 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Result<()> {
+async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> TestResult<()> {
     let tmp = tempfile::TempDir::new()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tmp.path()),
@@ -468,13 +473,13 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
                 .map(|m| m.transcript_invalidations > 0)
                 .unwrap_or(false)
             {
-                return Ok::<(), anyhow::Error>(());
+                return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
             }
             sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("timed out waiting for canonical transcript invalidation")??;
+    .map_err(|_| "timed out waiting for canonical transcript invalidation")??;
     assert!(core.store().snapshot().transcript_messages.is_empty());
     let page =
         load_session_transcript_page(core.node(), "long", None, None, None, Some(40)).await?;
@@ -486,7 +491,7 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> Result<()> {
+async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> TestResult<()> {
     let tmp = tempfile::TempDir::new()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tmp.path()),
@@ -535,7 +540,7 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
+async fn agent_scope_isolation_under_drop_recovery() -> TestResult<()> {
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path());
     let core =
@@ -589,7 +594,7 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
             let snap = core.store().snapshot();
             let dids: Vec<&str> = snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
             if dids.contains(&"did:alpha") && dids.contains(&"did:beta") {
-                return Ok::<(), anyhow::Error>(());
+                return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
             }
             sleep(Duration::from_millis(50)).await;
         }
@@ -602,12 +607,13 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
             "test.scope_timeout",
         )
         .await?;
-        anyhow::bail!(
+        return Err(format!(
             "timed out waiting for both nodes in store: snapshot={:?}, metrics={:?}, durable={:?}",
             core.store().snapshot().nodes,
             core.observer_metrics().await,
             durable.data,
-        );
+        )
+        .into());
     }
     observed??;
 

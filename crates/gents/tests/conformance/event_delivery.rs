@@ -569,7 +569,7 @@ async fn install_event_delivery_config(access: &gents::config_client::ConfigAcce
             let query = format!("{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
                 escape_graphql_string(NODE_DID), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID));
             let response = txn.execute(&query).await?;
-            Ok(response["data"]["Trigger"][0]["_docID"].as_str()
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(response["data"]["Trigger"][0]["_docID"].as_str()
                 .expect("persisted trigger physical identity").to_owned())
         })
     }).await.expect("persist event source configuration")
@@ -580,7 +580,7 @@ async fn admit_event_delivery(
     intent: &mut gents::FireIntent,
     trigger_doc_id: &str,
     doc_id: &str,
-) -> anyhow::Result<gents::lifecycle::TaskDeliveryAdmission> {
+) -> Result<gents::lifecycle::TaskDeliveryAdmission, Box<dyn std::error::Error + Send + Sync>> {
     use gents::lifecycle::{
         build_signed_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
         TriggerLineage,
@@ -636,7 +636,7 @@ async fn admit_event_delivery(
     spec.trigger_doc_id = Some(trigger_doc_id.into());
     let signer = crate::support::materialization_identity();
     let create = build_signed_request(spec, RequestSigner::Identity(signer.as_ref())).await?;
-    gents::lifecycle::write_task_delivery(access, &fire, false, &create).await
+    Ok(gents::lifecycle::write_task_delivery(access, &fire, false, &create).await?)
 }
 
 async fn poll_watcher(watcher: &mut DefraWatcher) -> Result<AgentRequest, String> {

@@ -15,6 +15,8 @@ use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::error::GrokShimError;
+
 const PAGE_SIZE: usize = 128;
 
 #[derive(Default, Deserialize)]
@@ -29,30 +31,32 @@ pub(super) struct ListParams {
 }
 
 impl ListParams {
-    pub(super) fn validate(&self) -> Result<()> {
-        ensure!(self.limit != Some(0), "session list limit must be positive");
-        ensure!(
-            self.headless
-                .as_deref()
-                .is_none_or(|v| matches!(v, "include" | "exclude" | "only")),
-            "unknown headless policy"
-        );
+    pub(super) fn validate(&self) -> Result<(), GrokShimError> {
+        if self.limit == Some(0) {
+            return Err(GrokShimError::SessionListLimitZero);
+        }
+        if !self
+            .headless
+            .as_deref()
+            .is_none_or(|v| matches!(v, "include" | "exclude" | "only"))
+        {
+            return Err(GrokShimError::UnknownHeadlessPolicy);
+        }
         if let Some(filters) = self.meta.get("x.ai/facetFilters") {
             let filters = filters
                 .as_object()
-                .context("facetFilters must be an object")?;
-            ensure!(
-                filters.keys().all(|key| key == "kind"),
-                "unsupported session facet filter"
-            );
+                .ok_or(GrokShimError::FacetFiltersNotObject)?;
+            if !filters.keys().all(|key| key == "kind") {
+                return Err(GrokShimError::UnsupportedFacetFilter);
+            }
             if let Some(kind) = filters.get("kind") {
-                ensure!(
-                    kind.is_string()
-                        || kind
-                            .as_array()
-                            .is_some_and(|items| items.iter().all(Value::is_string)),
-                    "kind must be a string or string array"
-                );
+                if !(kind.is_string()
+                    || kind
+                        .as_array()
+                        .is_some_and(|items| items.iter().all(Value::is_string)))
+                {
+                    return Err(GrokShimError::InvalidKindFacet);
+                }
             }
         }
         self.boundary()?;
@@ -68,16 +72,15 @@ impl ListParams {
             .to_lowercase()
     }
 
-    fn boundary(&self) -> Result<Option<Cursor>> {
+    fn boundary(&self) -> Result<Option<Cursor>, GrokShimError> {
         self.cursor
             .as_deref()
             .map(|value| {
                 let cursor: Cursor =
-                    serde_json::from_str(value).context("invalid session cursor")?;
-                ensure!(
-                    cursor.query == self.query(),
-                    "session cursor belongs to another search"
-                );
+                    serde_json::from_str(value).map_err(GrokShimError::InvalidSessionCursor)?;
+                if cursor.query != self.query() {
+                    return Err(GrokShimError::SessionCursorOtherSearch);
+                }
                 Ok(cursor)
             })
             .transpose()
@@ -483,7 +486,7 @@ mod tests {
                 for statement in statements {
                     txn.execute(statement).await?;
                 }
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

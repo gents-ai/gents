@@ -1,7 +1,7 @@
 use super::rows::dedupe_paths;
 use super::*;
 use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
-use anyhow::Context;
+use anyhow::{Context, Result};
 use rapidhash::RapidHashSet;
 use std::collections::BTreeSet;
 
@@ -135,31 +135,35 @@ pub(super) fn validate_compaction_chain<T>(
     session_id: &str,
     requester_did: Option<&str>,
     rows: &[T],
-) -> Result<()>
+) -> Result<(), SessionError>
 where
     T: CompactionProjection,
 {
     let mut prior_cursor = None;
     for (index, row) in rows.iter().enumerate() {
-        let expected_sequence = u32::try_from(index + 1).context("compaction sequence overflow")?;
+        let expected_sequence =
+            u32::try_from(index + 1).map_err(SessionError::CompactionSequenceOverflow)?;
         let expected_key = compaction_key(node_did, session_id, requester_did, expected_sequence);
-        anyhow::ensure!(
-            row.sequence() == expected_sequence && row.key() == expected_key,
-            "ambiguous compaction chain for session {session_id}: expected {expected_key}, found {} at sequence {}",
-            row.key(),
-            row.sequence()
-        );
-        let cursor = row.cursor().with_context(|| {
-            format!(
-                "compaction entry for session {session_id} at sequence {} has no canonical cursor",
-                row.sequence()
-            )
-        })?;
-        anyhow::ensure!(
-            prior_cursor.is_none_or(|prior| cursor > prior),
-            "compaction cursor regression for session {session_id} at sequence {}",
-            row.sequence()
-        );
+        if row.sequence() != expected_sequence || row.key() != expected_key {
+            return Err(SessionError::AmbiguousCompactionChain {
+                session_id: session_id.to_owned(),
+                expected_key,
+                found_key: row.key().to_owned(),
+                sequence: row.sequence(),
+            });
+        }
+        let cursor = row
+            .cursor()
+            .ok_or_else(|| SessionError::CompactionMissingCursor {
+                session_id: session_id.to_owned(),
+                sequence: row.sequence(),
+            })?;
+        if prior_cursor.is_some_and(|prior| cursor <= prior) {
+            return Err(SessionError::CompactionCursorRegression {
+                session_id: session_id.to_owned(),
+                sequence: row.sequence(),
+            });
+        }
         prior_cursor = Some(cursor);
     }
     Ok(())
@@ -181,7 +185,9 @@ where
             ])
         })
         .collect::<Vec<_>>();
-    crate::rendered_request::sha256_canonical_json(&serde_json::json!(projection))
+    Ok(crate::rendered_request::sha256_canonical_json(
+        &serde_json::json!(projection),
+    )?)
 }
 
 pub(crate) async fn load_prompt_compaction_state(
@@ -583,8 +589,8 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     .await
 }
 
-fn encode_file_path_delta(paths: &[String]) -> Result<String> {
-    Ok(serde_json::to_string(&FilePathDelta { version: 1, paths })?)
+fn encode_file_path_delta(paths: &[String]) -> Result<String, SessionError> {
+    serde_json::to_string(&FilePathDelta { version: 1, paths }).map_err(SessionError::FilePathJson)
 }
 
 fn new_file_paths(cumulative: &[String], current: &[String]) -> Vec<String> {
@@ -601,11 +607,11 @@ fn new_file_paths(cumulative: &[String], current: &[String]) -> Vec<String> {
     delta
 }
 
-fn decode_file_paths(encoded: &str) -> Result<StoredFilePaths> {
+fn decode_file_paths(encoded: &str) -> Result<StoredFilePaths, SessionError> {
     if encoded.trim().is_empty() {
         return Ok(StoredFilePaths::Cumulative(Vec::new()));
     }
-    Ok(serde_json::from_str::<StoredFilePaths>(encoded)?)
+    serde_json::from_str::<StoredFilePaths>(encoded).map_err(SessionError::FilePathJson)
 }
 
 #[derive(Default)]
@@ -615,17 +621,16 @@ struct FilePathAccumulator {
 }
 
 impl FilePathAccumulator {
-    fn push(&mut self, encoded: &str) -> Result<()> {
+    fn push(&mut self, encoded: &str) -> Result<(), SessionError> {
         match decode_file_paths(encoded)? {
             StoredFilePaths::Cumulative(paths) => {
                 self.cumulative = paths;
                 self.deltas = None;
             }
             StoredFilePaths::Delta(delta) => {
-                anyhow::ensure!(
-                    delta.version == 1,
-                    "unsupported compaction file-list version"
-                );
+                if delta.version != 1 {
+                    return Err(SessionError::UnsupportedFilePathVersion);
+                }
                 let paths = self.deltas.get_or_insert_with(|| {
                     std::mem::take(&mut self.cumulative).into_iter().collect()
                 });
@@ -651,7 +656,7 @@ impl FilePathAccumulator {
 fn cumulative_file_paths(
     rows: &[CompactionGenerationRow],
     paths: impl for<'a> Fn(&'a CompactionGenerationRow) -> &'a str,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>, SessionError> {
     let mut accumulator = FilePathAccumulator::default();
     for row in rows {
         accumulator.push(paths(row))?;
@@ -668,7 +673,7 @@ fn validate_file_path_projection_chain(
     session_id: &str,
     requester_did: Option<&str>,
     rows: &[CompactionGenerationRow],
-) -> Result<()> {
+) -> Result<(), SessionError> {
     if rows.iter().any(|row| {
         !is_cumulative_file_paths(&row.files_read) || !is_cumulative_file_paths(&row.files_modified)
     }) {

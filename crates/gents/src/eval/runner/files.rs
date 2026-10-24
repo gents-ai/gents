@@ -1,26 +1,40 @@
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use serde::Serialize;
+
+use crate::eval::documents::EvalError;
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
 
 /// Eval snapshots may contain private prompts and documents, so replacements
 /// keep the staging file's owner-only permissions. The parent must already
 /// exist: a run removed while its loop is active must stay removed.
 pub(super) fn write_json_atomically(path: &Path, value: &impl Serialize) -> Result<()> {
-    let dir = path
-        .parent()
-        .with_context(|| format!("{} has no parent directory", path.display()))?;
-    let mut staged = tempfile::NamedTempFile::new_in(dir)
-        .with_context(|| format!("staging {}", path.display()))?;
-    let encoded =
-        serde_json::to_vec_pretty(value).with_context(|| format!("encoding {}", path.display()))?;
+    let dir = path.parent().ok_or_else(|| EvalError::NoParentDirectory {
+        path: path.to_path_buf(),
+    })?;
+    let mut staged =
+        tempfile::NamedTempFile::new_in(dir).map_err(|source| EvalError::StageSnapshot {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let encoded = serde_json::to_vec_pretty(value).map_err(|source| EvalError::EncodeSnapshot {
+        path: path.to_path_buf(),
+        source,
+    })?;
     staged
         .write_all(&encoded)
-        .with_context(|| format!("writing {}", path.display()))?;
+        .map_err(|source| EvalError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
     staged
         .persist(path)
-        .with_context(|| format!("replacing {}", path.display()))?;
+        .map_err(|source| EvalError::ReplaceSnapshot {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok(())
 }
 

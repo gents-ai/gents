@@ -1,12 +1,21 @@
 use std::env;
 
-use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{global, KeyValue};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{SdkTracerProvider, SpanExporter};
 use opentelemetry_sdk::Resource;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TelemetryError {
+    #[error("initializing tracing subscriber")]
+    Subscriber(#[source] tracing_subscriber::util::TryInitError),
+    #[error("building OTLP span exporter")]
+    OtlpExporter(#[source] opentelemetry_otlp::ExporterBuildError),
+}
+
+type Result<T, E = TelemetryError> = std::result::Result<T, E>;
 
 const DEFAULT_SERVICE_NAME: &str = "gents";
 const DEFAULT_HOSTNAME: &str = "unknown";
@@ -76,7 +85,7 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
                     .with_filter(log_rate_ceiling())
             }))
             .try_init()
-            .context("initializing tracing subscriber")?;
+            .map_err(TelemetryError::Subscriber)?;
         return Ok(TelemetryGuard {
             tracer_provider: None,
         });
@@ -86,7 +95,7 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .build()
-        .context("building OTLP span exporter")?;
+        .map_err(TelemetryError::OtlpExporter)?;
     let provider = build_tracer_provider_with_batch_exporter(&service_name, exporter);
     let tracer = provider.tracer(TRACER_NAME);
 
@@ -100,7 +109,7 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
         }))
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .try_init()
-        .context("initializing tracing subscriber")?;
+        .map_err(TelemetryError::Subscriber)?;
 
     tracing::info!(
         service_name = %service_name,

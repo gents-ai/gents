@@ -47,14 +47,14 @@ fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
     let [request] = requests.as_slice() else {
         return Ok(ClientStore::default());
     };
-    anyhow::ensure!(
-        request.doc_id == expected.doc_id
-            && request.request_id == expected.request_id
-            && request.node_did == expected.node_did
-            && request.session_id == expected.session_id
-            && request.requester_did == expected.requester_did,
-        "live request scope changed"
-    );
+    if !(request.doc_id == expected.doc_id
+        && request.request_id == expected.request_id
+        && request.node_did == expected.node_did
+        && request.session_id == expected.session_id
+        && request.requester_did == expected.requester_did)
+    {
+        return Err(ClientQueryError::LiveRequestScope);
+    }
     let mut rows = tip_rows(data, expected)?;
     rows.requests = requests;
     Ok(ClientStore::from_rows(rows))
@@ -76,7 +76,7 @@ pub struct RequestPromptFact {
 
 fn input_owner(request: &AgentRequestRow) -> Result<(String, String, bool)> {
     let (owner, key) = gents::lifecycle::input_message_owner(request)
-        .context("prompt lookup lacks physical request")?;
+        .ok_or(ClientQueryError::PromptRequestIdentity)?;
     let own = request.doc_id.as_deref() == Some(owner.as_str());
     Ok((owner, key, own))
 }
@@ -169,7 +169,7 @@ fn decode_prompt_ownership_batch(
     let rows = data
         .get(AGENT_MESSAGE_NAME)
         .and_then(Value::as_array)
-        .context("prompt batch omitted rows")?;
+        .ok_or(ClientQueryError::PromptBatchRows)?;
     if rows.len() > MAX_TIP_REQUEST_ROWS {
         return Ok(false);
     }
@@ -213,11 +213,11 @@ fn prompt_ownership_query(requests: &[AgentRequestRow]) -> Result<String> {
         let node = request
             .node_did
             .as_deref()
-            .context("prompt lookup lacks node")?;
+            .ok_or(ClientQueryError::PromptNode)?;
         let session = request
             .session_id
             .as_deref()
-            .context("prompt lookup lacks session")?;
+            .ok_or(ClientQueryError::PromptSession)?;
         let requester = request
             .requester_did
             .as_deref()
@@ -250,35 +250,34 @@ fn decode_prompt_ownership(
         let doc = request
             .doc_id
             .as_ref()
-            .context("prompt lookup lacks physical request")?;
+            .ok_or(ClientQueryError::PromptRequestIdentity)?;
         let (owner, key, _) = input_owner(request)?;
         let prompt = data
             .get(format!("p{index}"))
             .and_then(Value::as_array)
-            .context("prompt lookup omitted rows")?;
+            .ok_or(ClientQueryError::PromptLookupRows)?;
         let anchor = data
             .get(format!("a{index}"))
             .and_then(Value::as_array)
-            .context("prompt anchor lookup omitted rows")?;
-        anyhow::ensure!(
-            prompt.len() <= 1 && anchor.len() <= 1,
-            "prompt ownership is physically ambiguous"
-        );
+            .ok_or(ClientQueryError::PromptAnchorRows)?;
+        if prompt.len() > 1 || anchor.len() > 1 {
+            return Err(ClientQueryError::PromptAmbiguous);
+        }
         for row in prompt.iter().chain(anchor.iter()) {
-            anyhow::ensure!(
-                row["request_doc_id"].as_str() == Some(owner.as_str())
-                    && row["node_did"].as_str() == request.node_did.as_deref()
-                    && row["session_id"].as_str() == request.session_id.as_deref()
-                    && row["requester_did"].as_str() == request.requester_did.as_deref(),
-                "prompt observation crossed physical request scope"
-            );
+            if !(row["request_doc_id"].as_str() == Some(owner.as_str())
+                && row["node_did"].as_str() == request.node_did.as_deref()
+                && row["session_id"].as_str() == request.session_id.as_deref()
+                && row["requester_did"].as_str() == request.requester_did.as_deref())
+            {
+                return Err(ClientQueryError::PromptScope);
+            }
         }
         if let Some(row) = prompt.first() {
-            anyhow::ensure!(
-                row["message_key"].as_str() == Some(key.as_str())
-                    && row["role"].as_str() == Some("user"),
-                "prompt observation is not the exact authored owner"
-            );
+            if !(row["message_key"].as_str() == Some(key.as_str())
+                && row["role"].as_str() == Some("user"))
+            {
+                return Err(ClientQueryError::PromptOwner);
+            }
         }
         facts.by_request_doc_id.insert(
             doc.clone(),
@@ -286,11 +285,11 @@ fn decode_prompt_ownership(
                 node_did: request
                     .node_did
                     .clone()
-                    .context("prompt lookup lacks node")?,
+                    .ok_or(ClientQueryError::PromptNode)?,
                 session_id: request
                     .session_id
                     .clone()
-                    .context("prompt lookup lacks session")?,
+                    .ok_or(ClientQueryError::PromptSession)?,
                 requester_did: request.requester_did.clone(),
                 materialized: !prompt.is_empty(),
                 first_sequence: anchor
@@ -305,7 +304,7 @@ fn decode_prompt_ownership(
                     .map(|row| {
                         row["sequence"]
                             .as_i64()
-                            .context("prompt anchor lacks sequence")
+                            .ok_or(ClientQueryError::PromptAnchorSequence)
                     })
                     .transpose()?,
             },
@@ -319,19 +318,19 @@ fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String>
         request
             .doc_id
             .as_deref()
-            .context("tip request lacks physical identity")?,
+            .ok_or(ClientQueryError::TipIdentity)?,
     );
     let node = escape_graphql_string(
         request
             .node_did
             .as_deref()
-            .context("tip request lacks node")?,
+            .ok_or(ClientQueryError::TipNode)?,
     );
     let session = escape_graphql_string(
         request
             .session_id
             .as_deref()
-            .context("tip request lacks session")?,
+            .ok_or(ClientQueryError::TipSession)?,
     );
     let requester = request
         .requester_did
@@ -388,14 +387,17 @@ fn tip_store(data: &Value, request: &AgentRequestRow) -> Result<ClientStore> {
 }
 
 fn bounded_tip_rows<'a>(data: &'a Value, root: &str) -> Result<&'a [Value]> {
-    let rows = data
-        .get(root)
-        .and_then(Value::as_array)
-        .with_context(|| format!("session tip omitted {root} rows"))?;
-    anyhow::ensure!(
-        rows.len() <= MAX_TIP_REQUEST_ROWS,
-        "active request exceeds bounded session-tip read of {MAX_TIP_REQUEST_ROWS} rows"
-    );
+    let rows =
+        data.get(root)
+            .and_then(Value::as_array)
+            .ok_or_else(|| ClientQueryError::TipRows {
+                root: root.to_owned(),
+            })?;
+    if rows.len() > MAX_TIP_REQUEST_ROWS {
+        return Err(ClientQueryError::TipLimit {
+            limit: MAX_TIP_REQUEST_ROWS,
+        });
+    }
     Ok(rows)
 }
 
@@ -403,11 +405,11 @@ fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> 
     let node = request
         .node_did
         .as_deref()
-        .context("tip request lacks node")?;
+        .ok_or(ClientQueryError::TipNode)?;
     let session = request
         .session_id
         .as_deref()
-        .context("tip request lacks session")?;
+        .ok_or(ClientQueryError::TipSession)?;
     let messages = decode_scoped_canonical_rows(
         bounded_tip_rows(data, AGENT_MESSAGE_NAME)?,
         node,
@@ -746,7 +748,7 @@ mod tests {
                         }
                     }
                     let explain = |query: &str| query.replacen("query DesktopRequestPromptOwnership", "query DesktopRequestPromptOwnership @explain(type: execute)", 1);
-                    Ok(serde_json::json!({
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(serde_json::json!({
                         "session_headers": 2_112, "owner_headers": 64, "requests": 32,
                         "timings": timings, "decoder_ms_per_1000": decoder_timings,
                         "unique_plan": txn.execute(&explain(&unique)).await?,

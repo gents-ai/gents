@@ -1,4 +1,5 @@
 use super::*;
+use crate::workspace::documents::DocumentsError;
 
 #[test]
 fn generated_operator_base_freeze_cases_drive_real_git_executor() {
@@ -332,33 +333,59 @@ struct FailFreezePlacementOnce {
 }
 
 impl WorkspaceDocuments for FailFreezePlacementOnce {
-    fn load_isolated_workspace(&self, id: &str) -> anyhow::Result<Option<IsolatedWorkspaceDoc>> {
+    fn load_isolated_workspace(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Option<IsolatedWorkspaceDoc>, DocumentsError> {
         self.inner.load_isolated_workspace(id)
     }
-    fn load_placement(&self, id: &str) -> anyhow::Result<Option<WorkspacePlacementDoc>> {
+    fn load_placement(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Option<WorkspacePlacementDoc>, DocumentsError> {
         self.inner.load_placement(id)
     }
-    fn write_isolated_workspace(&mut self, doc: IsolatedWorkspaceDoc) -> anyhow::Result<()> {
+    fn write_isolated_workspace(
+        &mut self,
+        doc: IsolatedWorkspaceDoc,
+    ) -> std::result::Result<(), DocumentsError> {
         self.workspace_writes += 1;
         self.inner.write_isolated_workspace(doc)
     }
-    fn write_placement(&mut self, doc: WorkspacePlacementDoc) -> anyhow::Result<()> {
+    fn write_placement(
+        &mut self,
+        doc: WorkspacePlacementDoc,
+    ) -> std::result::Result<(), DocumentsError> {
         self.placement_writes += 1;
         if std::mem::take(&mut self.fail_placement) {
-            anyhow::bail!("injected placement persistence failure after workspace write");
+            return Err(DocumentsError::StoreRejected {
+                message: "injected placement persistence failure after workspace write".into(),
+            });
         }
         self.inner.write_placement(doc)
     }
-    fn load_bindings(&self, id: &str) -> anyhow::Result<Vec<WorkspaceBindingDoc>> {
+    fn load_bindings(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Vec<WorkspaceBindingDoc>, DocumentsError> {
         self.inner.load_bindings(id)
     }
-    fn write_binding(&mut self, doc: WorkspaceBindingDoc) -> anyhow::Result<()> {
+    fn write_binding(
+        &mut self,
+        doc: WorkspaceBindingDoc,
+    ) -> std::result::Result<(), DocumentsError> {
         self.inner.write_binding(doc)
     }
-    fn load_receipts(&self, id: &str) -> anyhow::Result<Vec<WorkspaceReceiptDoc>> {
+    fn load_receipts(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Vec<WorkspaceReceiptDoc>, DocumentsError> {
         self.inner.load_receipts(id)
     }
-    fn write_receipt(&mut self, doc: WorkspaceReceiptDoc) -> anyhow::Result<()> {
+    fn write_receipt(
+        &mut self,
+        doc: WorkspaceReceiptDoc,
+    ) -> std::result::Result<(), DocumentsError> {
         self.inner.write_receipt(doc)
     }
 }

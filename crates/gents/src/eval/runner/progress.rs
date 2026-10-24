@@ -268,7 +268,7 @@ impl ProgressWriter {
         change(&mut state);
         if let Err(error) = write_json_atomically(&self.path, &*state) {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 path = %self.path.display(),
                 "eval run progress was not recorded"
             );

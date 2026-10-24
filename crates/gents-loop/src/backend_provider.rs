@@ -1,5 +1,14 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackendProviderKindError {
+    #[error("backend provider kind is required")]
+    Required,
+    #[error("unknown backend provider kind {kind}")]
+    Unknown { kind: String },
+}
+
+type Result<T, E = BackendProviderKindError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -31,14 +40,16 @@ impl BackendProviderKind {
 
     pub fn parse_optional(value: Option<&str>) -> Result<Self> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None => anyhow::bail!("backend provider kind is required"),
+            None => Err(BackendProviderKindError::Required),
             Some("OpenAiCompatible") => Ok(Self::OpenAiCompatible),
             Some("OpenRouter") => Ok(Self::OpenRouter),
             Some("ChatGptCodex") => Ok(Self::ChatGptCodex),
             Some("XaiGrokOAuth") => Ok(Self::XaiGrokOAuth),
             Some("ClaudeCliSubscription") => Ok(Self::ClaudeCliSubscription),
             Some("AnthropicApiKey") => Ok(Self::AnthropicApiKey),
-            Some(other) => anyhow::bail!("unknown backend provider kind {other}"),
+            Some(other) => Err(BackendProviderKindError::Unknown {
+                kind: other.to_owned(),
+            }),
         }
     }
 

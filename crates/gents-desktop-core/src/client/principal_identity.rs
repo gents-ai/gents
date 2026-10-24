@@ -1,14 +1,89 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use gents::identity::{
     load_file_identity, load_or_create_file_identity, register_ed25519_signing_identity,
-    NodeIdentity, ServiceAccount,
+    IdentityError, NodeIdentity, ServiceAccount,
 };
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
 use super::paths::DesktopPaths;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PrincipalIdentityError {
+    #[error("node identity metadata {} is not a regular file", path.display())]
+    MetadataNotRegularFile { path: PathBuf },
+    #[error("inspecting node identity metadata {}", path.display())]
+    InspectMetadata {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("joining node identity load")]
+    JoinIdentityLoad(#[source] tokio::task::JoinError),
+    #[error(transparent)]
+    IdentityKey(#[from] IdentityError),
+    #[error(transparent)]
+    Did(#[from] identity::Error),
+    #[error("loading node identity for {did}")]
+    LoadSigner {
+        did: String,
+        #[source]
+        source: identity::Error,
+    },
+    #[error("signing payload as {did}")]
+    SignPayload {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("parsing did:key public key from DID {did}")]
+    ParseDidKey {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("no public key registered for DID {did}")]
+    UnregisteredDid { did: String },
+    #[error(transparent)]
+    PublicKey(crypto::Error),
+    #[error("verifying payload for {did}")]
+    VerifyPayload {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("parsing node identity metadata {}", path.display())]
+    ParseMetadata {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("node identity metadata mismatch at {}", path.display())]
+    MetadataMismatch { path: PathBuf },
+    #[error("reading {}", path.display())]
+    ReadMetadata {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("writing {}", path.display())]
+    WriteTemp {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("persisting {}", path.display())]
+    Persist {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+type Result<T, E = PrincipalIdentityError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone)]
 pub struct PrincipalIdentity {
@@ -29,20 +104,18 @@ impl PrincipalIdentity {
         let metadata_path = paths.principal_metadata_path();
         let metadata_exists = match tokio::fs::symlink_metadata(metadata_path).await {
             Ok(metadata) => {
-                anyhow::ensure!(
-                    metadata.file_type().is_file(),
-                    "node identity metadata {} is not a regular file",
-                    metadata_path.display()
-                );
+                if !metadata.file_type().is_file() {
+                    return Err(PrincipalIdentityError::MetadataNotRegularFile {
+                        path: metadata_path.to_path_buf(),
+                    });
+                }
                 true
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => {
-                return Err(anyhow::Error::from(error)).with_context(|| {
-                    format!(
-                        "inspecting node identity metadata {}",
-                        metadata_path.display()
-                    )
+            Err(source) => {
+                return Err(PrincipalIdentityError::InspectMetadata {
+                    path: metadata_path.to_path_buf(),
+                    source,
                 });
             }
         };
@@ -54,9 +127,9 @@ impl PrincipalIdentity {
             }
         })
         .await
-        .context("joining node identity load")??;
+        .map_err(PrincipalIdentityError::JoinIdentityLoad)??;
 
-        let did = identity.did().map_err(anyhow::Error::from)?.to_string();
+        let did = identity.did()?.to_string();
         let public_key_bytes = identity.public_key_bytes();
         let private_key_bytes = identity.private_key_bytes().to_vec();
         let metadata = NodeIdentityMetadata {
@@ -101,12 +174,41 @@ impl PrincipalIdentity {
     }
 
     pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
-        RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("loading node identity for {}", self.did))?
+        let identity = RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
+            .map_err(|source| PrincipalIdentityError::LoadSigner {
+            did: self.did.clone(),
+            source,
+        })?;
+        identity
             .sign(payload)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("signing payload as {}", self.did))
+            .map_err(|source| PrincipalIdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })
+    }
+
+    fn verify_signature(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+        let (key_type, public_key_bytes) = if did == self.did {
+            (crypto::KeyType::Ed25519, self.public_key_bytes.clone())
+        } else if did.starts_with("did:key:") {
+            crypto::parse_did_key(did).map_err(|source| PrincipalIdentityError::ParseDidKey {
+                did: did.to_owned(),
+                source,
+            })?
+        } else {
+            return Err(PrincipalIdentityError::UnregisteredDid {
+                did: did.to_owned(),
+            });
+        };
+
+        let public_key = crypto::public_key_from_bytes(key_type, &public_key_bytes)
+            .map_err(PrincipalIdentityError::PublicKey)?;
+        public_key.verify(payload, signature).map_err(|source| {
+            PrincipalIdentityError::VerifyPayload {
+                did: did.to_owned(),
+                source,
+            }
+        })
     }
 }
 
@@ -116,27 +218,12 @@ impl NodeIdentity for PrincipalIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
-        PrincipalIdentity::sign(self, payload)
+    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+        Ok(PrincipalIdentity::sign(self, payload)?)
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
-        let (key_type, public_key_bytes) = if did == self.did {
-            (crypto::KeyType::Ed25519, self.public_key_bytes.clone())
-        } else if did.starts_with("did:key:") {
-            crypto::parse_did_key(did)
-                .map_err(anyhow::Error::from)
-                .with_context(|| format!("parsing did:key public key from DID {did}"))?
-        } else {
-            anyhow::bail!("no public key registered for DID {did}");
-        };
-
-        let public_key = crypto::public_key_from_bytes(key_type, &public_key_bytes)
-            .map_err(anyhow::Error::from)?;
-        public_key
-            .verify(payload, signature)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("verifying payload for {did}"))
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool> {
+        Ok(self.verify_signature(did, payload, signature)?)
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {
@@ -147,22 +234,27 @@ impl NodeIdentity for PrincipalIdentity {
 async fn validate_or_persist_metadata(path: &Path, expected: &NodeIdentityMetadata) -> Result<()> {
     match tokio::fs::read(path).await {
         Ok(bytes) => {
-            let stored: NodeIdentityMetadata = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing node identity metadata {}", path.display()))?;
+            let stored: NodeIdentityMetadata =
+                serde_json::from_slice(&bytes).map_err(|source| {
+                    PrincipalIdentityError::ParseMetadata {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                })?;
             if stored != *expected {
-                return Err(anyhow::anyhow!(
-                    "node identity metadata mismatch at {}",
-                    path.display()
-                ));
+                return Err(PrincipalIdentityError::MetadataMismatch {
+                    path: path.to_path_buf(),
+                });
             }
             Ok(())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             write_json_atomically(path, expected).await
         }
-        Err(error) => {
-            Err(anyhow::Error::from(error)).with_context(|| format!("reading {}", path.display()))
-        }
+        Err(source) => Err(PrincipalIdentityError::ReadMetadata {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -173,15 +265,21 @@ where
     let bytes = serde_json::to_vec_pretty(value)?;
     let tmp_path = path.with_extension("tmp");
 
-    tokio::fs::write(&tmp_path, bytes)
-        .await
-        .with_context(|| format!("writing {}", tmp_path.display()))?;
+    tokio::fs::write(&tmp_path, bytes).await.map_err(|source| {
+        PrincipalIdentityError::WriteTemp {
+            path: tmp_path.clone(),
+            source,
+        }
+    })?;
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
         let _ = tokio::fs::remove_file(path).await;
     }
     tokio::fs::rename(&tmp_path, path)
         .await
-        .with_context(|| format!("persisting {}", path.display()))?;
+        .map_err(|source| PrincipalIdentityError::Persist {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok(())
 }
 

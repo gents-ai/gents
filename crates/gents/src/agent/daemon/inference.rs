@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
@@ -621,7 +622,7 @@ where
                                         async {
                                             match processor.validate_execution().await {
                                                 Ok(()) => {}
-                                                Err(error) if error.is::<crate::lifecycle::ExecutionOwnershipLost>() => {
+                                                Err(error) if find_source::<crate::lifecycle::ExecutionOwnershipLost>(error.as_ref()).is_some() => {
                                                     tracing::warn!(
                                                         request_id = %request_id,
                                                         session_id = %session_id,
@@ -640,7 +641,7 @@ where
                                             .context("shutdown drain was not attempted")),
                                         Ok(Ok(true)) => return Err(anyhow!("shutdown requested during inference stream")),
                                         Ok(Err(error)) => return Err(ShutdownDrainFailure {
-                                            reason: format!("partial-turn persistence failed: {error:#}"),
+                                            reason: format!("partial-turn persistence failed: {}", ErrorChain(error.as_ref())),
                                         }.into()),
                                         Err(_) => return Err(ShutdownDrainFailure {
                                             reason: "partial-turn persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state".into(),
@@ -682,7 +683,7 @@ where
                                 }
                                 _ = lease_poll.tick() => {
                                     if let Err(error) = processor.validate_execution().await {
-                                        let reason = format!("request execution lease: {error:#}");
+                                        let reason = format!("request execution lease: {}", ErrorChain(error.as_ref()));
                                         admission::set_terminal_failure_reason(
                                             &terminal_failure_reason,
                                             reason.clone(),
@@ -779,7 +780,7 @@ where
                                     drop(stream);
                                     return Err(match flush_failure {
                                         Some(flush_error) => error.context(format!(
-                                            "retaining the received stream item after a flush failed: {flush_error:#}"
+                                            "retaining the received stream item after a flush failed: {}", ErrorChain(flush_error.as_ref())
                                         )),
                                         None => error,
                                     });
@@ -796,7 +797,7 @@ where
                                 return Err(match retained {
                                     Ok(_) => error,
                                     Err(retention_error) => retention_error.context(format!(
-                                        "retaining received output after a flush failed: {error:#}"
+                                        "retaining received output after a flush failed: {}", ErrorChain(error.as_ref())
                                     )),
                                 });
                             }

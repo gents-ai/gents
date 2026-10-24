@@ -1,4 +1,6 @@
 use super::*;
+use anyhow::anyhow;
+use gents_protocol::error_chain::ErrorChain;
 
 pub(super) struct SideEffects {
     pub(super) wake_request_id: Option<String>,
@@ -97,7 +99,7 @@ async fn stored_notification_text(
     .map_err(|error| {
         tracing::warn!(
             notification_doc_id,
-            error = %format!("{error:#}"),
+            error = %ErrorChain(error.as_ref()),
             "published background notification could not be read for replay"
         )
     })

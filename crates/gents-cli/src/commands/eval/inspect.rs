@@ -11,6 +11,7 @@ use gents::eval::report::{
 use gents::eval::{
     load_verdicts, Invalidation, OutcomeKind, ProviderReason, RunHeader, VerdictRecord,
 };
+use gents_protocol::error_chain::ErrorChain;
 use serde::Serialize;
 
 use super::{render, write_json, EvalContext};
@@ -70,7 +71,7 @@ pub(super) async fn list(
                         .collect(),
                     None,
                 ),
-                Err(error) => match report_refused(&error) {
+                Err(error) => match report_refused(error.as_ref()) {
                     Some(refusal) => (Vec::new(), Some(refusal.to_string())),
                     None => return Err(error),
                 },
@@ -91,7 +92,7 @@ pub(super) async fn list(
         });
     }
     if args.json {
-        write_json(out, &rows)
+        Ok(write_json(out, &rows)?)
     } else {
         Ok(render::list_table(&rows, out)?)
     }
@@ -110,10 +111,10 @@ fn run_size(ctx: &EvalContext, run_id: &str) -> (Option<u64>, Option<String>) {
             tracing::warn!(
                 run_id,
                 dir = %dir.display(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(&error),
                 "eval list could not measure a run directory"
             );
-            (None, Some(format!("{error:#}")))
+            (None, Some(ErrorChain(&error).to_string()))
         }
     }
 }
@@ -125,7 +126,7 @@ pub(super) async fn show(
 ) -> Result<()> {
     let report = load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), &args.run_id).await?;
     if args.json {
-        write_json(out, &report)
+        Ok(write_json(out, &report)?)
     } else {
         Ok(render::report_table(&report, out)?)
     }
@@ -258,7 +259,7 @@ pub(super) async fn trial(
         requests,
     };
     if args.json {
-        write_json(out, &view)
+        Ok(write_json(out, &view)?)
     } else {
         Ok(render::trial_text(&view, out)?)
     }

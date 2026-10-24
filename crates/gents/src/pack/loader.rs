@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
+use super::{
+    asset_path, interpolate, validate_pack_manifest, PackError, PackInstallOptions, PackManifest,
+};
 use crate::document_config::{EvalCase, PackConfig};
 
 pub fn load_pack_config(
@@ -28,14 +30,11 @@ pub fn load_pack_config(
     Ok(config)
 }
 
-pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
+pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<(), PackError> {
     if let Some(default) = &config.node.default_agent_id {
-        anyhow::bail!(
-            "pack node sets default_agent_id {default:?}; a pack must not choose \
-             the default agent. Remove it from the pack: the user selects the default \
-             (\"Make default\" in the desktop, or default_agent_id in the \
-             node of their own `gents config apply` root)"
-        );
+        return Err(PackError::DefaultAgentSet {
+            default: default.clone(),
+        });
     }
     Ok(())
 }

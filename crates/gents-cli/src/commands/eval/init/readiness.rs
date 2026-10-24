@@ -57,6 +57,7 @@ pub(super) async fn wait_for_author(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -141,7 +142,7 @@ mod tests {
         )
         .await;
         server.abort();
-        let error = format!("{:#}", result.unwrap_err());
+        let error = format!("{}", ErrorChain(result.unwrap_err().as_ref()));
         assert!(error.contains("did not become ready"), "{error}");
     }
 }

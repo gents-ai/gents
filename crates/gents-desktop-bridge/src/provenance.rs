@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -45,8 +46,10 @@ pub async fn session_provenance(
     scope: SessionScope,
 ) -> Result<SessionProvenanceView, String> {
     let access = crate::snapshot::node_reads(core, &scope.node_did);
-    let fail = |error: anyhow::Error| format!("session provenance: {error:#}");
-    let lineage = lineage(&access, &scope).await.map_err(fail)?;
+    let fail = |error: anyhow::Error| format!("session provenance: {}", ErrorChain(error.as_ref()));
+    let lineage = lineage(&access, &scope)
+        .await
+        .map_err(|error| fail(error.into()))?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
     let opening_request_id = match &lineage.started_by {
         Some(started_by) => opening_request(
@@ -116,7 +119,7 @@ async fn opening_request(
     access: &ConfigAccess,
     link: &SessionLink,
 ) -> anyhow::Result<Option<AgentRequestRow>> {
-    starting_request(access, link).await
+    Ok(starting_request(access, link).await?)
 }
 
 async fn caused_calls(
@@ -276,7 +279,7 @@ async fn related_session_metadata<'a>(
                 .await?
                 .iter()
                 .map(gents::session::decode_session_row)
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .map(|row| row.session)
                 .filter(|session| {

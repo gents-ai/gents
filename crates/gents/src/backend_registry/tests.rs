@@ -3,6 +3,7 @@ use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::lean_vocab_test::lean_backend_health_admission_cases;
 use crate::OpenAiWireApi;
+use gents_protocol::error_chain::ErrorChain;
 
 fn base_backend() -> InferenceBackend {
     serde_json::from_value(serde_json::json!({
@@ -51,7 +52,8 @@ fn inference_backend_from_value_requires_provider_kind_and_explicit_auth() {
         let mut value = serde_json::to_value(base_backend()).unwrap();
         value.as_object_mut().unwrap().remove(field);
         let error = InferenceBackend::from_value(&value).unwrap_err();
-        assert!(format!("{error:#}").contains(field), "{error:#}");
+        let text = gents_protocol::error_chain::ErrorChain(&error).to_string();
+        assert!(text.contains(field), "{text}");
     }
     let mut value = serde_json::to_value(base_backend()).unwrap();
     value["auth"] = serde_json::json!({"kind":"api_key", "key":"key", "variable":"KEY"});
@@ -222,7 +224,7 @@ fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
     };
     let error = crate::config::resolve_backend_api_key(&backend)
         .expect_err("missing selected credential must fail");
-    let message = format!("{error:#}");
+    let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
     assert!(message.contains(&backend.backend_id), "{message}");
     assert!(
         message.contains("BACKEND_REGISTRY_TEST_KEY_MISSING_1338"),
@@ -523,8 +525,11 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
         .await
         .expect_err("a single lookup stays strict");
     assert!(
-        format!("{error:#}").contains("FutureProviderKind"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("FutureProviderKind"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     Ok(())
 }

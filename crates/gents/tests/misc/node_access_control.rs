@@ -1,9 +1,10 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::{EmbeddedNode, HttpConfig, StorageBackend};
@@ -63,7 +64,7 @@ async fn names(access: &ConfigAccess) -> Result<Vec<String>> {
     let response = access
         .execute("{ NodeAccessProbe { name } }")
         .await
-        .context("reading probe rows")?;
+        .map_err(|error| format!("reading probe rows: {}", ErrorChain(&error)))?;
     let mut names: Vec<String> = response["data"]["NodeAccessProbe"]
         .as_array()
         .into_iter()
@@ -88,7 +89,8 @@ async fn assert_access_control(
         .expect_err("an anonymous HTTP mutation must be refused");
     assert!(
         refused.to_string().contains("not authorized"),
-        "unexpected refusal: {refused:#}"
+        "unexpected refusal: {}",
+        ErrorChain(&refused)
     );
     let refused_schema = anonymous
         .add_schema("type NodeAccessIntruder { name: String }")
@@ -96,7 +98,8 @@ async fn assert_access_control(
         .expect_err("an anonymous HTTP schema change must be refused");
     assert!(
         refused_schema.to_string().contains("401"),
-        "unexpected schema refusal: {refused_schema:#}"
+        "unexpected schema refusal: {}",
+        ErrorChain(&refused_schema)
     );
 
     let signed = ConfigAccess::graphql_as(endpoint, principal);

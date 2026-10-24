@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 type AssemblyCapture = (usize, u32, AssemblyBuildPath, AssemblyTrace);
 
 #[tokio::test]
@@ -620,8 +621,9 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 let error = captured.expect_err("a rebound key must be rejected");
                 assert!(
                     error.to_string().contains("integrity violation"),
-                    "{}: unexpected error {error:#}",
-                    case.name
+                    "{}: unexpected error {}",
+                    case.name,
+                    ErrorChain(&error)
                 );
             }
             other => panic!("{}: unknown capture outcome {other}", case.name),

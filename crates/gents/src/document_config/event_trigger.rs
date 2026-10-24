@@ -1,4 +1,7 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+use gents_protocol::error_chain::ErrorChain;
+
+use super::error::DocumentConfigError;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
@@ -35,10 +38,11 @@ fn render_trigger_runtime_mutation(
 pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],
-) -> Vec<Result<Option<String>>> {
+) -> Vec<std::result::Result<Option<String>, DocumentConfigError>> {
+    type Cursor = std::result::Result<Option<String>, DocumentConfigError>;
     let mut results = std::iter::repeat_with(|| None)
         .take(scopes.len())
-        .collect::<Vec<Option<Result<Option<String>>>>>();
+        .collect::<Vec<Option<Cursor>>>();
 
     for (chunk_index, chunk) in scopes.chunks(TRIGGER_CURSOR_BATCH_SIZE).enumerate() {
         let chunk_start = chunk_index * TRIGGER_CURSOR_BATCH_SIZE;
@@ -47,7 +51,8 @@ pub(crate) async fn load_trigger_next_run_at_batch(
         for (index, (node_did, trigger_id)) in chunk.iter().enumerate() {
             let result_index = chunk_start + index;
             if node_did.is_empty() {
-                results[result_index] = Some(Err(anyhow!("trigger observation owner is required")));
+                results[result_index] =
+                    Some(Err(DocumentConfigError::TriggerObservationOwnerRequired));
                 continue;
             }
             let alias = format!("trigger_{index}");
@@ -75,7 +80,9 @@ pub(crate) async fn load_trigger_next_run_at_batch(
             Err(error) => {
                 for (result_index, _) in aliases {
                     results[result_index] =
-                        Some(Err(anyhow!("query Trigger cursor failed: {error:#}")));
+                        Some(Err(DocumentConfigError::TriggerCursorQueryFailed {
+                            error: ErrorChain(&error).to_string(),
+                        }));
                 }
                 continue;
             }
@@ -116,9 +123,10 @@ pub(crate) async fn load_trigger_next_run_at_batch(
                     .chain(global_errors.iter().copied())
                     .collect::<Vec<_>>()
                     .join("; ");
-                results[result_index] = Some(Err(anyhow!(
-                    "query Trigger cursor for {alias} failed: {messages}"
-                )));
+                results[result_index] = Some(Err(DocumentConfigError::TriggerCursorAliasFailed {
+                    alias,
+                    messages,
+                }));
                 continue;
             }
 
@@ -130,7 +138,7 @@ pub(crate) async fn load_trigger_next_run_at_batch(
             if let Some(rows) = rows {
                 if rows.len() > 1 {
                     results[result_index] =
-                        Some(Err(anyhow!("ambiguous scoped trigger observation")));
+                        Some(Err(DocumentConfigError::TriggerObservationAmbiguous));
                     continue;
                 }
             }
@@ -144,7 +152,7 @@ pub(crate) async fn load_trigger_next_run_at_batch(
 
     results
         .into_iter()
-        .map(|result| result.unwrap_or_else(|| Err(anyhow!("trigger cursor result was omitted"))))
+        .map(|result| result.unwrap_or(Err(DocumentConfigError::TriggerCursorOmitted)))
         .collect()
 }
 
@@ -178,10 +186,9 @@ pub(crate) async fn update_trigger_runtime_fields(
     updates: TriggerRuntimeUpdate,
 ) -> Result<()> {
     let escaped_owner = escape_graphql_string(node_did);
-    anyhow::ensure!(
-        !node_did.is_empty(),
-        "trigger observation owner is required"
-    );
+    if node_did.is_empty() {
+        return Err(DocumentConfigError::TriggerObservationOwnerRequired.into());
+    }
     if updates.next_run_at.is_none()
         && updates.last_attempt_at.is_none()
         && updates.last_fired_source_doc_id.is_none()
@@ -256,7 +263,11 @@ pub(crate) async fn update_trigger_runtime_fields(
                     .and_then(serde_json::Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                anyhow::ensure!(rows.len() <= 1, "ambiguous scoped trigger observation");
+                if rows.len() > 1 {
+                    return Err(anyhow::Error::from(
+                        DocumentConfigError::TriggerObservationAmbiguous,
+                    ));
+                }
                 let Some(row) = rows.first() else {
                     tracing::info!(
                         trigger_id,
@@ -365,12 +376,11 @@ pub enum EventGroupCount {
 }
 
 impl EventSource {
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), DocumentConfigError> {
         crate::graphql::validate_collection_identifier(&self.source_collection)?;
-        anyhow::ensure!(
-            self.event_kind.as_deref().unwrap_or("created") == "created",
-            "event source supports only the created event kind"
-        );
+        if self.event_kind.as_deref().unwrap_or("created") != "created" {
+            return Err(DocumentConfigError::EventSourceEventKind);
+        }
         if let Some(filter) = self
             .filter
             .as_deref()
@@ -388,7 +398,7 @@ impl EventSource {
         self.validate_group()
     }
 
-    pub fn validate_group(&self) -> anyhow::Result<()> {
+    pub fn validate_group(&self) -> std::result::Result<(), DocumentConfigError> {
         use crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
             .correlation_field
@@ -397,26 +407,21 @@ impl EventSource {
         let Some(group) = self.group.as_ref() else {
             return Ok(());
         };
-
         if correlation_field.is_none() {
-            anyhow::bail!("per_group source requires correlation_field");
+            return Err(DocumentConfigError::PerGroupRequiresCorrelation);
         }
-
         let expected_count = match &group.expected_count {
             Some(crate::document_config::EventGroupCount::Fixed(count)) => {
                 let count = usize::try_from(*count)
-                    .map_err(|_| anyhow::anyhow!("expected_count must be a positive count"))?;
+                    .map_err(|_| DocumentConfigError::ExpectedCountNotPositive)?;
                 if !(1..=MAX_EVENT_TRIGGER_GROUP_DOCS).contains(&count) {
-                    anyhow::bail!(
-                        "expected_count {count} exceeds the group bound \
-                     {MAX_EVENT_TRIGGER_GROUP_DOCS}"
-                    );
+                    return Err(DocumentConfigError::ExpectedCountOutOfBounds { count });
                 }
                 Some(count)
             }
             Some(crate::document_config::EventGroupCount::SourceField { source_field }) => {
                 if crate::graphql::validate_graphql_name(source_field).is_err() {
-                    anyhow::bail!("count field is not a GraphQL name");
+                    return Err(DocumentConfigError::CountFieldNotName);
                 }
                 None
             }
@@ -428,50 +433,49 @@ impl EventSource {
             }
             _ => None,
         };
-
         let group_timeout_secs = group
             .timeout_secs
             .map(|value| {
-                anyhow::ensure!(value > 0, "group timeout_secs must be positive");
-                u64::try_from(value)
-                    .map_err(|_| anyhow::anyhow!("group timeout_secs exceeds the supported range"))
+                if value <= 0 {
+                    return Err(DocumentConfigError::GroupTimeoutNotPositive);
+                }
+                u64::try_from(value).map_err(|_| DocumentConfigError::GroupTimeoutOutOfRange)
             })
             .transpose()?;
         let group_min_count = group
             .min_count
             .map(|value| {
-                anyhow::ensure!(value > 0, "group min_count must be positive");
-                usize::try_from(value)
-                    .map_err(|_| anyhow::anyhow!("group min_count exceeds the supported range"))
+                if value <= 0 {
+                    return Err(DocumentConfigError::GroupMinCountNotPositive);
+                }
+                usize::try_from(value).map_err(|_| DocumentConfigError::GroupMinCountOutOfRange)
             })
             .transpose()?;
         if let Some(min_count) = group_min_count {
             if min_count == 0 || min_count > MAX_EVENT_TRIGGER_GROUP_DOCS {
-                anyhow::bail!(
-                    "min_count {min_count} must be within 1..={MAX_EVENT_TRIGGER_GROUP_DOCS}"
-                );
+                return Err(DocumentConfigError::GroupMinCountOutOfBounds { min_count });
             }
             if group_timeout_secs.is_none() {
-                anyhow::bail!("min_count requires a positive group timeout_secs");
+                return Err(DocumentConfigError::MinCountRequiresTimeout);
             }
         }
         if let (Some(expected), Some(min_count)) = (expected_count, group_min_count) {
             if min_count > expected {
-                anyhow::bail!("min_count {min_count} exceeds expected_count {expected}");
+                return Err(DocumentConfigError::MinCountExceedsExpected {
+                    min_count,
+                    expected,
+                });
             }
         }
         match (expected_count, expected_count_field.as_ref()) {
             (Some(_), None) | (None, Some(_)) => {}
             (None, None) => {
                 if group_timeout_secs.is_none() {
-                    anyhow::bail!(
-                        "per_group without a fixed or source-field count requires \
-                     a positive timeout_secs"
-                    );
+                    return Err(DocumentConfigError::PerGroupRequiresCount);
                 }
             }
             (Some(_), Some(_)) => {
-                anyhow::bail!("expected_count cannot combine a fixed count and a source field");
+                return Err(DocumentConfigError::ExpectedCountAndSourceField);
             }
         }
         Ok(())

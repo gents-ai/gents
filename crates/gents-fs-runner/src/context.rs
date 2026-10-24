@@ -1,6 +1,38 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+#[derive(Debug, thiserror::Error)]
+pub enum PathError {
+    #[error("canonicalizing runner root {}", root.display())]
+    CanonicalizeRoot {
+        root: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("canonicalizing runner base {}", base.display())]
+    CanonicalizeBase {
+        base: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "runner base {} is outside root {} or is not a directory",
+        base.display(),
+        root.display()
+    )]
+    BaseOutsideRoot { base: PathBuf, root: PathBuf },
+    #[error("resolving path {}", path.display())]
+    Resolve {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("path is not a directory: {}", path.display())]
+    NotADirectory { path: PathBuf },
+    #[error("path is outside the allowed tool root {}: {}", root.display(), path.display())]
+    OutsideRoot { root: PathBuf, path: PathBuf },
+}
+
+type Result<T, E = PathError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub(crate) struct RunnerContext {
@@ -11,17 +43,13 @@ pub(crate) struct RunnerContext {
 impl RunnerContext {
     pub(crate) fn new_with_base(root: PathBuf, base: Option<PathBuf>) -> Result<Self> {
         let root = std::fs::canonicalize(&root)
-            .with_context(|| format!("canonicalizing runner root {}", root.display()))?;
+            .map_err(|source| PathError::CanonicalizeRoot { root, source })?;
         let base = match base {
             Some(base) => {
                 let base = std::fs::canonicalize(&base)
-                    .with_context(|| format!("canonicalizing runner base {}", base.display()))?;
+                    .map_err(|source| PathError::CanonicalizeBase { base, source })?;
                 if !base.is_dir() || !base.starts_with(&root) {
-                    bail!(
-                        "runner base {} is outside root {} or is not a directory",
-                        base.display(),
-                        root.display()
-                    );
+                    return Err(PathError::BaseOutsideRoot { base, root });
                 }
                 base
             }
@@ -33,12 +61,16 @@ impl RunnerContext {
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
         let candidate = Path::new(path);
         let resolved = if candidate.is_absolute() {
-            std::fs::canonicalize(candidate)
-                .with_context(|| format!("resolving path {}", candidate.display()))?
+            std::fs::canonicalize(candidate).map_err(|source| PathError::Resolve {
+                path: candidate.to_path_buf(),
+                source,
+            })?
         } else {
             let joined = self.base.join(candidate);
-            std::fs::canonicalize(&joined)
-                .with_context(|| format!("resolving path {}", joined.display()))?
+            std::fs::canonicalize(&joined).map_err(|source| PathError::Resolve {
+                path: joined,
+                source,
+            })?
         };
         self.ensure_allowed(resolved)
     }
@@ -53,7 +85,7 @@ impl RunnerContext {
     pub(crate) fn resolve_existing_dir(&self, path: Option<&str>) -> Result<PathBuf> {
         let resolved = self.resolve_existing_path(path)?;
         if !resolved.is_dir() {
-            bail!("path is not a directory: {}", resolved.display());
+            return Err(PathError::NotADirectory { path: resolved });
         }
         Ok(resolved)
     }
@@ -62,11 +94,10 @@ impl RunnerContext {
         if path.starts_with(&self.root) {
             Ok(path)
         } else {
-            bail!(
-                "path is outside the allowed tool root {}: {}",
-                self.root.display(),
-                path.display()
-            );
+            Err(PathError::OutsideRoot {
+                root: self.root.clone(),
+                path,
+            })
         }
     }
 

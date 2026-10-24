@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -582,7 +583,7 @@ pub struct SessionHistoryToolError(anyhow::Error);
 
 impl std::fmt::Display for SessionHistoryToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -657,10 +658,16 @@ impl Tool for SessionHistoryTool {
             .into());
         }
         let value = discovery::run(self, &args, action).await.map_err(|error| {
-            if format!("{error:#}").contains("next call:") {
+            if ErrorChain(error.as_ref())
+                .to_string()
+                .contains("next call:")
+            {
                 error
             } else {
-                anyhow!("{error:#}; next call: sessions {{\"action\":\"help\"}}")
+                anyhow!(
+                    "{}; next call: sessions {{\"action\":\"help\"}}",
+                    ErrorChain(error.as_ref())
+                )
             }
         })?;
         Ok(if action == "output" {
@@ -821,7 +828,7 @@ pub async fn load_session_investigation(
             Err(error) => super::ParentAuditUsageObservation::Unavailable {
                 parent_request_doc_id: request.doc_id.clone(),
                 parent_request_id: request.request_id.clone(),
-                error: format!("{error:#}"),
+                error: ErrorChain(error.as_ref()).to_string(),
             },
         };
         audit_usage.push(observation);

@@ -192,7 +192,7 @@ impl DevicePolls for CloudDevicePolls {
             .text()
             .await
             .map_err(|error| unreachable_cloud(&self.poll_url, &error))?;
-        classify_poll(status, &body)
+        Ok(classify_poll(status, &body)?)
     }
 }
 
@@ -209,27 +209,56 @@ async fn request_device_code(http: &reqwest::Client, base: &reqwest::Url) -> Res
         .text()
         .await
         .map_err(|error| unreachable_cloud(&url, &error))?;
-    classify_start(status, &body)
+    Ok(classify_start(status, &body)?)
 }
 
-fn classify_start(status: StatusCode, body: &str) -> Result<DeviceStart> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CloudError {
+    #[error("--cloud must name a gents cloud host, for example app.dev.gents.xyz")]
+    NoHost,
+    #[error("--cloud value {cloud:?} is not a host or a URL")]
+    NotHostOrUrl { cloud: String },
+    #[error("--cloud must use https, or http on a loopback host such as http://127.0.0.1:9192")]
+    CleartextNonLoopback,
+    #[error("--provider must name the gents cloud credential, for example gents-cloud")]
+    NoProvider,
+    #[error("--provider {provider} is an OAuth credential gents refreshes; cloud login stores a workspace token under gents-cloud")]
+    OAuthProvider { provider: String },
+    #[error("the gents cloud answered the sign-in request with something this version does not understand; upgrade gents or check --cloud")]
+    UnknownStartResponse,
+    #[error("the gents cloud approved this sign-in but answered with something this version does not understand; upgrade gents or check --cloud")]
+    UnknownApprovedResponse,
+    #[error("the gents cloud could not {action} (HTTP {status}: {reason}); run `gents cloud login` again")]
+    RefusedWithReason {
+        action: &'static str,
+        status: StatusCode,
+        reason: String,
+    },
+    #[error("the gents cloud could not {action} (HTTP {status}); run `gents cloud login` again")]
+    Refused {
+        action: &'static str,
+        status: StatusCode,
+    },
+    #[error("cannot reach the gents cloud at {url} ({reasons}); check --cloud and that the host is reachable")]
+    Unreachable { url: String, reasons: String },
+    #[error(
+        "this sign-in was not approved within {wait_secs} seconds; run `gents cloud login` again"
+    )]
+    NotApproved { wait_secs: u64 },
+}
+
+fn classify_start(status: StatusCode, body: &str) -> Result<DeviceStart, CloudError> {
     if status != StatusCode::OK {
         return Err(cloud_said_no("start this sign-in", status, body));
     }
-    serde_json::from_str(body).map_err(|_| {
-        anyhow::anyhow!(
-            "the gents cloud answered the sign-in request with something this version does not understand; upgrade gents or check --cloud"
-        )
-    })
+    serde_json::from_str(body).map_err(|_| CloudError::UnknownStartResponse)
 }
 
-fn classify_poll(status: StatusCode, body: &str) -> Result<PollStep> {
+fn classify_poll(status: StatusCode, body: &str) -> Result<PollStep, CloudError> {
     match status {
-        StatusCode::OK => serde_json::from_str(body).map(PollStep::SignedIn).map_err(|_| {
-            anyhow::anyhow!(
-                "the gents cloud approved this sign-in but answered with something this version does not understand; upgrade gents or check --cloud"
-            )
-        }),
+        StatusCode::OK => serde_json::from_str(body)
+            .map(PollStep::SignedIn)
+            .map_err(|_| CloudError::UnknownApprovedResponse),
         StatusCode::PRECONDITION_REQUIRED => Ok(PollStep::Pending),
         StatusCode::FORBIDDEN => Ok(PollStep::Refused(
             message_sentence(body).unwrap_or_else(|| DEFAULT_REFUSAL.to_string()),
@@ -251,9 +280,7 @@ async fn wait_for_approval(polls: &impl DevicePolls, start: &DeviceStart) -> Res
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            anyhow::bail!(
-                "this sign-in was not approved within {wait_secs} seconds; run `gents cloud login` again"
-            );
+            return Err(CloudError::NotApproved { wait_secs }.into());
         }
         tokio::time::sleep(interval.min(remaining)).await;
     }
@@ -292,25 +319,25 @@ fn no_expiry_horizon(now: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// Allows cleartext only for loopback because workspace tokens have no expiry.
-fn cloud_base_url(cloud: &str) -> Result<reqwest::Url> {
+fn cloud_base_url(cloud: &str) -> Result<reqwest::Url, CloudError> {
     let cloud = cloud.trim();
     if cloud.is_empty() {
-        anyhow::bail!("--cloud must name a gents cloud host, for example app.dev.gents.xyz");
+        return Err(CloudError::NoHost);
     }
     let absolute = if cloud.starts_with("http://") || cloud.starts_with("https://") {
         cloud.to_string()
     } else {
         format!("https://{cloud}")
     };
-    let url = reqwest::Url::parse(&absolute)
-        .map_err(|_| anyhow::anyhow!("--cloud value {cloud:?} is not a host or a URL"))?;
+    let not_host_or_url = || CloudError::NotHostOrUrl {
+        cloud: cloud.to_owned(),
+    };
+    let url = reqwest::Url::parse(&absolute).map_err(|_| not_host_or_url())?;
     if url.host_str().is_none() {
-        anyhow::bail!("--cloud value {cloud:?} is not a host or a URL");
+        return Err(not_host_or_url());
     }
     if url.scheme() == "http" && !host_is_loopback(&url) {
-        anyhow::bail!(
-            "--cloud must use https, or http on a loopback host such as http://127.0.0.1:9192"
-        );
+        return Err(CloudError::CleartextNonLoopback);
     }
     Ok(url)
 }
@@ -331,10 +358,10 @@ fn host_is_loopback(url: &reqwest::Url) -> bool {
 }
 
 /// Prevents replacing credentials managed by the OAuth refreshers with workspace tokens.
-fn cloud_provider(provider: &str) -> Result<&str> {
+fn cloud_provider(provider: &str) -> Result<&str, CloudError> {
     let provider = provider.trim();
     if provider.is_empty() {
-        anyhow::bail!("--provider must name the gents cloud credential, for example gents-cloud");
+        return Err(CloudError::NoProvider);
     }
     if matches!(
         provider,
@@ -342,9 +369,9 @@ fn cloud_provider(provider: &str) -> Result<&str> {
             | gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER
             | gents::xai_grok_oauth::XAI_OAUTH_PROVIDER
     ) {
-        anyhow::bail!(
-            "--provider {provider} is an OAuth credential gents refreshes; cloud login stores a workspace token under gents-cloud"
-        );
+        return Err(CloudError::OAuthProvider {
+            provider: provider.to_owned(),
+        });
     }
     Ok(provider)
 }
@@ -357,22 +384,22 @@ fn cloud_endpoint(base: &reqwest::Url, path: &str) -> String {
     url.to_string()
 }
 
-fn cloud_said_no(action: &str, status: StatusCode, body: &str) -> anyhow::Error {
+fn cloud_said_no(action: &'static str, status: StatusCode, body: &str) -> CloudError {
     match message_sentence(body) {
-        Some(reason) => anyhow::anyhow!(
-            "the gents cloud could not {action} (HTTP {status}: {reason}); run `gents cloud login` again"
-        ),
-        None => anyhow::anyhow!(
-            "the gents cloud could not {action} (HTTP {status}); run `gents cloud login` again"
-        ),
+        Some(reason) => CloudError::RefusedWithReason {
+            action,
+            status,
+            reason,
+        },
+        None => CloudError::Refused { action, status },
     }
 }
 
-fn unreachable_cloud(url: &str, error: &reqwest::Error) -> anyhow::Error {
-    anyhow::anyhow!(
-        "cannot reach the gents cloud at {url} ({}); check --cloud and that the host is reachable",
-        transport_reasons(error)
-    )
+fn unreachable_cloud(url: &str, error: &reqwest::Error) -> CloudError {
+    CloudError::Unreachable {
+        url: url.to_owned(),
+        reasons: transport_reasons(error),
+    }
 }
 
 fn transport_reasons(error: &reqwest::Error) -> String {
@@ -637,7 +664,10 @@ mod tests {
             error.to_string(),
             "the gents cloud could not complete this sign-in (HTTP 502 Bad Gateway: upstream is down); run `gents cloud login` again"
         );
-        assert_eq!(error.chain().count(), 1, "no cause chain to print");
+        assert!(
+            std::error::Error::source(&error).is_none(),
+            "no cause chain to print"
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub(crate) use result::{
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -21,10 +21,80 @@ use super::{
     AwaitMode, CancelCause, FailureClass, SelectedToolIdentity, ToolCallLifecycle, ToolCallState,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolCallQueryError {
+    #[error(
+        "AgentToolCall selected tool identity must contain both non-empty selected_service_id and selected_tool_name"
+    )]
+    SelectedToolIdentityIncomplete,
+    #[error("load AgentToolCall query failed: {errors}")]
+    LoadQueryFailed { errors: String },
+    #[error("lifecycle query omitted AgentToolCall rows")]
+    LifecycleQueryOmittedRows,
+    #[error("ambiguous tool-call lifecycle identity")]
+    AmbiguousLifecycleIdentity,
+    #[error("AgentToolCall is missing node_did")]
+    MissingNodeDid,
+    #[error("plugin effect has incoherent accepted-parent provenance")]
+    PluginEffectIncoherentParent,
+    #[error("spawned lifecycle has incoherent accepted-parent provenance")]
+    SpawnedIncoherentParent,
+    #[error("tool lifecycle changed while resolving its publication; retry the scoped read")]
+    ChangedWhileResolving,
+    #[error("AgentToolCall is missing a valid lifecycle_state")]
+    MissingLifecycleState,
+    #[error("AgentToolCall is missing a valid deadline_at")]
+    MissingDeadline,
+    #[error("AgentToolCall is missing a valid await_mode")]
+    MissingAwaitMode,
+    #[error("spawned lifecycle must be background work")]
+    SpawnedNotBackground,
+    #[error("plugin effect must remain foreground work")]
+    PluginEffectNotForeground,
+    #[error("tool owner request lookup failed: {errors}")]
+    RequestLookupFailed { errors: String },
+    #[error("tool owner request lookup omitted rows")]
+    RequestLookupOmittedRows,
+    #[error("tool owner request is missing or ambiguous")]
+    RequestMissingOrAmbiguous,
+    #[error("tool owner request is missing logical request_id")]
+    RequestMissingLogicalId,
+    #[error("tool logical request ID conflicts with physical owner")]
+    LogicalRequestIdConflict,
+    #[error("direct admission lookup omitted tool rows")]
+    DirectAdmissionOmittedToolRows,
+    #[error("direct admission tool is missing or ambiguous")]
+    DirectAdmissionToolMissingOrAmbiguous,
+    #[error("spawned process admission belongs to its accepted meta-call owner")]
+    SpawnedProcessAdmissionNotDirect,
+    #[error("accepted tool lacks request document identity")]
+    AcceptedToolLacksRequestDoc,
+    #[error("accepted tool lacks native ID")]
+    AcceptedToolLacksNativeId,
+    #[error("accepted tool lacks name")]
+    AcceptedToolLacksName,
+    #[error("accepted tool lacks valid message sequence")]
+    AcceptedToolLacksMessageSequence,
+    #[error("accepted tool has an invalid await mode")]
+    AcceptedToolInvalidAwaitMode,
+    #[error("direct admission lookup omitted header rows")]
+    DirectAdmissionOmittedHeaderRows,
+    #[error("accepted header is missing or ambiguous")]
+    AcceptedHeaderMissingOrAmbiguous,
+    #[error("direct tool binding requires assistant publication")]
+    DirectBindingNotAssistant,
+    #[error("partial diagnostic tool bindings must already be terminal and cannot dispatch")]
+    PartialDiagnosticNotTerminal,
+    #[error("direct dispatch requires provider execution publication")]
+    DirectDispatchNotExecution,
+    #[error("accepted header does not uniquely bind this physical tool")]
+    AcceptedHeaderNotUniqueBinding,
+}
+
 fn decode_selected_tool_identity(
     service_id: Option<String>,
     tool_name: Option<String>,
-) -> Result<Option<SelectedToolIdentity>> {
+) -> Result<Option<SelectedToolIdentity>, ToolCallQueryError> {
     match (service_id, tool_name) {
         (None, None) => Ok(None),
         (Some(service_id), Some(tool_name))
@@ -35,10 +105,7 @@ fn decode_selected_tool_identity(
                 tool_name,
             }))
         }
-        _ => anyhow::bail!(
-            "AgentToolCall selected tool identity must contain both non-empty \
-             selected_service_id and selected_tool_name"
-        ),
+        _ => Err(ToolCallQueryError::SelectedToolIdentityIncomplete),
     }
 }
 
@@ -128,21 +195,24 @@ impl ToolCallLifecycle {
         let resp =
             crate::graphql::graphql_with_transaction_retry(&node, &query, "tool_call.load").await?;
         if resp.has_errors() {
-            return Err(anyhow!(
-                "load AgentToolCall query failed: {:?}",
-                resp.errors
-            ));
+            return Err(ToolCallQueryError::LoadQueryFailed {
+                errors: format!("{:?}", resp.errors),
+            }
+            .into());
         }
 
-        anyhow::ensure!(
-            resp.data
-                .as_ref()
-                .and_then(|data| data.get("AgentToolCall"))
-                .is_some(),
-            "lifecycle query omitted AgentToolCall rows"
-        );
+        if resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .is_none()
+        {
+            return Err(ToolCallQueryError::LifecycleQueryOmittedRows.into());
+        }
         let mut rows: Vec<ToolCallRow> = crate::graphql::rows(&resp, "AgentToolCall")?;
-        anyhow::ensure!(rows.len() <= 1, "ambiguous tool-call lifecycle identity");
+        if rows.len() > 1 {
+            return Err(ToolCallQueryError::AmbiguousLifecycleIdentity.into());
+        }
         let Some(row) = rows.pop() else {
             return Ok(None);
         };
@@ -151,7 +221,7 @@ impl ToolCallLifecycle {
             .node_did
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("AgentToolCall is missing node_did"))?;
+            .ok_or(ToolCallQueryError::MissingNodeDid)?;
         let spawned_by_tool_call_doc_id = row
             .spawned_by_tool_call_doc_id
             .as_deref()
@@ -179,35 +249,33 @@ impl ToolCallLifecycle {
         .await?;
 
         if let Some(effect) = plugin_effect.as_ref() {
-            anyhow::ensure!(
-                effect.parent_tool_call_doc_id != row.doc_id
-                    && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
-                    && row.message_sequence == accepted.message_sequence,
-                "plugin effect has incoherent accepted-parent provenance"
-            );
+            if !(effect.parent_tool_call_doc_id != row.doc_id
+                && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
+                && row.message_sequence == accepted.message_sequence)
+            {
+                return Err(ToolCallQueryError::PluginEffectIncoherentParent.into());
+            }
         } else if let Some(parent_doc_id) = spawned_by_tool_call_doc_id.as_deref() {
-            anyhow::ensure!(
-                parent_doc_id != row.doc_id
-                    && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
-                    && row.message_sequence == accepted.message_sequence
-                    && accepted.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
-                "spawned lifecycle has incoherent accepted-parent provenance"
-            );
-        } else {
-            anyhow::ensure!(
-                row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
-                    && row.message_sequence == accepted.message_sequence
-                    && row.tool_call_id == accepted.id
-                    && row.tool_name == accepted.tool_name,
-                "tool lifecycle changed while resolving its publication; retry the scoped read"
-            );
+            if !(parent_doc_id != row.doc_id
+                && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
+                && row.message_sequence == accepted.message_sequence
+                && accepted.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME)
+            {
+                return Err(ToolCallQueryError::SpawnedIncoherentParent.into());
+            }
+        } else if !(row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
+            && row.message_sequence == accepted.message_sequence
+            && row.tool_call_id == accepted.id
+            && row.tool_name == accepted.tool_name)
+        {
+            return Err(ToolCallQueryError::ChangedWhileResolving.into());
         }
 
         let state = row
             .lifecycle_state
             .as_deref()
             .and_then(ToolCallState::from_persisted)
-            .ok_or_else(|| anyhow!("AgentToolCall is missing a valid lifecycle_state"))?;
+            .ok_or(ToolCallQueryError::MissingLifecycleState)?;
 
         let started_at = row
             .started_at
@@ -220,7 +288,7 @@ impl ToolCallLifecycle {
             .as_deref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .ok_or_else(|| anyhow!("AgentToolCall is missing a valid deadline_at"))?;
+            .ok_or(ToolCallQueryError::MissingDeadline)?;
 
         let failure_class = row
             .tool_failure_class
@@ -236,19 +304,13 @@ impl ToolCallLifecycle {
             .await_mode
             .as_deref()
             .and_then(AwaitMode::from_persisted)
-            .ok_or_else(|| anyhow!("AgentToolCall is missing a valid await_mode"))?;
+            .ok_or(ToolCallQueryError::MissingAwaitMode)?;
 
-        if spawned_by_tool_call_doc_id.is_some() {
-            anyhow::ensure!(
-                await_mode == AwaitMode::Background,
-                "spawned lifecycle must be background work"
-            );
+        if spawned_by_tool_call_doc_id.is_some() && await_mode != AwaitMode::Background {
+            return Err(ToolCallQueryError::SpawnedNotBackground.into());
         }
-        if plugin_effect.is_some() {
-            anyhow::ensure!(
-                await_mode == AwaitMode::Foreground,
-                "plugin effect must remain foreground work"
-            );
+        if plugin_effect.is_some() && await_mode != AwaitMode::Foreground {
+            return Err(ToolCallQueryError::PluginEffectNotForeground.into());
         }
         let arguments = if plugin_effect.is_some() {
             let binding = super::delivery::ToolOutputBinding {
@@ -314,34 +376,33 @@ impl ToolCallLifecycle {
         let request_response = crate::graphql::graphql_with_transaction_retry(&node, &format!(
             r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{request_doc}" }} }}, limit: 2) {{ request_id }} }}"#
         ), "tool_call.load_request").await?;
-        anyhow::ensure!(
-            !request_response.has_errors(),
-            "tool owner request lookup failed: {:?}",
-            request_response.errors
-        );
+        if request_response.has_errors() {
+            return Err(ToolCallQueryError::RequestLookupFailed {
+                errors: format!("{:?}", request_response.errors),
+            }
+            .into());
+        }
         let requests = request_response
             .data
             .as_ref()
             .and_then(|data| data.get("AgentRequest"))
             .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| anyhow!("tool owner request lookup omitted rows"))?;
-        anyhow::ensure!(
-            requests.len() == 1,
-            "tool owner request is missing or ambiguous"
-        );
+            .ok_or(ToolCallQueryError::RequestLookupOmittedRows)?;
+        if requests.len() != 1 {
+            return Err(ToolCallQueryError::RequestMissingOrAmbiguous.into());
+        }
         let request_id = requests[0]["request_id"]
             .as_str()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("tool owner request is missing logical request_id"))?
+            .ok_or(ToolCallQueryError::RequestMissingLogicalId)?
             .to_owned();
-        anyhow::ensure!(
-            row.request_id.as_deref().is_none_or(|id| id == request_id),
-            "tool logical request ID conflicts with physical owner"
-        );
+        if !row.request_id.as_deref().is_none_or(|id| id == request_id) {
+            return Err(ToolCallQueryError::LogicalRequestIdConflict.into());
+        }
         let node_did = row
             .node_did
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("AgentToolCall is missing node_did"))?;
+            .ok_or(ToolCallQueryError::MissingNodeDid)?;
 
         Ok(Some(Self {
             node,

@@ -42,37 +42,41 @@ impl ConfigReferences {
     pub fn from_documents(
         node_did: &str,
         documents: impl IntoIterator<Item = (Collection, Value)>,
-    ) -> Result<Self> {
-        ensure!(
-            !node_did.trim().is_empty(),
-            "configuration requires node_did"
-        );
+    ) -> std::result::Result<Self, DocumentConfigError> {
+        if node_did.trim().is_empty() {
+            return Err(DocumentConfigError::ConfigurationRequiresNodeDid);
+        }
         let mut snapshot = Self {
             node_did: node_did.to_owned(),
             documents: BTreeMap::new(),
         };
         for (collection, value) in documents {
-            let value = config_projection(collection, Some(&value))?
+            let value = config_projection(collection, Some(&value))
+                .map_err(|error| DocumentConfigError::DesiredState(Box::new(error)))?
                 .1
-                .context("missing canonical projection")?;
-            ensure!(
-                value["node_did"].as_str() == Some(node_did),
-                "{} configuration owner does not match {node_did:?}",
-                collection.graphql_type()
-            );
+                .ok_or(DocumentConfigError::MissingCanonicalProjection)?;
+            if value["node_did"].as_str() != Some(node_did) {
+                return Err(DocumentConfigError::ConfigurationOwnerNotNode {
+                    collection,
+                    node_did: node_did.to_owned(),
+                });
+            }
             let id = value[collection.unique_field()]
                 .as_str()
                 .filter(|id| !id.trim().is_empty())
-                .context("configuration requires logical ID")?
+                .ok_or(DocumentConfigError::ConfigurationRequiresLogicalId)?
                 .to_owned();
-            ensure!(
-                snapshot
-                    .documents
-                    .insert((collection, id.clone()), value)
-                    .is_none(),
-                "multiple live {} documents share owner {node_did:?} and ID {id:?}",
-                collection.graphql_type()
-            );
+            if snapshot
+                .documents
+                .insert((collection, id.clone()), value)
+                .is_some()
+            {
+                return Err(DocumentConfigError::DuplicateLiveDocument {
+                    collection,
+                    node_did: node_did.to_owned(),
+                    id,
+                });
+            }
         }
         Ok(snapshot)
     }
@@ -99,13 +103,14 @@ impl ConfigReferences {
                 .with_context(|| format!("{name} configuration query did not return rows"))?;
             documents.extend(rows.iter().cloned().map(|row| (collection, row)));
         }
-        Self::from_documents(node_did, documents)
+        Ok(Self::from_documents(node_did, documents)?)
     }
 
     pub(crate) fn profile_with_backend(
         &self,
         profile_id: &str,
-    ) -> Result<Option<(InferenceProfile, InferenceBackend)>> {
+    ) -> std::result::Result<Option<(InferenceProfile, InferenceBackend)>, DocumentConfigError>
+    {
         let Some(profile) = self
             .documents
             .get(&(Collection::InferenceProfile, profile_id.to_owned()))
@@ -116,7 +121,9 @@ impl ConfigReferences {
         let backend = self
             .documents
             .get(&(Collection::InferenceBackend, profile.backend_id.clone()))
-            .with_context(|| format!("profile {profile_id} references a missing backend"))?;
+            .ok_or_else(|| DocumentConfigError::ProfileMissingBackend {
+                profile_id: profile_id.to_owned(),
+            })?;
         Ok(Some((profile, decode(backend)?)))
     }
 
@@ -198,7 +205,7 @@ impl ConfigReferences {
             .collect()
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> anyhow::Result<()> {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;
         }
@@ -207,13 +214,13 @@ impl ConfigReferences {
 
     pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
         let mut candidate = self.clone();
-        ensure!(
-            candidate
-                .documents
-                .remove(&(collection, id.to_owned()))
-                .is_some(),
-            "configuration selected for removal does not exist"
-        );
+        if candidate
+            .documents
+            .remove(&(collection, id.to_owned()))
+            .is_none()
+        {
+            return Err(DocumentConfigError::RemovalTargetMissing.into());
+        }
         for ((kind, _), document) in &self.documents {
             candidate.validate_document(*kind, document)?;
         }
@@ -221,21 +228,24 @@ impl ConfigReferences {
     }
 
     pub(crate) fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
-        ensure!(
-            value["node_did"].as_str() == Some(&self.node_did),
-            "{} configuration owner does not match reference scope",
-            collection.graphql_type()
-        );
+        if value["node_did"].as_str() != Some(&self.node_did) {
+            return Err(DocumentConfigError::ConfigOwnerMismatch { collection }.into());
+        }
         let id = value[collection.unique_field()]
             .as_str()
             .filter(|id| !id.trim().is_empty())
-            .context("configuration requires logical ID")?;
-        let require = |target: Collection, target_id: &str, field: &str| -> Result<()> {
-            ensure!(
-                !target_id.trim().is_empty(),
-                "{} {id} field {field} has a blank reference ID",
-                collection.graphql_type()
-            );
+            .ok_or(DocumentConfigError::ConfigurationRequiresLogicalId)?;
+        let require = |target: Collection,
+                       target_id: &str,
+                       field: &str|
+         -> std::result::Result<(), DocumentConfigError> {
+            if target_id.trim().is_empty() {
+                return Err(DocumentConfigError::BlankReferenceId {
+                    collection,
+                    id: id.to_owned(),
+                    field: field.to_owned(),
+                });
+            }
             if !self.documents.contains_key(&(target, target_id.to_owned())) {
                 return Err(MissingReference {
                     collection,
@@ -249,7 +259,10 @@ impl ConfigReferences {
             }
             Ok(())
         };
-        let optional = |target, target_id: Option<&str>, field| -> Result<()> {
+        let optional = |target,
+                        target_id: Option<&str>,
+                        field|
+         -> std::result::Result<(), DocumentConfigError> {
             if let Some(target_id) = target_id {
                 require(target, target_id, field)?;
             }
@@ -266,12 +279,13 @@ impl ConfigReferences {
                 if let Some(default) = doc.default_agent_id.as_deref() {
                     let agent: Agent =
                         decode(&self.documents[&(Collection::Agent, default.to_owned())])?;
-                    ensure!(
-                        agent.enabled,
-                        "Agent {default:?} is the default agent of {} and must be \
-                         enabled; enable it or choose another default first",
-                        self.node_did
-                    );
+                    if !agent.enabled {
+                        return Err(DocumentConfigError::DefaultAgentDisabled {
+                            agent_id: default.to_owned(),
+                            node_did: self.node_did.clone(),
+                        }
+                        .into());
+                    }
                 }
             }
             Collection::Agent => {
@@ -326,7 +340,7 @@ impl ConfigReferences {
                     .iter()
                     .filter(|((collection, _), _)| *collection == Collection::DatastoreToolSurface)
                     .map(|(_, value)| decode::<DatastoreToolSurfaceDocument>(value))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, DocumentConfigError>>()?;
                 let merged = merge_datastore_tool_surfaces(&doc, &surfaces)?;
                 let cli_names = doc
                     .host
@@ -339,7 +353,7 @@ impl ConfigReferences {
                     .iter()
                     .filter(|((collection, _), _)| *collection == Collection::EthTool)
                     .map(|(_, value)| decode::<EthToolDocument>(value))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, DocumentConfigError>>()?;
                 for tool_id in doc
                     .integrations
                     .as_ref()
@@ -381,7 +395,7 @@ impl ConfigReferences {
                     .iter()
                     .filter(|((collection, _), _)| *collection == Collection::AgentTarget)
                     .map(|(_, value)| decode::<AgentTargetDocument>(value))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, DocumentConfigError>>()?;
                 crate::tool_surface::AgentToolConfig::from_document_with_targets(&doc, &targets)?;
                 if let Some(datastore) = doc.datastore {
                     for surface in datastore.datastore_tool_surface_ids.unwrap_or_default() {
@@ -395,10 +409,11 @@ impl ConfigReferences {
             }
             Collection::AgentTarget => {
                 let doc: AgentTargetDocument = decode(value)?;
-                ensure!(
-                    !doc.target_node_did.trim().is_empty() && !doc.agent_id.trim().is_empty(),
-                    "AgentTarget {id} requires target_node_did and agent_id"
-                );
+                if doc.target_node_did.trim().is_empty() || doc.agent_id.trim().is_empty() {
+                    return Err(
+                        DocumentConfigError::AgentTargetRequiresIds { id: id.to_owned() }.into(),
+                    );
+                }
                 // Same-owner targets close legal agent/context/tools cycles;
                 // foreign targets are checked by delegation admission under ACP.
                 if doc.target_node_did == self.node_did {
@@ -458,7 +473,7 @@ impl ConfigReferences {
                 let task: Task = decode(
                     self.documents
                         .get(&(Collection::Task, doc.task_id.clone()))
-                        .context("trigger task missing")?,
+                        .ok_or(DocumentConfigError::TriggerTaskMissing)?,
                 )?;
                 let forbidden: &[&str] = match &doc.source {
                     TriggerSource::Schedule { schedule_id } => {
@@ -471,11 +486,11 @@ impl ConfigReferences {
                             doc.concurrency.unwrap_or_default(),
                             doc.session_id_template.is_some(),
                         )
-                        .with_context(|| {
-                            format!(
-                                "trigger {} has a schedule source; use an event source or remove the option",
-                                doc.trigger_id
-                            )
+                        .map_err(|source| {
+                            DocumentConfigError::TriggerScheduleOption {
+                                trigger_id: doc.trigger_id.clone(),
+                                source,
+                            }
                         })?;
                         &["doc", "args", "group"]
                     }
@@ -488,17 +503,18 @@ impl ConfigReferences {
                         let source: EventSource = decode(
                             self.documents
                                 .get(&(Collection::EventSource, event_source_id.clone()))
-                                .context("trigger event source missing")?,
+                                .ok_or(DocumentConfigError::TriggerEventSourceMissing)?,
                         )?;
-                        ensure!(
-                            crate::trigger_engine::durable::outcome_source_allowed(
-                                &source.source_collection,
-                                task.emit_outcome,
-                            ),
-                            "trigger {} sources FireOutcome but task {} enables emit_outcome",
-                            doc.trigger_id,
-                            task.task_id
-                        );
+                        if !crate::trigger_engine::durable::outcome_source_allowed(
+                            &source.source_collection,
+                            task.emit_outcome,
+                        ) {
+                            return Err(DocumentConfigError::TriggerFireOutcomeSource {
+                                trigger_id: doc.trigger_id.clone(),
+                                task_id: task.task_id.clone(),
+                            }
+                            .into());
+                        }
                         if source.group.is_some() {
                             &["args"]
                         } else {
@@ -520,15 +536,18 @@ impl ConfigReferences {
                         )
                 {
                     for reference in crate::template::parse_template_for_validation(template)? {
-                        ensure!(
-                            !reference
-                                .root()
-                                .is_some_and(|root| forbidden.contains(&root)),
-                            "trigger {} task {} {field} references unavailable source scope {}",
-                            doc.trigger_id,
-                            task.task_id,
-                            reference.path.join(".")
-                        );
+                        if reference
+                            .root()
+                            .is_some_and(|root| forbidden.contains(&root))
+                        {
+                            return Err(DocumentConfigError::TriggerUnavailableScope {
+                                trigger_id: doc.trigger_id.clone(),
+                                task_id: task.task_id.clone(),
+                                field,
+                                scope: reference.path.join("."),
+                            }
+                            .into());
+                        }
                     }
                 }
             }
@@ -561,7 +580,7 @@ impl ConfigReferences {
                 let source: EventSource = decode(
                     self.documents
                         .get(&(Collection::EventSource, doc.event_source_id.clone()))
-                        .context("callback event source missing")?,
+                        .ok_or(DocumentConfigError::CallbackEventSourceMissing)?,
                 )?;
                 crate::callback::reject_secret_bearing_callback_fields(
                     &doc.binding_id,
@@ -581,7 +600,7 @@ impl ConfigReferences {
     }
 }
 
-fn decode<T>(value: &Value) -> Result<T>
+fn decode<T>(value: &Value) -> std::result::Result<T, DocumentConfigError>
 where
     T: DeserializeOwned,
 {

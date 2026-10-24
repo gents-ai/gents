@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -156,7 +157,7 @@ fn optional_start(
             input.insert(
                 "service".into(),
                 serde_json::json!({
-                    "status":"unavailable", "error":format!("{error:#}"), "code_executed":false
+                    "status":"unavailable", "error":format!("{}", ErrorChain(error.as_ref())), "code_executed":false
                 }),
             );
             Ok(None)
@@ -251,7 +252,7 @@ impl Service {
             Err(error) => {
                 service.terminate().await;
                 let detail = String::from_utf8_lossy(&tail.lock().unwrap()).into_owned();
-                anyhow::bail!("{error:#}; service stderr: {detail}");
+                anyhow::bail!("{}; service stderr: {detail}", ErrorChain(error.as_ref()));
             }
         }
         service.drains.push(tokio::spawn(async move {

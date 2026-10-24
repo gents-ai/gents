@@ -1,13 +1,15 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use gents::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, validate_adapter_projection_contract,
     AdapterProjectionEnvelope,
 };
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 const FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_FIXTURES";
 
@@ -17,11 +19,11 @@ fn external_adapter_projection_fixtures_validate_against_contracts() -> Result<(
     let root = std::env::var_os(FIXTURE_ROOT_ENV)
         .map(PathBuf::from)
         .map(resolve_fixture_root)
-        .context(
+        .ok_or(
             "set GENTS_ADAPTER_INTEROP_FIXTURES to an adapter fixture path and pass --ignored to run external adapter fixture validation",
         )?;
     let files = collect_json_files(&root)?;
-    anyhow::ensure!(
+    assert!(
         !files.is_empty(),
         "{FIXTURE_ROOT_ENV}={} did not contain JSON fixture files",
         root.display()
@@ -43,25 +45,26 @@ fn resolve_fixture_root(root: PathBuf) -> PathBuf {
 }
 
 fn validate_external_fixture_file(path: &Path) -> Result<()> {
-    let raw =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("reading {}: {error}", path.display()))?;
     let value = serde_json::from_str::<Value>(&raw)
-        .with_context(|| format!("parsing {} as JSON", path.display()))?;
+        .map_err(|error| format!("parsing {} as JSON: {error}", path.display()))?;
     let envelope_value = value
         .get("envelope")
         .cloned()
         .unwrap_or_else(|| value.clone());
     let envelope = serde_json::from_value::<AdapterProjectionEnvelope>(envelope_value.clone())
-        .with_context(|| {
+        .map_err(|error| {
             format!(
-                "deserializing adapter projection envelope in {}",
+                "deserializing adapter projection envelope in {}: {error}",
                 path.display()
             )
         })?;
-    validate_adapter_projection_contract(&envelope).with_context(|| {
+    validate_adapter_projection_contract(&envelope).map_err(|error| {
         format!(
-            "validating adapter projection contract in {}",
-            path.display()
+            "validating adapter projection contract in {}: {}",
+            path.display(),
+            ErrorChain(&error)
         )
     })?;
 
@@ -74,7 +77,7 @@ fn validate_external_fixture_file(path: &Path) -> Result<()> {
 
     let jsonl_schema = adapter_projection_jsonl_record_schema(kind);
     let jsonl_records = adapter_projection_jsonl_records(&envelope);
-    anyhow::ensure!(
+    assert!(
         !jsonl_records.is_empty(),
         "{} produced no adapter JSONL records",
         path.display()
@@ -89,7 +92,7 @@ fn validate_external_fixture_file(path: &Path) -> Result<()> {
 
     let eval_schema = adapter_projection_eval_jsonl_record_schema(kind);
     let eval_records = adapter_projection_eval_jsonl_records(&envelope);
-    anyhow::ensure!(
+    assert!(
         !eval_records.is_empty(),
         "{} produced no eval JSONL records",
         path.display()
@@ -106,13 +109,13 @@ fn validate_external_fixture_file(path: &Path) -> Result<()> {
 }
 
 fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
-    let validator =
-        jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|error| format!("compiling {label} schema: {error}"))?;
     let errors = validator
         .iter_errors(instance)
         .map(|error| format!("{}: {error}", error.instance_path()))
         .collect::<Vec<_>>();
-    anyhow::ensure!(
+    assert!(
         errors.is_empty(),
         "{label} failed JSON Schema validation:\n{}",
         errors.join("\n")
@@ -136,12 +139,14 @@ fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
         }
         return Ok(());
     }
-    anyhow::ensure!(
+    assert!(
         path.is_dir(),
         "adapter interop fixture path is neither file nor directory: {}",
         path.display()
     );
-    for entry in std::fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
+    for entry in
+        std::fs::read_dir(path).map_err(|error| format!("reading {}: {error}", path.display()))?
+    {
         let entry = entry?;
         if entry.file_name() == "gents-exports" {
             continue;

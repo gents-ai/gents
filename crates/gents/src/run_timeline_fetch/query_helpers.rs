@@ -1,10 +1,11 @@
+use super::error::{Result, RunTimelineError};
 use super::*;
 
 pub(super) async fn load_rows<T>(
     access: &ConfigAccess,
     collection: &str,
     query: &str,
-) -> Result<Vec<T>>
+) -> anyhow::Result<Vec<T>>
 where
     T: DeserializeOwned,
 {
@@ -20,31 +21,36 @@ pub(super) async fn required_rows(
     access: &ConfigAccess,
     collection_name: &str,
     query: &str,
-) -> Result<Vec<Value>> {
+) -> anyhow::Result<Vec<Value>> {
     let response = access
         .execute(query)
         .await
         .with_context(|| format!("reading required timeline collection {collection_name}"))?;
-    decode_required_rows(&response, collection_name)
+    Ok(decode_required_rows(&response, collection_name)?)
 }
 
 fn decode_required_rows(response: &Value, collection: &str) -> Result<Vec<Value>> {
-    anyhow::ensure!(
-        response
-            .get("errors")
-            .is_none_or(|errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)),
-        "timeline {collection} query failed: {}",
-        response["errors"]
-    );
+    if !response
+        .get("errors")
+        .is_none_or(|errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty))
+    {
+        return Err(RunTimelineError::RequiredRowsFailed {
+            collection: collection.to_owned(),
+            errors: response["errors"].clone(),
+        });
+    }
     let rows = response
         .get("data")
         .and_then(|data| data.get(collection))
         .and_then(Value::as_array)
-        .with_context(|| format!("timeline query omitted required {collection} row array"))?;
-    anyhow::ensure!(
-        rows.iter().all(Value::is_object),
-        "timeline {collection} query returned a non-document row"
-    );
+        .ok_or_else(|| RunTimelineError::RequiredRowsOmitted {
+            collection: collection.to_owned(),
+        })?;
+    if !rows.iter().all(Value::is_object) {
+        return Err(RunTimelineError::NonDocumentRows {
+            collection: collection.to_owned(),
+        });
+    }
     Ok(rows.clone())
 }
 

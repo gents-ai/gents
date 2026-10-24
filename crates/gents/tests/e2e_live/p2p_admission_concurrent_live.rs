@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::NodeIdentity;
@@ -13,6 +12,8 @@ use crate::support::interrupt::{create_runtime_request, BootedAgent};
 use crate::support::live_inference::{bind_target, boot_live_agent, live_target};
 use crate::support::p2p_waits::wait_for_listen_addr;
 use crate::support::{first_optional_row, test_p2p_db_with_admission, TestDb, TestP2pAdmission};
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 const CONCURRENT_WAVES: usize = 4;
 const REPLICATED: &[&str] = &["AgentRequest", "AgentOutputSegment", "AgentMessage"];

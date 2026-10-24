@@ -1,15 +1,16 @@
 use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, ExitCode};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use gents_desktop_core::client::DesktopPaths;
+use gents_desktop_core::client::{DesktopPaths, PathsError};
 use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, default_node_home, init_standard_local_runtime,
-    render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
+    render_human_summary, reset_desktop_runtime_state, DesktopInitOptions, LocalRuntimeError,
 };
+use gents_protocol::error_chain::ErrorChain;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -55,23 +56,71 @@ struct InitArgs {
     json: bool,
 }
 
-fn main() -> anyhow::Result<()> {
-    init_tracing();
-    let cli = Cli::parse();
-    if let Some(command) = cli.command {
-        return run_command(command);
-    }
-
-    launch_desktop()
+#[derive(Debug, thiserror::Error)]
+enum LauncherError {
+    #[error(
+        "{} is a debug build, which loads its UI from the Vite dev server \
+         (http://localhost:1420) instead of bundled assets, but nothing is \
+         listening there right now.\n\n\
+         You can fix this in one of the following ways:\n  \
+         - Start the dev server first: `npm --prefix apps/gents-desktop run dev`, \
+         then run `gents-desktop` again.\n  \
+         - Launch via `make desktop-native-dev`, which starts both for you.\n  \
+         - Build a standalone binary with `make desktop-native-build` (release \
+         mode; no dev server needed).",
+        binary.display()
+    )]
+    DevServerUnreachable { binary: PathBuf },
+    #[error("failed to launch {}: {error}", binary.display())]
+    Launch {
+        binary: PathBuf,
+        error: std::io::Error,
+    },
+    #[error(transparent)]
+    CurrentExe(std::io::Error),
+    #[error("failed to resolve launcher directory")]
+    LauncherDirectory,
+    #[error(
+        "could not find the Tauri desktop binary `{binary}`. Install or build `gents-desktop-tauri`, or set GENTS_DESKTOP_TAURI_BIN."
+    )]
+    TauriBinaryNotFound { binary: &'static str },
 }
 
-fn run_command(command: Command) -> anyhow::Result<()> {
+#[derive(Debug, thiserror::Error)]
+enum CommandError {
+    #[error(transparent)]
+    Runtime(#[from] std::io::Error),
+    #[error(transparent)]
+    Paths(#[from] PathsError),
+    #[error(transparent)]
+    LocalRuntime(#[from] LocalRuntimeError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+/// Prints the error with its source chain to stderr and exits non-zero.
+fn main() -> ExitCode {
+    init_tracing();
+    let cli = Cli::parse();
+    let result = match cli.command {
+        Some(command) => run_command(command).map_err(|error| ErrorChain(&error).to_string()),
+        None => launch_desktop().map_err(|error| ErrorChain(&error).to_string()),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_command(command: Command) -> Result<(), CommandError> {
     match command {
         Command::Init(args) => {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
-                .build()
-                .map_err(|error| anyhow::anyhow!(error))?;
+                .build()?;
             let desktop_paths = match args.desktop_home {
                 Some(root) => DesktopPaths::from_root(root),
                 None => DesktopPaths::discover()?,
@@ -97,30 +146,24 @@ fn run_command(command: Command) -> anyhow::Result<()> {
     }
 }
 
-fn launch_desktop() -> anyhow::Result<()> {
+fn launch_desktop() -> Result<(), LauncherError> {
     let tauri_binary = resolve_tauri_binary()?;
     tracing::info!(path = %tauri_binary.display(), "launching tauri desktop shell");
 
     if is_debug_build(&tauri_binary) && !dev_server_reachable() {
-        anyhow::bail!(
-            "{} is a debug build, which loads its UI from the Vite dev server \
-             (http://localhost:1420) instead of bundled assets, but nothing is \
-             listening there right now.\n\n\
-             You can fix this in one of the following ways:\n  \
-             - Start the dev server first: `npm --prefix apps/gents-desktop run dev`, \
-             then run `gents-desktop` again.\n  \
-             - Launch via `make desktop-native-dev`, which starts both for you.\n  \
-             - Build a standalone binary with `make desktop-native-build` (release \
-             mode; no dev server needed).",
-            tauri_binary.display()
-        );
+        return Err(LauncherError::DevServerUnreachable {
+            binary: tauri_binary,
+        });
     }
 
     // The frontend is not a runtime or logging supervisor. Native logging is
     // initialized inside the app; the OS service owns the agent's lifetime.
     ProcessCommand::new(&tauri_binary)
         .spawn()
-        .map_err(|error| anyhow::anyhow!("failed to launch {}: {error}", tauri_binary.display()))?;
+        .map_err(|error| LauncherError::Launch {
+            binary: tauri_binary.clone(),
+            error,
+        })?;
     Ok(())
 }
 
@@ -138,7 +181,7 @@ fn dev_server_reachable() -> bool {
     .is_ok()
 }
 
-fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
+fn resolve_tauri_binary() -> Result<PathBuf, LauncherError> {
     if let Ok(explicit) = std::env::var("GENTS_DESKTOP_TAURI_BIN") {
         let explicit = PathBuf::from(explicit);
         if explicit.is_file() {
@@ -146,11 +189,11 @@ fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
         }
     }
 
-    let current_exe = std::env::current_exe()?;
+    let current_exe = std::env::current_exe().map_err(LauncherError::CurrentExe)?;
     let sibling = current_exe
         .parent()
         .map(|dir| dir.join(tauri_binary_name()))
-        .ok_or_else(|| anyhow::anyhow!("failed to resolve launcher directory"))?;
+        .ok_or(LauncherError::LauncherDirectory)?;
     if sibling.is_file() {
         return Ok(sibling);
     }
@@ -160,10 +203,9 @@ fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
         return Ok(path_candidate);
     }
 
-    Err(anyhow::anyhow!(
-        "could not find the Tauri desktop binary `{}`. Install or build `gents-desktop-tauri`, or set GENTS_DESKTOP_TAURI_BIN.",
-        tauri_binary_name()
-    ))
+    Err(LauncherError::TauriBinaryNotFound {
+        binary: tauri_binary_name(),
+    })
 }
 
 fn which_in_path(binary: &PathBuf) -> Option<PathBuf> {

@@ -45,7 +45,7 @@ pub(crate) fn new(args: PackNewArgs) -> Result<()> {
         );
     }
     let report = scaffold(&dir, &args.name, &args.options)?;
-    crate::print_json(&serde_json::to_value(report)?)
+    Ok(crate::print_json(&serde_json::to_value(report)?)?)
 }
 
 pub(crate) fn init(args: PackScaffoldArgs) -> Result<()> {
@@ -56,7 +56,7 @@ pub(crate) fn init(args: PackScaffoldArgs) -> Result<()> {
         .context("the current directory has no usable name")?
         .to_owned();
     let report = scaffold(&dir, &name, &args)?;
-    crate::print_json(&serde_json::to_value(report)?)
+    Ok(crate::print_json(&serde_json::to_value(report)?)?)
 }
 
 pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Result<ScaffoldReport> {
@@ -98,7 +98,9 @@ pub(crate) fn write_plugin_source(
     name: &str,
     language: Option<&str>,
 ) -> Result<String> {
-    gents::pack::authoring::write_plugin_source(source, name, language)
+    Ok(gents::pack::authoring::write_plugin_source(
+        source, name, language,
+    )?)
 }
 
 #[cfg(test)]

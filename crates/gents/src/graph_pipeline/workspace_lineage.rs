@@ -1,3 +1,4 @@
+use super::super::runtime::GraphPipelineError;
 use super::super::StageTarget;
 use super::*;
 use crate::lifecycle::WorkspaceLineage;
@@ -21,11 +22,10 @@ fn matches_hint(hint: &Option<String>, expected: &Option<String>) -> bool {
     present(hint.as_deref()).is_none_or(|value| Some(value) == present(expected.as_deref()))
 }
 
-fn validate_tuple(lineage: &WorkspaceLineage) -> Result<()> {
-    anyhow::ensure!(
-        lineage.workspace_id.is_some() || lineage.workspace_seal_hash.is_none(),
-        "unbound graph workspace cannot carry a seal"
-    );
+fn validate_tuple(lineage: &WorkspaceLineage) -> Result<(), GraphPipelineError> {
+    if lineage.workspace_id.is_none() && lineage.workspace_seal_hash.is_some() {
+        return Err(GraphPipelineError::UnboundWorkspaceSeal);
+    }
     Ok(())
 }
 
@@ -53,12 +53,14 @@ fn from_row(row: &AgentRequestRow) -> WorkspaceLineage {
     }
 }
 
-fn from_input(input: &Value) -> Result<WorkspaceLineage> {
-    let field = |name: &str| -> Result<Option<String>> {
+fn from_input(input: &Value) -> Result<WorkspaceLineage, GraphPipelineError> {
+    let field = |name: &str| -> Result<Option<String>, GraphPipelineError> {
         match input.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(value)) => Ok(present(Some(value)).map(str::to_owned)),
-            _ => anyhow::bail!("graph input workspace field {name} must be a string"),
+            _ => Err(GraphPipelineError::WorkspaceFieldNotString {
+                name: name.to_owned(),
+            }),
         }
     };
     Ok(WorkspaceLineage {
@@ -89,7 +91,9 @@ async fn stamp_from_workspace_owner(
         workspace.owner_node_did == owner,
         "graph input workspace owner mismatch"
     );
-    crate::workspace::apply_workspace_lineage_stamp(lineage, &workspace)
+    Ok(crate::workspace::apply_workspace_lineage_stamp(
+        lineage, &workspace,
+    )?)
 }
 
 struct VerifiedGraphContext {
@@ -352,12 +356,14 @@ pub(crate) async fn fence_root_workspace_in_txn(
             && explicit.workspace_seal_hash == expected.workspace_seal_hash,
         "signed graph workspace tuple differs from resolved publication evidence"
     );
-    super::super::runtime::fence_observed_graph_publication_in_txn(
-        txn,
-        &resolved.run,
-        &resolved.digest,
+    Ok(
+        super::super::runtime::fence_observed_graph_publication_in_txn(
+            txn,
+            &resolved.run,
+            &resolved.digest,
+        )
+        .await?,
     )
-    .await
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

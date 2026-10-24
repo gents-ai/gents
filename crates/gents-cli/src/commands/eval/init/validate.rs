@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 
 use gents::document_config::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
@@ -52,7 +53,7 @@ pub(crate) fn validate(
     let definition = &assembled.definition;
     definition
         .validate()
-        .map_err(|error| vec![format!("{error:#}")])?;
+        .map_err(|error| vec![format!("{}", ErrorChain(&error))])?;
     for step in [
         catalog_conformance(definition, registry),
         capture_conformance(definition, dossier),

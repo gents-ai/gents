@@ -4,7 +4,6 @@ use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
 
-use anyhow::{ensure, Context, Result};
 use windows_sys::Win32::Foundation::{LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
@@ -20,6 +19,28 @@ use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum WindowsSecurityError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("Windows did not return a user token size")]
+    TokenSizeUnavailable,
+    #[error("decoding the Windows user SID")]
+    SidText(#[source] std::string::FromUtf16Error),
+    #[error("client files must be owned by this Windows user, SYSTEM or administrators")]
+    UnexpectedOwner,
+    #[error("client files require a private Windows DACL")]
+    DaclMissing,
+    #[error("client files require an explicit private Windows ACL")]
+    DaclInvalid,
+    #[error("client files use an unsupported Windows ACL entry")]
+    UnsupportedAce,
+    #[error("client files grant access to another Windows account; choose a private client home under LocalAppData")]
+    ForeignGrant,
+}
+
+type Result<T, E = WindowsSecurityError> = std::result::Result<T, E>;
 
 pub(super) struct LocalAllocation(pub(super) *mut c_void);
 
@@ -41,7 +62,9 @@ impl Sid {
     pub(super) fn for_process(pid: u32) -> Result<Self> {
         // SAFETY: OpenProcess returns an owned handle or null; no rights to modify the peer are requested.
         let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        ensure!(!raw.is_null(), io::Error::last_os_error());
+        if raw.is_null() {
+            return Err(io::Error::last_os_error().into());
+        }
         // SAFETY: raw is a newly owned, non-null process handle.
         let process = unsafe { OwnedHandle::from_raw_handle(raw) };
         Self::from_process(process.as_raw_handle())
@@ -50,10 +73,9 @@ impl Sid {
     fn from_process(process: HANDLE) -> Result<Self> {
         let mut token = ptr::null_mut();
         // SAFETY: process is a live process handle; token is writable for one returned handle.
-        ensure!(
-            unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } != 0,
-            io::Error::last_os_error()
-        );
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
         // SAFETY: OpenProcessToken transferred ownership of token on success.
         let token = unsafe { OwnedHandle::from_raw_handle(token) };
         let mut length = 0;
@@ -67,34 +89,32 @@ impl Sid {
                 &mut length,
             )
         };
-        ensure!(
-            length as usize >= size_of::<TOKEN_USER>(),
-            "Windows did not return a user token size"
-        );
+        if (length as usize) < size_of::<TOKEN_USER>() {
+            return Err(WindowsSecurityError::TokenSizeUnavailable);
+        }
         let mut buffer = vec![0_usize; (length as usize).div_ceil(size_of::<usize>())];
         // SAFETY: buffer has TOKEN_USER alignment and at least length initialized bytes.
-        ensure!(
-            unsafe {
-                GetTokenInformation(
-                    token.as_raw_handle(),
-                    TokenUser,
-                    buffer.as_mut_ptr().cast(),
-                    length,
-                    &mut length,
-                )
-            } != 0,
-            io::Error::last_os_error()
-        );
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error().into());
+        }
         // SAFETY: successful TokenUser information starts with TOKEN_USER; its SID lives in buffer.
         let raw = unsafe { (*(buffer.as_ptr().cast::<TOKEN_USER>())).User.Sid };
         // SAFETY: GetTokenInformation returned a valid SID that remains live until buffer drops.
         let length = unsafe { GetLengthSid(raw) };
         let mut sid = Self(vec![0; (length as usize).div_ceil(size_of::<u32>())]);
         // SAFETY: sid has SID alignment and length bytes; raw remains valid for this copy.
-        ensure!(
-            unsafe { CopySid(length, sid.0.as_mut_ptr().cast(), raw) } != 0,
-            io::Error::last_os_error()
-        );
+        if unsafe { CopySid(length, sid.0.as_mut_ptr().cast(), raw) } == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
         Ok(sid)
     }
 
@@ -114,10 +134,9 @@ impl Sid {
     pub(super) fn text(&self) -> Result<String> {
         let mut text = ptr::null_mut();
         // SAFETY: self contains a live SID and text is writable for the returned allocation.
-        ensure!(
-            unsafe { ConvertSidToStringSidW(self.raw(), &mut text) } != 0,
-            io::Error::last_os_error()
-        );
+        if unsafe { ConvertSidToStringSidW(self.raw(), &mut text) } == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
         let allocation = LocalAllocation(text.cast());
         let mut length = 0;
         // SAFETY: Windows returns a terminated UTF-16 SID string in this allocation.
@@ -126,7 +145,7 @@ impl Sid {
         }
         // SAFETY: the preceding scan found length initialized UTF-16 units in allocation.
         let text = unsafe { std::slice::from_raw_parts(text, length) };
-        let result = String::from_utf16(text).context("decoding the Windows user SID");
+        let result = String::from_utf16(text).map_err(WindowsSecurityError::SidText);
         drop(allocation);
         result
     }
@@ -136,17 +155,17 @@ pub(super) fn descriptor(sddl: &str) -> Result<LocalAllocation> {
     let text: Vec<_> = sddl.encode_utf16().chain(Some(0)).collect();
     let mut descriptor = ptr::null_mut();
     // SAFETY: text is terminated UTF-16 and descriptor is writable for the returned LocalAlloc pointer.
-    ensure!(
-        unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                text.as_ptr(),
-                SDDL_REVISION_1,
-                &mut descriptor,
-                ptr::null_mut(),
-            )
-        } != 0,
-        io::Error::last_os_error()
-    );
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            text.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
     Ok(LocalAllocation(descriptor))
 }
 
@@ -170,12 +189,13 @@ pub(super) fn require_private_file(file: &std::fs::File) -> Result<()> {
             &mut descriptor,
         )
     };
-    ensure!(status == 0, io::Error::from_raw_os_error(status as i32));
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
     let descriptor = LocalAllocation(descriptor);
-    ensure!(
-        !owner.is_null() && (user.matches_raw(owner) || privileged_sid(owner)),
-        "client files must be owned by this Windows user, SYSTEM or administrators"
-    );
+    if owner.is_null() || !(user.matches_raw(owner) || privileged_sid(owner)) {
+        return Err(WindowsSecurityError::UnexpectedOwner);
+    }
     require_private_acl(&descriptor, &user)
 }
 
@@ -184,34 +204,33 @@ fn require_private_acl(security: &LocalAllocation, user: &Sid) -> Result<()> {
     let mut dacl: *mut ACL = ptr::null_mut();
     let mut defaulted = 0;
     // SAFETY: security owns a valid descriptor and the output pointers remain writable.
-    ensure!(
-        unsafe { GetSecurityDescriptorDacl(security.0, &mut present, &mut dacl, &mut defaulted) }
-            != 0,
-        io::Error::last_os_error()
-    );
-    ensure!(present != 0, "client files require a private Windows DACL");
+    if unsafe { GetSecurityDescriptorDacl(security.0, &mut present, &mut dacl, &mut defaulted) }
+        == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    if present == 0 {
+        return Err(WindowsSecurityError::DaclMissing);
+    }
     // SAFETY: a non-null DACL was returned inside a live security descriptor.
-    ensure!(
-        !dacl.is_null() && unsafe { IsValidAcl(dacl) } != 0,
-        "client files require an explicit private Windows ACL"
-    );
+    if dacl.is_null() || unsafe { IsValidAcl(dacl) } == 0 {
+        return Err(WindowsSecurityError::DaclInvalid);
+    }
     // SAFETY: IsValidAcl established that dacl points to a valid ACL header.
     for index in 0..unsafe { (*dacl).AceCount } {
         let mut ace = ptr::null_mut();
         // SAFETY: index is within AceCount and ace is writable for the returned pointer.
-        ensure!(
-            unsafe { GetAce(dacl, u32::from(index), &mut ace) } != 0,
-            io::Error::last_os_error()
-        );
+        if unsafe { GetAce(dacl, u32::from(index), &mut ace) } == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
         // SAFETY: GetAce returned a valid ACE header in the live DACL.
         let header = unsafe { &*ace.cast::<ACE_HEADER>() };
         if u32::from(header.AceType) == ACCESS_DENIED_ACE_TYPE {
             continue;
         }
-        ensure!(
-            u32::from(header.AceType) == ACCESS_ALLOWED_ACE_TYPE,
-            "client files use an unsupported Windows ACL entry"
-        );
+        if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
+            return Err(WindowsSecurityError::UnsupportedAce);
+        }
         // SAFETY: this ACE has the validated ACCESS_ALLOWED_ACE layout and a valid trailing SID.
         let sid = unsafe {
             ptr::addr_of!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart)
@@ -225,7 +244,9 @@ fn require_private_acl(security: &LocalAllocation, user: &Sid) -> Result<()> {
                 u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0
                     && IsWellKnownSid(sid, WinCreatorOwnerSid) != 0
             };
-        ensure!(trusted, "client files grant access to another Windows account; choose a private client home under LocalAppData");
+        if !trusted {
+            return Err(WindowsSecurityError::ForeignGrant);
+        }
     }
     Ok(())
 }

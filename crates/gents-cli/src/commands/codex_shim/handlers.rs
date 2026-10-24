@@ -26,13 +26,13 @@ pub(super) async fn handle_request(
     let codex_request = match client_request_from_jsonrpc(request) {
         Ok(request) => request,
         Err(err) => {
-            return send_error(
+            return Ok(send_error(
                 outbound,
                 request_id,
                 JSONRPC_INVALID_REQUEST,
                 format!("invalid Codex shim request `{method}`: {err}"),
             )
-            .await;
+            .await?);
         }
     };
 
@@ -105,7 +105,7 @@ pub(super) async fn handle_request(
             request_id, params, ..
         } => skills::handle_skills_config_write(outbound, state, request_id, params).await,
 
-        unsupported => send_planned_stub(outbound, state, unsupported).await,
+        unsupported => Ok(send_planned_stub(outbound, state, unsupported).await?),
     };
 
     if let Err(err) = result {
@@ -115,13 +115,13 @@ pub(super) async fn handle_request(
             error = %err,
             "Codex shim request failed"
         );
-        return send_error(
+        return Ok(send_error(
             outbound,
             request_id,
             JSONRPC_INTERNAL_ERROR,
             format!("Codex shim request `{method}` failed: {err}"),
         )
-        .await;
+        .await?);
     }
 
     Ok(())

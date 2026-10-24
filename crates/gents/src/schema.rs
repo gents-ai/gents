@@ -1,4 +1,3 @@
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 #[cfg(feature = "agent-memory")]
@@ -23,13 +22,20 @@ pub use gents_protocol::schemas::{
     TOOL_SERVICE_REGISTRY as TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 
-pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaError {
+    #[error(transparent)]
+    Migration(#[from] crate::migration::RuntimeMigrationError),
+}
+
+pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<(), SchemaError> {
     if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
         return access
             .run_local_owned(|node| async move {
                 crate::migration::ensure_migrations_borrowed(node.as_ref()).await
             })
-            .await;
+            .await
+            .map_err(SchemaError::from);
     }
-    crate::migration::ensure_migrations_borrowed(node).await
+    Ok(crate::migration::ensure_migrations_borrowed(node).await?)
 }

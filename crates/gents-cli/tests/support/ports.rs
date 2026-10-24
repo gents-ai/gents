@@ -2,13 +2,25 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::net::TcpListener;
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{bail, Context, Result};
-
 const FIRST_TEST_PORT: u16 = 20_000;
 const LAST_TEST_PORT: u16 = 45_000;
 
 static NEXT_TEST_PORT: OnceLock<Mutex<u16>> = OnceLock::new();
 static PORT_RESERVATIONS: OnceLock<Mutex<Vec<(u16, File)>>> = OnceLock::new();
+
+#[derive(Debug, thiserror::Error)]
+pub enum PortError {
+    #[error("creating test port reservation directory")]
+    CreateReservationDir(#[source] std::io::Error),
+    #[error("opening test port reservation")]
+    OpenReservation(#[source] std::io::Error),
+    #[error("locking test port reservation")]
+    LockReservation(#[source] std::io::Error),
+    #[error("no free test port in {FIRST_TEST_PORT}..={LAST_TEST_PORT}")]
+    NoFreePort,
+}
+
+type Result<T, E = PortError> = std::result::Result<T, E>;
 
 pub fn allocate_port() -> Result<u16> {
     // Allocate monotonically from a fixed range instead of probing port 0:
@@ -17,7 +29,7 @@ pub fn allocate_port() -> Result<u16> {
     // ephemeral range, so this only narrows the collision window. Reservation
     // files must not be unlinked: replacing an inode defeats their lock.
     let reservations = std::env::temp_dir().join("gents-cli-test-port-reservations");
-    std::fs::create_dir_all(&reservations).context("creating test port reservation directory")?;
+    std::fs::create_dir_all(&reservations).map_err(PortError::CreateReservationDir)?;
     let next_port = NEXT_TEST_PORT.get_or_init(|| Mutex::new(FIRST_TEST_PORT));
     for _ in FIRST_TEST_PORT..=LAST_TEST_PORT {
         let port = {
@@ -36,12 +48,12 @@ pub fn allocate_port() -> Result<u16> {
             .read(true)
             .write(true)
             .open(reservations.join(port.to_string()))
-            .context("opening test port reservation")?;
+            .map_err(PortError::OpenReservation)?;
         match reservation.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => continue,
             Err(TryLockError::Error(error)) => {
-                return Err(error).context("locking test port reservation");
+                return Err(PortError::LockReservation(error));
             }
         }
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
@@ -55,7 +67,7 @@ pub fn allocate_port() -> Result<u16> {
         }
     }
 
-    bail!("no free test port in {FIRST_TEST_PORT}..={LAST_TEST_PORT}")
+    Err(PortError::NoFreePort)
 }
 
 /// True while this process still holds `allocate_port`'s advisory reservation

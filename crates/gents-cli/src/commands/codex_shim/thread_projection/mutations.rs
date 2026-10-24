@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::config_client::ConfigAccess;
 use gents_codex_protocol as codex;
 
 use crate::commands::codex_shim::ShimState;
 
-use super::{load_codex_thread, CodexThreadRecord};
+use super::{load_codex_thread, CodexShimProjectionError, CodexThreadRecord};
 
 pub(in crate::commands::codex_shim) async fn set_codex_thread_loaded(
     state: &ShimState,
@@ -63,11 +63,10 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
                 Some(state.local_requester_did()),
             )
             .await?
-            .context("thread session vanished during rename")?;
-            anyhow::ensure!(
-                row.session.agent_id == state.agent_id.as_ref(),
-                "thread agent changed during rename"
-            );
+            .ok_or(CodexShimProjectionError::ThreadSessionVanished)?;
+            if row.session.agent_id != state.agent_id.as_ref() {
+                return Err(CodexShimProjectionError::ThreadAgentChanged.into());
+            }
             gents::session::apply_title_in_txn(
                 txn,
                 &state.node_did,
@@ -106,7 +105,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_settings(
         return Ok(());
     }
     let settings_json =
-        serde_json::to_string(settings).context("encoding Codex thread settings")?;
+        serde_json::to_string(settings).map_err(CodexShimProjectionError::EncodeThreadSettings)?;
     state.set_thread_settings(thread_id, &settings_json).await;
     if let Some(cwd) = settings.cwd.as_deref() {
         let cwd = if cwd.is_absolute() {

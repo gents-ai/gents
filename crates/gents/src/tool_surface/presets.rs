@@ -56,7 +56,7 @@ pub fn preset_name(fields: &PresetFields) -> Option<&'static str> {
 pub fn classify_tools(
     tools: &crate::document_config::Tools,
     merged: &crate::document_config::MergedSurfaceTools,
-) -> anyhow::Result<Option<&'static str>> {
+) -> Result<Option<&'static str>, super::ToolSurfaceError> {
     use crate::tool_surface::{BashMode, FileToolMode};
     let host = tools.host.as_ref();
     let files = host
@@ -65,13 +65,14 @@ pub fn classify_tools(
         .unwrap_or_default();
     let bash = host.and_then(|h| h.bash.as_ref());
     let mode = bash.map(|b| b.mode).unwrap_or_default();
-    let prefixes = |values: Option<&Vec<Vec<String>>>| -> anyhow::Result<Vec<String>> {
-        values
-            .into_iter()
-            .flatten()
-            .map(|v| serde_json::to_string(v).map_err(Into::into))
-            .collect()
-    };
+    let prefixes =
+        |values: Option<&Vec<Vec<String>>>| -> Result<Vec<String>, super::ToolSurfaceError> {
+            values
+                .into_iter()
+                .flatten()
+                .map(|v| serde_json::to_string(v).map_err(Into::into))
+                .collect()
+        };
     Ok(preset_name(&PresetFields {
         enable_file_tools: files != FileToolMode::Off,
         file_tools_mode: format!("{files:?}"),

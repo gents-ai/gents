@@ -323,6 +323,7 @@ pub async fn ux_data_surfaces(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     /// `ctx.plugin` resolves its pack from the caller's own listing: an
     /// unknown listing, a plugin outside a pack and a plugin the pack does
@@ -381,8 +382,12 @@ mod tests {
 
         let refused = |ux: &str, name: &str| {
             format!(
-                "{:#}",
-                plugin_call_target(home.path(), ux, name).unwrap_err()
+                "{}",
+                ErrorChain(
+                    plugin_call_target(home.path(), ux, name)
+                        .unwrap_err()
+                        .as_ref()
+                )
             )
         };
         assert!(refused("nope", "board_store").contains("no ux plugin \"nope\""));

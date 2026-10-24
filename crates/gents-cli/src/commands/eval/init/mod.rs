@@ -17,6 +17,7 @@ use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
 mod contract;
 pub(crate) mod dossier;
 pub(crate) mod draft;
+mod error;
 mod pilot;
 mod readiness;
 pub(crate) mod turn;
@@ -402,6 +403,7 @@ pub(crate) fn pack_config(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     use super::turn::ScriptedTurn;
@@ -519,7 +521,7 @@ mod tests {
             .await
             .err()
             .expect("three failed drafts are an error");
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains("after 3 rounds"), "{message}");
         assert!(message.contains("unknown check"), "{message}");
         assert_eq!(turn.sent.len(), 3);
@@ -582,8 +584,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("no-such-profile"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("no-such-profile"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

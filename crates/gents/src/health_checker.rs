@@ -11,6 +11,12 @@ use tokio_util::sync::CancellationToken;
 
 use gents_protocol::tool_service_health::ToolServiceHealthProjection;
 
+#[derive(Debug, thiserror::Error)]
+pub enum HealthCheckerError {
+    #[error("registry health checks require a node scope")]
+    NoNodeScope,
+}
+
 use crate::graphql::escape_graphql_string;
 use crate::mcp_pool::{resolve_mcp_url, McpPool};
 
@@ -361,7 +367,7 @@ async fn run_health_check(
     let owner = persistence
         .as_ref()
         .map(|context| context.node_did)
-        .ok_or_else(|| anyhow::anyhow!("registry health checks require a node scope"))?;
+        .ok_or(HealthCheckerError::NoNodeScope)?;
     let services = crate::registry::configured_mcp_services(node, owner)
         .await?
         .into_iter()
@@ -1272,7 +1278,11 @@ mod tests {
                     if probe_succeeds.load(Ordering::SeqCst) {
                         Ok(ListToolsResult::default())
                     } else {
-                        anyhow::bail!("synthetic MCP health probe failure")
+                        Err(crate::mcp_pool::McpPoolError::ListTools {
+                            error: crate::mcp_pool::test_service_error(
+                                "synthetic MCP health probe failure",
+                            ),
+                        })
                     }
                 }
             })

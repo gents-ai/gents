@@ -2,13 +2,13 @@ use crate::support::*;
 
 use std::fs;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -91,7 +91,7 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -126,7 +126,7 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
     let mut config = read_json_file(&config_path)?;
     let backend_id = config["inference_backends"][0]["backend_id"]
         .as_str()
-        .context("exported backend id")?
+        .expect("exported backend id")
         .to_string();
     config["inference_backends"][0]["endpoint"] =
         Value::String("http://127.0.0.1:9000/v1".to_string());

@@ -4,6 +4,7 @@ use crate::tool_call_lifecycle::admission_fixture::{
     published_session_message_with_owner, PublishedAdmission, PublishedAdmissionOptions,
 };
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 /// Fixture writes to a `@branchable` collection also advance its
@@ -1497,7 +1498,8 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
             error
                 .to_string()
                 .contains("tool owner request is missing or ambiguous"),
-            "{name}: unexpected missing-owner guard: {error:#}"
+            "{name}: unexpected missing-owner guard: {}",
+            ErrorChain(error.as_ref())
         );
         let registry = crate::BackgroundExecutionRegistry::default();
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(

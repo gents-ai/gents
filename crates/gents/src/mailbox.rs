@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -370,7 +371,7 @@ async fn load_prefix_items(
         kind.as_str(),
     );
     let response = graphql_with_transaction_retry(node, &query, "load mailbox item prefix").await?;
-    rows(&response, MAILBOX_COLLECTION)
+    Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
 pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Option<MailboxItem>> {
@@ -601,7 +602,7 @@ pub struct MailboxToolError(anyhow::Error);
 
 impl std::fmt::Display for MailboxToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -821,7 +822,7 @@ pub async fn list_mailbox_items(
         escape_graphql_string(requester_did)
     );
     let response = graphql_with_transaction_retry(node, &query, "list mailbox items").await?;
-    rows(&response, MAILBOX_COLLECTION)
+    Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
 pub async fn dismiss_mailbox_item(

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -2933,7 +2934,8 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         late_error
             .to_string()
             .contains("terminal raw tool result is not an exact extension of persisted raw output"),
-        "unexpected late-completion failure: {late_error:#}"
+        "unexpected late-completion failure: {}",
+        ErrorChain(late_error.as_ref())
     );
     let outer_after = fetch_tool_call_row(&node, &session_id, "native-tool").await;
     assert_eq!(

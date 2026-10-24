@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -335,7 +336,7 @@ async fn execute(
                     .requests
                     .iter()
                     .map(|row| row.doc_id.clone().context("request has no physical ID"))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, _>>()?;
                 let calls = if docs.is_empty() {
                     super::InvestigationCallsEnvelope {
                         inference_calls: vec![],
@@ -580,7 +581,12 @@ async fn tool_output(
         requester,
     )
     .await
-    .map_err(|error| anyhow::anyhow!("{error:#}; next call: sessions {transcript_call}"))?;
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "{}; next call: sessions {transcript_call}",
+            ErrorChain(error.as_ref())
+        )
+    })?;
     let mut next = json!({"action":"output","session_id":session_id});
     match &call_id {
         Some(call_id) => next["call_id"] = json!(call_id),
@@ -674,7 +680,7 @@ async fn transcript(
     let observed = headers
         .iter()
         .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     reader.observe_headers(&observed);
     let mut messages = Vec::new();
     let mut next = None;
@@ -747,7 +753,7 @@ async fn search_session(
         let observed = headers
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         reader.observe_headers(&observed);
         let exhausted = headers.len() < SEARCH_MESSAGE_PAGE;
         for row in headers {
@@ -849,7 +855,7 @@ resources:
             let did = owner_did.clone();
             Box::pin(async move {
                 let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{node_did: {}, requester_did: \"different-requester\", session_id: \"shared\", agent_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
-                Ok(value["data"]["add_AgentSession"][0]["_docID"].as_str().with_context(|| format!("ACP session fixture creation failed: {value}"))?.to_owned())
+                Ok::<_, anyhow::Error>(value["data"]["add_AgentSession"][0]["_docID"].as_str().with_context(|| format!("ACP session fixture creation failed: {value}"))?.to_owned())
             })
         }).await.unwrap();
         node.add_dac_actor_relationship(owner.did(), "AgentSession", &doc, "reader", reader.did())

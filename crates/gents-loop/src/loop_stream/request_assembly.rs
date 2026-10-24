@@ -4,6 +4,7 @@ use crate::claude_messages_body::{
     ResolvedReplayEvidence, TaggedAssistantRow,
 };
 use crate::provider_input::ProviderInputProfile;
+use gents_protocol::error_chain::ErrorChain;
 
 pub(super) fn message_values(rows: &[TaggedMessage]) -> Vec<Message> {
     rows.iter().map(|row| row.message.clone()).collect()
@@ -43,7 +44,8 @@ pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
             StreamingError::Completion(CompletionError::RequestError(Box::new(violation)))
         }
         Err(error) => StreamingError::Completion(CompletionError::ProviderError(format!(
-            "loading canonical Claude replay evidence failed: {error:#}",
+            "loading canonical Claude replay evidence failed: {}",
+            ErrorChain(error.as_ref()),
         ))),
     }
 }
@@ -952,12 +954,11 @@ pub fn association_reduction(
     profile: ProviderInputProfile,
     rows: &[TaggedMessage],
     exact: crate::compaction::ExactReduction<'_>,
-) -> anyhow::Result<crate::compaction::AssociationReduction> {
+) -> Result<crate::compaction::AssociationReduction, crate::compaction::CompactionError> {
     let split = exact.compacted_prefix.len();
-    anyhow::ensure!(
-        split <= rows.len(),
-        "exact reduction split exceeds its association rows"
-    );
+    if split > rows.len() {
+        return Err(crate::compaction::CompactionError::SplitExceedsRows);
+    }
     let (prefix, suffix) = rows.split_at(split);
     exact.over_association_view(profile, message_values(prefix), message_values(suffix))
 }
@@ -1169,7 +1170,7 @@ pub fn completion_request_input_components(
         StreamingError::Completion(CompletionError::RequestError(Box::new(
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("provider_input_projection_failed: {error:#}"),
+                format!("provider_input_projection_failed: {}", ErrorChain(&error)),
             ),
         )))
     })
@@ -1183,7 +1184,7 @@ fn completion_request_input_tokens(
         StreamingError::Completion(CompletionError::RequestError(Box::new(
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("provider_input_projection_failed: {error:#}"),
+                format!("provider_input_projection_failed: {}", ErrorChain(&error)),
             ),
         )))
     })
@@ -1397,9 +1398,19 @@ where
     let body = config
         .provider_input_counter
         .project_body(&core)
-        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
-    let stage_body = crate::provider_input::replay_frontier::flatten(&body, wire)
-        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
+        .map_err(|error| {
+            replay_input_error(format!(
+                "provider replay projection: {}",
+                ErrorChain(&error)
+            ))
+        })?;
+    let stage_body =
+        crate::provider_input::replay_frontier::flatten(&body, wire).map_err(|error| {
+            replay_input_error(format!(
+                "provider replay projection: {}",
+                ErrorChain(&error)
+            ))
+        })?;
     apply_assistant_rows(
         &mut joined,
         &indices,
@@ -1470,6 +1481,11 @@ where
         if matches!(
             error.downcast_ref::<crate::compaction::ReductionError>(),
             Some(crate::compaction::ReductionError::CannotFit)
+        ) || matches!(
+            error.downcast_ref::<crate::compaction::CompactionError>(),
+            Some(crate::compaction::CompactionError::Reduction(
+                crate::compaction::ReductionError::CannotFit
+            ))
         ) || error.is::<ReplayCheckpointError>()
             || error.is::<ReplayEvidenceViolation>()
         {
@@ -1477,10 +1493,11 @@ where
                 error.into_boxed_dyn_error(),
             ));
         }
-        aggregate_token_budget_exhaustion_message(&error).map_or_else(
+        aggregate_token_budget_exhaustion_message(error.as_ref()).map_or_else(
             || {
                 StreamingError::Completion(CompletionError::ProviderError(format!(
-                    "per-turn provider-input compaction failed: {error:#}"
+                    "per-turn provider-input compaction failed: {}",
+                    ErrorChain(error.as_ref())
                 )))
             },
             |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),

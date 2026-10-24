@@ -1,15 +1,28 @@
 use afterburner_core::manifold::{EnvAccess, FsAccess, Manifold, NetAccess};
-use anyhow::{Context, Result};
 
 use crate::pack::PackPlugin;
 
+#[derive(Debug, thiserror::Error)]
+pub enum AuthorityError {
+    #[error("plugin {name:?} declares authority that is not valid")]
+    InvalidDeclaration {
+        name: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("plugin {name} asks for {asks}; install it with --grant-authority to allow that")]
+    ConsentRequired { name: String, asks: String },
+}
+
+type Result<T, E = AuthorityError> = std::result::Result<T, E>;
+
 pub fn declared_manifold(plugin: &PackPlugin) -> Result<Manifold> {
     match &plugin.manifold {
-        Some(value) => serde_json::from_value(value.clone()).with_context(|| {
-            format!(
-                "plugin {:?} declares authority that is not valid",
-                plugin.name
-            )
+        Some(value) => serde_json::from_value(value.clone()).map_err(|source| {
+            AuthorityError::InvalidDeclaration {
+                name: plugin.name.clone(),
+                source,
+            }
         }),
         None => Ok(Manifold::sealed()),
     }
@@ -105,10 +118,10 @@ pub fn grant_for(
     if previous.is_some_and(|previous| manifold_within(&declared, previous)) || consent {
         return Ok(declared);
     }
-    anyhow::bail!(
-        "plugin {} asks for {asks}; install it with --grant-authority to allow that",
-        plugin.name
-    )
+    Err(AuthorityError::ConsentRequired {
+        name: plugin.name.clone(),
+        asks,
+    })
 }
 
 pub(super) fn limits_consented(
@@ -128,6 +141,7 @@ pub(super) fn limits_consented(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn plugin(manifold: Option<serde_json::Value>) -> PackPlugin {
         serde_json::from_value(serde_json::json!({
@@ -154,8 +168,10 @@ mod tests {
         let net = serde_json::json!({"fs": "None", "net": {"OutboundHttp": ["api.example.com"]}, "env": "None", "crypto": false, "child_process": false});
         let error = grant_for(&plugin(Some(net.clone())), None, false).unwrap_err();
         assert!(
-            format!("{error:#}").contains("HTTP to api.example.com"),
-            "{error:#}"
+            ErrorChain(&error)
+                .to_string()
+                .contains("HTTP to api.example.com"),
+            "{error}"
         );
         let granted = grant_for(&plugin(Some(net.clone())), None, true).unwrap();
         assert_eq!(

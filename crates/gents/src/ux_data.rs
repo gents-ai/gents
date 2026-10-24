@@ -13,7 +13,7 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -26,6 +26,12 @@ use crate::document_config::{
 };
 use crate::llm::tool::Tool;
 use crate::ux_plugin::UxListing;
+
+#[derive(Debug, thiserror::Error)]
+pub enum UxDataError {
+    #[error("args must be a JSON object of the tool's arguments, got {kind}")]
+    ArgsNotObject { kind: &'static str },
+}
 
 /// One call from a page, as `desktop_ux_data_call` receives it.
 #[derive(Debug, Clone, Deserialize)]
@@ -92,20 +98,19 @@ fn has_runtime_fill(entry: &SurfaceToolDecl) -> bool {
     }
 }
 
-fn args_object(args: Value) -> Result<Map<String, Value>> {
+fn args_object(args: Value) -> std::result::Result<Map<String, Value>, UxDataError> {
     match args {
         Value::Null => Ok(Map::new()),
         Value::Object(map) => Ok(map),
-        other => bail!(
-            "args must be a JSON object of the tool's arguments, got {}",
-            match other {
+        other => Err(UxDataError::ArgsNotObject {
+            kind: match other {
                 Value::Array(_) => "an array",
                 Value::String(_) => "a string",
                 Value::Number(_) => "a number",
                 Value::Bool(_) => "a boolean",
                 Value::Null | Value::Object(_) => unreachable!(),
-            }
-        ),
+            },
+        }),
     }
 }
 

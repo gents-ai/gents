@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyUnavailable};
+use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyError};
 use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
 use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
+use gents_protocol::error_chain::find_source;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
@@ -13,6 +13,36 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 const MAX_FRAME_BYTES: usize = 4096;
 pub use gents_desktop_bridge::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION as VERSION;
+
+type Result<T, E = EditorStoreError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EditorStoreError {
+    #[error("Unlock local history in the editor to save access for future launches")]
+    HistoryUnlockRequired,
+    #[error("unsupported editor store encryption version")]
+    UnsupportedEncryptionVersion,
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("editor secret storage did not respond")]
+    NoResponse(#[source] tokio::time::error::Elapsed),
+    #[error("editor secret storage disconnected")]
+    Disconnected,
+    #[error("invalid editor secret storage frame")]
+    InvalidFrame(#[source] std::io::Error),
+    #[error("invalid editor secret storage response")]
+    InvalidResponse(#[source] serde_json::Error),
+    #[error("invalid editor secret storage acknowledgement")]
+    InvalidAcknowledgement(#[source] serde_json::Error),
+    #[error("editor acknowledged a key before receiving it")]
+    KeyAcknowledgedEarly,
+    #[error("loading the editor store key")]
+    KeyTask(#[source] tokio::task::JoinError),
+    #[error("editor did not retain the store key")]
+    KeyNotRetained,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -63,21 +93,10 @@ where
 {
     tokio::time::timeout(std::time::Duration::from_secs(30), channel.next())
         .await
-        .context("editor secret storage did not respond")?
-        .context("editor secret storage disconnected")?
-        .context("invalid editor secret storage frame")
+        .map_err(EditorStoreError::NoResponse)?
+        .ok_or(EditorStoreError::Disconnected)?
+        .map_err(EditorStoreError::InvalidFrame)
 }
-
-#[derive(Debug)]
-struct HistoryUnlockRequired;
-
-impl std::fmt::Display for HistoryUnlockRequired {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Unlock local history in the editor to save access for future launches")
-    }
-}
-
-impl std::error::Error for HistoryUnlockRequired {}
 
 /// Only the extension host receives this private bootstrap channel. It is
 /// retired before ordinary client framing starts; keys never become host RPCs,
@@ -115,9 +134,13 @@ where
         send(&mut *self.channel.lock().await, &Message::Ready).await
     }
 
-    pub async fn failed(&self, error: &anyhow::Error) -> Result<()> {
-        let (code, message) = if error.downcast_ref::<HistoryUnlockRequired>().is_some()
-            || error.downcast_ref::<StoreKeyUnavailable>().is_some()
+    pub async fn failed(&self, error: &(dyn std::error::Error + 'static)) -> Result<()> {
+        let (code, message) = if matches!(
+            find_source::<EditorStoreError>(error),
+            Some(EditorStoreError::HistoryUnlockRequired)
+        ) || find_source::<StoreKeyError>(error)
+            .and_then(StoreKeyError::unavailable)
+            .is_some()
         {
             (
                     BridgeErrorCode::LocalHistoryLocked,
@@ -159,13 +182,12 @@ where
         record: &StoreEncryption,
         key_file: &Path,
         data_path: &Path,
-    ) -> Result<StoreKey> {
-        anyhow::ensure!(
-            record.version == gents::store_key::STORE_ENCRYPTION_VERSION,
-            "unsupported editor store encryption version"
-        );
+    ) -> anyhow::Result<StoreKey> {
+        if record.version != gents::store_key::STORE_ENCRYPTION_VERSION {
+            return Err(EditorStoreError::UnsupportedEncryptionVersion.into());
+        }
         if matches!(record.custody, StoreKeyCustody::File) {
-            return record.initialize(key_file, data_path);
+            return Ok(record.initialize(key_file, data_path)?);
         }
         let mut channel = self.channel.lock().await;
         send(
@@ -178,33 +200,32 @@ where
         )
         .await?;
         let reply: Reply = serde_json::from_slice(&receive(&mut channel).await?)
-            .context("invalid editor secret storage response")?;
+            .map_err(EditorStoreError::InvalidResponse)?;
         match reply {
-            Reply::Use { bytes: Some(bytes) } => return StoreKey::from_host(&bytes),
+            Reply::Use { bytes: Some(bytes) } => return Ok(StoreKey::from_host(&bytes)?),
             Reply::Use { bytes: None } => {}
-            Reply::Stored => bail!("editor acknowledged a key before receiving it"),
+            Reply::Stored => return Err(EditorStoreError::KeyAcknowledgedEarly.into()),
         }
         // Background startup must never call Keychain: an updated ad hoc signed
         // helper can trigger system consent even when the login keychain is open.
         if !self.interactive {
-            return Err(HistoryUnlockRequired.into());
+            return Err(EditorStoreError::HistoryUnlockRequired.into());
         }
         let record = record.clone();
         let key_file = key_file.to_owned();
         let data_path = data_path.to_owned();
         let key = tokio::task::spawn_blocking(move || record.initialize(&key_file, &data_path))
             .await
-            .context("loading the editor store key")??;
+            .map_err(EditorStoreError::KeyTask)??;
         let message = key.with_secret(|bytes| Message::Key {
             bytes: bytes.to_vec(),
         });
         send(&mut channel, &message).await?;
         let reply: Reply = serde_json::from_slice(&receive(&mut channel).await?)
-            .context("invalid editor secret storage acknowledgement")?;
-        anyhow::ensure!(
-            matches!(reply, Reply::Stored),
-            "editor did not retain the store key"
-        );
+            .map_err(EditorStoreError::InvalidAcknowledgement)?;
+        if !matches!(reply, Reply::Stored) {
+            return Err(EditorStoreError::KeyNotRetained.into());
+        }
         Ok(key)
     }
 }
@@ -284,8 +305,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap_err()
-            .downcast_ref::<HistoryUnlockRequired>()
-            .is_some());
+            .downcast_ref::<EditorStoreError>()
+            .is_some_and(|error| matches!(error, EditorStoreError::HistoryUnlockRequired)));
     }
 
     #[tokio::test]
@@ -311,7 +332,7 @@ mod tests {
         let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
         let provider = Provider::new(home.path().to_owned(), false, native);
         provider
-            .failed(&HistoryUnlockRequired.into())
+            .failed(&EditorStoreError::HistoryUnlockRequired)
             .await
             .unwrap();
         assert!(matches!(
@@ -326,16 +347,19 @@ mod tests {
         ));
     }
 
+    #[derive(Debug, thiserror::Error)]
+    #[error("sensitive native cause")]
+    struct SensitiveNativeCause(#[source] gents::storage_backend::IncompatibleStore);
+
     #[tokio::test]
     async fn incompatible_store_failures_retain_their_class_without_raw_causes() {
         let home = tempfile::tempdir().unwrap();
         let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
         let provider = Provider::new(home.path().to_owned(), false, native);
-        let failure = anyhow::Error::from(gents::storage_backend::IncompatibleStore {
+        let failure = SensitiveNativeCause(gents::storage_backend::IncompatibleStore {
             kind: gents::storage_backend::IncompatibleStoreKind::ForeignVersion,
             data_path: PathBuf::from("/private/retained-history"),
-        })
-        .context("sensitive native cause");
+        });
         provider.failed(&failure).await.unwrap();
         let Message::Error { error } = read_message(&mut frames(editor)).await else {
             panic!("expected a typed startup failure");
@@ -353,7 +377,7 @@ mod tests {
         let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
         let provider = Provider::new(home.path().to_owned(), false, native);
         provider
-            .failed(&anyhow::anyhow!("sensitive native cause"))
+            .failed(&std::io::Error::other("sensitive native cause"))
             .await
             .unwrap();
         let Message::Error { error } = read_message(&mut frames(editor)).await else {

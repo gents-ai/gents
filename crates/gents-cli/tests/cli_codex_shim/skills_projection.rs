@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_lists_and_toggles_skills() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -100,7 +100,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     send_client_request(
@@ -221,8 +221,8 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -299,7 +299,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     send_client_request(
@@ -366,8 +366,8 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_explicit_selection_respects_effective_set() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -442,7 +442,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     send_client_request(

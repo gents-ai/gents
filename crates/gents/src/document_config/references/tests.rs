@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+type TestError = Box<dyn std::error::Error + Send + Sync>;
+
 #[test]
 fn candidate_tools_reuse_surface_expansion_and_collision_guards() {
     let tools = json!({"tools_id":"tools", "node_did":"owner",
@@ -19,7 +21,8 @@ fn candidate_tools_reuse_surface_expansion_and_collision_guards() {
                 (Collection::DatastoreToolSurface, b),
             ],
         )
-        .and_then(|refs| refs.validate())
+        .map_err(TestError::from)
+        .and_then(|refs| refs.validate().map_err(TestError::from))
     };
     validate(
         tools.clone(),
@@ -58,7 +61,8 @@ fn candidate_tools_reuse_surface_expansion_and_collision_guards() {
 fn candidate_installation_uses_existing_endpoint_and_path_requirements() {
     let validate = |collection, value| {
         ConfigReferences::from_documents("owner", [(collection, value)])
-            .and_then(|refs| refs.validate())
+            .map_err(TestError::from)
+            .and_then(|refs| refs.validate().map_err(TestError::from))
     };
     let service = json!({"service_id":"service", "node_did":"owner", "hostname":"localhost", "mcp_port":8000});
     validate(Collection::ToolServiceRegistry, service.clone()).unwrap();
@@ -101,7 +105,8 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
                 (Collection::CallbackBinding, binding),
             ],
         )
-        .and_then(|refs| refs.validate())
+        .map_err(TestError::from)
+        .and_then(|refs| refs.validate().map_err(TestError::from))
     };
     validate(source.clone(), binding.clone()).unwrap();
     for fields in [
@@ -250,7 +255,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
                 )
                 .await?
                 .is_none());
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         })
         .await

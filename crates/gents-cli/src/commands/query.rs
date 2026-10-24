@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 #[cfg(test)]
 use gents::config_client::GraphqlEndpoint;
 use gents::defra_query::{CollectionScope, DefraQueryParams};
@@ -6,6 +6,14 @@ use serde_json::{json, Value};
 
 use crate::cli::args::QueryArgs;
 use crate::print_json;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum QueryCommandError {
+    #[error("parsing --filter as JSON")]
+    FilterJson(#[source] serde_json::Error),
+    #[error("parsing --order as JSON")]
+    OrderJson(#[source] serde_json::Error),
+}
 
 #[cfg(test)]
 pub(crate) async fn run_defra_query(
@@ -21,14 +29,18 @@ pub(crate) async fn run_defra_query(
     .await
 }
 
-pub(crate) fn params_from_args(args: &QueryArgs) -> Result<(DefraQueryParams, CollectionScope)> {
+pub(crate) fn params_from_args(
+    args: &QueryArgs,
+) -> Result<(DefraQueryParams, CollectionScope), QueryCommandError> {
     let filter = match args
         .filter
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        Some(raw) => Some(serde_json::from_str::<Value>(raw).context("parsing --filter as JSON")?),
+        Some(raw) => {
+            Some(serde_json::from_str::<Value>(raw).map_err(QueryCommandError::FilterJson)?)
+        }
         None => None,
     };
     let params = DefraQueryParams {
@@ -56,7 +68,7 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
 
 fn command_from_args(
     args: QueryArgs,
-) -> Result<(gents::defra_query::QueryParams, CollectionScope)> {
+) -> Result<(gents::defra_query::QueryParams, CollectionScope), QueryCommandError> {
     let (params, scope) = params_from_args(&args)?;
     let mut command: gents::defra_query::QueryParams = params.into();
     if let Some(verb) = args.verb {
@@ -75,7 +87,7 @@ fn command_from_args(
     if let Some(order) = args.order {
         command.options.insert(
             "order".into(),
-            serde_json::from_str(&order).context("parsing --order as JSON")?,
+            serde_json::from_str(&order).map_err(QueryCommandError::OrderJson)?,
         );
     }
     if let Some(offset) = args.offset {
@@ -94,6 +106,7 @@ fn command_from_args(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::schemas::EVAL_VERDICT_NAME;
 
     use super::*;
@@ -167,7 +180,7 @@ mod tests {
         )
         .await
         .expect_err("EvalVerdict must never be readable through `gents query`");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
         assert!(message.contains("protected"), "{message}");
     }
@@ -185,7 +198,7 @@ mod tests {
         )
         .await
         .expect_err("a protected collection's field inventory must stay unlisted");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
         assert!(message.contains("protected"), "{message}");
     }

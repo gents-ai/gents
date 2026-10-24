@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use crate::support::{TestError, TestResult};
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
 
 /// A private console delivers Ctrl-C without signalling the runner's console.
@@ -25,7 +25,7 @@ struct ConsoleOutput {
 }
 
 impl ConsoleChild {
-    pub fn spawn(command: &Command, log: &Path) -> Result<Self> {
+    pub fn spawn(command: &Command, log: &Path) -> TestResult<Self> {
         let mut builder = CommandBuilder::new(command.get_program());
         builder.args(command.get_args());
         if let Some(directory) = command.get_current_dir() {
@@ -61,7 +61,7 @@ impl ConsoleChild {
         let child = pair.slave.spawn_command(builder);
         drop(pair.slave);
         Ok(Self {
-            child: child.context("starting fixture console")?,
+            child: child.expect("starting fixture console"),
             output: Some(output),
         })
     }
@@ -70,21 +70,21 @@ impl ConsoleChild {
         self.child.try_wait()
     }
 
-    pub fn interrupt(&mut self) -> Result<()> {
+    pub fn interrupt(&mut self) -> TestResult<()> {
         let writer = self
             .output
             .as_mut()
             .and_then(|output| output.writer.as_ref())
-            .context("fixture console has already closed")?;
+            .expect("fixture console has already closed");
         let mut writer = writer
             .lock()
-            .map_err(|_| anyhow::anyhow!("fixture console input lock poisoned"))?;
+            .map_err(|_| TestError::from("fixture console input lock poisoned"))?;
         writer.write_all(b"\x03")?;
         writer.flush()?;
         Ok(())
     }
 
-    pub async fn wait(&mut self) -> Result<ExitStatus> {
+    pub async fn wait(&mut self) -> TestResult<ExitStatus> {
         let status = loop {
             if let Some(status) = self.try_wait()? {
                 break status;
@@ -107,17 +107,21 @@ impl Drop for ConsoleChild {
 }
 
 impl ConsoleOutput {
-    fn finish(&mut self) -> Result<()> {
+    fn finish(&mut self) -> TestResult<()> {
         drop(self.writer.take());
         drop(self.master.take());
         if let Some(drain) = self.drain.take() {
             match drain
                 .join()
-                .map_err(|_| anyhow::anyhow!("fixture console output thread panicked"))?
+                .map_err(|_| TestError::from("fixture console output thread panicked"))?
             {
                 Ok(_) => {}
                 Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
-                Err(error) => return Err(error).context("draining fixture console output"),
+                Err(error) => {
+                    return Err(TestError::from(format!(
+                        "draining fixture console output: {error}"
+                    )))
+                }
             }
         }
         Ok(())
@@ -131,7 +135,7 @@ impl Drop for ConsoleOutput {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn console_interrupt_releases_the_native_installation() -> Result<()> {
+async fn console_interrupt_releases_the_native_installation() -> TestResult<()> {
     use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
     use std::sync::Arc;
 
@@ -156,22 +160,22 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
             {
                 break;
             }
-            anyhow::ensure!(child.try_wait()?.is_none(), "console fixture exited");
+            assert!(child.try_wait()?.is_none(), "console fixture exited");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, TestError>(())
     })
     .await??;
     let mut attachment = super::support::Attachment::start(&paths).await;
-    anyhow::ensure!(attachment.snapshot(1).await["client"]["localPeerId"] == peer);
+    assert!(attachment.snapshot(1).await["client"]["localPeerId"] == peer);
     attachment.close().await;
     child.interrupt()?;
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await??;
-    anyhow::ensure!(status.success(), "console fixture exited with {status}");
+    assert!(status.success(), "console fixture exited with {status}");
     let reopened = Arc::new(
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?,
     );
-    anyhow::ensure!(reopened.local_peer_id() == peer);
+    assert!(reopened.local_peer_id() == peer);
     reopened.shutdown().await?;
     Ok(())
 }

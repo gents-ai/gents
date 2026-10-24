@@ -1,8 +1,8 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use gents_protocol::job::AssetMount;
 use gents_protocol::plugin::{
     PluginEnvironmentGrant, PluginExecutionAuthority, PluginExecutionLimits,
@@ -18,7 +18,83 @@ use super::model_calls::{self, ModelResolver};
 use super::rounds::{self, HostCalls};
 use super::store::{self, InstalledPlugin};
 use super::{allowed, approval};
-use super::{BoundDir, Manifold, PluginBudget, PluginOutcome, PluginRunner};
+use super::{BoundDir, Manifold, PluginBudget, PluginError, PluginOutcome, PluginRunner};
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginRunError {
+    #[error("plugin {coordinate} is not installed: this runtime has no plugin directory")]
+    NotInstalledWithoutHome { coordinate: String },
+    #[error("plugin {coordinate} is not installed")]
+    NotInstalled {
+        coordinate: String,
+        #[source]
+        source: store::PluginStoreError,
+    },
+    #[error("plugin {coordinate} is installed as {installed}, not the pinned {pinned}; reinstall it or update the pin")]
+    PinMismatch {
+        coordinate: String,
+        installed: String,
+        pinned: String,
+    },
+    #[error("this runtime has no plugin directory")]
+    NoPluginDirectory,
+    #[error("installed plugin digest {digest:?} is not sha256")]
+    DigestNotSha256 { digest: String },
+    #[error("installed plugin {namespace}/{name} bytes do not match their digest {digest}; reinstall it")]
+    BytesMismatch {
+        namespace: String,
+        name: String,
+        digest: String,
+    },
+    #[error("installed plugin {namespace}/{name} is not a readable .afb: {error}")]
+    NotReadableAfb {
+        namespace: String,
+        name: String,
+        error: afterburner_afb::AfbError,
+    },
+    #[error("plugin resource limits have no recorded consent; reinstall with --grant-authority")]
+    LimitsNotConsented,
+    #[error("plugin {coordinate} has its model slot {slot:?} bound, but this runtime cannot reach inference")]
+    ModelUnreachable { coordinate: String, slot: String },
+    #[error("service requires a runtime home")]
+    ServiceNeedsHome,
+    #[error(
+        "plugin {coordinate} was reinstalled while this call was being authorized; call again"
+    )]
+    Reinstalled { coordinate: String },
+    #[error("plugin {coordinate} stopped unexpectedly")]
+    Stopped {
+        coordinate: String,
+        #[source]
+        source: tokio::task::JoinError,
+    },
+    #[error(transparent)]
+    Store(#[from] store::PluginStoreError),
+    #[error(transparent)]
+    Bound(#[from] super::bound::BoundDirError),
+    #[error(transparent)]
+    Plugin(#[from] PluginError),
+    #[error(transparent)]
+    Rounds(#[from] rounds::RoundsError),
+    #[error(transparent)]
+    Http(#[from] http_calls::HttpCallError),
+    #[error(transparent)]
+    Model(#[from] model_calls::ModelCallError),
+    #[error(transparent)]
+    Mounts(#[from] super::mounts::MountsError),
+}
+
+impl PluginRunError {
+    pub(crate) fn is_trap(&self) -> bool {
+        matches!(
+            self,
+            Self::Plugin(PluginError::Trap(_))
+                | Self::Rounds(rounds::RoundsError::Plugin(PluginError::Trap(_)))
+        )
+    }
+}
+
+type Result<T, E = PluginRunError> = std::result::Result<T, E>;
 
 const ADMITTED_BYTES_BUDGET: u64 = 512 * 1024 * 1024;
 
@@ -98,7 +174,7 @@ pub struct PluginCall {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("{source:#}")]
+#[error("{}", ErrorChain(.source.as_ref()))]
 struct PluginAttemptError {
     source: anyhow::Error,
     receipt: PluginExecutionReceipt,
@@ -209,15 +285,16 @@ impl PluginExecutor {
         artifact: &[u8],
         input: &serde_json::Value,
         budget: PluginBudget,
-    ) -> Result<PluginOutcome> {
-        Self::sealed_artifact_runner(artifact)?.call(input, &budget)
+    ) -> anyhow::Result<PluginOutcome> {
+        Ok(Self::sealed_artifact_runner(artifact)?.call(input, &budget)?)
     }
 
-    pub(crate) fn validate_sealed_artifact(artifact: &[u8]) -> Result<()> {
-        Self::sealed_artifact_runner(artifact).map(|_| ())
+    pub(crate) fn validate_sealed_artifact(artifact: &[u8]) -> anyhow::Result<()> {
+        Self::sealed_artifact_runner(artifact)?;
+        Ok(())
     }
 
-    fn sealed_artifact_runner(artifact: &[u8]) -> Result<PluginRunner> {
+    fn sealed_artifact_runner(artifact: &[u8]) -> std::result::Result<PluginRunner, PluginError> {
         static DECLARATION: std::sync::LazyLock<crate::pack::PackPlugin> =
             std::sync::LazyLock::new(|| {
                 serde_json::from_value(serde_json::json!({
@@ -261,9 +338,13 @@ impl PluginExecutor {
             return Ok((None, None));
         };
         let coordinate = format!("{}/{}", record.namespace, record.name);
-        let resolver = self.models.as_ref().with_context(|| {
-            format!("plugin {coordinate} has its model slot {slot:?} bound, but this runtime cannot reach inference")
-        })?;
+        let resolver = self
+            .models
+            .as_ref()
+            .ok_or_else(|| PluginRunError::ModelUnreachable {
+                coordinate: coordinate.clone(),
+                slot: slot.clone(),
+            })?;
         let resolved = resolver.resolve(binding).await;
         match resolved {
             Ok(endpoint) => Ok((Some(model_calls::Session::new(endpoint)?), None)),
@@ -311,15 +392,16 @@ impl PluginExecutor {
         let resolved = allowed::resolve(requested, context.workdir, user_home.as_deref(), home)
             .map_err(refuse)?;
         if resolved.is_dir {
-            allowed::ensure_mount_safe(&resolved.target)
-                .map_err(|error| refuse(format!("{error:#}")))?;
+            allowed::ensure_mount_safe(&resolved.target).map_err(|error| {
+                refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+            })?;
         } else if allowed::is_protected(&resolved.target) {
             return Err(refuse(
                 "Runtime permission files cannot be shared with a plugin.".into(),
             ));
         }
         let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
-            .map_err(|error| refuse(format!("{error:#}")))?;
+            .map_err(|error| refuse(gents_protocol::error_chain::ErrorChain(&error).to_string()))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
@@ -338,7 +420,7 @@ impl PluginExecutor {
             covered || approval::workspace::within_workspace(&resolved.target),
             || Ok(input.clone()),
         )
-        .map_err(|error| refuse(format!("{error:#}")))?;
+        .map_err(|error| refuse(gents_protocol::error_chain::ErrorChain(&error).to_string()))?;
         let mut consent = None;
         if route.is_some() || !covered {
             let allowed = match route {
@@ -351,7 +433,9 @@ impl PluginExecutor {
                         context.session_id.map(str::to_owned),
                     )
                     .await
-                    .map_err(|error| refuse(format!("{error:#}")))?;
+                    .map_err(|error| {
+                        refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+                    })?;
                     consent = Some(approval::workspace::action_consent(home, binding));
                     allowed
                 }
@@ -363,7 +447,9 @@ impl PluginExecutor {
                             approval::Request::new(&plugin, &resolved, access, session_id);
                         approval::ask(home, &request, approval::WAIT)
                             .await
-                            .map_err(|error| refuse(format!("{error:#}")))?
+                            .map_err(|error| {
+                                refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+                            })?
                     }
                 },
             };
@@ -379,7 +465,9 @@ impl PluginExecutor {
         }
         let folder_allowed =
             approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
-                .map_err(|error| refuse(format!("{error:#}")))?
+                .map_err(|error| {
+                    refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+                })?
                 .granted(resolved.folder())
                 .is_some();
         allowed::bind(&resolved, access, folder_allowed)
@@ -394,7 +482,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         tool_root: Option<&Path>,
         tool_calls: bool,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         self.call_data_bound_for(record, input, tool_root, tool_calls, None)
             .await
     }
@@ -408,7 +496,7 @@ impl PluginExecutor {
         tool_root: Option<&Path>,
         tool_calls: bool,
         data: Option<DataCaller>,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         self.call_data_bound_jobs(record, input, tool_root, tool_calls, data, None)
             .await
     }
@@ -423,7 +511,7 @@ impl PluginExecutor {
         tool_calls: bool,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         let session = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
             .as_ref()
@@ -460,7 +548,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         tool_root: Option<&Path>,
         tool_calls: bool,
-    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+    ) -> (anyhow::Result<PluginCall>, PluginExecutionReceipt) {
         self.call_data_bound_with_receipt_for(record, input, tool_root, tool_calls, None)
             .await
     }
@@ -474,7 +562,7 @@ impl PluginExecutor {
         tool_root: Option<&Path>,
         tool_calls: bool,
         data: Option<DataCaller>,
-    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+    ) -> (anyhow::Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
             .call_data_bound_for(record, input, tool_root, tool_calls, data)
@@ -492,7 +580,7 @@ impl PluginExecutor {
         tool_calls: bool,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
-    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+    ) -> (anyhow::Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
             .call_data_bound_jobs(record, input, tool_root, tool_calls, data, jobs)
@@ -510,26 +598,40 @@ impl PluginExecutor {
         input: serde_json::Value,
         data: Option<DataCaller>,
         jobs: JobCaller,
-    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+    ) -> (anyhow::Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self.run(record, input, None, None, data, Some(jobs)).await;
         let receipt = receipt_of(&result, refused);
         (result, receipt)
     }
 
-    pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
+    pub fn resolve(
+        &self,
+        coordinate: &str,
+        pinned: Option<&str>,
+    ) -> anyhow::Result<InstalledPlugin> {
         let (namespace, name) = store::parse_coordinate(coordinate)?;
-        let home = self.home.as_deref().with_context(|| {
-            format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
+        let home = self
+            .home
+            .as_deref()
+            .ok_or_else(|| PluginRunError::NotInstalledWithoutHome {
+                coordinate: coordinate.to_owned(),
+            })?;
+        let record = store::read_record(home, namespace, name).map_err(|source| {
+            PluginRunError::NotInstalled {
+                coordinate: coordinate.to_owned(),
+                source,
+            }
         })?;
-        let record = store::read_record(home, namespace, name)
-            .with_context(|| format!("plugin {coordinate} is not installed"))?;
         if let Some(pinned) = pinned {
-            anyhow::ensure!(
-                record.digest == pinned,
-                "plugin {coordinate} is installed as {}, not the pinned {pinned}; reinstall it or update the pin",
-                record.digest
-            );
+            if record.digest != pinned {
+                return Err(PluginRunError::PinMismatch {
+                    coordinate: coordinate.to_owned(),
+                    installed: record.digest.clone(),
+                    pinned: pinned.to_owned(),
+                }
+                .into());
+            }
         }
         Ok(record)
     }
@@ -539,7 +641,7 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         self.run(record, input, None, None, None, None).await
     }
 
@@ -550,7 +652,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         caller: DataCaller,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         self.run(record, input, None, None, Some(caller), None)
             .await
     }
@@ -562,7 +664,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         caller: JobCaller,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         self.run(record, input, None, None, None, Some(caller))
             .await
     }
@@ -572,7 +674,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         bound: BoundDir,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         self.run(record, input, Some(bound), None, None, None).await
     }
 
@@ -584,7 +686,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: Option<BoundDir>,
         data: Option<DataCaller>,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         self.run(record, input, bound, None, data, None).await
     }
 
@@ -596,15 +698,17 @@ impl PluginExecutor {
         tools: Option<super::tool_calls::Session>,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
-    ) -> Result<PluginCall> {
+    ) -> anyhow::Result<PluginCall> {
         let mut receipt = initial_receipt(record, &input);
-        let result: Result<PluginCall> = async {
+        let result: anyhow::Result<PluginCall> = async {
             let coordinate = receipt.coordinate.clone();
             let current = self.resolve(&coordinate, Some(&record.digest))?;
-            anyhow::ensure!(
-                bound.is_none() || current == *record,
-                "plugin {coordinate} was reinstalled while this call was being authorized; call again"
-            );
+            if bound.is_some() && current != *record {
+                return Err(PluginRunError::Reinstalled {
+                    coordinate: coordinate.clone(),
+                }
+                .into());
+            }
             let record = &current;
             if let Some(bound) = &bound {
                 bound.validate_invocation(&coordinate, &record.digest, &json_digest(&input))?;
@@ -612,9 +716,19 @@ impl PluginExecutor {
             let admitted = self.admit(record)?;
             let mut input = input.clone();
             if record.declaration.service.is_some() {
-                if let Some(object) = input.as_object_mut() { object.remove("service"); }
+                if let Some(object) = input.as_object_mut() {
+                    object.remove("service");
+                }
                 if bound.is_none() {
-                    self.services.prepare(self.home.as_deref().context("service requires a runtime home")?, record, &mut input).await?;
+                    self.services
+                        .prepare(
+                            self.home
+                                .as_deref()
+                                .ok_or(PluginRunError::ServiceNeedsHome)?,
+                            record,
+                            &mut input,
+                        )
+                        .await?;
                 }
             }
             let (model, binding_note) = self.model_session(record).await?;
@@ -644,7 +758,12 @@ impl PluginExecutor {
             receipt.limits = Some(PluginExecutionLimits {
                 fuel: admitted.budget.fuel,
                 memory_bytes: admitted.budget.memory_bytes,
-                wall_ms: admitted.budget.wall_clock.as_millis().try_into().unwrap_or(u64::MAX),
+                wall_ms: admitted
+                    .budget
+                    .wall_clock
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
                 max_output_bytes: admitted.budget.max_output_bytes as u64,
             });
             let bound_field = bound
@@ -671,7 +790,7 @@ impl PluginExecutor {
             )
             .await
             .inspect_err(|error| {
-                if error.downcast_ref::<super::GuestTrap>().is_some() {
+                if error.is_trap() {
                     receipt.verdict = PluginExecutionVerdict::Failed;
                 }
             })?;
@@ -686,7 +805,8 @@ impl PluginExecutor {
                 binding_note,
                 receipt: receipt.clone(),
             })
-        }.await;
+        }
+        .await;
         result.map_err(|source| PluginAttemptError { source, receipt }.into())
     }
 
@@ -697,33 +817,34 @@ impl PluginExecutor {
         let home = self
             .home
             .as_deref()
-            .context("this runtime has no plugin directory")?;
-        let digest_hex = record.digest.strip_prefix("sha256:").with_context(|| {
-            format!("installed plugin digest {:?} is not sha256", record.digest)
+            .ok_or(PluginRunError::NoPluginDirectory)?;
+        let digest_hex = record.digest.strip_prefix("sha256:").ok_or_else(|| {
+            PluginRunError::DigestNotSha256 {
+                digest: record.digest.clone(),
+            }
         })?;
         let bytes = store::read_bytes(home, digest_hex)?;
-        anyhow::ensure!(
-            store::content_digest_hex(&bytes) == digest_hex,
-            "installed plugin {}/{} bytes do not match their digest {}; reinstall it",
-            record.namespace,
-            record.name,
-            record.digest
-        );
+        if store::content_digest_hex(&bytes) != digest_hex {
+            return Err(PluginRunError::BytesMismatch {
+                namespace: record.namespace.clone(),
+                name: record.name.clone(),
+                digest: record.digest.clone(),
+            });
+        }
         let afb = afterburner_afb::Afb::from_bytes(&bytes).map_err(|error| {
-            anyhow::anyhow!(
-                "installed plugin {}/{} is not a readable .afb: {error}",
-                record.namespace,
-                record.name
-            )
+            PluginRunError::NotReadableAfb {
+                namespace: record.namespace.clone(),
+                name: record.name.clone(),
+                error,
+            }
         })?;
-        anyhow::ensure!(
-            super::authority::limits_consented(
-                record.declaration.limits.as_ref(),
-                None,
-                record.granted.is_some()
-            ),
-            "plugin resource limits have no recorded consent; reinstall with --grant-authority"
-        );
+        if !super::authority::limits_consented(
+            record.declaration.limits.as_ref(),
+            None,
+            record.granted.is_some(),
+        ) {
+            return Err(PluginRunError::LimitsNotConsented);
+        }
         let budget = PluginBudget::for_plugin(&afb, &record.declaration);
         let runner = PluginRunner::compile_within(&bytes, &record.declaration, &record.ceiling())?;
         let admitted = Arc::new(Admitted {
@@ -774,14 +895,14 @@ pub async fn call_runner(
     input: serde_json::Value,
     budget: PluginBudget,
     bound: Option<BoundDir>,
-) -> Result<PluginOutcome> {
-    drive(coordinate, runner, None, input, budget, bound, None).await
+) -> anyhow::Result<PluginOutcome> {
+    Ok(drive(coordinate, runner, None, input, budget, bound, None).await?)
 }
 
 /// The receipt of a finished attempt: the call's own, the one its failure
 /// carries, or `refused` when it failed before running.
 fn receipt_of(
-    result: &Result<PluginCall>,
+    result: &anyhow::Result<PluginCall>,
     refused: PluginExecutionReceipt,
 ) -> PluginExecutionReceipt {
     match result {
@@ -827,8 +948,12 @@ async fn drive_with_calls(
     if calls.is_empty() {
         tokio::task::spawn_blocking(move || round(input, budget))
             .await
-            .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))?
+            .map_err(|source| PluginRunError::Stopped {
+                coordinate: coordinate.to_owned(),
+                source,
+            })?
+            .map_err(PluginRunError::Plugin)
     } else {
-        rounds::drive(calls, input, budget, round).await
+        Ok(rounds::drive(calls, input, budget, round).await?)
     }
 }

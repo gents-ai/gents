@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 const PROVIDER_FIXTURE_ROOT: &str = "tests/fixtures/providers";
 
@@ -15,15 +15,16 @@ pub fn provider_wire_fixtures_do_not_contain_credentials() -> Result<()> {
     collect_fixture_files(&root, &mut files)?;
     for path in files {
         let text = fs::read_to_string(&path)
-            .with_context(|| format!("reading provider fixture {}", path.display()))?;
+            .map_err(|error| format!("reading provider fixture {}: {error}", path.display()))?;
         assert_no_secret_patterns(&path, &text);
     }
     Ok(())
 }
 
 fn collect_fixture_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let entry = entry.with_context(|| format!("reading entry in {}", dir.display()))?;
+    for entry in fs::read_dir(dir).map_err(|error| format!("reading {}: {error}", dir.display()))? {
+        let entry =
+            entry.map_err(|error| format!("reading entry in {}: {error}", dir.display()))?;
         let path = entry.path();
         if path.is_dir() {
             collect_fixture_files(&path, out)?;

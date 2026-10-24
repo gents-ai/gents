@@ -9,6 +9,7 @@ use crate::local_pairing::{
 };
 use gents_desktop_core::home_reset::*;
 use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
+use gents_protocol::error_chain::ErrorChain;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -453,14 +454,10 @@ where
             launchable_native_service(self.app, self.state)?,
             move |service| match service.start(enable_at_login) {
                 Ok(()) => Ok(Launched::Started),
-                Err(error) => {
-                    match error
-                        .downcast::<gents_server::native_service::BackgroundApprovalPending>()
-                    {
-                        Ok(pending) => Ok(Launched::ApprovalPending(pending.detail)),
-                        Err(error) => Err(error),
-                    }
+                Err(gents_server::native_service::NativeServiceError::ApprovalPending(pending)) => {
+                    Ok(Launched::ApprovalPending(pending.detail))
                 }
+                Err(error) => Err(error),
             },
         )
         .await?;
@@ -605,8 +602,9 @@ where
         stored.as_ref(),
     )?;
     refuse_renaming_home(&node_home, node_name).await?;
-    gents::home::ensure_home_identity_can_serve(&node_home)
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+    gents::home::ensure_home_identity_can_serve(&node_home).map_err(|error| {
+        BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
+    })?;
 
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
@@ -824,7 +822,7 @@ where
     } else {
         error.downcast_ref::<BridgeError>().cloned()
     };
-    let mut message = format!("{error:#}");
+    let mut message = ErrorChain(error.as_ref()).to_string();
     let _lifecycle = match lifecycle {
         Some(lifecycle) => lifecycle,
         None => relock_start(state, token).await.map_err(|_| cancelled())?,
@@ -1205,7 +1203,7 @@ fn launch_reset_helper_with_timeout(
 ) -> Result<(), BridgeError> {
     use std::io::Read;
     use std::process::{Command, Stdio};
-    let launch = || -> anyhow::Result<()> {
+    let launch = || -> Result<(), ResetHelperError> {
         let mut command = Command::new(executable);
         command
             .args(["desktop", "reset", "--home"])
@@ -1216,7 +1214,7 @@ fn launch_reset_helper_with_timeout(
             .arg("--desktop-pid")
             .arg(std::process::id().to_string())
             .arg("--desktop-executable")
-            .arg(std::env::current_exe()?)
+            .arg(std::env::current_exe().map_err(ResetHelperError::CurrentExecutable)?)
             .env("GENTS_DESKTOP_HOME", desktop)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1224,7 +1222,7 @@ fn launch_reset_helper_with_timeout(
         if disposition == HomeResetDisposition::Delete {
             command.arg("--delete");
         }
-        let mut child = command.spawn()?;
+        let mut child = command.spawn().map_err(ResetHelperError::Spawn)?;
         let mut stdout = child.stdout.take().expect("piped reset stdout");
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
@@ -1235,11 +1233,26 @@ fn launch_reset_helper_with_timeout(
         if receive.recv_timeout(timeout) != Ok(true) {
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!("The reset helper could not prepare; your local state has not been retired. Run gents desktop reset to review and retry.");
+            return Err(ResetHelperError::NotPrepared);
         }
         Ok(())
     };
-    launch().map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
+    launch().map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        )
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ResetHelperError {
+    #[error(transparent)]
+    CurrentExecutable(std::io::Error),
+    #[error(transparent)]
+    Spawn(std::io::Error),
+    #[error("The reset helper could not prepare; your local state has not been retired. Run gents desktop reset to review and retry.")]
+    NotPrepared,
 }
 
 async fn ensure_home_not_served(home: &Path) -> Result<(), BridgeError> {
@@ -1515,7 +1528,8 @@ where
         return Err(BridgeError::untyped(token.cancel_message()));
     }
     if matches!(adopted, Ok(BootOutcome::NeedsLaunch(..))) {
-        return adopted.map_err(|error| BridgeError::untyped(format!("{error:#}")));
+        return adopted
+            .map_err(|error| BridgeError::untyped(ErrorChain(error.as_ref()).to_string()));
     }
     let result = settle_adoption(state, &token, node_home, adopted).await;
     emit_status(app, state).await;
@@ -1533,7 +1547,7 @@ async fn settle_adoption<'a>(
         Ok(outcome) => return Ok(outcome),
         Err(error) => error,
     };
-    let message = format!("{error:#}");
+    let message = ErrorChain(error.as_ref()).to_string();
     if error.is::<RuntimeStillBooting>() {
         return Err(BridgeError::new(
             BridgeErrorCode::RuntimeStillBooting,
@@ -1954,8 +1968,8 @@ where
     gents_server::native_service::NativeServiceManager::new(config).map_err(native_error)
 }
 
-fn native_error(error: anyhow::Error) -> BridgeError {
-    let message = format!("{error:#}");
+fn native_error(error: gents_server::native_service::NativeServiceError) -> BridgeError {
+    let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
     let code = if message.contains("supported only on macOS and Linux") {
         BridgeErrorCode::Unsupported
     } else {
@@ -1970,7 +1984,9 @@ async fn run_native<T, F>(
 ) -> Result<T, BridgeError>
 where
     T: Send + 'static,
-    F: FnOnce(gents_server::native_service::NativeServiceManager) -> anyhow::Result<T>
+    F: FnOnce(
+            gents_server::native_service::NativeServiceManager,
+        ) -> Result<T, gents_server::native_service::NativeServiceError>
         + Send
         + 'static,
 {
@@ -2470,7 +2486,7 @@ where
                 provision,
             )
             .await
-            .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+            .map_err(|error| BridgeError::untyped(ErrorChain(error.as_ref()).to_string()))
         },
         || async {
             save_confirmed_preference(
@@ -2495,7 +2511,7 @@ where
     if let (Some(core), Some(node_did)) = (current_core(&state), previous_did.as_deref()) {
         if let Err(error) = core.mark_managed_runtime_restarting(node_did).await {
             let message = format!(
-                "The node was stopped, but desktop restart bookkeeping failed: {error:#}. Retry Restart Node."
+                "The node was stopped, but desktop restart bookkeeping failed: {}. Retry Restart Node.", ErrorChain(error.as_ref())
             );
             state.managed_server.lock().await.last_error = Some(message.clone());
             emit_status(&app, &state).await;

@@ -1,12 +1,15 @@
-use anyhow::{anyhow, bail, Context, Result};
+use crate::error::BridgeError;
 use defra_node::EmbeddedNode;
+use gents::config_client::ConfigClientError;
 use gents::document_config::{
     Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
     DatastoreToolSurfaceDocument, EventSource, InferenceBackend, InferenceBackendObservation,
     InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
     SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
+use gents::session::canonical_rows::CanonicalRowsError;
 use gents_protocol::graphql::escape_graphql_string;
+use gents_protocol::output::origin::OriginError;
 use gents_protocol::output::reconstruction::DependencyDenial;
 use gents_protocol::row::{
     AgentRequestRow, AgentToolCallRow, CompactionEntryRow, GoalRow, MailboxItemRow,
@@ -55,6 +58,177 @@ pub use session_transcript::{
     session_unreadable_reason, session_unsendable_reason, TranscriptWindow,
 };
 pub(crate) use snapshot_loaders::*;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClientQueryError {
+    #[error("query result missing root field {root}")]
+    MissingRootField { root: String },
+    #[error("query result for {root} returned non-array payload: {payload}")]
+    NonArrayPayload {
+        root: String,
+        payload: serde_json::Value,
+    },
+    #[error("{operation} returned errors: {errors}")]
+    GraphqlErrors {
+        operation: String,
+        errors: serde_json::Value,
+    },
+    #[error("{operation} returned no data")]
+    NoData { operation: String },
+    #[error("{operation}")]
+    Access {
+        operation: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    GraphqlInput(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    CanonicalRow(#[from] CanonicalRowsError),
+    #[error(transparent)]
+    Origin(#[from] OriginError),
+    #[error(transparent)]
+    ProjectionPending(BridgeError),
+    #[error(transparent)]
+    Projection(#[from] gents::config_client::DesiredStateError),
+    #[error("query result missing canonical row array {root}")]
+    MissingCanonicalRows { root: String },
+    #[error("pending edit request patch is incomplete")]
+    PendingEditRequestIncomplete,
+    #[error(
+        "selected request query returned a row outside its exact node/session/requester scope"
+    )]
+    SelectedRequestScope,
+    #[error("canonical session head did not resolve to its exact physical request")]
+    CanonicalHeadMismatch,
+    #[error(
+        "session transcript has request owners but the canonical session has no latest request"
+    )]
+    LatestRequestMissing,
+    #[error("selected session query returned malformed rows")]
+    SelectedSessionMalformed,
+    #[error("selected session refresh requires exactly one canonical AgentSession row for node/session; found {found}")]
+    SelectedSessionCount { found: usize },
+    #[error("selected session refresh returned a row outside its exact node/session scope")]
+    SelectedSessionScope,
+    #[error(
+        "session request seed query returned a row outside its exact node/session/requester scope"
+    )]
+    SessionRequestSeedScope,
+    #[error("request closure contains a row outside the canonical session requester scope")]
+    RequestRequesterScope,
+    #[error("request query {root} returned malformed rows")]
+    MalformedRequestRows { root: String },
+    #[error("task candidate page exceeded its limit")]
+    TaskCandidatePageLimit,
+    #[error("task request query returned a non-object payload")]
+    TaskRequestPayload,
+    #[error("task request query returned a non-public or unidentified row")]
+    TaskRequestRow,
+    #[error("task request lacks node scope")]
+    TaskNodeScope,
+    #[error("task request lacks trigger scope")]
+    TaskTriggerScope,
+    #[error("request dependency row lacks physical identity")]
+    RequestDependencyIdentity,
+    #[error("request dependency query returned a row outside its exact scope")]
+    RequestDependencyScope,
+    #[error("{operation} lacks physical identity")]
+    MissingPhysicalIdentity { operation: String },
+    #[error("{operation} returned an unrelated document")]
+    UnrelatedDocument { operation: String },
+    #[error("{operation} duplicated a document")]
+    DuplicatedDocument { operation: String },
+    #[error("conflicting canonical header facts share physical identity {doc_id}")]
+    ConflictingHeaderFacts { doc_id: String },
+    #[error("conflicting canonical output facts share physical identity {doc_id}")]
+    ConflictingOutputFacts { doc_id: String },
+    #[error("canonical fork origin chain exceeds bounded depth {limit} at {origin_id}")]
+    ForkOriginDepth { limit: usize, origin_id: String },
+    #[error("exact canonical fork origin crossed its authorized scope")]
+    ForkOriginScope,
+    #[error("exact canonical fork origin has conflicting physical rows: {origin_id}")]
+    ForkOriginConflict { origin_id: String },
+    #[error("canonical transcript page names more than {limit} output closures")]
+    OutputClosureLimit { limit: usize },
+    #[error("exact canonical output closure crossed its authorized scope")]
+    OutputClosureScope,
+    #[error("exact canonical output closure has conflicting physical rows: {close_id}")]
+    OutputClosureConflict { close_id: String },
+    #[error(
+        "canonical output request {request_id} exceeds bounded dependency read of {limit} rows"
+    )]
+    OutputSourceLimit { request_id: String, limit: usize },
+    #[error("canonical output source crossed its authorized request scope")]
+    OutputSourceScope,
+    #[error("session transcript cursor is no longer present: {cursor}")]
+    CursorMissing { cursor: String },
+    #[error("session transcript query requires a session id")]
+    TranscriptSessionId,
+    #[error("session context query requires a session id")]
+    ContextSessionId,
+    #[error("session diagnostics query requires a session id")]
+    DiagnosticsSessionId,
+    #[error("session compactions require a session id")]
+    CompactionSessionId,
+    #[error("session compactions require a node DID")]
+    CompactionNodeDid,
+    #[error("session transcript has more than {limit} messages at sequence {sequence}; the sequence-atomic page budget cannot represent it losslessly")]
+    MessageSequenceBudget { limit: usize, sequence: u32 },
+    #[error("session transcript has more than {limit} tool calls at sequence {sequence}; the sequence-atomic tool budget cannot represent it losslessly")]
+    ToolCallSequenceBudget { limit: usize, sequence: i64 },
+    #[error("session transcript contains legacy tool calls without a message sequence; bounded pagination cannot represent that schema state losslessly")]
+    LegacyToolCalls,
+    #[error("live request scope changed")]
+    LiveRequestScope,
+    #[error("prompt lookup lacks physical request")]
+    PromptRequestIdentity,
+    #[error("prompt lookup lacks node")]
+    PromptNode,
+    #[error("prompt lookup lacks session")]
+    PromptSession,
+    #[error("prompt batch omitted rows")]
+    PromptBatchRows,
+    #[error("prompt lookup omitted rows")]
+    PromptLookupRows,
+    #[error("prompt anchor lookup omitted rows")]
+    PromptAnchorRows,
+    #[error("prompt anchor lacks sequence")]
+    PromptAnchorSequence,
+    #[error("prompt ownership is physically ambiguous")]
+    PromptAmbiguous,
+    #[error("prompt observation crossed physical request scope")]
+    PromptScope,
+    #[error("prompt observation is not the exact authored owner")]
+    PromptOwner,
+    #[error("session tip omitted {root} rows")]
+    TipRows { root: String },
+    #[error("active request exceeds bounded session-tip read of {limit} rows")]
+    TipLimit { limit: usize },
+    #[error("tip request lacks physical identity")]
+    TipIdentity,
+    #[error("tip request lacks node")]
+    TipNode,
+    #[error("tip request lacks session")]
+    TipSession,
+    #[error("fetch_doc_patch: unknown collection {collection}")]
+    UnknownPatchCollection { collection: String },
+}
+
+type Result<T, E = ClientQueryError> = std::result::Result<T, E>;
+
+impl gents::config_client::TransactionFailure for ClientQueryError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access { source, .. } | Self::Config(source) => Some(source),
+            _ => None,
+        }
+    }
+}
 
 pub const DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 40;
 pub const MAX_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 80;
@@ -158,10 +332,12 @@ pub async fn load_chat_patch(
             Box::pin(async move {
                 let mut execute = |query: String, operation: &'static str| {
                     Box::pin(async move {
-                        let response = txn
-                            .execute(&query)
-                            .await
-                            .with_context(|| operation.to_string())?;
+                        let response = txn.execute(&query).await.map_err(|source| {
+                            ClientQueryError::Access {
+                                operation: operation.to_owned(),
+                                source,
+                            }
+                        })?;
                         into_access_graphql_data(response, operation)
                     }) as QueryFuture<'_>
                 };
@@ -254,10 +430,9 @@ pub(crate) async fn load_request_documents_on(
         "pending edit request patch",
     )
     .await?;
-    anyhow::ensure!(
-        rows.len() == expected,
-        "pending edit request patch is incomplete"
-    );
+    if rows.len() != expected {
+        return Err(ClientQueryError::PendingEditRequestIncomplete);
+    }
     Ok(rows)
 }
 
@@ -295,33 +470,29 @@ impl SelectedRequestLookup {
         requester_did: Option<&str>,
     ) -> Result<Vec<AgentRequestRow>> {
         let selected = snapshot_loaders::complete_request_rows(data, AGENT_REQUEST_NAME)?;
-        anyhow::ensure!(
-            selected.iter().all(|row| {
-                row.node_did.as_deref() == Some(node_did)
-                    && row.session_id.as_deref() == Some(session_id)
-                    && row.requester_did.as_deref() == requester_did
-                    && row.purpose
-                        == Some(gents_protocol::request_admission::RequestPurpose::Normal)
-                    && self
-                        .expected_doc_id
-                        .as_deref()
-                        .is_none_or(|doc_id| row.doc_id.as_deref() == Some(doc_id))
-            }),
-            "selected request query returned a row outside its exact node/session/requester scope"
-        );
+        if !selected.iter().all(|row| {
+            row.node_did.as_deref() == Some(node_did)
+                && row.session_id.as_deref() == Some(session_id)
+                && row.requester_did.as_deref() == requester_did
+                && row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+                && self
+                    .expected_doc_id
+                    .as_deref()
+                    .is_none_or(|doc_id| row.doc_id.as_deref() == Some(doc_id))
+        }) {
+            return Err(ClientQueryError::SelectedRequestScope);
+        }
         if selected.is_empty() {
             // A signed client request can arrive after its independently created session.
-            return Err(crate::error::BridgeError::new(
+            return Err(ClientQueryError::ProjectionPending(BridgeError::new(
                 crate::error::BridgeErrorCode::ProjectionPending,
                 "selected request has not reached the session owner yet",
-            )
-            .into());
+            )));
         }
         if let Some(expected_request_id) = self.expected_request_id.as_deref() {
-            anyhow::ensure!(
-                selected.len() == 1 && selected[0].request_id == expected_request_id,
-                "canonical session head did not resolve to its exact physical request"
-            );
+            if selected.len() != 1 || selected[0].request_id != expected_request_id {
+                return Err(ClientQueryError::CanonicalHeadMismatch);
+            }
         }
         Ok(selected)
     }
@@ -364,10 +535,9 @@ fn selected_request_lookup(
     } else {
         None
     };
-    anyhow::ensure!(
-        lookup.is_some() || page_request_doc_ids.is_empty(),
-        "session transcript has request owners but the canonical session has no latest request"
-    );
+    if lookup.is_none() && !page_request_doc_ids.is_empty() {
+        return Err(ClientQueryError::LatestRequestMissing);
+    }
     Ok(lookup)
 }
 
@@ -405,20 +575,21 @@ fn selected_session_from_data(
         data,
         AGENT_SESSION_NAME,
     )?;
-    anyhow::ensure!(complete, "selected session query returned malformed rows");
-    anyhow::ensure!(
-        sessions.len() == 1,
-        "selected session refresh requires exactly one canonical AgentSession row for node/session; found {}",
-        sessions.len()
-    );
+    if !complete {
+        return Err(ClientQueryError::SelectedSessionMalformed);
+    }
+    if sessions.len() != 1 {
+        return Err(ClientQueryError::SelectedSessionCount {
+            found: sessions.len(),
+        });
+    }
     let session = sessions
         .into_iter()
         .next()
         .expect("one session was checked");
-    anyhow::ensure!(
-        session.node_did == node_did && session.session_id == session_id,
-        "selected session refresh returned a row outside its exact node/session scope"
-    );
+    if session.node_did != node_did || session.session_id != session_id {
+        return Err(ClientQueryError::SelectedSessionScope);
+    }
     Ok(session)
 }
 
@@ -478,14 +649,13 @@ fn request_seeds_from_data(
             data,
             &format!("newest_{index}"),
         )?);
-        anyhow::ensure!(
-            rows.iter().all(|row| {
-                row.node_did.as_deref() == Some(node_did)
-                    && row.session_id.as_deref() == Some(session_id)
-                    && row.requester_did == *requester_did
-            }),
-            "session request seed query returned a row outside its exact node/session/requester scope"
-        );
+        if !rows.iter().all(|row| {
+            row.node_did.as_deref() == Some(node_did)
+                && row.session_id.as_deref() == Some(session_id)
+                && row.requester_did == *requester_did
+        }) {
+            return Err(ClientQueryError::SessionRequestSeedScope);
+        }
         selected.extend(rows);
     }
     Ok(selected)
@@ -544,12 +714,12 @@ fn request_patch_from_context_data(
             &format!("goals_{index}"),
         )?);
     }
-    anyhow::ensure!(
-        requests
-            .iter()
-            .all(|row| row.requester_did == requester_did),
-        "request closure contains a row outside the canonical session requester scope"
-    );
+    if !requests
+        .iter()
+        .all(|row| row.requester_did == requester_did)
+    {
+        return Err(ClientQueryError::RequestRequesterScope);
+    }
     Ok(ClientStore::from_rows(ClientStoreRows {
         requests,
         sessions,
@@ -564,9 +734,9 @@ pub(super) async fn execute_local_graphql_query(
     operation: &str,
 ) -> Result<Value> {
     let response = gents::graphql::graphql_with_transaction_retry(node, query, operation).await?;
-    response
-        .data
-        .with_context(|| format!("{operation} returned no data"))
+    response.data.ok_or_else(|| ClientQueryError::NoData {
+        operation: operation.to_owned(),
+    })
 }
 
 pub(super) async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
@@ -576,9 +746,9 @@ where
     let operation = format!("query for {root}");
     let response = gents::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
 
-    let data = response
-        .data
-        .with_context(|| format!("query for {root} returned no data"))?;
+    let data = response.data.ok_or_else(|| ClientQueryError::NoData {
+        operation: format!("query for {root}"),
+    })?;
     parse_query_rows(&data, root)
 }
 
@@ -590,44 +760,58 @@ pub(super) async fn execute_access_graphql_query(
     let body = access
         .execute(query)
         .await
-        .with_context(|| operation.to_string())?;
+        .map_err(|source| ClientQueryError::Access {
+            operation: operation.to_owned(),
+            source,
+        })?;
     into_access_graphql_data(body, operation)
 }
 
-fn into_access_graphql_data(mut body: Value, operation: &str) -> Result<Value> {
+fn into_access_graphql_data(mut body: Value, operation: &str) -> Result<Value, ClientQueryError> {
     if let Some(errors) = body.get("errors") {
         if errors.as_array().is_some_and(|rows| !rows.is_empty()) {
-            anyhow::bail!("{operation} returned errors: {errors}");
+            return Err(ClientQueryError::GraphqlErrors {
+                operation: operation.to_owned(),
+                errors: errors.clone(),
+            });
         }
     }
     body.as_object_mut()
         .and_then(|root| root.remove("data"))
-        .with_context(|| format!("{operation} returned no data"))
+        .ok_or_else(|| ClientQueryError::NoData {
+            operation: operation.to_owned(),
+        })
 }
 
-pub(super) fn parse_query_rows<T>(data: &Value, root: &str) -> Result<Vec<T>>
+pub(super) fn parse_query_rows<T>(data: &Value, root: &str) -> Result<Vec<T>, ClientQueryError>
 where
     T: DeserializeOwned,
 {
     let rows = data
         .get(root)
-        .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
+        .ok_or_else(|| ClientQueryError::MissingRootField {
+            root: root.to_owned(),
+        })?;
     parse_row_array(rows, root)
 }
 
 pub(super) fn parse_canonical_rows<T>(
     data: &Value,
     root: &str,
-    decode: impl Fn(&Value) -> Result<T>,
+    decode: impl Fn(&Value) -> std::result::Result<T, CanonicalRowsError>,
 ) -> Result<Vec<T>> {
-    let rows = data
-        .get(root)
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("query result missing canonical row array {root}"))?;
-    rows.iter().map(decode).collect()
+    let rows = data.get(root).and_then(Value::as_array).ok_or_else(|| {
+        ClientQueryError::MissingCanonicalRows {
+            root: root.to_owned(),
+        }
+    })?;
+    Ok(rows
+        .iter()
+        .map(decode)
+        .collect::<std::result::Result<_, _>>()?)
 }
 
-pub(super) fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>>
+pub(super) fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>, ClientQueryError>
 where
     T: DeserializeOwned,
 {
@@ -648,9 +832,10 @@ where
             }
             Ok(parsed)
         }
-        other => Err(anyhow!(
-            "query result for {root} returned non-array payload: {other}"
-        )),
+        other => Err(ClientQueryError::NonArrayPayload {
+            root: root.to_owned(),
+            payload: other.clone(),
+        }),
     }
 }
 

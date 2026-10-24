@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Value};
 
 use super::registry::{resolve_registry_url, RegistryClient};
@@ -26,7 +27,7 @@ async fn outdated_packs(
     for pack in installed {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
         let (latest, outdated, error) = match client.package(namespace, name).await {
-            Err(error) => (None, None, Some(format!("{error:#}"))),
+            Err(error) => (None, None, Some(ErrorChain(&error).to_string())),
             Ok(package) => match package["latest"].as_str() {
                 None => (
                     None,
@@ -63,7 +64,10 @@ fn is_newer(latest: &str, installed: &str) -> Option<bool> {
     Some(latest.cmp_precedence(&installed).is_gt())
 }
 
-fn select_packs<'a>(packs: &'a [Value], package: Option<&str>) -> Result<Vec<&'a Value>> {
+fn select_packs<'a>(
+    packs: &'a [Value],
+    package: Option<&str>,
+) -> Result<Vec<&'a Value>, super::error::PackCommandError> {
     let selected: Vec<&Value> = packs
         .iter()
         .filter(|pack| {
@@ -73,8 +77,10 @@ fn select_packs<'a>(packs: &'a [Value], package: Option<&str>) -> Result<Vec<&'a
             })
         })
         .collect();
-    if let Some(package) = package {
-        anyhow::ensure!(!selected.is_empty(), "{package} is not installed");
+    if let Some(package) = package.filter(|_| selected.is_empty()) {
+        return Err(super::error::PackCommandError::NotInstalled {
+            package: package.to_owned(),
+        });
     }
     Ok(selected)
 }
@@ -133,7 +139,10 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
             Ok(_) => updated.push(coordinate),
-            Err(error) => failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") })),
+            Err(error) => failed.push(json!({
+                "pack": coordinate,
+                "error": ErrorChain(error.as_ref()).to_string(),
+            })),
         }
     }
 

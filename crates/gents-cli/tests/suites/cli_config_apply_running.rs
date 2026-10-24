@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::{fs, time::Duration};
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -48,7 +48,7 @@ async fn config_apply_reconciles_running_context_without_restart() -> Result<()>
     let mut config = read_json_file(&path)?;
     let context_id = config["contexts"][0]["context_id"]
         .as_str()
-        .context("context id")?
+        .expect("context id")
         .to_string();
     config["contexts"][0]["system_prompt"] = Value::String("updated live prompt".to_string());
     write_json_file(&path, &config)?;

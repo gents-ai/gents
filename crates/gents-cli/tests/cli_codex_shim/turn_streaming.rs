@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_protocol_turn_streams_gents_response() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -56,7 +56,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
 
@@ -116,7 +116,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         read_typed_response(&mut ws, request_id(3)).await?;
     let thread_id = thread_start.thread.id.clone();
     Uuid::parse_str(&thread_id)
-        .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
+        .map_err(|error| format!("Codex TUI requires UUID thread ids, got {thread_id}: {error}"))?;
 
     let prompt = format!("Reply with exactly {}.", Uuid::new_v4().simple());
     send_client_request(
@@ -296,7 +296,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let thread_resume: codex::ThreadResumeResponse = read_typed_response(&mut ws, request_id(33))
         .await
-        .context("reading thread/resume response")?;
+        .map_err(|error| format!("reading thread/resume response: {error}"))?;
     assert_eq!(thread_resume.thread.id, thread_id);
 
     send_client_request(
@@ -312,7 +312,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let _: codex::ThreadSetNameResponse = read_typed_response(&mut ws, request_id(34))
         .await
-        .context("reading thread/name/set response")?;
+        .map_err(|error| format!("reading thread/name/set response: {error}"))?;
 
     send_client_request(
         &mut ws,
@@ -327,7 +327,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let _: codex::ThreadMemoryModeSetResponse = read_typed_response(&mut ws, request_id(35))
         .await
-        .context("reading thread/memoryMode/set response")?;
+        .map_err(|error| format!("reading thread/memoryMode/set response: {error}"))?;
 
     send_client_request(
         &mut ws,
@@ -343,7 +343,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let _: codex::ThreadSettingsUpdateResponse = read_typed_response(&mut ws, request_id(36))
         .await
-        .context("reading thread/settings/update response")?;
+        .map_err(|error| format!("reading thread/settings/update response: {error}"))?;
 
     send_client_request(
         &mut ws,
@@ -360,7 +360,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(37))
         .await
-        .context("reading thread/goal/set response")?;
+        .map_err(|error| format!("reading thread/goal/set response: {error}"))?;
     assert_eq!(goal_set.goal.thread_id, thread_id);
     assert_eq!(
         goal_set.goal.objective,
@@ -381,7 +381,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let goal_get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(38))
         .await
-        .context("reading thread/goal/get response")?;
+        .map_err(|error| format!("reading thread/goal/get response: {error}"))?;
     assert_eq!(
         goal_get.goal.as_ref().map(|goal| &goal.thread_id),
         Some(&thread_id)
@@ -406,7 +406,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let metadata_update: codex::ThreadMetadataUpdateResponse =
         read_typed_response(&mut ws, request_id(39))
             .await
-            .context("reading thread/metadata/update response")?;
+            .map_err(|error| format!("reading thread/metadata/update response: {error}"))?;
     assert_eq!(
         metadata_update
             .thread
@@ -428,7 +428,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let _: codex::ThreadArchiveResponse = read_typed_response(&mut ws, request_id(40))
         .await
-        .context("reading thread/archive response")?;
+        .map_err(|error| format!("reading thread/archive response: {error}"))?;
 
     send_client_request(
         &mut ws,
@@ -453,7 +453,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let archived_threads: codex::ThreadListResponse = read_typed_response(&mut ws, request_id(48))
         .await
-        .context("reading archived thread/list response")?;
+        .map_err(|error| format!("reading archived thread/list response: {error}"))?;
     assert_eq!(archived_threads.data.len(), 1);
     assert_eq!(archived_threads.data[0].id, thread_id);
     assert_eq!(
@@ -483,7 +483,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let wrong_provider_threads: codex::ThreadListResponse =
         read_typed_response(&mut ws, request_id(49))
             .await
-            .context("reading provider-filtered thread/list response")?;
+            .map_err(|error| format!("reading provider-filtered thread/list response: {error}"))?;
     assert!(wrong_provider_threads.data.is_empty());
 
     send_client_request(
@@ -499,7 +499,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let thread_unarchive: codex::ThreadUnarchiveResponse =
         read_typed_response(&mut ws, request_id(41))
             .await
-            .context("reading thread/unarchive response")?;
+            .map_err(|error| format!("reading thread/unarchive response: {error}"))?;
     assert_eq!(thread_unarchive.thread.id, thread_id);
 
     send_client_request(
@@ -515,7 +515,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let goal_after_turn: codex::ThreadGoalGetResponse =
         read_typed_response(&mut ws, request_id(50))
             .await
-            .context("reading post-turn thread/goal/get response")?;
+            .map_err(|error| format!("reading post-turn thread/goal/get response: {error}"))?;
     let goal_after_turn = goal_after_turn
         .goal
         .expect("goal should still exist after the turn");
@@ -568,7 +568,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let resumed_history: codex::ThreadResumeResponse = read_typed_response(&mut ws, request_id(46))
         .await
-        .context("reading history-bearing thread/resume response")?;
+        .map_err(|error| format!("reading history-bearing thread/resume response: {error}"))?;
     assert_eq!(resumed_history.thread.id, thread_id);
     assert_eq!(resumed_history.thread.turns.len(), 1);
     let resumed_turn = &resumed_history.thread.turns[0];
@@ -580,7 +580,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
 
     let replay_usage = read_token_usage_notification(&mut ws)
         .await
-        .context("reading token-usage replay after thread/resume")?;
+        .map_err(|error| format!("reading token-usage replay after thread/resume: {error}"))?;
     assert!(
         replay_usage.total.total_tokens > 0,
         "thread/resume should replay non-zero session token usage, got {replay_usage:?}"
@@ -609,7 +609,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     .await?;
     let metadata_resume: codex::ThreadResumeResponse = read_typed_response(&mut ws, request_id(47))
         .await
-        .context("reading metadata-only thread/resume response")?;
+        .map_err(|error| format!("reading metadata-only thread/resume response: {error}"))?;
     assert_eq!(metadata_resume.thread.id, thread_id);
     assert!(
         metadata_resume.thread.turns.is_empty(),
@@ -728,8 +728,8 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_completes_blank_materialized_terminal_message() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -780,7 +780,7 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -794,7 +794,7 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
 
     let capture = tokio::time::timeout(Duration::from_secs(15), read_turn_capture(&mut ws))
         .await
-        .context("timed out waiting for Codex shim turn completion")??;
+        .map_err(|error| format!("timed out waiting for Codex shim turn completion: {error}"))??;
 
     assert_eq!(capture.turn.status, codex::TurnStatus::Completed);
     assert!(

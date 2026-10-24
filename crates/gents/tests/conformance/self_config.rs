@@ -135,12 +135,18 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 }
                 _ => Ok(()),
             };
-            let guard = if case.guarded {
+            let guard: Result<(), Box<dyn std::error::Error + Send + Sync>> = if case.guarded {
                 let (stored, candidate) = typed();
                 match target {
-                    SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
-                    SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
-                    SelfConfigTarget::InferenceBackend => guard_backend_auth(&stored, &candidate),
+                    SelfConfigTarget::Tools => {
+                        guard_tools_keep_control(&stored, &candidate).map_err(Into::into)
+                    }
+                    SelfConfigTarget::Agent => {
+                        guard_agent_keeps_reach(&stored, &candidate).map_err(Into::into)
+                    }
+                    SelfConfigTarget::InferenceBackend => {
+                        guard_backend_auth(&stored, &candidate).map_err(Into::into)
+                    }
                     SelfConfigTarget::InferenceProfile => {
                         let backend = |doc: &Map<String, Value>| {
                             let id = doc.get("backend_id")?;
@@ -154,8 +160,9 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                         match backend(&candidate) {
                             Some(next) => {
                                 guard_backend_choice(backend(&stored).as_ref(), &next, None)
+                                    .map_err(Into::into)
                             }
-                            None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
+                            None => Err(format!("{}: unknown next backend", case.name).into()),
                         }
                     }
                     other => panic!("{}: no runtime guard for {other:?}", case.name),
@@ -164,7 +171,7 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 Ok(())
             };
             assert_eq!(
-                grants.and(guard).is_ok(),
+                grants.is_ok() && guard.is_ok(),
                 case.accepted,
                 "{}: runtime guard",
                 case.name

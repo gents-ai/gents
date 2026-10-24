@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::Result;
 
 use super::args::BashArgs;
 use super::shared::{

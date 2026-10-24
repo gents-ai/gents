@@ -11,6 +11,7 @@ use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_r
 use crate::tool_call_lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
 
 use super::super::operator_resume::support::*;
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Deserialize)]
 struct PublicationContracts {
@@ -539,7 +540,11 @@ async fn run_generated_wait_observations() {
                     failure,
                 )
                 .await
-                .unwrap_or_else(|error| panic!("{} terminalize: {error:#}", case.name)),
+                .unwrap_or_else(|error| panic!(
+                    "{} terminalize: {}",
+                    case.name,
+                    ErrorChain(error.as_ref())
+                )),
             TerminalizeResult::Won,
             "{}",
             case.name
@@ -618,8 +623,9 @@ async fn run_generated_wait_observations() {
                 let error = result.expect_err(&case.name);
                 assert!(
                     crate::config_client::is_transaction_step_unavailable(&error),
-                    "{}: {error:#}",
-                    case.name
+                    "{}: {}",
+                    case.name,
+                    ErrorChain(error.as_ref())
                 );
                 assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
                 let retried = publish_claimed_continuation(
@@ -829,7 +835,7 @@ async fn run_historical_publication_cases() {
                 txn.discard().await.unwrap();
             }
             "conflict" => {
-                let error = format!("{:#}", result.unwrap_err());
+                let error = format!("{}", ErrorChain(result.unwrap_err().as_ref()));
                 assert!(
                     error.contains("binding")
                         || error.contains("receipt")

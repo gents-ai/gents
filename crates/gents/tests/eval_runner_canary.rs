@@ -1,5 +1,6 @@
 mod support;
 
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
 use gents::config_client::{
@@ -634,8 +635,8 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
     )
     .await
     .unwrap_err();
-    let refusal = freeze_refused(&error)
-        .unwrap_or_else(|| panic!("expected a FreezeRefused: {error:#}"))
+    let refusal = freeze_refused(error.as_ref())
+        .unwrap_or_else(|| panic!("expected a FreezeRefused: {}", ErrorChain(error.as_ref())))
         .0
         .clone();
     assert!(
@@ -668,8 +669,8 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
     )
     .await
     .unwrap_err();
-    let refusal = freeze_refused(&error)
-        .unwrap_or_else(|| panic!("expected a FreezeRefused: {error:#}"))
+    let refusal = freeze_refused(error.as_ref())
+        .unwrap_or_else(|| panic!("expected a FreezeRefused: {}", ErrorChain(error.as_ref())))
         .0
         .clone();
     assert!(refusal.contains("node_oauth"), "{refusal}");

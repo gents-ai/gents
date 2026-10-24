@@ -1,37 +1,37 @@
-use anyhow::{ensure, Context, Result};
 use gents_protocol::goal_control::{GOAL_STOP_CONTRACT_VERSION, STATUS_GOAL_STOP_CONTRACT_FIELD};
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use serde_json::Value;
 
 use crate::client::PeerRecord;
 
-use super::{http::peer_status, serving_runtime};
+use super::{http::peer_status, serving_runtime, LocalRuntimeError, Result};
 
 pub(crate) async fn ensure_goal_stop_supported(record: Option<&PeerRecord>) -> Result<()> {
     let Some(record) = record else {
         return Ok(());
     };
-    let status = peer_status(record).await?.context(
-        "Cannot verify goal assignment controls. Reconnect this runtime through its HTTP address.",
-    )?;
+    let status = peer_status(record)
+        .await?
+        .ok_or(LocalRuntimeError::GoalControlUnverifiable)?;
     decode(&status, &record.node_did)
 }
 
 fn decode(status: &Value, expected_did: &str) -> Result<()> {
-    ensure!(
-        matches!(
-            serving_runtime(status, expected_did)?,
-            ObservedServeLifecycle::Ready
-        ),
-        "The runtime is not ready. Reconnect it before changing this goal."
-    );
-    ensure!(
-        status
-            .get(STATUS_GOAL_STOP_CONTRACT_FIELD)
-            .and_then(Value::as_u64)
-            == Some(u64::from(GOAL_STOP_CONTRACT_VERSION)),
-        "The extension and runtime use different goal controls. Update them together, then reconnect."
-    );
+    if !matches!(
+        serving_runtime(status, expected_did)?,
+        ObservedServeLifecycle::Ready
+    ) {
+        return Err(LocalRuntimeError::RuntimeNotReady {
+            action: "changing this goal",
+        });
+    }
+    if status
+        .get(STATUS_GOAL_STOP_CONTRACT_FIELD)
+        .and_then(Value::as_u64)
+        != Some(u64::from(GOAL_STOP_CONTRACT_VERSION))
+    {
+        return Err(LocalRuntimeError::GoalControlContractMismatch);
+    }
     Ok(())
 }
 

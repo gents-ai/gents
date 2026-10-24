@@ -69,7 +69,9 @@ fn core_request(reasoning: &str) -> CompletionRequest {
 struct StaticBearer;
 
 impl crate::oauth_credential::BearerSource for StaticBearer {
-    async fn current_bearer(&self) -> anyhow::Result<String> {
+    async fn current_bearer(
+        &self,
+    ) -> std::result::Result<String, crate::oauth_credential::OAuthCredentialError> {
         Ok("test-oauth-token".to_string())
     }
 

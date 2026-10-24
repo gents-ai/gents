@@ -1,14 +1,16 @@
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
+use super::error::DocumentConfigError;
 use super::references::ConfigReferences;
 use super::serde_helpers::{
     default_enabled, deserialize_default_on_null, deserialize_enabled, first_row_with_doc_id,
     is_enabled, rows_with_doc_id,
 };
+
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -53,7 +55,7 @@ impl Agent {
             .unwrap_or_default()
     }
 
-    pub fn validate_references(&self, refs: &ConfigReferences) -> Result<()> {
+    pub fn validate_references(&self, refs: &ConfigReferences) -> anyhow::Result<()> {
         refs.validate_document(crate::Collection::Agent, &serde_json::to_value(self)?)?;
         refs.validate()
     }
@@ -133,7 +135,10 @@ pub(crate) async fn list_agent_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn upsert_agent(node: &std::sync::Arc<EmbeddedNode>, behavior: &Agent) -> Result<()> {
+pub async fn upsert_agent(
+    node: &std::sync::Arc<EmbeddedNode>,
+    behavior: &Agent,
+) -> anyhow::Result<()> {
     crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,

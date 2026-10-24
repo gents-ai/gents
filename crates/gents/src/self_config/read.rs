@@ -7,7 +7,23 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ExecutionSettingsError {
+    #[error(transparent)]
+    Decode(#[from] serde_json::Error),
+    #[error(transparent)]
+    Validate(Box<crate::document_config::DocumentConfigError>),
+}
+
+impl From<crate::document_config::DocumentConfigError> for ExecutionSettingsError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::Validate(Box::new(error))
+    }
+}
+
+pub(super) fn execution_settings(
+    document: Option<&Value>,
+) -> Result<Value, ExecutionSettingsError> {
     use crate::config::*;
     let mut document = document.cloned().unwrap_or_else(|| {
         json!({

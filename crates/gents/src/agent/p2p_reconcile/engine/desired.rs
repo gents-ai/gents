@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
-
+use super::super::error::{P2pReconcileError, Result};
 #[cfg(test)]
 use super::super::templates::Delivery;
 use super::super::templates::{
@@ -30,9 +29,12 @@ pub(super) fn desired_from_pairing_row(
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .context("pairing row is missing its scope template")?;
-    let template = resolve_template(template_id)
-        .with_context(|| format!("unknown pairing scope template {template_id:?}"))?;
+        .ok_or(P2pReconcileError::PairingRowMissingScopeTemplate)?;
+    let template = resolve_template(template_id).ok_or_else(|| {
+        P2pReconcileError::UnknownPairingScopeTemplate {
+            template_id: template_id.to_owned(),
+        }
+    })?;
 
     if template.id == APP_COLLECTIONS_TEMPLATE {
         tracing::warn!(target: "gents::agent::p2p_reconcile::engine",
@@ -44,10 +46,9 @@ pub(super) fn desired_from_pairing_row(
 
     let peer_did = row.node_did.as_deref().map(str::trim).unwrap_or_default();
     if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
-        anyhow::bail!(
-            "pairing row for peer-DID-dependent template {template_id:?} has a blank \
-             node_did; refusing to install an unscoped replicator (skipping peer)"
-        );
+        return Err(P2pReconcileError::PeerDidDependentTemplateBlank {
+            template_id: template_id.to_owned(),
+        });
     }
     let (requester_did, owner_node_did, direction) = if template.scope == Scope::ClientRoute {
         let route_id = row
@@ -55,7 +56,7 @@ pub(super) fn desired_from_pairing_row(
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .context("client pairing row is missing its durable route key")?;
+            .ok_or(P2pReconcileError::ClientPairingRowMissingRouteKey)?;
         let direction = policy::client_route_direction(route_id)?;
         (local_did, peer_did, direction)
     } else {
@@ -124,13 +125,11 @@ pub(super) fn data_plane_desired_from_pairing_row(
         .filter(|did| !did.is_empty())
     {
         if row_did != self_did {
-            anyhow::bail!(
-                "DataPlanePairingDesired for peer {} scopes node_did {} but this node is {}; \
-                 refusing to install a data-plane replicator for a foreign DID",
-                signed_endpoint.peer_id,
-                row_did,
-                self_did
-            );
+            return Err(P2pReconcileError::DataPlaneForeignDid {
+                peer_id: signed_endpoint.peer_id.clone(),
+                row_did: row_did.to_owned(),
+                self_did: self_did.to_owned(),
+            });
         }
     }
 
@@ -139,16 +138,19 @@ pub(super) fn data_plane_desired_from_pairing_row(
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .context("data-plane pairing row is missing its scope template")?;
-    let template = resolve_template(template_id)
-        .with_context(|| format!("unknown data-plane pairing scope template {template_id:?}"))?;
+        .ok_or(P2pReconcileError::DataPlanePairingRowMissingScopeTemplate)?;
+    let template = resolve_template(template_id).ok_or_else(|| {
+        P2pReconcileError::UnknownDataPlaneScopeTemplate {
+            template_id: template_id.to_owned(),
+        }
+    })?;
     let client_route_direction = if template.scope == Scope::ClientRoute {
         let route_id = row
             .peer_id
             .as_deref()
             .map(str::trim)
             .filter(|route_id| !route_id.is_empty())
-            .context("client data-plane pairing row is missing its durable route key")?;
+            .ok_or(P2pReconcileError::ClientDataPlanePairingRowMissingRouteKey)?;
         match policy::client_route_direction(route_id) {
             Ok(direction) => direction,
             // Enrollment base routes are keyed by the member peer, not a
@@ -163,11 +165,10 @@ pub(super) fn data_plane_desired_from_pairing_row(
     };
     let peer_did = signed_endpoint.node_did.trim();
     if data_plane_scope_requires_signed_peer_did(&template.scope) && peer_did.is_empty() {
-        anyhow::bail!(
-            "DataPlanePairingDesired for peer {} uses template {template_id:?} but the signed \
-             PeerEndpoint has a blank node_did",
-            signed_endpoint.peer_id
-        );
+        return Err(P2pReconcileError::DataPlaneBlankPeerDid {
+            peer_id: signed_endpoint.peer_id.clone(),
+            template_id: template_id.to_owned(),
+        });
     }
 
     row.replicator_addresses = Some(vec![signed_endpoint.address.clone()]);

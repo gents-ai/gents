@@ -165,6 +165,7 @@ impl ClientCore {
 mod tests {
     use super::*;
     use gents::goal::SessionGoalObservationState;
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::goal_control::ObservedGoal;
     use serde_json::{json, Value};
 
@@ -383,7 +384,8 @@ mod tests {
                 let error = actual.unwrap_err();
                 assert!(
                     error.to_string().contains("still syncing"),
-                    "{mode}: {error:#}"
+                    "{mode}: {}",
+                    ErrorChain(error.as_ref())
                 );
                 let requests = server.received_requests().await.unwrap();
                 assert!(

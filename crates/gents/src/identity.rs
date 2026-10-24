@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 #[cfg(target_os = "macos")]
 use defra_core::signing::RemoteSigner;
@@ -13,6 +12,245 @@ mod file_key;
 
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
+
+#[derive(Debug, thiserror::Error)]
+pub enum IdentityError {
+    #[error(transparent)]
+    InsecureKey(#[from] InsecureKeyPermissions),
+    #[error("identity key does not exist at {}", path.display())]
+    KeyMissing { path: PathBuf },
+    #[error("constructing identity from {}", path.display())]
+    ConstructIdentity {
+        path: PathBuf,
+        #[source]
+        source: identity::Error,
+    },
+    #[error("loading identity from {}", path.display())]
+    LoadIdentity {
+        path: PathBuf,
+        #[source]
+        source: identity::Error,
+    },
+    #[error("staging key for {}", path.display())]
+    StageKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("securing staged key for {}", path.display())]
+    SecureStagedKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing staged key for {}", path.display())]
+    WriteStagedKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("syncing staged key for {}", path.display())]
+    SyncStagedKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("persisting key to {}", path.display())]
+    PersistKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("opening key {}", path.display())]
+    OpenKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading key {}", path.display())]
+    ReadKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting key {}", path.display())]
+    InspectKey {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("key {} is not a regular file", path.display())]
+    KeyNotRegular { path: PathBuf },
+    #[error("creating key directory {}", path.display())]
+    CreateKeyDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Crypto(#[from] crypto::Error),
+    #[error(transparent)]
+    Identity(#[from] identity::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("node signing DID mismatch: expected {did}, derived {derived_did}")]
+    NodeDidMismatch { did: String, derived_did: String },
+    #[error("node signing public key does not match DID {did}")]
+    NodePublicKeyMismatch { did: String },
+    #[error("loading Ed25519 node signing identity")]
+    LoadNodeSigning(#[source] identity::Error),
+    #[error("parsing commit signer DID {did}")]
+    ParseCommitSignerDid {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("no signing identity is loaded for {did}")]
+    SigningIdentityNotLoaded { did: String },
+    #[error("loading signing identity {did}")]
+    LoadSigningIdentity {
+        did: String,
+        #[source]
+        source: Box<IdentityError>,
+    },
+    #[error("minting DefraDB bearer token for {did}")]
+    MintBearer {
+        did: String,
+        #[source]
+        source: identity::Error,
+    },
+    #[error("DefraDB bearer token is not UTF-8")]
+    BearerNotUtf8(#[source] std::string::FromUtf8Error),
+    #[error("signing payload for {did}")]
+    SignPayload {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("no DefraDB signing identity registered for DID {did}")]
+    NoDefraSigningIdentity { did: String },
+    #[error("macos-secure-enclave identity backend is only available on macOS")]
+    SecureEnclaveUnavailable,
+    #[error("macos-keychain identity backend is only available on macOS")]
+    KeychainUnavailable,
+    #[error("no public key registered for DID {did}")]
+    NoPublicKey { did: String },
+    #[error("parsing did:key public key from DID {did}")]
+    ParseDidKey {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("verifying payload for {did}")]
+    VerifyPayload {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("registered identity {did} has neither a local key nor a remote signer")]
+    NoLocalOrRemoteSigner { did: String },
+    #[error("registered identity {did} has no public key bytes")]
+    NoRegisteredPublicKey { did: String },
+    #[error("loading public key for registered identity {did}")]
+    LoadRegisteredPublicKey {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("deriving DID for registered identity {did}")]
+    DeriveRegisteredDid {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
+    #[error("registered identity DID mismatch: expected {did}, derived {derived_did}")]
+    RegisteredDidMismatch { did: String, derived_did: String },
+    #[error("registered identity has no local private key and no remote signer was available")]
+    NoLocalPrivateKey,
+    #[error("constructing identity from DefraDB signing config")]
+    IdentityFromSigningConfig(#[source] identity::Error),
+    #[error("signing payload for {did}: {error}")]
+    RemoteSignFailed { did: String, error: String },
+    #[error("joining DefraDB remote signing task")]
+    JoinRemoteSigning(#[source] tokio::task::JoinError),
+    #[error("BLS registered identities cannot be used as gents runtime identities")]
+    BlsRegistered,
+    #[error("registered identity key type {key_type} cannot be used as a gents runtime identity")]
+    UnsupportedRegisteredKeyType { key_type: SigningKeyType },
+    #[error("macOS keychain identity not found for label {label}")]
+    KeychainIdentityNotFound { label: String },
+    #[error("loading macOS keychain identity {label}")]
+    LoadKeychainIdentity {
+        label: String,
+        #[source]
+        source: identity::Error,
+    },
+    #[error("storing macOS keychain identity {label}")]
+    StoreKeychainIdentity {
+        label: String,
+        #[source]
+        source: Box<IdentityError>,
+    },
+    #[error("constructing macOS keychain identity {label}")]
+    ConstructKeychainIdentity {
+        label: String,
+        #[source]
+        source: identity::Error,
+    },
+    #[error("reading macOS keychain identity {label}: macOS Keychain error {code}")]
+    KeychainReadFailed { label: String, code: i32 },
+    #[error("verifying deletion of Keychain item {label}: macOS Keychain error {code}")]
+    KeychainVerifyFailed { label: String, code: i32 },
+    #[error("Keychain item {label} is still present after deletion; its custody record must be retained")]
+    KeychainStillPresent { label: String },
+    #[error("loading default macOS keychain")]
+    DefaultKeychain(#[source] security_framework::base::Error),
+    #[error(transparent)]
+    Keychain(#[from] security_framework::base::Error),
+    #[error("macOS Secure Enclave key not found for label {label}")]
+    SecureEnclaveKeyNotFound { label: String },
+    #[error("loading public key for Secure Enclave key {label}")]
+    SecureEnclavePublicKey {
+        label: String,
+        #[source]
+        source: Box<IdentityError>,
+    },
+    #[error("deriving DID for Secure Enclave key {label}")]
+    SecureEnclaveDid {
+        label: String,
+        #[source]
+        source: Box<IdentityError>,
+    },
+    #[error("multiple keychain private keys found for label {label}")]
+    MultipleSecureEnclaveKeys { label: String },
+    #[error("searching keychain for macOS Secure Enclave key label {label}")]
+    SearchSecureEnclaveKey {
+        label: String,
+        #[source]
+        source: security_framework::base::Error,
+    },
+    #[error("creating Secure Enclave key access control")]
+    SecureEnclaveAccessControl(#[source] security_framework::base::Error),
+    #[error("creating macOS Secure Enclave key label {label}: {error}")]
+    CreateSecureEnclaveKey { label: String, error: String },
+    #[error("macOS Secure Enclave key label {label} requires a codesigned binary with Data Protection keychain access-group entitlements")]
+    SecureEnclaveEntitlement { label: String },
+    #[error("Secure Enclave key has no public key")]
+    SecureEnclaveNoPublicKey,
+    #[error("Secure Enclave public key is not exportable")]
+    SecureEnclaveNotExportable,
+}
+
+impl IdentityError {
+    pub fn insecure_key(&self) -> Option<&InsecureKeyPermissions> {
+        match self {
+            Self::InsecureKey(key) => Some(key),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = IdentityError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAccount {
@@ -44,9 +282,9 @@ impl std::fmt::Debug for RuntimeNode {
 pub trait NodeIdentity: Send + Sync {
     fn did(&self) -> &str;
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>>;
+    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>>;
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool>;
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool>;
 
     fn service_account(&self) -> Option<&ServiceAccount>;
 }
@@ -94,7 +332,7 @@ impl KeyIdentity {
         service_account: Option<ServiceAccount>,
     ) -> Result<Self> {
         let identity = Arc::new(identity);
-        let did = identity.did().map_err(anyhow::Error::from)?.to_string();
+        let did = identity.did()?.to_string();
         let public_key_bytes = identity.public_key_bytes();
         register_public_key(&did, identity.key_type(), public_key_bytes.clone());
         register_ed25519_signing_identity(&did, &identity.private_key_bytes(), &public_key_bytes)?;
@@ -112,14 +350,18 @@ pub fn register_ed25519_signing_identity(
     public_key_bytes: &[u8],
 ) -> Result<()> {
     let identity = RawIdentity::from_bytes(crypto::KeyType::Ed25519, private_key_bytes)
-        .map_err(anyhow::Error::from)
-        .context("loading Ed25519 node signing identity")?;
-    let derived_did = identity.did().map_err(anyhow::Error::from)?.to_string();
+        .map_err(IdentityError::LoadNodeSigning)?;
+    let derived_did = identity.did()?.to_string();
     if derived_did != did {
-        anyhow::bail!("node signing DID mismatch: expected {did}, derived {derived_did}");
+        return Err(IdentityError::NodeDidMismatch {
+            did: did.to_owned(),
+            derived_did,
+        });
     }
     if identity.public_key_bytes() != public_key_bytes {
-        anyhow::bail!("node signing public key does not match DID {did}");
+        return Err(IdentityError::NodePublicKeyMismatch {
+            did: did.to_owned(),
+        });
     }
 
     defra_core::signing::store_identity(
@@ -141,9 +383,11 @@ pub fn register_ed25519_signing_identity(
 /// Identity string DefraDB stores in commit signature headers for a
 /// `did:key` principal: the hexadecimal public key, not the DID.
 pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
-    let (_, public_key_bytes) = crypto::parse_did_key(did)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("parsing commit signer DID {did}"))?;
+    let (_, public_key_bytes) =
+        crypto::parse_did_key(did).map_err(|source| IdentityError::ParseCommitSignerDid {
+            did: did.to_owned(),
+            source,
+        })?;
     Ok(lowercase_hex(&public_key_bytes))
 }
 
@@ -157,19 +401,28 @@ const DEFRADB_BEARER_LIFETIME: std::time::Duration = std::time::Duration::from_s
 /// private key bytes this process did not register is refused, not silently
 /// downgraded to an anonymous request.
 pub fn defradb_bearer_authorization(did: &str, audience: &str) -> Result<String> {
-    let config = defra_core::signing::get_identity(did)
-        .ok_or_else(|| anyhow!("no signing identity is loaded for {did}"))?;
-    let identity = raw_identity_from_signing_config(&config)
-        .with_context(|| format!("loading signing identity {did}"))?;
+    let config = defra_core::signing::get_identity(did).ok_or_else(|| {
+        IdentityError::SigningIdentityNotLoaded {
+            did: did.to_owned(),
+        }
+    })?;
+    let identity = raw_identity_from_signing_config(&config).map_err(|source| {
+        IdentityError::LoadSigningIdentity {
+            did: did.to_owned(),
+            source: Box::new(source),
+        }
+    })?;
     let token = identity::new_token(
         &identity,
         DEFRADB_BEARER_LIFETIME,
         Some(audience.to_string()),
         None,
     )
-    .map_err(anyhow::Error::from)
-    .with_context(|| format!("minting DefraDB bearer token for {did}"))?;
-    let token = String::from_utf8(token).context("DefraDB bearer token is not UTF-8")?;
+    .map_err(|source| IdentityError::MintBearer {
+        did: did.to_owned(),
+        source,
+    })?;
+    let token = String::from_utf8(token).map_err(IdentityError::BearerNotUtf8)?;
     Ok(format!("Bearer {token}"))
 }
 
@@ -192,14 +445,17 @@ impl NodeIdentity for KeyIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
-        self.identity
+    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+        Ok(self
+            .identity
             .sign(payload)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("signing payload for {}", self.did))
+            .map_err(|source| IdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })?)
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool> {
         let public_key = if did == self.did {
             KnownPublicKey {
                 key_type: self.identity.key_type(),
@@ -209,7 +465,7 @@ impl NodeIdentity for KeyIdentity {
             known_public_key_for_did(did)?
         };
 
-        verify_with_public_key(did, public_key, payload, signature)
+        Ok(verify_with_public_key(did, public_key, payload, signature)?)
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {
@@ -230,7 +486,7 @@ impl RegisteredIdentity {
     ) -> Result<Self> {
         let did = did.into();
         let config = defra_core::signing::get_identity(&did)
-            .ok_or_else(|| anyhow!("no DefraDB signing identity registered for DID {did}"))?;
+            .ok_or_else(|| IdentityError::NoDefraSigningIdentity { did: did.clone() })?;
         validate_registered_identity_config(&did, &config)?;
         register_public_key(
             &did,
@@ -293,27 +549,32 @@ impl NodeIdentity for RegisteredIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
         if let Some(signer) = self.config.remote_signer.clone() {
             let payload = payload.to_vec();
             let authorization = self.config.signing_authorization.clone();
-            return tokio::task::spawn_blocking(move || {
+            let signed = tokio::task::spawn_blocking(move || {
                 signer.sign_sync(&payload, authorization.as_ref())
             })
             .await
-            .context("joining DefraDB remote signing task")?
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("signing payload for {}", self.did));
+            .map_err(IdentityError::JoinRemoteSigning)?
+            .map_err(|error| IdentityError::RemoteSignFailed {
+                did: self.did.clone(),
+                error,
+            })?;
+            return Ok(signed);
         }
 
         let identity = raw_identity_from_signing_config(&self.config)?;
-        identity
+        Ok(identity
             .sign(payload)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("signing payload for {}", self.did))
+            .map_err(|source| IdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })?)
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool> {
         let public_key = if did == self.did {
             KnownPublicKey {
                 key_type: signing_key_type_to_crypto_key_type(self.config.key_type)?,
@@ -323,7 +584,7 @@ impl NodeIdentity for RegisteredIdentity {
             known_public_key_for_did(did)?
         };
 
-        verify_with_public_key(did, public_key, payload, signature)
+        Ok(verify_with_public_key(did, public_key, payload, signature)?)
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {
@@ -379,7 +640,7 @@ fn register_macos_secure_enclave_identity(
     _create_if_missing: bool,
     _service_account: Option<ServiceAccount>,
 ) -> Result<RegisteredIdentity> {
-    anyhow::bail!("macos-secure-enclave identity backend is only available on macOS")
+    Err(IdentityError::SecureEnclaveUnavailable)
 }
 
 #[cfg(target_os = "macos")]
@@ -389,7 +650,7 @@ fn register_macos_keychain_identity(
     service_account: Option<ServiceAccount>,
 ) -> Result<RegisteredIdentity> {
     let identity = load_or_create_macos_keychain_raw_identity(label, create_if_missing)?;
-    let did = identity.did().map_err(anyhow::Error::from)?.to_string();
+    let did = identity.did()?.to_string();
     let public_key_bytes = identity.public_key_bytes();
     defra_core::signing::store_identity(
         &did,
@@ -413,7 +674,7 @@ fn register_macos_keychain_identity(
     _create_if_missing: bool,
     _service_account: Option<ServiceAccount>,
 ) -> Result<RegisteredIdentity> {
-    anyhow::bail!("macos-keychain identity backend is only available on macOS")
+    Err(IdentityError::KeychainUnavailable)
 }
 
 #[cfg(target_os = "macos")]
@@ -424,23 +685,39 @@ fn load_or_create_macos_keychain_raw_identity(
     use crypto::Key as _;
 
     match macos_keychain_find(MACOS_KEYCHAIN_SERVICE, label)? {
-        Ok(password) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, &password)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("loading macOS keychain identity {label}")),
+        Ok(password) => {
+            RawIdentity::from_bytes(crypto::KeyType::Ed25519, &password).map_err(|source| {
+                IdentityError::LoadKeychainIdentity {
+                    label: label.to_owned(),
+                    source,
+                }
+            })
+        }
         Err(ERR_SEC_ITEM_NOT_FOUND) => {
             if !create_if_missing {
-                anyhow::bail!("macOS keychain identity not found for label {label}");
+                return Err(IdentityError::KeychainIdentityNotFound {
+                    label: label.to_owned(),
+                });
             }
-            let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
+            let private_key = crypto::generate_ed25519()?;
             let bytes = private_key.raw();
-            macos_keychain_set(MACOS_KEYCHAIN_SERVICE, label, bytes)
-                .with_context(|| format!("storing macOS keychain identity {label}"))?;
-            RawIdentity::from_private_key(private_key)
-                .map_err(anyhow::Error::from)
-                .with_context(|| format!("constructing macOS keychain identity {label}"))
+            macos_keychain_set(MACOS_KEYCHAIN_SERVICE, label, bytes).map_err(|source| {
+                IdentityError::StoreKeychainIdentity {
+                    label: label.to_owned(),
+                    source: Box::new(source),
+                }
+            })?;
+            RawIdentity::from_private_key(private_key).map_err(|source| {
+                IdentityError::ConstructKeychainIdentity {
+                    label: label.to_owned(),
+                    source,
+                }
+            })
         }
-        Err(code) => Err(anyhow!("macOS Keychain error {code}"))
-            .with_context(|| format!("reading macOS keychain identity {label}")),
+        Err(code) => Err(IdentityError::KeychainReadFailed {
+            label: label.to_owned(),
+            code,
+        }),
     }
 }
 
@@ -450,7 +727,7 @@ pub(crate) fn macos_keychain_find(
     label: &str,
 ) -> Result<std::result::Result<k256::elliptic_curve::zeroize::Zeroizing<Vec<u8>>, i32>> {
     let keychain = security_framework::os::macos::keychain::SecKeychain::default()
-        .context("loading default macOS keychain")?;
+        .map_err(IdentityError::DefaultKeychain)?;
     Ok(match keychain.find_generic_password(service, label) {
         Ok((password, _)) => Ok(k256::elliptic_curve::zeroize::Zeroizing::new(
             password.as_ref().to_vec(),
@@ -462,9 +739,9 @@ pub(crate) fn macos_keychain_find(
 #[cfg(target_os = "macos")]
 pub(crate) fn macos_keychain_set(service: &str, label: &str, secret: &[u8]) -> Result<()> {
     security_framework::os::macos::keychain::SecKeychain::default()
-        .context("loading default macOS keychain")?
+        .map_err(IdentityError::DefaultKeychain)?
         .set_generic_password(service, label, secret)
-        .map_err(anyhow::Error::from)
+        .map_err(IdentityError::Keychain)
 }
 
 /// `security-framework` discards `SecKeychainItemDelete`'s status, so
@@ -472,21 +749,23 @@ pub(crate) fn macos_keychain_set(service: &str, label: &str, secret: &[u8]) -> R
 #[cfg(target_os = "macos")]
 pub(crate) fn macos_keychain_delete(service: &str, label: &str) -> Result<()> {
     let keychain = security_framework::os::macos::keychain::SecKeychain::default()
-        .context("loading default macOS keychain")?;
+        .map_err(IdentityError::DefaultKeychain)?;
     match keychain.find_generic_password(service, label) {
         Ok((_, item)) => {
             item.delete();
             match macos_keychain_find(service, label)? {
                 Err(ERR_SEC_ITEM_NOT_FOUND) => Ok(()),
-                Err(code) => Err(anyhow!("macOS Keychain error {code}"))
-                    .with_context(|| format!("verifying deletion of Keychain item {label}")),
-                Ok(_) => anyhow::bail!(
-                    "Keychain item {label} is still present after deletion; its custody record must be retained"
-                ),
+                Err(code) => Err(IdentityError::KeychainVerifyFailed {
+                    label: label.to_owned(),
+                    code,
+                }),
+                Ok(_) => Err(IdentityError::KeychainStillPresent {
+                    label: label.to_owned(),
+                }),
             }
         }
         Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-        Err(error) => Err(anyhow::Error::from(error)),
+        Err(error) => Err(IdentityError::Keychain(error)),
     }
 }
 
@@ -508,12 +787,24 @@ impl MacosSecureEnclaveSigner {
         let key = match find_macos_secure_enclave_key(label)? {
             Some(key) => key,
             None if create_if_missing => create_macos_secure_enclave_key(label)?,
-            None => anyhow::bail!("macOS Secure Enclave key not found for label {label}"),
+            None => {
+                return Err(IdentityError::SecureEnclaveKeyNotFound {
+                    label: label.to_owned(),
+                })
+            }
         };
-        let public_key_bytes = public_key_bytes_for_sec_key(&key)
-            .with_context(|| format!("loading public key for Secure Enclave key {label}"))?;
-        let did = did_for_secp256r1_public_key(&public_key_bytes)
-            .with_context(|| format!("deriving DID for Secure Enclave key {label}"))?;
+        let public_key_bytes = public_key_bytes_for_sec_key(&key).map_err(|source| {
+            IdentityError::SecureEnclavePublicKey {
+                label: label.to_owned(),
+                source: Box::new(source),
+            }
+        })?;
+        let did = did_for_secp256r1_public_key(&public_key_bytes).map_err(|source| {
+            IdentityError::SecureEnclaveDid {
+                label: label.to_owned(),
+                source: Box::new(source),
+            }
+        })?;
         Ok(Self {
             label: label.to_string(),
             key,
@@ -563,9 +854,10 @@ fn find_macos_secure_enclave_key(label: &str) -> Result<Option<security_framewor
         Err(error) if error.code() == ERR_SEC_MISSING_ENTITLEMENT => {
             return Err(missing_secure_enclave_entitlement_error(label));
         }
-        Err(error) => {
-            return Err(anyhow::Error::from(error)).with_context(|| {
-                format!("searching keychain for macOS Secure Enclave key label {label}")
+        Err(source) => {
+            return Err(IdentityError::SearchSecureEnclaveKey {
+                label: label.to_owned(),
+                source,
             });
         }
     };
@@ -575,7 +867,9 @@ fn find_macos_secure_enclave_key(label: &str) -> Result<Option<security_framewor
     });
     let first = matches.next();
     if matches.next().is_some() {
-        anyhow::bail!("multiple keychain private keys found for label {label}");
+        return Err(IdentityError::MultipleSecureEnclaveKeys {
+            label: label.to_owned(),
+        });
     }
     Ok(first)
 }
@@ -589,7 +883,7 @@ fn create_macos_secure_enclave_key(label: &str) -> Result<security_framework::ke
 
     let access_control =
         SecAccessControl::create_with_flags(AccessControlOptions::PRIVATE_KEY_USAGE.bits())
-            .context("creating Secure Enclave key access control")?;
+            .map_err(IdentityError::SecureEnclaveAccessControl)?;
     let mut options = GenerateKeyOptions::default();
     options
         .set_key_type(KeyType::ec())
@@ -603,34 +897,35 @@ fn create_macos_secure_enclave_key(label: &str) -> Result<security_framework::ke
         Err(error) if error.code() == ERR_SEC_MISSING_ENTITLEMENT as isize => {
             Err(missing_secure_enclave_entitlement_error(label))
         }
-        Err(error) => Err(anyhow!("{error}"))
-            .with_context(|| format!("creating macOS Secure Enclave key label {label}")),
+        Err(error) => Err(IdentityError::CreateSecureEnclaveKey {
+            label: label.to_owned(),
+            error: error.to_string(),
+        }),
     }
 }
 
 #[cfg(target_os = "macos")]
-fn missing_secure_enclave_entitlement_error(label: &str) -> anyhow::Error {
-    anyhow!(
-        "macOS Secure Enclave key label {label} requires a codesigned binary with Data Protection keychain access-group entitlements"
-    )
+fn missing_secure_enclave_entitlement_error(label: &str) -> IdentityError {
+    IdentityError::SecureEnclaveEntitlement {
+        label: label.to_owned(),
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn public_key_bytes_for_sec_key(key: &security_framework::key::SecKey) -> Result<Vec<u8>> {
     let public_key = key
         .public_key()
-        .ok_or_else(|| anyhow!("Secure Enclave key has no public key"))?;
+        .ok_or(IdentityError::SecureEnclaveNoPublicKey)?;
     let data = public_key
         .external_representation()
-        .ok_or_else(|| anyhow!("Secure Enclave public key is not exportable"))?;
+        .ok_or(IdentityError::SecureEnclaveNotExportable)?;
     Ok(data.to_vec())
 }
 
 #[cfg(target_os = "macos")]
 fn did_for_secp256r1_public_key(public_key_bytes: &[u8]) -> Result<String> {
-    let public_key = crypto::public_key_from_bytes(crypto::KeyType::Secp256r1, public_key_bytes)
-        .map_err(anyhow::Error::from)?;
-    public_key.did().map_err(anyhow::Error::from)
+    let public_key = crypto::public_key_from_bytes(crypto::KeyType::Secp256r1, public_key_bytes)?;
+    Ok(public_key.did()?)
 }
 
 fn lowercase_hex(bytes: &[u8]) -> String {
@@ -654,9 +949,11 @@ fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {
     }
 
     if did.starts_with("did:key:") {
-        let (key_type, bytes) = crypto::parse_did_key(did)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("parsing did:key public key from DID {did}"))?;
+        let (key_type, bytes) =
+            crypto::parse_did_key(did).map_err(|source| IdentityError::ParseDidKey {
+                did: did.to_owned(),
+                source,
+            })?;
         tracing::trace!(
             did,
             ?key_type,
@@ -665,7 +962,9 @@ fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {
         return Ok(KnownPublicKey { key_type, bytes });
     }
 
-    anyhow::bail!("no public key registered for DID {did}")
+    Err(IdentityError::NoPublicKey {
+        did: did.to_owned(),
+    })
 }
 
 fn verify_with_public_key(
@@ -674,12 +973,13 @@ fn verify_with_public_key(
     payload: &[u8],
     signature: &[u8],
 ) -> Result<bool> {
-    let public_key = crypto::public_key_from_bytes(public_key.key_type, &public_key.bytes)
-        .map_err(anyhow::Error::from)?;
+    let public_key = crypto::public_key_from_bytes(public_key.key_type, &public_key.bytes)?;
     public_key
         .verify(payload, signature)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("verifying payload for {did}"))
+        .map_err(|source| IdentityError::VerifyPayload {
+            did: did.to_owned(),
+            source,
+        })
 }
 
 pub(crate) fn verify_did_signature(did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
@@ -688,24 +988,35 @@ pub(crate) fn verify_did_signature(did: &str, payload: &[u8], signature: &[u8]) 
 
 fn validate_registered_identity_config(did: &str, config: &SigningConfig) -> Result<()> {
     if !config.has_local_private_key() && !config.has_remote_signer() {
-        anyhow::bail!("registered identity {did} has neither a local key nor a remote signer");
+        return Err(IdentityError::NoLocalOrRemoteSigner {
+            did: did.to_owned(),
+        });
     }
     if config.public_key_bytes.is_empty() {
-        anyhow::bail!("registered identity {did} has no public key bytes");
+        return Err(IdentityError::NoRegisteredPublicKey {
+            did: did.to_owned(),
+        });
     }
 
     let public_key = crypto::public_key_from_bytes(
         signing_key_type_to_crypto_key_type(config.key_type)?,
         &config.public_key_bytes,
     )
-    .map_err(anyhow::Error::from)
-    .with_context(|| format!("loading public key for registered identity {did}"))?;
+    .map_err(|source| IdentityError::LoadRegisteredPublicKey {
+        did: did.to_owned(),
+        source,
+    })?;
     let derived_did = public_key
         .did()
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("deriving DID for registered identity {did}"))?;
+        .map_err(|source| IdentityError::DeriveRegisteredDid {
+            did: did.to_owned(),
+            source,
+        })?;
     if derived_did != did {
-        anyhow::bail!("registered identity DID mismatch: expected {did}, derived {derived_did}");
+        return Err(IdentityError::RegisteredDidMismatch {
+            did: did.to_owned(),
+            derived_did,
+        });
     }
 
     Ok(())
@@ -713,16 +1024,13 @@ fn validate_registered_identity_config(did: &str, config: &SigningConfig) -> Res
 
 fn raw_identity_from_signing_config(config: &SigningConfig) -> Result<RawIdentity> {
     if config.private_key_bytes.is_empty() {
-        anyhow::bail!(
-            "registered identity has no local private key and no remote signer was available"
-        );
+        return Err(IdentityError::NoLocalPrivateKey);
     }
     RawIdentity::from_bytes(
         signing_key_type_to_crypto_key_type(config.key_type)?,
         &config.private_key_bytes,
     )
-    .map_err(anyhow::Error::from)
-    .context("constructing identity from DefraDB signing config")
+    .map_err(IdentityError::IdentityFromSigningConfig)
 }
 
 fn signing_key_type_to_crypto_key_type(key_type: SigningKeyType) -> Result<crypto::KeyType> {
@@ -730,12 +1038,8 @@ fn signing_key_type_to_crypto_key_type(key_type: SigningKeyType) -> Result<crypt
         SigningKeyType::Ed25519 => Ok(crypto::KeyType::Ed25519),
         SigningKeyType::Secp256k1 => Ok(crypto::KeyType::Secp256k1),
         SigningKeyType::Secp256r1 => Ok(crypto::KeyType::Secp256r1),
-        SigningKeyType::BlsAugV1 => {
-            anyhow::bail!("BLS registered identities cannot be used as gents runtime identities")
-        }
-        other => anyhow::bail!(
-            "registered identity key type {other} cannot be used as a gents runtime identity"
-        ),
+        SigningKeyType::BlsAugV1 => Err(IdentityError::BlsRegistered),
+        other => Err(IdentityError::UnsupportedRegisteredKeyType { key_type: other }),
     }
 }
 

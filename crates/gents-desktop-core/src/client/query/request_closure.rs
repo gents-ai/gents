@@ -1,9 +1,8 @@
 use super::snapshot_loaders::complete_request_rows;
 use super::{
-    execute_access_graphql_query, execute_local_graphql_query, AGENT_REQUEST_FIELDS,
-    AGENT_REQUEST_NAME,
+    execute_access_graphql_query, execute_local_graphql_query, ClientQueryError, Result,
+    AGENT_REQUEST_FIELDS, AGENT_REQUEST_NAME,
 };
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
@@ -215,14 +214,13 @@ pub(super) async fn close_request_rows_with<'a>(
             for (index, read) in batch.iter().enumerate() {
                 let candidates = complete_request_rows(&data, &format!("r{index}"))?;
                 for row in candidates {
-                    anyhow::ensure!(
-                        read.scope.owns(&row),
-                        "request dependency query returned a row outside its exact scope"
-                    );
+                    if !read.scope.owns(&row) {
+                        return Err(ClientQueryError::RequestDependencyScope);
+                    }
                     let doc_id = row
                         .doc_id
                         .as_ref()
-                        .context("request dependency row lacks physical identity")?;
+                        .ok_or(ClientQueryError::RequestDependencyIdentity)?;
                     if seen.insert((read.scope.clone(), doc_id.clone())) {
                         frontier.push(rows.len());
                         rows.push(row);

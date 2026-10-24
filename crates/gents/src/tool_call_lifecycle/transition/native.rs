@@ -34,15 +34,12 @@ impl ToolCallLifecycle {
         expected_generation: Option<&str>,
     ) -> Result<()> {
         if let Some(expected) = expected_generation {
-            anyhow::ensure!(
-                self.execution_generation.as_deref() == Some(expected),
-                "dispatch generation differs from accepted physical tool"
-            );
+            if self.execution_generation.as_deref() != Some(expected) {
+                return Err(TransitionError::DispatchGenerationDiffers.into());
+            }
         }
         if self.state == ToolCallState::Running {
-            anyhow::bail!(
-                "start_running cannot re-dispatch an already-running physical tool; recover its registered executor instead"
-            );
+            return Err(TransitionError::StartRunningAlreadyRunning.into());
         }
         if self.state.is_terminal() {
             return Err(
@@ -313,11 +310,12 @@ impl ToolCallLifecycle {
                 "tool_call.spawn_failed_delivery",
             )
             .await?;
-        anyhow::ensure!(
-            failed,
-            "spawn_failed lost its pending compare for tool_call_id={}",
-            self.tool_call_id
-        );
+        if !failed {
+            return Err(TransitionError::SpawnFailedLostCompare {
+                tool_call_id: self.tool_call_id.clone(),
+            }
+            .into());
+        }
         Ok(())
     }
 

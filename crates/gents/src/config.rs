@@ -1,7 +1,61 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use gents_protocol::error_chain::ErrorChain;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("{field} must be positive")]
+    NotPositive { field: &'static str },
+    #[error(transparent)]
+    OutOfRange(#[from] std::num::TryFromIntError),
+    #[error(
+        "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
+    )]
+    UnknownReasoningEffort,
+    #[error("sampling seed must be non-negative")]
+    NegativeSeed,
+    #[error(
+        "sampling seed is unsupported by provider {provider_kind} on the {openai_wire_api} wire"
+    )]
+    SeedUnsupported {
+        provider_kind: BackendProviderKind,
+        openai_wire_api: OpenAiWireApi,
+    },
+    #[error("{provider} does not support selecting a service tier")]
+    ServiceTierUnsupported { provider: BackendProviderKind },
+    #[error("backend {backend_id} for agent {agent_id}: {error}")]
+    AgentBackendApiKey {
+        backend_id: String,
+        agent_id: String,
+        error: String,
+    },
+    #[error("backend {backend_id}: {error}")]
+    BackendApiKey { backend_id: String, error: String },
+    #[error("profile {profile_id} context window {selected} exceeds model {model_name} advertised maximum {maximum}")]
+    ContextWindowExceeded {
+        profile_id: String,
+        selected: i64,
+        model_name: String,
+        maximum: i64,
+    },
+    #[error("model {model_name} is not advertised by backend {backend_id} in the selected credential scope")]
+    ModelNotAdvertised {
+        model_name: String,
+        backend_id: String,
+    },
+    #[error("ambiguous advertised model {model_name}")]
+    AmbiguousAdvertisedModel { model_name: String },
+    #[error("model {model_name} does not advertise selected reasoning effort {effort:?}")]
+    ReasoningEffortNotAdvertised {
+        model_name: String,
+        effort: ReasoningEffort,
+    },
+    #[error(transparent)]
+    BackendCatalog(#[from] crate::backend_registry::BackendRegistryError),
+}
+
+type Result<T, E = ConfigError> = std::result::Result<T, E>;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
@@ -137,11 +191,15 @@ impl ResolvedInference {
     }
 }
 
-fn positive_inference_limit(value: Option<i64>, default: usize, field: &str) -> Result<usize> {
+fn positive_inference_limit(
+    value: Option<i64>,
+    default: usize,
+    field: &'static str,
+) -> Result<usize> {
     match value {
         None => Ok(default),
         Some(value) if value > 0 => Ok(usize::try_from(value)?),
-        Some(_) => anyhow::bail!("{field} must be positive"),
+        Some(_) => Err(ConfigError::NotPositive { field }),
     }
 }
 
@@ -158,10 +216,9 @@ pub fn validate_service_tier(
     provider: BackendProviderKind,
     tier: Option<ServiceTier>,
 ) -> Result<()> {
-    anyhow::ensure!(
-        tier.is_none() || supports_service_tier(provider),
-        "{provider} does not support selecting a service tier"
-    );
+    if tier.is_some() && !supports_service_tier(provider) {
+        return Err(ConfigError::ServiceTierUnsupported { provider });
+    }
     Ok(())
 }
 
@@ -230,7 +287,7 @@ impl ReasoningEffort {
         Self::Ultra,
     ];
 
-    pub fn parse(value: &str) -> anyhow::Result<Self> {
+    pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "minimal" => Ok(Self::Minimal),
@@ -240,9 +297,7 @@ impl ReasoningEffort {
             "xhigh" => Ok(Self::XHigh),
             "max" => Ok(Self::Max),
             "ultra" => Ok(Self::Ultra),
-            _ => anyhow::bail!(
-                "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
-            ),
+            _ => Err(ConfigError::UnknownReasoningEffort),
         }
     }
 
@@ -287,7 +342,7 @@ impl SamplingConfig {
             return Ok(());
         };
         if seed < 0 {
-            anyhow::bail!("sampling seed must be non-negative");
+            return Err(ConfigError::NegativeSeed);
         }
         if !matches!(
             (provider_kind, openai_wire_api),
@@ -296,11 +351,10 @@ impl SamplingConfig {
                 OpenAiWireApi::ChatCompletions
             ) | (BackendProviderKind::OpenRouter, _)
         ) {
-            anyhow::bail!(
-                "sampling seed is unsupported by provider {} on the {} wire",
+            return Err(ConfigError::SeedUnsupported {
                 provider_kind,
-                openai_wire_api
-            );
+                openai_wire_api,
+            });
         }
         Ok(())
     }
@@ -415,13 +469,13 @@ impl ResolvedAgent {
     }
 
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {
-        self.backend_auth.resolve_api_key().map_err(|error| {
-            anyhow::anyhow!(
-                "backend {} for agent {}: {error:#}",
-                self.backend_id.as_deref().unwrap_or("<unbound>"),
-                self.agent_id
-            )
-        })
+        self.backend_auth
+            .resolve_api_key()
+            .map_err(|error| ConfigError::AgentBackendApiKey {
+                backend_id: self.backend_id.as_deref().unwrap_or("<unbound>").to_owned(),
+                agent_id: self.agent_id.to_string(),
+                error: ErrorChain(&error).to_string(),
+            })
     }
 
     pub fn completion_client_api_key(&self) -> Result<String> {
@@ -437,13 +491,16 @@ pub fn resolve_backend_api_key(
     backend
         .auth
         .resolve_api_key()
-        .map_err(|error| anyhow::anyhow!("backend {}: {error:#}", backend.backend_id))
+        .map_err(|error| ConfigError::BackendApiKey {
+            backend_id: backend.backend_id.to_string(),
+            error: ErrorChain(&error).to_string(),
+        })
 }
 
 pub fn validate_advertised_context_override(
     profile: &crate::document_config::InferenceProfile,
     model: &crate::document_config::AdvertisedModel,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let Some(selected) = profile.context_window else {
         return Ok(());
     };
@@ -455,21 +512,21 @@ pub fn validate_advertised_context_override(
     }) else {
         return Ok(());
     };
-    anyhow::ensure!(
-        selected <= maximum,
-        "profile {} context window {} exceeds model {} advertised maximum {}",
-        profile.profile_id,
-        selected,
-        profile.model_name,
-        maximum
-    );
+    if selected > maximum {
+        return Err(ConfigError::ContextWindowExceeded {
+            profile_id: profile.profile_id.clone(),
+            selected,
+            model_name: profile.model_name.clone(),
+            maximum,
+        });
+    }
     Ok(())
 }
 
 pub fn backend_catalog<'a>(
     backend: &crate::document_config::InferenceBackend,
     observation: Option<&'a crate::document_config::InferenceBackendObservation>,
-) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
+) -> Result<Option<&'a crate::document_config::BackendModelCatalog>> {
     let credential_scope = matches!(
         backend.auth,
         crate::document_config::BackendAuth::NodeOAuth { .. }
@@ -547,7 +604,7 @@ pub fn advertised_model_for_profile(
     backend: &crate::document_config::InferenceBackend,
     profile: &crate::document_config::InferenceProfile,
     observation: Option<&crate::document_config::InferenceBackendObservation>,
-) -> anyhow::Result<Option<crate::document_config::AdvertisedModel>> {
+) -> Result<Option<crate::document_config::AdvertisedModel>> {
     validate_service_tier(backend.provider_kind, profile.service_tier)?;
     let Some(catalog) = backend_catalog(backend, observation)? else {
         return Ok(None);
@@ -556,26 +613,26 @@ pub fn advertised_model_for_profile(
         .models
         .iter()
         .filter(|model| model.model_name == profile.model_name);
-    let model = models.next().ok_or_else(|| {
-        anyhow::anyhow!(
-            "model {} is not advertised by backend {} in the selected credential scope",
-            profile.model_name,
-            backend.backend_id
-        )
-    })?;
-    anyhow::ensure!(
-        models.next().is_none(),
-        "ambiguous advertised model {}",
-        profile.model_name
-    );
+    let model = models
+        .next()
+        .ok_or_else(|| ConfigError::ModelNotAdvertised {
+            model_name: profile.model_name.clone(),
+            backend_id: backend.backend_id.clone(),
+        })?;
+    if models.next().is_some() {
+        return Err(ConfigError::AmbiguousAdvertisedModel {
+            model_name: profile.model_name.clone(),
+        });
+    }
     if let (Some(effort), Some(supported)) =
         (profile.reasoning_effort, model.reasoning_efforts.as_ref())
     {
-        anyhow::ensure!(
-            admits_reasoning_effort(backend, effort, supported),
-            "model {} does not advertise selected reasoning effort {effort:?}",
-            profile.model_name
-        );
+        if !admits_reasoning_effort(backend, effort, supported) {
+            return Err(ConfigError::ReasoningEffortNotAdvertised {
+                model_name: profile.model_name.clone(),
+                effort,
+            });
+        }
     }
     validate_advertised_context_override(profile, model)?;
     Ok(Some(model.clone()))

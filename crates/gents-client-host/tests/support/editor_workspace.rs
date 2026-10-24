@@ -1,5 +1,5 @@
 use super::fake_llm::FakeLlm;
-use anyhow::{ensure, Context, Result};
+use crate::support::TestResult;
 use gents::ConfigAccess;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
@@ -21,10 +21,10 @@ pub async fn verify(
     node: &str,
     session: &str,
     author: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-workspace-ui.json"))?)?;
     let rows = requests(access, node, session).await?;
-    ensure!(rows.len() == 2, "workspace input must be admitted once");
+    assert!(rows.len() == 2, "workspace input must be admitted once");
     let row = rows
         .iter()
         .find(|row| {
@@ -32,9 +32,9 @@ pub async fn verify(
                 .as_deref()
                 .is_some_and(|content| content.starts_with(PROMPT))
         })
-        .context("submitted workspace request")?;
+        .expect("submitted workspace request");
     gents::verify_request_receipt_signature(row)?;
-    ensure!(
+    assert!(
         row.lifecycle_state == Some(RequestLifecycleState::Completed)
             && row.admission_signer_did.as_deref() == Some(author)
             && row.requester_did.as_deref() == Some(author),
@@ -44,23 +44,23 @@ pub async fn verify(
         .input
         .as_ref()
         .and_then(|input| input.cwd.as_deref())
-        .context("workspace directory")?;
-    ensure!(
+        .expect("workspace directory");
+    assert!(
         std::fs::canonicalize(cwd)? == std::fs::canonicalize(root.join("second-project"))?,
         "the request selected a different workspace folder"
     );
-    let content = row.content.as_deref().context("workspace input")?;
-    ensure!(
+    let content = row.content.as_deref().expect("workspace input");
+    assert!(
         content == PROMPT,
         "captured context was mixed into authored prose"
     );
-    let input = row.input.as_ref().context("typed workspace input")?;
-    ensure!(
+    let input = row.input.as_ref().expect("typed workspace input");
+    assert!(
         input.captured_context.len() == 1,
         "one original capture must be submitted"
     );
     let context = serde_json::to_value(&input.captured_context[0])?;
-    ensure!(
+    assert!(
         context["kind"] == "selection"
             && context["source"] == "editor"
             && context["content"] == CAPTURED
@@ -74,20 +74,20 @@ pub async fn verify(
             && context["range"]["end"] == json!({"line":1,"character":0}),
         "captured context lost its source, version, range or unsaved contents: {context}"
     );
-    ensure!(
+    assert!(
         !input.captured_context[0].content.contains(LATER.trim()),
         "the later buffer replaced the attachment"
     );
     let matches = provider_occurrences(provider, content, &context);
-    ensure!(
+    assert!(
         matches == 1,
         "the provider must receive the exact captured input once"
     );
     let edited_session = ui["editedSessionId"]
         .as_str()
-        .context("edited chat identity")?;
-    let edited_prompt = ui["editedPrompt"].as_str().context("edited prose")?;
-    ensure!(
+        .expect("edited chat identity");
+    let edited_prompt = ui["editedPrompt"].as_str().expect("edited prose");
+    assert!(
         edited_session != session,
         "message editing overwrote the source chat"
     );
@@ -95,44 +95,44 @@ pub async fn verify(
     let edited = edited_rows
         .iter()
         .find(|row| row.content.as_deref() == Some(edited_prompt))
-        .context("edited branch request")?;
+        .expect("edited branch request");
     verify_completed(edited, author)?;
-    ensure!(
+    assert!(
         edited.input.as_ref().map(|input| &input.captured_context) == Some(&input.captured_context),
         "message editing replaced the original capture"
     );
-    ensure!(
+    assert!(
         provider_occurrences(provider, edited_prompt, &context) == 1,
         "edited snapshot must reach the provider once"
     );
     let attachment_session = ui["attachmentOnlySessionId"]
         .as_str()
-        .context("attachment-only chat identity")?;
-    ensure!(
+        .expect("attachment-only chat identity");
+    assert!(
         attachment_session != session && attachment_session != edited_session,
         "attachment-only input reused another chat"
     );
     let attachment_rows = requests(access, node, attachment_session).await?;
-    ensure!(
+    assert!(
         attachment_rows.len() == 1,
         "attachment-only input must be admitted once"
     );
     let attachment = &attachment_rows[0];
     verify_completed(attachment, author)?;
-    ensure!(
+    assert!(
         attachment.content.as_deref() == Some(""),
         "attachment-only input fabricated prose"
     );
     let attachment_input = attachment
         .input
         .as_ref()
-        .context("attachment-only typed input")?;
-    ensure!(
+        .expect("attachment-only typed input");
+    assert!(
         attachment_input.captured_context.len() == 1,
         "attachment-only capture count"
     );
     let attachment_context = serde_json::to_value(&attachment_input.captured_context[0])?;
-    ensure!(
+    assert!(
         attachment_context["content"] == CAPTURED
             && attachment_context["uri"] == context["uri"]
             && attachment_context["workspaceUri"] == context["workspaceUri"]
@@ -143,7 +143,7 @@ pub async fn verify(
                 .is_some_and(|version| version > 1),
         "attachment-only submission lost its captured snapshot"
     );
-    ensure!(
+    assert!(
         provider_occurrences(provider, "", &attachment_context) == 1,
         "attachment-only snapshot must reach the provider once"
     );
@@ -170,11 +170,11 @@ pub async fn verify(
                 })
         })
         .count();
-    ensure!(
+    assert!(
         title_requests == 1,
         "attachment-only title must use the frozen parent input once"
     );
-    ensure!(
+    assert!(
         std::fs::read_to_string(root.join("second-project/context.rs"))? == DISK,
         "the editor fixture overwrote the unsaved source on disk"
     );
@@ -194,7 +194,7 @@ async fn requests(
     access: &ConfigAccess,
     node: &str,
     session: &str,
-) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
+) -> TestResult<Vec<gents_protocol::row::AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
         gents::graphql::escape_graphql_string(node),
@@ -206,9 +206,9 @@ async fn requests(
     )?)
 }
 
-fn verify_completed(row: &gents_protocol::row::AgentRequestRow, author: &str) -> Result<()> {
+fn verify_completed(row: &gents_protocol::row::AgentRequestRow, author: &str) -> TestResult<()> {
     gents::verify_request_receipt_signature(row)?;
-    ensure!(
+    assert!(
         row.lifecycle_state == Some(RequestLifecycleState::Completed)
             && row.admission_signer_did.as_deref() == Some(author)
             && row.requester_did.as_deref() == Some(author),

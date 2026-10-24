@@ -3,7 +3,6 @@ use crate::support::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -15,6 +14,10 @@ use gents::ensure_runtime_schemas;
 use gents::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+use gents_protocol::error_chain::ErrorChain;
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 fn adapter_schema_snapshot(snapshot_name: &str, suffix: &str) -> Result<Value> {
     read_workspace_json(&format!(
@@ -36,7 +39,7 @@ fn assert_projection_records_match_schema(
     records: &[Value],
 ) -> Result<()> {
     let schema = adapter_schema_snapshot(snapshot_name, suffix)?;
-    anyhow::ensure!(
+    assert!(
         !records.is_empty(),
         "{snapshot_name} {suffix} should produce records"
     );
@@ -52,7 +55,8 @@ fn assert_projection_records_match_schema(
 
 #[tokio::test]
 async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let agent_home = tempdir.path().join("agent-home");
 
     {
@@ -68,7 +72,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
             "trace",
             "export",
             "--home",
-            agent_home.to_str().context("agent home utf8")?,
+            agent_home.to_str().ok_or("agent home utf8")?,
             "--run-id",
             "run-cli",
             "--case-id",
@@ -79,7 +83,10 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     )?;
     let mut records = output
         .lines()
-        .map(|line| serde_json::from_str::<Value>(line).context("parsing JSONL record"))
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .map_err(|error| format!("parsing JSONL record: {}", ErrorChain(&error)).into())
+        })
         .collect::<Result<Vec<_>>>()?;
     records.sort_by_key(|record| {
         record
@@ -299,7 +306,8 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
 
 #[test]
 fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let schema_cases = [
         ("openai-codex", "openai_codex_run_trace"),
         ("langgraph", "langgraph_state_history"),
@@ -311,8 +319,8 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
             tempdir.path(),
             &["trace", "project-schema", "--projection", cli_projection],
         )?;
-        let json_schema =
-            serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
+        let json_schema = serde_json::from_str::<Value>(&json_schema_output)
+            .map_err(|error| format!("parsing JSON schema: {}", ErrorChain(&error)))?;
         let expected_json_schema = read_workspace_json(&format!(
             "crates/gents/tests/fixtures/adapter_projections/contracts/{snapshot_name}.schema.json"
         ))?;
@@ -332,8 +340,8 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
                 "jsonl",
             ],
         )?;
-        let jsonl_schema =
-            serde_json::from_str::<Value>(&jsonl_schema_output).context("parsing JSONL schema")?;
+        let jsonl_schema = serde_json::from_str::<Value>(&jsonl_schema_output)
+            .map_err(|error| format!("parsing JSONL schema: {}", ErrorChain(&error)))?;
         let expected_jsonl_schema = read_workspace_json(&format!(
             "crates/gents/tests/fixtures/adapter_projections/contracts/{snapshot_name}.jsonl-record.schema.json"
         ))?;
@@ -354,7 +362,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
             ],
         )?;
         let eval_jsonl_schema = serde_json::from_str::<Value>(&eval_jsonl_schema_output)
-            .context("parsing eval JSONL schema")?;
+            .map_err(|error| format!("parsing eval JSONL schema: {}", ErrorChain(&error)))?;
         let expected_eval_jsonl_schema = read_workspace_json(&format!(
             "crates/gents/tests/fixtures/adapter_projections/contracts/{snapshot_name}.eval-jsonl-record.schema.json"
         ))?;
@@ -376,7 +384,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         ],
     )?;
     let atif_native_schema = serde_json::from_str::<Value>(&atif_native_schema_output)
-        .context("parsing ATIF native JSON schema")?;
+        .map_err(|error| format!("parsing ATIF native JSON schema: {}", ErrorChain(&error)))?;
     assert_eq!(
         atif_native_schema
             .pointer("/properties/schema_version/const")
@@ -395,7 +403,8 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
 
 #[tokio::test]
 async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let agent_home = tempdir.path().join("agent-home");
 
     {
@@ -411,12 +420,13 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
             "trace",
             "timeline",
             "--home",
-            agent_home.to_str().context("agent home utf8")?,
+            agent_home.to_str().ok_or("agent home utf8")?,
             "--request-id",
             "req-1",
         ],
     )?;
-    let timeline = serde_json::from_str::<Value>(&output).context("parsing timeline JSON")?;
+    let timeline = serde_json::from_str::<Value>(&output)
+        .map_err(|error| format!("parsing timeline JSON: {}", ErrorChain(&error)))?;
 
     assert_eq!(
         timeline.get("request_id").and_then(Value::as_str),
@@ -435,7 +445,7 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     let events = timeline
         .get("events")
         .and_then(Value::as_array)
-        .context("timeline events array")?;
+        .ok_or("timeline events array")?;
     assert!(
         events
             .iter()
@@ -514,10 +524,11 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
         ))
         .await;
     if response.has_errors() {
-        anyhow::bail!(
+        return Err(format!(
             "querying seeded request commits failed: {:?}",
             response.errors
-        );
+        )
+        .into());
     }
     let request_commit_cid = response
         .data
@@ -531,7 +542,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
         .and_then(|row| row.get("cid"))
         .and_then(Value::as_str)
         .map(str::to_string)
-        .context("seeded AgentRequest has no composite commit cid")?;
+        .ok_or("seeded AgentRequest has no composite commit cid")?;
     let escaped_request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
     let escaped_request_commit_cid = gents::graphql::escape_graphql_string(&request_commit_cid);
     for (suffix, attempt, call_id, call_seq, created_at) in [
@@ -693,10 +704,10 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 gents::graphql::escape_graphql_string(&first_capture_key)
             ))
             .await;
-        anyhow::ensure!(!first_row.has_errors(), "{:?}", first_row.errors);
+        assert!(!first_row.has_errors(), "{:?}", first_row.errors);
         let first_doc_id = first_row.data.expect("data")["RenderedRequest"][0]["_docID"]
             .as_str()
-            .context("first v2 row doc id")?
+            .ok_or("first v2 row doc id")?
             .to_owned();
         let base_cid = node
             .execute(&format!(
@@ -704,14 +715,14 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 gents::graphql::escape_graphql_string(&first_doc_id)
             ))
             .await;
-        anyhow::ensure!(!base_cid.has_errors(), "{:?}", base_cid.errors);
+        assert!(!base_cid.has_errors(), "{:?}", base_cid.errors);
         let base_cid = base_cid.data.expect("data")["_commits"]
             .as_array()
-            .context("commits")?
+            .ok_or("commits")?
             .iter()
             .find(|commit| commit["fieldName"].as_str() == Some("request_json"))
             .and_then(|commit| commit["cid"].as_str())
-            .context("request_json field commit")?
+            .ok_or("request_json field commit")?
             .to_owned();
         let witness = json!({
             "doc_id": first_doc_id,
@@ -829,7 +840,8 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
 
 #[tokio::test]
 async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let agent_home = tempdir.path().join("agent-home");
 
     {
@@ -840,7 +852,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         seed_manifest_rendered_request_row(&node).await?;
         node.shutdown().await;
     }
-    let home = agent_home.to_str().context("agent home utf8")?;
+    let home = agent_home.to_str().ok_or("agent home utf8")?;
 
     let output = run_cli_text(
         tempdir.path(),
@@ -854,11 +866,12 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
             "--list",
         ],
     )?;
-    let listing = serde_json::from_str::<Value>(&output).context("parsing capture list")?;
+    let listing = serde_json::from_str::<Value>(&output)
+        .map_err(|error| format!("parsing capture list: {}", ErrorChain(&error)))?;
     let captures = listing
         .get("captures")
         .and_then(Value::as_array)
-        .context("captures array")?;
+        .ok_or("captures array")?;
     assert_eq!(captures.len(), 2, "{listing:#}");
     assert_eq!(
         captures[0].get("attempt").and_then(Value::as_i64),
@@ -894,7 +907,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
             "0",
         ],
     )?;
-    let capture = serde_json::from_str::<Value>(&output).context("parsing single capture")?;
+    let capture = serde_json::from_str::<Value>(&output)
+        .map_err(|error| format!("parsing single capture: {}", ErrorChain(&error)))?;
     assert_eq!(
         capture.get("capture_key").and_then(Value::as_str),
         Some("rendered:v1:seeded-a0")
@@ -925,7 +939,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
             "--include-body",
         ],
     )?;
-    let capture = serde_json::from_str::<Value>(&output).context("parsing bodied capture")?;
+    let capture = serde_json::from_str::<Value>(&output)
+        .map_err(|error| format!("parsing bodied capture: {}", ErrorChain(&error)))?;
     let body = capture
         .get("request_json")
         .and_then(Value::as_str)
@@ -936,8 +951,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         .get("provenance_payload_json")
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("decoded provenance payload must be JSON text: {capture:#}"));
-    let provenance_payload: Value =
-        serde_json::from_str(provenance_payload).context("parsing decoded provenance payload")?;
+    let provenance_payload: Value = serde_json::from_str(provenance_payload)
+        .map_err(|error| format!("parsing decoded provenance payload: {}", ErrorChain(&error)))?;
     assert_eq!(provenance_payload["trace_version"], 4);
 
     let output = run_cli_text(
@@ -954,7 +969,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         ],
     )?;
     let listing: Value = serde_json::from_str(&output)?;
-    let v2 = listing["captures"].as_array().context("v2 captures")?;
+    let v2 = listing["captures"].as_array().ok_or("v2 captures")?;
     assert_eq!(v2.len(), 2);
     for capture in v2 {
         assert!(capture["request_json"].is_string(), "{capture:#}");
@@ -981,11 +996,11 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         ],
     )?;
     let capture = serde_json::from_str::<Value>(&output)?;
-    let body = capture["request_json"].as_str().context("manifest body")?;
+    let body = capture["request_json"].as_str().ok_or("manifest body")?;
     assert!(body.contains("manifest capture"), "{body}");
     let payload = capture["provenance_payload_json"]
         .as_str()
-        .context("payload")?;
+        .ok_or("payload")?;
     let payload: Value = serde_json::from_str(payload)?;
     assert_eq!(
         payload["threaded_tool_results"][0]["native_tool_output"]["exit_code"],
@@ -1019,11 +1034,12 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
             "req-cap",
         ],
     )?;
-    let timeline = serde_json::from_str::<Value>(&output).context("parsing timeline")?;
+    let timeline = serde_json::from_str::<Value>(&output)
+        .map_err(|error| format!("parsing timeline: {}", ErrorChain(&error)))?;
     let rendered_events = timeline
         .get("events")
         .and_then(Value::as_array)
-        .context("timeline events")?
+        .ok_or("timeline events")?
         .iter()
         .filter(|event| event.get("kind").and_then(Value::as_str) == Some("rendered_request"))
         .collect::<Vec<_>>();
@@ -1047,7 +1063,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
 
 #[tokio::test]
 async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let agent_home = tempdir.path().join("agent-home");
 
     {
@@ -1057,7 +1074,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         node.shutdown().await;
     }
 
-    let home = agent_home.to_str().context("agent home utf8")?;
+    let home = agent_home.to_str().ok_or("agent home utf8")?;
     let atif = trace_project_json_with_extra_args(
         tempdir.path(),
         home,
@@ -1235,7 +1252,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     let edges = langgraph
         .pointer("/output/projection/edges")
         .and_then(Value::as_array)
-        .context("langgraph edges")?;
+        .ok_or("langgraph edges")?;
     assert!(
         edges.iter().any(|edge| {
             edge.get("kind").and_then(Value::as_str) == Some("child_request")
@@ -1294,7 +1311,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     let delegations = multi_agent
         .pointer("/output/projection/delegations")
         .and_then(Value::as_array)
-        .context("multi-agent delegations")?;
+        .ok_or("multi-agent delegations")?;
     assert!(
         delegations.iter().any(|delegation| {
             delegation.get("parent_request_id").and_then(Value::as_str) == Some("req-1")
@@ -1343,7 +1360,8 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
 
 #[tokio::test]
 async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let endpoint = spawn_projection_graphql_acp_mock().await?;
 
     let cwd = tempdir.path().to_path_buf();
@@ -1370,9 +1388,13 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
         )
     })
     .await
-    .context("joining trace project CLI task")??;
-    let projection =
-        serde_json::from_str::<Value>(&output).context("parsing ACP-filtered projection JSON")?;
+    .map_err(|error| format!("joining trace project CLI task: {}", ErrorChain(&error)))??;
+    let projection = serde_json::from_str::<Value>(&output).map_err(|error| {
+        format!(
+            "parsing ACP-filtered projection JSON: {}",
+            ErrorChain(&error)
+        )
+    })?;
 
     assert_eq!(
         projection.get("projection_id").and_then(Value::as_str),
@@ -1408,7 +1430,7 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
     let delegations = projection
         .pointer("/output/projection/delegations")
         .and_then(Value::as_array)
-        .context("multi-agent delegations")?;
+        .ok_or("multi-agent delegations")?;
     assert!(
         delegations.is_empty(),
         "ACP-filtered projection should omit delegation rows for unreadable child requests: {projection:#}"
@@ -1416,7 +1438,7 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
     let tool_events = projection
         .pointer("/output/projection/tool_events")
         .and_then(Value::as_array)
-        .context("multi-agent tool events")?;
+        .ok_or("multi-agent tool events")?;
     assert!(
         tool_events.iter().any(|tool_event| {
             tool_event.get("request_id").and_then(Value::as_str) == Some("req-acp")
@@ -1429,7 +1451,7 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
     let messages = projection
         .pointer("/output/projection/messages")
         .and_then(Value::as_array)
-        .context("multi-agent messages")?;
+        .ok_or("multi-agent messages")?;
     assert!(
         messages.iter().all(|message| {
             message
@@ -1475,7 +1497,8 @@ fn trace_project_json_with_extra_args(
     ];
     args.extend_from_slice(extra_args);
     let output = run_cli_text(cwd, &args)?;
-    serde_json::from_str::<Value>(&output).context("parsing adapter projection JSON")
+    serde_json::from_str::<Value>(&output)
+        .map_err(|error| format!("parsing adapter projection JSON: {}", ErrorChain(&error)).into())
 }
 
 fn trace_project_jsonl_lines(
@@ -1505,7 +1528,11 @@ fn trace_project_jsonl_lines(
     )?;
     output
         .lines()
-        .map(|line| serde_json::from_str::<Value>(line).context("parsing adapter projection JSONL"))
+        .map(|line| {
+            serde_json::from_str::<Value>(line).map_err(|error| {
+                format!("parsing adapter projection JSONL: {}", ErrorChain(&error)).into()
+            })
+        })
         .collect::<Result<Vec<_>>>()
 }
 
@@ -1537,7 +1564,13 @@ fn trace_project_eval_jsonl_lines(
     output
         .lines()
         .map(|line| {
-            serde_json::from_str::<Value>(line).context("parsing adapter projection eval JSONL")
+            serde_json::from_str::<Value>(line).map_err(|error| {
+                format!(
+                    "parsing adapter projection eval JSONL: {}",
+                    ErrorChain(&error)
+                )
+                .into()
+            })
         })
         .collect::<Result<Vec<_>>>()
 }
@@ -1546,7 +1579,7 @@ async fn initialized_trace_node(
     cwd: &std::path::Path,
     agent_home: &std::path::Path,
 ) -> Result<Arc<EmbeddedNode>> {
-    let home = agent_home.to_str().context("agent home utf8")?;
+    let home = agent_home.to_str().ok_or("agent home utf8")?;
     let init = run_init_json(
         cwd,
         &[
@@ -1561,9 +1594,9 @@ async fn initialized_trace_node(
     let key_path = init
         .get("key_path")
         .and_then(Value::as_str)
-        .context("identity-only init output missing key_path")?;
+        .ok_or("identity-only init output missing key_path")?;
     let _identity = gents::KeyIdentity::load_or_create(key_path, None)
-        .context("loading initialized trace identity")?;
+        .map_err(|error| format!("loading initialized trace identity: {}", ErrorChain(&error)))?;
 
     let data = agent_home.join("data");
     gents::store_key::open_home_store_key(agent_home, &data)
@@ -1576,14 +1609,16 @@ async fn initialized_trace_node(
         .with_node_identity_did(node_did)
         .build()
         .await
-        .context("opening initialized embedded node")
+        .map_err(|error| {
+            format!("opening initialized embedded node: {}", ErrorChain(&error)).into()
+        })
         .map(Arc::new)
 }
 
 async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Result<String> {
     let response = node.execute(query).await;
     if response.has_errors() {
-        anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
+        return Err(format!("GraphQL mutation failed: {:?}", response.errors).into());
     }
     let create_key = format!("create_{collection}");
     let add_key = format!("add_{collection}");
@@ -1591,7 +1626,7 @@ async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Resu
         .data
         .as_ref()
         .and_then(|data| data.get(&create_key).or_else(|| data.get(&add_key)))
-        .with_context(|| format!("{collection} mutation response missing create/add field"))?;
+        .ok_or_else(|| format!("{collection} mutation response missing create/add field"))?;
     value
         .get("_docID")
         .and_then(Value::as_str)
@@ -1603,7 +1638,7 @@ async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Resu
                 .and_then(Value::as_str)
         })
         .map(ToOwned::to_owned)
-        .with_context(|| format!("{collection} mutation response missing _docID"))
+        .ok_or_else(|| format!("{collection} mutation response missing _docID").into())
 }
 
 async fn exec_variables_doc_id(
@@ -1615,10 +1650,10 @@ async fn exec_variables_doc_id(
     let response = node
         .execute_request(gents::defra_node::QueryRequest::new(query).with_variables(variables))
         .await;
-    anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+    assert!(!response.has_errors(), "{:?}", response.errors);
     gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))?
         .and_then(|row| row["_docID"].as_str().map(ToOwned::to_owned))
-        .with_context(|| format!("{collection} mutation omitted document"))
+        .ok_or_else(|| format!("{collection} mutation omitted document").into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1899,7 +1934,7 @@ async fn seed_canonical_terminal_text(
     .await?;
     let terminal = serde_json::to_value(TerminalOutput::Message { message_doc_id })?;
     let response = node.execute_request(gents::defra_node::QueryRequest::new(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#).with_variables(json!({"id": request_doc_id, "terminal": terminal}))).await;
-    anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+    assert!(!response.has_errors(), "{:?}", response.errors);
     Ok(())
 }
 
@@ -1956,7 +1991,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"{{ _commits(docID: "{observed}") {{cid fieldName}} }}"#
         ))
         .await;
-    anyhow::ensure!(
+    assert!(
         !commit_response.has_errors(),
         "{:?}",
         commit_response.errors
@@ -1967,7 +2002,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         .and_then(|data| data["_commits"].as_array())
         .and_then(|rows| rows.iter().find(|row| row["fieldName"] == "_C"))
         .and_then(|row| row["cid"].as_str())
-        .context("trace root has no composite commit")?;
+        .ok_or("trace root has no composite commit")?;
     let commit = escape_graphql_string(commit);
     let rendered_body = escape_graphql_string(&json!({"model":"baa-ai/GLM-5.1-RAM-420GB-MLX", "messages":[{"role":"user","content":"Inspect the repo and show README.md"}]}).to_string());
     exec(node, &format!(r#"mutation {{
@@ -2293,7 +2328,12 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
-        .context("binding projection GraphQL/ACP mock")?;
+        .map_err(|error| {
+            format!(
+                "binding projection GraphQL/ACP mock: {}",
+                ErrorChain(&error)
+            )
+        })?;
     let addr = listener.local_addr()?;
     let state = ProjectionGraphqlAcpState {
         allowed: Arc::new(allowed),

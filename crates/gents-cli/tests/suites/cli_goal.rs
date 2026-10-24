@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-goal-cli-{}", Uuid::new_v4().simple());
@@ -180,8 +181,8 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-resume-cli-{}", Uuid::new_v4().simple());
@@ -232,7 +233,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     let predecessor = submitted
         .get("request_id")
         .and_then(Value::as_str)
-        .context("signed submission request ID")?;
+        .expect("signed submission request ID");
     let paused = run_cli_json(
         &home_dir,
         &[
@@ -266,7 +267,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     let child_id = first
         .get("request_id")
         .and_then(Value::as_str)
-        .context("resume receipt request ID")?;
+        .expect("resume receipt request ID");
     let second = run_cli_json(&home_dir, &resume_args)?;
     assert_eq!(second.get("created").and_then(Value::as_bool), Some(false));
     assert_eq!(second.get("request_id"), first.get("request_id"));
@@ -292,7 +293,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     let children = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("physical resume children")?;
+        .expect("physical resume children");
     assert_eq!(
         children.len(),
         1,

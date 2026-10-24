@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -55,7 +55,7 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -65,12 +65,16 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
 
     let started = tokio::time::timeout(Duration::from_secs(30), read_turn_started(&mut ws))
         .await
-        .context("background completion wake was not projected as a new turn")??;
+        .map_err(|error| {
+            format!("background completion wake was not projected as a new turn: {error}")
+        })??;
     assert_eq!(started.thread_id, thread_id);
     assert_eq!(started.turn.id, wake_request_id);
     let capture = tokio::time::timeout(Duration::from_secs(30), read_turn_capture(&mut ws))
         .await
-        .context("background completion wake did not finish in the connected client")??;
+        .map_err(|error| {
+            format!("background completion wake did not finish in the connected client: {error}")
+        })??;
     assert_eq!(capture.turn.id, wake_request_id);
     assert_eq!(capture.turn.status, codex::TurnStatus::Completed);
     assert!(
@@ -113,8 +117,8 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -172,7 +176,7 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -182,7 +186,9 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
 
     let started = tokio::time::timeout(Duration::from_secs(30), read_turn_started(&mut ws))
         .await
-        .context("background completion wake was not projected as a new turn")??;
+        .map_err(|error| {
+            format!("background completion wake was not projected as a new turn: {error}")
+        })??;
     assert_eq!(started.turn.id, wake_request_id);
     assert_eq!(started.turn.status, codex::TurnStatus::InProgress);
 
@@ -205,12 +211,14 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
         .turns
         .iter()
         .find(|turn| turn.id == wake_request_id)
-        .context("resume omitted the in-progress background wake")?;
+        .ok_or("resume omitted the in-progress background wake")?;
     assert_eq!(baseline.status, codex::TurnStatus::InProgress);
 
     let capture = tokio::time::timeout(Duration::from_secs(30), read_turn_capture(&mut ws))
         .await
-        .context("resumed background wake did not finish in the connected client")??;
+        .map_err(|error| {
+            format!("resumed background wake did not finish in the connected client: {error}")
+        })??;
     assert_eq!(capture.turn.id, wake_request_id);
     assert_eq!(capture.turn.status, codex::TurnStatus::Completed);
     assert!(

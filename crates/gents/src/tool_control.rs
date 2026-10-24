@@ -10,6 +10,14 @@ use crate::hook::BackgroundExecutionRegistry;
 use crate::plugin_job::control::control;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle, ToolRowKind};
 
+#[derive(Debug, thiserror::Error)]
+pub enum ToolControlError {
+    #[error(transparent)]
+    JobRead(#[from] JobReadError),
+    #[error("background cancellation lacks physical identity")]
+    LacksPhysicalIdentity,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelBackgroundToolCallOutcome {
     Cancelled { live_execution_cancelled: bool },
@@ -99,7 +107,7 @@ pub async fn cancel_background_tool_call(
                     | JobReadError::NotAuthorized
                     | JobReadError::NotYetObservable,
                 ) => CancelBackgroundToolCallOutcome::NotFound,
-                Err(error) => return Err(anyhow::Error::new(error)),
+                Err(error) => return Err(ToolControlError::from(error).into()),
             },
         );
     }
@@ -139,7 +147,7 @@ pub async fn cancel_background_tool_call(
         .await;
     let doc_id = lifecycle
         .doc_id()
-        .ok_or_else(|| anyhow::anyhow!("background cancellation lacks physical identity"))?
+        .ok_or(ToolControlError::LacksPhysicalIdentity)?
         .to_owned();
     let process = background_executions
         .stop_execution(tool_call_id, &doc_id)

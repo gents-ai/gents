@@ -91,7 +91,7 @@ pub async fn agent_accounts(
                         profile_backends.push((profile_id.clone(), profile.backend_id));
                     }
                 }
-                Ok(profile_backends)
+                Ok::<_, anyhow::Error>(profile_backends)
             })
         })
         .await?;
@@ -190,7 +190,7 @@ mod tests {
                         let actual: InferenceProfile = serde_json::from_value(value)?;
                         assert_eq!(&actual, expected);
                     }
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -281,7 +281,7 @@ mod tests {
                                 .expect("profile"),
                             );
                         }
-                        Ok(records)
+                        Ok::<_, anyhow::Error>(records)
                     })
                 })
                 .await

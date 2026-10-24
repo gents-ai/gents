@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 fn plugin_discovery_calls(plugins: &[(String, String)]) -> Vec<serde_json::Value> {
     plugins
@@ -67,7 +68,8 @@ impl PackInstaller {
                 &plugin.name,
                 &coordinate,
             ) {
-                blockers.push(json!({"plugin":plugin.name,"reason":format!("{error:#}")}));
+                blockers
+                    .push(json!({"plugin":plugin.name,"reason":ErrorChain(&error).to_string()}));
             }
             crate::plugin::PluginRunner::compile(
                 distribution.0.archive.asset(&plugin.artifact)?,
@@ -76,7 +78,7 @@ impl PackInstaller {
         }
         let ready = blockers.is_empty() && missing.is_empty();
         if !commit {
-            return ordered! {
+            return Ok(ordered! {
                 "committed": false,
                 "ready": ready,
                 "operation": operation,
@@ -88,7 +90,7 @@ impl PackInstaller {
                 "manifest": manifest,
                 "artifact_digest": distribution.digest(),
                 "inference": inference,
-            }.pretty();
+            }.pretty()?);
         }
         anyhow::ensure!(ready, "plugin installation blocked; call [\"pack\",\"preview\",{operation:?},{:?}] and resolve its operator approval or inference blockers", distribution.pinned_spec(&args.package));
         let inference = crate::pack::preview_pack_inference_bindings(
@@ -133,7 +135,7 @@ impl PackInstaller {
                 .collect::<Vec<_>>(),
         );
         let single = discovery.first().cloned().unwrap_or(json!(null));
-        ordered! {
+        Ok(ordered! {
             "committed": true,
             "installed": record,
             "next_call": single,
@@ -141,6 +143,6 @@ impl PackInstaller {
             "guidance": "Installation installs every plugin in `plugins` but selects no tool: installed is not selected. Read the current Tools document first and preserve its full `integrations` object, including every existing entry and plugin; do not generate a replacement patch or overwrite the whole object. Then explicitly select each installed plugin by name in `Tools.integrations.plugins`, one entry per plugin. Read config tools get and config get after selection; start a fresh request to call each selected plugin.",
             "plugins": plugins,
             "artifact_digest": distribution.digest(),
-        }.pretty()
+        }.pretty()?)
     }
 }

@@ -23,7 +23,7 @@ async fn plugin_invocations(
     plan: &GraphPlan,
     routes: &BTreeMap<String, String>,
     owner_did: &str,
-) -> Result<Vec<GraphRunRequestView>> {
+) -> Result<Vec<GraphRunRequestView>, GraphPipelineError> {
     let plugin_routes = routes
         .iter()
         .filter(|(_, node_id)| {

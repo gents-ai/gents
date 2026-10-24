@@ -214,6 +214,22 @@ impl std::fmt::Display for JournalConflict {
 
 impl std::error::Error for JournalConflict {}
 
+#[derive(Debug, thiserror::Error)]
+pub enum OptimizationError {
+    #[error("{field}")]
+    MissingField { field: &'static str },
+    #[error("decoding job origin")]
+    OriginDecode(#[source] serde_json::Error),
+    #[error("decoding job journal")]
+    JournalDecode(#[source] serde_json::Error),
+    #[error("removing {}", path.display())]
+    RemoveDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 pub fn journal_conflict(error: &anyhow::Error) -> Option<&JournalConflict> {
     error.downcast_ref::<JournalConflict>()
 }
@@ -270,17 +286,20 @@ pub async fn create_job(
 
 const JOB_FIELDS: &str = "job_id owner_node_did origin journal";
 
-fn decode(row: &Value) -> Result<JobRecord> {
+fn text<'a>(row: &'a Value, field: &'static str) -> Result<&'a str, OptimizationError> {
+    row[field]
+        .as_str()
+        .ok_or(OptimizationError::MissingField { field })
+}
+
+fn decode(row: &Value) -> Result<JobRecord, OptimizationError> {
     Ok(JobRecord {
-        job_id: row["job_id"].as_str().context("job_id")?.to_owned(),
-        owner: row["owner_node_did"]
-            .as_str()
-            .context("owner_node_did")?
-            .to_owned(),
-        origin: serde_json::from_str(row["origin"].as_str().context("origin")?)
-            .context("decoding job origin")?,
+        job_id: text(row, "job_id")?.to_owned(),
+        owner: text(row, "owner_node_did")?.to_owned(),
+        origin: serde_json::from_str(text(row, "origin")?)
+            .map_err(OptimizationError::OriginDecode)?,
         journal: serde_json::from_str(row["journal"].as_str().unwrap_or("[]"))
-            .context("decoding job journal")?,
+            .map_err(OptimizationError::JournalDecode)?,
     })
 }
 
@@ -312,11 +331,11 @@ pub(crate) async fn load_job_in_txn(
             filter(owner, job_id)
         ))
         .await?;
-    response["data"]["OptimizationJob"]
+    Ok(response["data"]["OptimizationJob"]
         .as_array()
         .and_then(|rows| rows.first())
         .map(decode)
-        .transpose()
+        .transpose()?)
 }
 
 pub(crate) async fn fold_jobs_for_owner<T, F>(
@@ -462,6 +481,7 @@ pub async fn append(access: &ConfigAccess, job: &mut JobRecord, entry: JournalEn
 mod tests {
     use super::*;
     use crate::optimization::target::{Target, TargetField};
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     async fn access() -> ConfigAccess {
@@ -601,7 +621,8 @@ mod tests {
         let error = append(&access, &mut stale, proposed(1, "racing"))
             .await
             .unwrap_err();
-        let conflict = journal_conflict(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let conflict =
+            journal_conflict(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(conflict.expected, 0);
         assert!(stale.journal.is_empty());
 

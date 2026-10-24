@@ -5,7 +5,6 @@ mod routes;
 
 use std::sync::Arc;
 
-use anyhow::Result;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
@@ -21,7 +20,7 @@ pub(crate) struct BridgeRunnerServer {
 }
 
 impl BridgeRunnerServer {
-    pub(crate) async fn start(fixture: Arc<LiveBridgeFixture>) -> Result<Self> {
+    pub(crate) async fn start(fixture: Arc<LiveBridgeFixture>) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let (stop, mut stopped) = oneshot::channel();
@@ -55,12 +54,12 @@ impl BridgeRunnerServer {
 
 async fn serve_connection(mut stream: TcpStream, fixture: Arc<LiveBridgeFixture>) {
     let response = match read_http_request(&mut stream).await {
-        Ok(request) => handle_request(&fixture, request).await,
-        Err(error) => Err(error),
+        Ok(request) => handle_request(&fixture, request)
+            .await
+            .map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
     }
-    .unwrap_or_else(|error| {
-        HttpResponse::json_error("500 Internal Server Error", &error.to_string())
-    });
+    .unwrap_or_else(|error| HttpResponse::json_error("500 Internal Server Error", &error));
     let _ = write_http_response(
         &mut stream,
         response.status,

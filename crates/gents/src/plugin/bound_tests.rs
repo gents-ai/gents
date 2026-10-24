@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 fn dir_names(dir: &Path) -> Vec<std::ffi::OsString> {
     let mut names: Vec<_> = std::fs::read_dir(dir)
@@ -63,11 +64,20 @@ fn a_path_that_is_not_the_one_the_scope_checked_is_refused() {
     std::os::unix::fs::symlink(base.join("real.txt"), base.join("link.txt")).unwrap();
     let error = BoundDir::for_file(&base.join("link.txt"), BindAccess::Read).unwrap_err();
     assert!(
-        format!("{error:#}").contains("changed after it was validated"),
-        "{error:#}"
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .contains("changed after it was validated"),
+        "{}",
+        ErrorChain(&error)
     );
     let error = BoundDir::folder(&base.join("missing"), BindAccess::Read).unwrap_err();
-    assert!(format!("{error:#}").contains("cannot be read"), "{error:#}");
+    assert!(
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .contains("cannot be read"),
+        "{}",
+        ErrorChain(&error)
+    );
     std::fs::create_dir(base.join("d")).unwrap();
     std::os::unix::fs::symlink(base.join("d"), base.join("dlink")).unwrap();
     assert!(BoundDir::folder(&base.join("dlink"), BindAccess::Read).is_err());
@@ -122,8 +132,11 @@ fn a_bound_dir_swapped_to_a_fifo_is_refused() {
     let error = BoundDir::folder(&base.join("d"), BindAccess::Read)
         .expect_err("a FIFO read-open blocks until a writer appears");
     assert!(
-        format!("{error:#}").contains("is not a folder"),
-        "{error:#}"
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .contains("is not a folder"),
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -135,7 +148,13 @@ fn a_bound_file_swapped_to_a_fifo_is_refused() {
     make_fifo(&base.join("f.txt"));
     let error = BoundDir::for_file(&base.join("f.txt"), BindAccess::Read)
         .expect_err("a FIFO read-open blocks until a writer appears");
-    assert!(format!("{error:#}").contains("is not a file"), "{error:#}");
+    assert!(
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .contains("is not a file"),
+        "{}",
+        ErrorChain(&error)
+    );
 }
 
 #[test]
@@ -146,8 +165,11 @@ fn a_bound_dir_swapped_to_a_file_is_refused() {
     let error = BoundDir::folder(&base.join("d"), BindAccess::Read)
         .expect_err("a regular file cannot be bound as a folder");
     assert!(
-        format!("{error:#}").contains("is not a folder"),
-        "{error:#}"
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .contains("is not a folder"),
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -158,7 +180,13 @@ fn a_bound_file_swapped_to_a_folder_is_refused() {
     std::fs::create_dir(base.join("f.txt")).unwrap();
     let error = BoundDir::for_file(&base.join("f.txt"), BindAccess::Read)
         .expect_err("a folder cannot be shared as a file");
-    assert!(format!("{error:#}").contains("is not a file"), "{error:#}");
+    assert!(
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .contains("is not a file"),
+        "{}",
+        ErrorChain(&error)
+    );
 }
 
 #[cfg(unix)]

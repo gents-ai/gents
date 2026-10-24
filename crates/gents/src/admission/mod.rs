@@ -18,7 +18,7 @@ pub(crate) use config::BackendAvailability;
 pub(crate) use config::{backend_connection_fingerprint, exportable_backend_fingerprint};
 pub use config::{document_configured_from_fields, BackendAdmissionConfig};
 pub(crate) use persistence::ProviderCallUsage;
-pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
+pub use recovery::{InferenceCall, InferenceCallRecoveryReport, InferenceRecoveryError};
 pub(crate) use registry::AdmissionRegistry;
 pub use slot_accounting::call_state_holds_backend_slot;
 

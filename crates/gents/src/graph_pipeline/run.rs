@@ -17,6 +17,7 @@ use crate::graphql::{
     document_composite_version, escape_graphql_string, validate_collection_identifier,
 };
 
+use super::runtime::GraphPipelineError;
 use super::{
     graph_run_terminal_decision, verify_graph_plan_digest, GraphPlan, PlannedResult,
     ResultCardinality,
@@ -194,11 +195,13 @@ impl GraphRunView {
         GRAPH_RUN_TERMINAL_STATUSES.contains(&self.status.as_str())
     }
 
-    pub fn status(&self) -> Result<GraphRunStatus> {
+    pub fn status(&self) -> Result<GraphRunStatus, GraphPipelineError> {
         GraphRunStatus::ALL
             .into_iter()
             .find(|status| status.as_str() == self.status)
-            .with_context(|| format!("unrecognized persisted graph run status {:?}", self.status))
+            .ok_or_else(|| GraphPipelineError::UnrecognizedRunStatus {
+                status: self.status.clone(),
+            })
     }
 
     fn successful_result_refs(&self) -> Vec<GraphResultRef> {
@@ -228,20 +231,22 @@ fn rows<'a>(response: &'a Value, name: &str) -> &'a [Value] {
         .unwrap_or_default()
 }
 
-fn required_string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
+fn required_string<'a>(row: &'a Value, field: &str) -> Result<&'a str, GraphPipelineError> {
     row.get(field)
         .and_then(Value::as_str)
-        .with_context(|| format!("GraphRun is missing {field}"))
+        .ok_or_else(|| GraphPipelineError::GraphRunFieldMissing {
+            field: field.to_owned(),
+        })
 }
 
 #[async_trait::async_trait]
 pub(crate) trait GraphRunQuery: Sync {
-    async fn execute_graph_query(&self, query: &str) -> Result<Value>;
+    async fn execute_graph_query(&self, query: &str) -> Result<Value, GraphPipelineError>;
 }
 
 #[async_trait::async_trait]
 impl GraphRunQuery for EmbeddedNode {
-    async fn execute_graph_query(&self, query: &str) -> Result<Value> {
+    async fn execute_graph_query(&self, query: &str) -> Result<Value, GraphPipelineError> {
         let response =
             crate::graphql::graphql_with_transaction_retry(self, query, "query graph run view")
                 .await?;
@@ -251,22 +256,22 @@ impl GraphRunQuery for EmbeddedNode {
 
 #[async_trait::async_trait]
 impl GraphRunQuery for ConfigAccess {
-    async fn execute_graph_query(&self, query: &str) -> Result<Value> {
-        self.execute(query).await
+    async fn execute_graph_query(&self, query: &str) -> Result<Value, GraphPipelineError> {
+        Ok(self.execute(query).await?)
     }
 }
 
 #[async_trait::async_trait]
 impl GraphRunQuery for ConfigApplyTxn<'_> {
-    async fn execute_graph_query(&self, query: &str) -> Result<Value> {
-        self.execute(query).await
+    async fn execute_graph_query(&self, query: &str) -> Result<Value, GraphPipelineError> {
+        Ok(self.execute(query).await?)
     }
 }
 
 async fn query_run_rows(
     executor: &(impl GraphRunQuery + ?Sized),
     run_id: &str,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Value>, GraphPipelineError> {
     let response = executor
         .execute_graph_query(&format!(
             r#"{{
@@ -300,7 +305,7 @@ async fn load_plan(
     executor: &(impl GraphRunQuery + ?Sized),
     digest: &str,
     owner_did: &str,
-) -> Result<GraphPlan> {
+) -> Result<GraphPlan, GraphPipelineError> {
     let response = executor.execute_graph_query(&format!(
         r#"{{ GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{ plan_json owner_did graph_id }} }}"#,
         escape_graphql_string(digest),
@@ -308,31 +313,33 @@ async fn load_plan(
     .await?;
     let found = rows(&response, "GraphRevision");
     if found.len() != 1 {
-        anyhow::bail!("pinned GraphRevision {digest:?} is missing or ambiguous");
+        return Err(GraphPipelineError::PinnedRevisionAmbiguous {
+            digest: digest.to_owned(),
+        });
     }
     let plan: GraphPlan = serde_json::from_str(
         found[0]
             .get("plan_json")
             .and_then(Value::as_str)
-            .context("pinned GraphRevision is missing plan_json")?,
+            .ok_or(GraphPipelineError::PinnedRevisionPlanJsonMissing)?,
     )?;
     if plan.digest != digest
         || !verify_graph_plan_digest(&plan)
         || found[0].get("owner_did").and_then(Value::as_str) != Some(owner_did)
         || found[0].get("graph_id").and_then(Value::as_str) != Some(plan.graph_id.as_str())
     {
-        anyhow::bail!("pinned GraphRevision plan failed immutable identity verification");
+        return Err(GraphPipelineError::PinnedRevisionUnverified);
     }
     Ok(plan)
 }
 
-fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
+fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>, GraphPipelineError> {
     let nodes_by_trigger: BTreeMap<String, String> = super::routes::planned_routes(plan)?
         .into_iter()
         .map(|route| (route.id, route.node_id.to_owned()))
         .collect();
     if nodes_by_trigger.is_empty() {
-        anyhow::bail!("pinned graph plan has no materialized trigger routes");
+        return Err(GraphPipelineError::PlanHasNoTriggerRoutes);
     }
     Ok(nodes_by_trigger)
 }
@@ -342,7 +349,7 @@ async fn load_groups(
     correlation: &str,
     plan: &GraphPlan,
     owner_did: &str,
-) -> Result<Vec<GraphRunGroupView>> {
+) -> Result<Vec<GraphRunGroupView>, GraphPipelineError> {
     use gents_protocol::event_delivery::{EventConsumer, EventGroupState};
     let trigger_ids = planned_trigger_nodes(plan)?.into_keys().collect::<Vec<_>>();
     let consumers = trigger_ids
@@ -366,19 +373,17 @@ async fn load_groups(
     }}"#, escape_graphql_string(owner_did), escape_graphql_string(correlation))).await?;
     rows(&response, "EventGroupState")
         .iter()
-        .map(|row| {
+        .map(|row| -> Result<GraphRunGroupView, GraphPipelineError> {
             let state: EventGroupState = serde_json::from_value(row.clone())?;
-            anyhow::ensure!(
-                state.node_did == owner_did && state.correlation == correlation,
-                "group observation is outside the graph run scope"
-            );
+            if state.node_did != owner_did || state.correlation != correlation {
+                return Err(GraphPipelineError::GroupOutsideRunScope);
+            }
             let EventConsumer::Trigger { trigger_id } = state.consumer else {
-                anyhow::bail!("graph group observation names a callback binding");
+                return Err(GraphPipelineError::GroupCallbackBinding);
             };
-            anyhow::ensure!(
-                trigger_ids.contains(&trigger_id),
-                "group observation names an unplanned trigger"
-            );
+            if !trigger_ids.contains(&trigger_id) {
+                return Err(GraphPipelineError::GroupUnplannedTrigger);
+            }
             Ok(GraphRunGroupView {
                 group_key: state.group_key,
                 trigger_id,
@@ -408,16 +413,16 @@ fn current_commit_cid(row: &Value) -> Option<String> {
 fn graph_run_deadline(
     started_at: Option<&str>,
     max_runtime_secs: u64,
-) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>> {
+) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, GraphPipelineError> {
     started_at
         .map(|started_at| {
             let started_at = chrono::DateTime::parse_from_rfc3339(started_at)
-                .context("GraphRun started_at is not RFC3339")?;
+                .map_err(GraphPipelineError::StartedAtNotRfc3339)?;
             let seconds = i64::try_from(max_runtime_secs)
-                .context("graph max_runtime_secs exceeds the supported clock range")?;
+                .map_err(GraphPipelineError::MaxRuntimeOutOfRange)?;
             started_at
                 .checked_add_signed(chrono::TimeDelta::seconds(seconds))
-                .context("graph run deadline exceeds the supported clock range")
+                .ok_or(GraphPipelineError::DeadlineOutOfRange)
         })
         .transpose()
 }
@@ -426,7 +431,7 @@ async fn load_result(
     executor: &(impl GraphRunQuery + ?Sized),
     correlation: &str,
     result: &PlannedResult,
-) -> Result<GraphRunResultView> {
+) -> Result<GraphRunResultView, GraphPipelineError> {
     validate_collection_identifier(&result.collection)?;
     crate::graphql::validate_graphql_name(&result.correlation_field)?;
     let limit = match result.cardinality {
@@ -466,9 +471,11 @@ async fn load_result(
         let document_id = doc
             .get("_docID")
             .and_then(Value::as_str)
-            .context("result document is missing _docID")?;
-        let commit_cid = current_commit_cid(doc)
-            .with_context(|| format!("result document {document_id} has no current commit CID"))?;
+            .ok_or(GraphPipelineError::ResultDocIdMissing)?;
+        let commit_cid =
+            current_commit_cid(doc).ok_or_else(|| GraphPipelineError::ResultCommitCidMissing {
+                document_id: document_id.to_owned(),
+            })?;
         refs.push(GraphResultRef {
             name: result.name.clone(),
             collection: result.collection.clone(),
@@ -838,21 +845,26 @@ pub async fn load_graph_run_view_with_access(
     load_graph_run_view_with(access, actor_did, run_id).await
 }
 
-fn collection_result_projection_fields(version: &Value, collection: &str) -> Result<Vec<String>> {
+fn collection_result_projection_fields(
+    version: &Value,
+    collection: &str,
+) -> Result<Vec<String>, GraphPipelineError> {
     let fields = version
         .get("Fields")
         .and_then(Value::as_array)
-        .with_context(|| format!("collection {collection} version has no Fields array"))?;
+        .ok_or_else(|| GraphPipelineError::CollectionFieldsMissing {
+            collection: collection.to_owned(),
+        })?;
     let mut names = fields
         .iter()
         .filter(|field| field.get("RelationName").is_none_or(Value::is_null))
         .filter_map(|field| field.get("Name").and_then(Value::as_str))
         .filter(|name| *name != "_docID" && *name != "_version")
-        .map(|name| {
+        .map(|name| -> Result<String, GraphPipelineError> {
             crate::graphql::validate_graphql_name(name)?;
             Ok(name.to_owned())
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     names.sort();
     names.dedup();
     Ok(names)
@@ -861,7 +873,7 @@ fn collection_result_projection_fields(version: &Value, collection: &str) -> Res
 async fn hydrate_terminal_result_documents(
     access: &ConfigAccess,
     view: &mut GraphRunView,
-) -> Result<()> {
+) -> Result<(), GraphPipelineError> {
     let mut fields_by_collection = BTreeMap::<String, Vec<String>>::new();
     for result in view.results.iter_mut().filter(|result| result.terminal) {
         let persisted_refs = view
@@ -886,8 +898,8 @@ async fn hydrate_terminal_result_documents(
                 let version = access
                     .collection_version(&reference.collection)
                     .await?
-                    .with_context(|| {
-                        format!("result collection {} is unavailable", reference.collection)
+                    .ok_or_else(|| GraphPipelineError::ResultCollectionUnavailable {
+                        collection: reference.collection.clone(),
                     })?;
                 let fields = collection_result_projection_fields(&version, &reference.collection)?;
                 fields_by_collection.insert(reference.collection.clone(), fields.clone());
@@ -912,45 +924,42 @@ async fn hydrate_terminal_result_documents(
                     document_id = escape_graphql_string(&reference.document_id),
                 ))
                 .await
-                .with_context(|| {
-                    format!(
-                        "reconstructing result {} document {} at {}",
-                        result.name, reference.document_id, reference.commit_cid
-                    )
+                .map_err(|source| GraphPipelineError::ReconstructResult {
+                    name: result.name.clone(),
+                    document_id: reference.document_id.clone(),
+                    commit_cid: reference.commit_cid.clone(),
+                    source: Box::new(source),
                 })?;
             let rows = rows(&response, &reference.collection);
             if rows.len() != 1 {
-                anyhow::bail!(
-                    "result {} document {} at {} reconstructed {} rows",
-                    result.name,
-                    reference.document_id,
-                    reference.commit_cid,
-                    rows.len()
-                );
+                return Err(GraphPipelineError::ReconstructedRowCount {
+                    name: result.name.clone(),
+                    document_id: reference.document_id.clone(),
+                    commit_cid: reference.commit_cid.clone(),
+                    rows: rows.len(),
+                });
             }
             let mut document = rows[0].clone();
             if document.get("_docID").and_then(Value::as_str)
                 != Some(reference.document_id.as_str())
             {
-                anyhow::bail!(
-                    "result {} commit {} reconstructed the wrong document",
-                    result.name,
-                    reference.commit_cid
-                );
+                return Err(GraphPipelineError::ReconstructedWrongDocument {
+                    name: result.name.clone(),
+                    commit_cid: reference.commit_cid.clone(),
+                });
             }
             let reconstructed = document_composite_version(
                 &document,
                 &format!("hydrate graph result {}", result.name),
             )?
-            .context("historical result document has no composite commit")?;
+            .ok_or(GraphPipelineError::HistoricalCommitMissing)?;
             if reconstructed.cid != reference.commit_cid {
-                anyhow::bail!(
-                    "result {} document {} reconstructed commit {}, expected {}",
-                    result.name,
-                    reference.document_id,
-                    reconstructed.cid,
-                    reference.commit_cid
-                );
+                return Err(GraphPipelineError::ReconstructedCommitMismatch {
+                    name: result.name.clone(),
+                    document_id: reference.document_id.clone(),
+                    reconstructed: reconstructed.cid.clone(),
+                    expected: reference.commit_cid.clone(),
+                });
             }
             if let Some(object) = document.as_object_mut() {
                 object.remove("_version");

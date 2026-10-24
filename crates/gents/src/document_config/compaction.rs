@@ -1,6 +1,6 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use super::error::DocumentConfigError;
 use crate::compaction::CompactionStrategy;
 
 /// Unset limits retain the existing runtime defaults. These are desired limits:
@@ -81,12 +81,14 @@ impl CompactionConfig {
         violations
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
         if violations.is_empty() {
             Ok(())
         } else {
-            anyhow::bail!(violations.join("; "))
+            Err(DocumentConfigError::CompactionViolations {
+                violations: violations.join("; "),
+            })
         }
     }
 }

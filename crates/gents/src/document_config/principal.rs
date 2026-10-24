@@ -1,10 +1,12 @@
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
+use super::error::DocumentConfigError;
 use super::serde_helpers::first_row_with_doc_id;
+
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
 
 /// DefraDB DID identity for the runtime node. One active instance is an
 /// operating convention; runtime enforcement is deferred to #1435. No host identity.
@@ -90,7 +92,7 @@ pub(crate) async fn upsert_node(
     default_agent_id: Option<&str>,
     enabled: bool,
     max_request_hop: Option<u32>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     use super::serde_helpers::{default_display_name_for_did, normalize_optional_string};
     let escaped_node_did = escape_graphql_string(node_did);
     let fallback_display_name = default_display_name_for_did(node_did);

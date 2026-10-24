@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -1254,6 +1255,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
                     &transcript_message_create_variables(&duplicate)?,
                 )
                 .await
+                .map_err(anyhow::Error::from)
             })
         })
         .await
@@ -1506,7 +1508,8 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
             error
                 .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
                 .is_none(),
-            "{fault:?} is not a replay violation: {error:#}"
+            "{fault:?} is not a replay violation: {}",
+            ErrorChain(error.as_ref())
         );
     }
 }

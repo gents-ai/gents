@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
+use gents_protocol::error_chain::ErrorChain;
 
 // A full conformance run starts many embedded DefraDB nodes in parallel. On a
 // busy CI host, a healthy runtime can spend more than 60 seconds waiting for
@@ -263,7 +264,7 @@ pub(crate) async fn boot_runtime_within(
         match tokio::time::timeout(RUNTIME_READY_TIMEOUT, runtime.shutdown()).await {
             Ok(Ok(())) => {}
             Ok(Err(stopping)) => tracing::warn!(
-                error = %format!("{stopping:#}"),
+                error = %ErrorChain(stopping.as_ref()),
                 node_did = %node_did,
                 "runtime that never became ready did not stop cleanly"
             ),

@@ -53,9 +53,17 @@ pub struct SpeechSynthesizeRequest {
     pub voice: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum SpeechError {
+    #[error("The speech worker could not start. Restart the Gents client.")]
+    WorkerStart,
+    #[error("Speech language and voice identifiers must be at most 256 bytes and contain no control characters.")]
+    InvalidLabel,
+}
+
 #[derive(Default)]
 pub(super) struct SpeechClient {
-    transport: OnceLock<Result<SpeechTransport, String>>,
+    transport: OnceLock<Option<SpeechTransport>>,
 }
 
 impl SpeechClient {
@@ -196,15 +204,11 @@ impl SpeechClient {
         }
     }
 
-    fn transport(&self) -> Result<&SpeechTransport> {
+    fn transport(&self) -> Result<&SpeechTransport, SpeechError> {
         self.transport
-            .get_or_init(|| {
-                SpeechTransport::new().map_err(|_| {
-                    "The speech worker could not start. Restart the Gents client.".to_owned()
-                })
-            })
+            .get_or_init(|| SpeechTransport::new().ok())
             .as_ref()
-            .map_err(|error| anyhow::anyhow!(error.clone()))
+            .ok_or(SpeechError::WorkerStart)
     }
 }
 
@@ -229,10 +233,14 @@ async fn route(
     let service = services(core, node_did).await?.into_iter().find(|service| service.enabled && service.service_id == service_id)
         .context("The selected speech service is no longer enabled for this runtime. Open Gents voice settings.")?;
     let hostname = hostname::get()?.to_string_lossy().into_owned();
-    gents::registry::resolve_mcp_service(&service, &hostname, None)
+    Ok(gents::registry::resolve_mcp_service(
+        &service, &hostname, None,
+    )?)
 }
 
-fn validate_label(value: Option<&str>) -> Result<()> {
-    ensure!(value.is_none_or(|value| value.len() <= 256 && !value.chars().any(char::is_control)), "Speech language and voice identifiers must be at most 256 bytes and contain no control characters.");
+fn validate_label(value: Option<&str>) -> Result<(), SpeechError> {
+    if value.is_some_and(|value| value.len() > 256 || value.chars().any(char::is_control)) {
+        return Err(SpeechError::InvalidLabel);
+    }
     Ok(())
 }

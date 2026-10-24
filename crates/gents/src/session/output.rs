@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, PayloadRef,
@@ -46,6 +47,8 @@ pub enum CanonicalOutputReadError {
     MissingCanonicalHeader { header_doc_id: String },
     #[error("canonical header lookup is ambiguous: {header_doc_id}")]
     AmbiguousCanonicalHeader { header_doc_id: String },
+    #[error("canonical output query omitted {collection} rows")]
+    RowsOmitted { collection: String },
 }
 
 /// The physical request and node scope supplied by the owned restore.
@@ -303,7 +306,7 @@ impl ReadAccess<'_, '_> {
                 crate::graphql::graphql_response_with_transaction_retry(node, document, operation)
                     .await?
             }
-            Self::Txn(txn) => return txn.execute(document).await,
+            Self::Txn(txn) => return Ok(txn.execute(document).await?),
             Self::Config(access) => {
                 let value = access.execute(document).await?;
                 anyhow::ensure!(
@@ -697,7 +700,7 @@ pub(crate) async fn load_request_headers_in_txn(
     let headers = rows_value(&response, "AgentMessage")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut sequences = std::collections::BTreeSet::new();
     for header in &headers {
         anyhow::ensure!(
@@ -718,12 +721,14 @@ pub(crate) async fn load_request_headers_in_txn(
 fn rows_value<'a>(
     response: &'a serde_json::Value,
     collection: &str,
-) -> Result<&'a Vec<serde_json::Value>> {
+) -> Result<&'a Vec<serde_json::Value>, CanonicalOutputReadError> {
     response
         .get("data")
         .and_then(|data| data.get(collection))
         .and_then(serde_json::Value::as_array)
-        .with_context(|| format!("canonical output query omitted {collection} rows"))
+        .ok_or_else(|| CanonicalOutputReadError::RowsOmitted {
+            collection: collection.to_owned(),
+        })
 }
 
 async fn load_header(
@@ -755,7 +760,7 @@ async fn load_header(
         rows_value(&response, "AgentMessage")?
             .iter()
             .map(decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
     };
     match headers.len() {
         0 => Err(anyhow::Error::new(
@@ -847,10 +852,10 @@ async fn coordinate_twins(
         let rows = rows_value(&response, "AgentMessage")?.clone();
         sessions.insert(session_id.clone(), SessionHeaderRows::from(rows));
     }
-    sessions[session_id]
+    Ok(sessions[session_id]
         .coordinate_matches(key, sequence)
         .map(decode_transcript_message_row)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 fn validate_fork(
@@ -1171,7 +1176,7 @@ async fn load_referenced_segments(
         closures.extend(
             rows.iter()
                 .map(decode_output_segment_row)
-                .collect::<Result<Vec<_>>>()?,
+                .collect::<Result<Vec<_>, _>>()?,
         );
     }
     for closure in &closures {
@@ -1416,7 +1421,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     let headers = rows_value(&response, "AgentMessage")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut ids = BTreeSet::new();
     let mut sequences = BTreeSet::new();
     let mut keys = BTreeSet::new();
@@ -1592,7 +1597,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             {
                 tracing::warn!(
                     header_doc_id = %candidate.header_doc_id,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "accepted turn request is unverifiable; its reasoning is not replayed"
                 );
                 continue;
@@ -1691,14 +1696,14 @@ fn replay_capture_key(
         turn_index,
         attempt,
     } = coordinate;
-    gents_loop::rendered_request::capture_key(
+    Ok(gents_loop::rendered_request::capture_key(
         node_did,
         session_id,
         request_doc_id,
         &capture_scope.to_string(),
         usize::try_from(turn_index)?,
         attempt,
-    )
+    )?)
 }
 
 /// Batched `capture_key` read for the pass's selected coordinates: one chunked
@@ -1786,7 +1791,7 @@ async fn preload_replay_capture_blocks(
         }
     }
     crate::rendered_request::preload_manifest_blocks(node, &manifests, cache).await?;
-    crate::rendered_request::preload_manifest_trees(node, &trees, cache).await
+    Ok(crate::rendered_request::preload_manifest_trees(node, &trees, cache).await?)
 }
 
 /// Validate a restored replay's physical request and bounded transcript view
@@ -2168,13 +2173,7 @@ async fn replay_capture_from_row(
     .await
     {
         Ok(verified) => Ok(verified),
-        Err(error)
-            if error
-                .downcast_ref::<crate::rendered_request::CaptureStoreReadError>()
-                .is_some() =>
-        {
-            Err(error)
-        }
+        Err(error) if crate::rendered_request::is_capture_store_read(error.as_ref()) => Err(error),
         Err(error) => {
             warn_unverifiable_replay_capture(capture_key, &error);
             Ok(None)
@@ -2205,7 +2204,7 @@ fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
     tracing::warn!(
         capture_key = %capture_key,
         suppressed,
-        error = %format!("{error:#}"),
+        error = %ErrorChain(error.as_ref()),
         "accepted turn capture is unverifiable; its reasoning is not replayed"
     );
 }
@@ -2395,7 +2394,7 @@ pub(super) async fn load_sequenced_messages(
         .context("canonical history query omitted AgentMessage rows")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut cache = ReadCache {
         reuse_node_scans: true,
         ..ReadCache::default()

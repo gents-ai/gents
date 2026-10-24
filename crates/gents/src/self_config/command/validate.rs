@@ -2,11 +2,14 @@ use super::*;
 use crate::config_client::{
     validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents_protocol::error_chain::{find_source, ErrorChain};
 
 impl ConfigCommandTool {
     pub(super) async fn validate_saved(&self, argv: &[String]) -> Result<String> {
         self.ensure_agent_catalog("validate", None)?;
-        anyhow::ensure!(argv.is_empty(), "validate takes no parameters; it checks saved configuration for your authenticated node");
+        if !argv.is_empty() {
+            return Err(CommandError::ValidateParameters.into());
+        }
         let identity = self.core.identity()?;
         let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local_readonly(
             &self.node,
@@ -22,9 +25,9 @@ impl ConfigCommandTool {
                         let mut diagnostic = json!({
                             "collection": collection.graphql_type(),
                             "id": id,
-                            "error": format!("{error:#}")
+                            "error": ErrorChain(error.as_ref()).to_string()
                         });
-                        if let Some(missing) = error.downcast_ref::<crate::document_config::MissingReference>() {
+                        if let Some(crate::document_config::DocumentConfigError::MissingReference(missing)) = find_source::<crate::document_config::DocumentConfigError>(error.as_ref()) {
                             diagnostic["field"] = json!(missing.field);
                             diagnostic["missing"] = json!({"collection":missing.target.graphql_type(),"id":missing.target_id});
                         }
@@ -47,7 +50,7 @@ impl ConfigCommandTool {
                         if crate::config_client::is_transaction_step_unavailable(&error) {
                             return Err(error);
                         }
-                        errors.push(json!({"error":format!("{error:#}")}));
+                        errors.push(json!({"error":ErrorChain(error.as_ref()).to_string()}));
                     }
                 }
                 let selected: std::collections::BTreeSet<String> = references.documents()
@@ -92,7 +95,7 @@ impl ConfigCommandTool {
                     errors.push(json!({
                         "collection":"DatastoreToolSurface", "id":surface.surface_id,
                         "tool_name":tool_name, "schema_collection":collection,
-                        "error":format!("{error:#}"),
+                        "error":ErrorChain(error.as_ref()).to_string(),
                         "inspect_with":{"argv":["datastore","get"],"target_id":surface.surface_id},
                         "inspect_schema_with":{"tool":"schema","args":{"argv":["collection","get"],"target_id":collection}},
                         "next":"Use datastore update to correct this entry or schema collection update to correct the existing collection. Preserve unrelated fields and entries, then run config validate again."
@@ -100,7 +103,7 @@ impl ConfigCommandTool {
                 }
             }
         }
-        ordered! {
+        Ok(ordered! {
             "valid": errors.is_empty(),
             "checked_documents": counts.values().sum::<usize>(),
             "collections": counts,
@@ -108,6 +111,6 @@ impl ConfigCommandTool {
             "scope": "Saved configuration for the authenticated node: canonical fields, references, publication checks and selected datastore tools against current collection schemas. Config and schema observations are not one atomic snapshot. Does not test credentials, remote destinations, runtime execution or user intent.",
             "next": if errors.is_empty() { "Inspect agent get to verify selections match the user's request; exercise tools to verify runtime agent. Report what remains untested." } else { "Read the named objects, correct existing objects with resource update (create only missing objects), and run validate again before reporting completion." },
             "committed": false,
-        }.pretty()
+        }.pretty()?)
     }
 }

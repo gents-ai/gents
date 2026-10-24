@@ -1,11 +1,42 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::pack::{declared_paths, PackKind, PackManifest};
+use crate::pack::{declared_paths, PackAssetError, PackKind, PackManifest};
 use crate::pack_archive::{pack_dir, PackArchive};
+
+#[derive(Debug, thiserror::Error)]
+pub enum CheckError {
+    #[error(transparent)]
+    Asset(#[from] PackAssetError),
+    #[error("reading {}", path.display())]
+    OpenAsset {
+        path: PathBuf,
+        #[source]
+        source: PackAssetError,
+    },
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing {}", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("walked outside the pack")]
+    OutsidePack,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+type Result<T, E = CheckError> = std::result::Result<T, E>;
 
 pub const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
 const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
@@ -33,7 +64,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     let manifest = match read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
-            report.problems.push(format!("{error:#}"));
+            report.problems.push(format!("{}", ErrorChain(&error)));
             return report;
         }
     };
@@ -47,7 +78,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     check_ux_plugins(dir, &manifest, &mut report.problems);
     if !unbuilt.is_empty() {
         if let Err(error) = crate::pack::validate_manifest(&manifest.name, &manifest) {
-            report.problems.push(format!("{error:#}"));
+            report
+                .problems
+                .push(format!("{}", ErrorChain(error.as_ref())));
         }
         if manifest.metadata.kind != PackKind::Plugins {
             report.problems.push(format!(
@@ -62,7 +95,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
         Ok(archive) => archive,
         Err(error) => {
-            report.problems.push(format!("{error:#}"));
+            report
+                .problems
+                .push(format!("{}", ErrorChain(error.as_ref())));
             return report;
         }
     };
@@ -79,7 +114,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
                         Ok(plans) => {
                             report.graphs = plans.into_iter().map(|plan| plan.graph_id).collect()
                         }
-                        Err(error) => report.problems.push(format!("{error:#}")),
+                        Err(error) => report
+                            .problems
+                            .push(format!("{}", ErrorChain(error.as_ref()))),
                     }
                     check_topology(dir, &config, &mut report.problems);
                 }
@@ -91,7 +128,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
                     report.unverified.push("event_source_filters");
                 }
             }
-            Err(error) => report.problems.push(format!("{error:#}")),
+            Err(error) => report
+                .problems
+                .push(format!("{}", ErrorChain(error.as_ref()))),
         }
     }
     if dir.join("experiment.json").is_file() {
@@ -103,12 +142,18 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
 
 pub fn read_manifest(dir: &Path) -> Result<PackManifest> {
     let path = dir.join("manifest.json");
-    let mut file = crate::pack::open_pack_asset(dir, "manifest.json")
-        .with_context(|| format!("reading {}", path.display()))?;
+    let mut file = crate::pack::open_pack_asset(dir, "manifest.json").map_err(|source| {
+        CheckError::OpenAsset {
+            path: path.clone(),
+            source,
+        }
+    })?;
     let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut bytes)
-        .with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    std::io::Read::read_to_end(&mut file, &mut bytes).map_err(|source| CheckError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| CheckError::Parse { path, source })
 }
 
 pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) -> Vec<String> {
@@ -137,7 +182,7 @@ pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Strin
         .collect();
     let mut present = Vec::new();
     if let Err(error) = walk(dir, dir, &mut present) {
-        problems.push(format!("{error:#}"));
+        problems.push(format!("{}", ErrorChain(&error)));
     }
     for path in present {
         if declared.binary_search(&path).is_err()
@@ -152,12 +197,16 @@ pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Strin
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+    let entries = std::fs::read_dir(dir).map_err(|source| CheckError::Read {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
         let entry = entry?;
         let path = entry.path();
         let relative = path
             .strip_prefix(root)
-            .context("walked outside the pack")?
+            .map_err(|_| CheckError::OutsidePack)?
             .to_string_lossy()
             .replace('\\', "/");
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -178,13 +227,13 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::PackConfig> {
+pub fn load_config(archive: &PackArchive) -> anyhow::Result<crate::document_config::PackConfig> {
     let config = crate::pack::load_pack_config(
         archive.manifest(),
         &crate::pack::PackInstallOptions {
             node_did: PLACEHOLDER_OWNER.into(),
         },
-        &|path| archive.asset(path).map(Vec::from),
+        &|path| Ok(archive.asset(path).map(Vec::from)?),
         &|_| None,
     )?;
     crate::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
@@ -217,8 +266,10 @@ fn check_topology(
 fn read_pack_text_asset(dir: &Path, path: &str) -> Result<String> {
     let mut file = crate::pack::open_pack_asset(dir, path)?;
     let mut text = String::new();
-    std::io::Read::read_to_string(&mut file, &mut text)
-        .with_context(|| format!("reading {path}"))?;
+    std::io::Read::read_to_string(&mut file, &mut text).map_err(|source| CheckError::Read {
+        path: PathBuf::from(path),
+        source,
+    })?;
     Ok(text)
 }
 
@@ -257,7 +308,7 @@ pub fn topology_block(config: &crate::document_config::PackConfig) -> String {
     )
 }
 
-pub fn write_topology(dir: &Path) -> Result<()> {
+pub fn write_topology(dir: &Path) -> anyhow::Result<()> {
     let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
     let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
     let readme = dir.join("README.md");
@@ -295,7 +346,7 @@ fn check_ux_plugins(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Stri
                 }
             }
         }
-        Err(error) => problems.push(format!("{error:#}")),
+        Err(error) => problems.push(format!("{}", ErrorChain(&error))),
     }
 }
 

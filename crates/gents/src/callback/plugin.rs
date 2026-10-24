@@ -11,6 +11,7 @@
 //! (`gents plugin dirs add`, or a pack scenario's `allowed_folders`), at the
 //! access that call asks for.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -39,7 +40,9 @@ pub(crate) fn writable_output_collection(collection: &str) -> Result<()> {
         !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection),
         "a plugin cannot write {collection}, which belongs to the runtime"
     );
-    crate::document_config::reject_protected_collection_name(collection)
+    Ok(crate::document_config::reject_protected_collection_name(
+        collection,
+    )?)
 }
 
 pub fn validate_handler(
@@ -103,7 +106,8 @@ pub(crate) fn output_documents(
     };
     let mut documents = Vec::new();
     for (port, value) in per_port {
-        writable_output_collection(&port.collection).map_err(|error| format!("{error:#}"))?;
+        writable_output_collection(&port.collection)
+            .map_err(|error| ErrorChain(error.as_ref()).to_string())?;
         let rows: Vec<&Value> = match (&port.cardinality, value) {
             (_, None | Some(Value::Null)) => Vec::new(),
             (PortCardinality::One, Some(value)) => vec![value],
@@ -187,7 +191,10 @@ pub(super) async fn execute(
     }
     let record = match plugins.resolve(handler.plugin, Some(handler.digest)) {
         Ok(record) => record,
-        Err(error) => return deny(node, invocation, &format!("{error:#}")).await,
+        Err(error) => {
+            let message = ErrorChain(error.as_ref()).to_string();
+            return deny(node, invocation, &message).await;
+        }
     };
     let input = crate::callback::documents::strip_secret_fields(source.clone());
     let bound = match plugins
@@ -222,7 +229,7 @@ pub(super) async fn execute(
         .and_then(|node| DataCaller::new(node.clone(), &invocation.owner_node_did).ok());
     let called = plugins.call_bound_data(&record, input, bound, caller).await;
     let failure = match called {
-        Err(error) => Some(format!("{error:#}")),
+        Err(error) => Some(ErrorChain(error.as_ref()).to_string()),
         Ok(call) if call.outcome.verdict != PluginVerdict::Success => Some(format!(
             "plugin {} did not return a result: {}",
             call.coordinate, call.outcome.diagnostics
@@ -250,9 +257,10 @@ pub(super) async fn execute(
                         .await
                     {
                         Ok(()) => return Ok(()),
-                        Err(error) => {
-                            Some(format!("writing the plugin's results failed: {error:#}"))
-                        }
+                        Err(error) => Some(format!(
+                            "writing the plugin's results failed: {}",
+                            ErrorChain(error.as_ref())
+                        )),
                     }
                 }
             }

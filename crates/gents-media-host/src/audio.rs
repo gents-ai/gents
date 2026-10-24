@@ -2,11 +2,60 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
 
+use crate::permission::PermissionError;
+
 pub use gents_protocol::client_media::{MAX_PCM_BYTES, MAX_SECONDS};
+
+#[derive(Debug, thiserror::Error)]
+pub enum AudioError {
+    #[error(transparent)]
+    Permission(#[from] PermissionError),
+    #[error(transparent)]
+    Device(#[from] cpal::Error),
+    #[error("No microphone is available. Connect one and choose it in Gents voice settings.")]
+    NoMicrophone,
+    #[error("The selected microphone is unavailable. Choose an available microphone in Gents voice settings.")]
+    MicrophoneUnavailable,
+    #[error("Microphone capture cancelled.")]
+    CaptureCancelled,
+    #[error("The microphone's default audio format is unsupported.")]
+    UnsupportedMicrophoneFormat,
+    #[error("The microphone's default sample format is unsupported.")]
+    UnsupportedMicrophoneSampleFormat,
+    #[error("Cannot start the microphone. Check microphone permission in system settings.")]
+    StartMicrophone(#[source] cpal::Error),
+    #[error("Microphone capture stopped. Check its connection and system microphone permission.")]
+    CaptureStopped,
+    #[error("Microphone capture failed.")]
+    CaptureFailed,
+    #[error("The microphone returned no audio. Check its connection and microphone permission.")]
+    NoAudio,
+    #[error("No playback device is available.")]
+    NoPlaybackDevice,
+    #[error("Speech playback cancelled.")]
+    PlaybackCancelled,
+    #[error("Speech playback has an unsupported sample rate.")]
+    UnsupportedPlaybackRate,
+    #[error("Speech playback exceeds the clip limit or contains no samples.")]
+    PlaybackOutOfBounds,
+    #[error("The playback device changed. Synthesize speech again at its current sample rate.")]
+    PlaybackDeviceChanged,
+    #[error("The playback device's channel count is unsupported.")]
+    UnsupportedPlaybackChannels,
+    #[error("The playback device's default sample format is unsupported.")]
+    UnsupportedPlaybackSampleFormat,
+    #[error(transparent)]
+    StartPlayback(cpal::Error),
+    #[error("Speech playback stopped. Check the playback device.")]
+    PlaybackStopped,
+    #[error("The playback device did not finish the clip.")]
+    PlaybackUnfinished,
+}
+
+type Result<T, E = AudioError> = std::result::Result<T, E>;
 
 pub fn input_devices() -> Result<Vec<(String, String)>> {
     cpal::default_host()
@@ -18,9 +67,11 @@ pub fn input_devices() -> Result<Vec<(String, String)>> {
 fn input_device(id: Option<&str>) -> Result<Device> {
     let host = cpal::default_host();
     match id {
-        None => host.default_input_device().context("No microphone is available. Connect one and choose it in Gents voice settings."),
-        Some(id) => host.input_devices()?.find(|device| device.id().is_ok_and(|value| value.to_string() == id))
-            .context("The selected microphone is unavailable. Choose an available microphone in Gents voice settings."),
+        None => host.default_input_device().ok_or(AudioError::NoMicrophone),
+        Some(id) => host
+            .input_devices()?
+            .find(|device| device.id().is_ok_and(|value| value.to_string() == id))
+            .ok_or(AudioError::MicrophoneUnavailable),
     }
 }
 
@@ -38,17 +89,16 @@ impl Capture {
     /// to a preallocated bounded buffer; neither audio nor device errors are logged.
     pub fn start(device_id: Option<&str>, stopped: &AtomicBool) -> Result<Self> {
         crate::permission::authorize(stopped)?;
-        ensure!(
-            !stopped.load(Ordering::Acquire),
-            "Microphone capture cancelled."
-        );
+        if stopped.load(Ordering::Acquire) {
+            return Err(AudioError::CaptureCancelled);
+        }
         let device = input_device(device_id)?;
         let supported = device.default_input_config()?;
         let config = supported.config();
-        ensure!(
-            (8_000..=192_000).contains(&config.sample_rate) && (1..=32).contains(&config.channels),
-            "The microphone's default audio format is unsupported."
-        );
+        if !((8_000..=192_000).contains(&config.sample_rate) && (1..=32).contains(&config.channels))
+        {
+            return Err(AudioError::UnsupportedMicrophoneFormat);
+        }
         let limit = (config.sample_rate as usize * MAX_SECONDS as usize).min(MAX_PCM_BYTES / 2);
         let samples = Arc::new(Mutex::new(Vec::with_capacity(limit)));
         let failed = Arc::new(AtomicBool::new(false));
@@ -94,15 +144,12 @@ impl Capture {
                 failed.clone(),
                 full.clone(),
             )?,
-            _ => bail!("The microphone's default sample format is unsupported."),
+            _ => return Err(AudioError::UnsupportedMicrophoneSampleFormat),
         };
-        ensure!(
-            !stopped.load(Ordering::Acquire),
-            "Microphone capture cancelled."
-        );
-        stream.play().context(
-            "Cannot start the microphone. Check microphone permission in system settings.",
-        )?;
+        if stopped.load(Ordering::Acquire) {
+            return Err(AudioError::CaptureCancelled);
+        }
+        stream.play().map_err(AudioError::StartMicrophone)?;
         Ok(Self {
             stream,
             samples,
@@ -121,20 +168,14 @@ impl Capture {
 
     pub fn finish(self) -> Result<(u32, Vec<i16>)> {
         drop(self.stream);
-        ensure!(
-            !self.failed.load(Ordering::Acquire),
-            "Microphone capture stopped. Check its connection and system microphone permission."
-        );
-        let samples = std::mem::take(
-            &mut *self
-                .samples
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Microphone capture failed."))?,
-        );
-        ensure!(
-            !samples.is_empty(),
-            "The microphone returned no audio. Check its connection and microphone permission."
-        );
+        if self.failed.load(Ordering::Acquire) {
+            return Err(AudioError::CaptureStopped);
+        }
+        let samples =
+            std::mem::take(&mut *self.samples.lock().map_err(|_| AudioError::CaptureFailed)?);
+        if samples.is_empty() {
+            return Err(AudioError::NoAudio);
+        }
         Ok((self.sample_rate, samples))
     }
 }
@@ -191,7 +232,7 @@ where
 pub fn output_sample_rate() -> Result<u32> {
     Ok(cpal::default_host()
         .default_output_device()
-        .context("No playback device is available.")?
+        .ok_or(AudioError::NoPlaybackDevice)?
         .default_output_config()?
         .sample_rate())
 }
@@ -205,33 +246,29 @@ pub struct Playback {
 
 impl Playback {
     pub fn start(sample_rate: u32, samples: Vec<i16>, stopped: &AtomicBool) -> Result<Self> {
-        ensure!(
-            !stopped.load(Ordering::Acquire),
-            "Speech playback cancelled."
-        );
-        ensure!(
-            (8_000..=192_000).contains(&sample_rate),
-            "Speech playback has an unsupported sample rate."
-        );
-        ensure!(
-            !samples.is_empty()
-                && samples.len() <= MAX_PCM_BYTES / 2
-                && samples.len() <= sample_rate as usize * MAX_SECONDS as usize,
-            "Speech playback exceeds the clip limit or contains no samples."
-        );
+        if stopped.load(Ordering::Acquire) {
+            return Err(AudioError::PlaybackCancelled);
+        }
+        if !(8_000..=192_000).contains(&sample_rate) {
+            return Err(AudioError::UnsupportedPlaybackRate);
+        }
+        if !(!samples.is_empty()
+            && samples.len() <= MAX_PCM_BYTES / 2
+            && samples.len() <= sample_rate as usize * MAX_SECONDS as usize)
+        {
+            return Err(AudioError::PlaybackOutOfBounds);
+        }
         let device = cpal::default_host()
             .default_output_device()
-            .context("No playback device is available.")?;
+            .ok_or(AudioError::NoPlaybackDevice)?;
         let supported = device.default_output_config()?;
         let config = supported.config();
-        ensure!(
-            config.sample_rate == sample_rate,
-            "The playback device changed. Synthesize speech again at its current sample rate."
-        );
-        ensure!(
-            (1..=32).contains(&config.channels),
-            "The playback device's channel count is unsupported."
-        );
+        if config.sample_rate != sample_rate {
+            return Err(AudioError::PlaybackDeviceChanged);
+        }
+        if !(1..=32).contains(&config.channels) {
+            return Err(AudioError::UnsupportedPlaybackChannels);
+        }
         let failed = Arc::new(AtomicBool::new(false));
         let finished_at = Arc::new(Mutex::new(None));
         let stream = match supported.sample_format() {
@@ -270,13 +307,12 @@ impl Playback {
                 failed.clone(),
                 finished_at.clone(),
             )?,
-            _ => bail!("The playback device's default sample format is unsupported."),
+            _ => return Err(AudioError::UnsupportedPlaybackSampleFormat),
         };
-        ensure!(
-            !stopped.load(Ordering::Acquire),
-            "Speech playback cancelled."
-        );
-        stream.play()?;
+        if stopped.load(Ordering::Acquire) {
+            return Err(AudioError::PlaybackCancelled);
+        }
+        stream.play().map_err(AudioError::StartPlayback)?;
         Ok(Self {
             _stream: stream,
             failed,
@@ -287,19 +323,13 @@ impl Playback {
 
     pub fn completion(&self) -> Option<Result<()>> {
         if self.failed.load(Ordering::Acquire) {
-            return Some(Err(anyhow::anyhow!(
-                "Speech playback stopped. Check the playback device."
-            )));
+            return Some(Err(AudioError::PlaybackStopped));
         }
         let finished = self.finished_at.lock().ok().and_then(|value| *value);
         if finished.is_some_and(|deadline| Instant::now() >= deadline) {
             return Some(Ok(()));
         }
-        (Instant::now() >= self.deadline).then(|| {
-            Err(anyhow::anyhow!(
-                "The playback device did not finish the clip."
-            ))
-        })
+        (Instant::now() >= self.deadline).then_some(Err(AudioError::PlaybackUnfinished))
     }
 }
 

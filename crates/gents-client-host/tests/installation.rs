@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use gents_desktop_bridge::host::local;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_protocol::error_chain::ErrorChain;
 use tokio::process::Command;
 
 mod support;
@@ -67,7 +68,14 @@ async fn standalone_installation_shares_one_store_between_stdio_clients_and_rele
             panic!("a second owner opened the installation store");
         }
     };
-    assert!(error.is::<gents::home::StoreLockHeld>(), "{error:#}");
+    assert!(
+        error
+            .downcast_ref::<gents::home::HomeError>()
+            .and_then(gents::home::HomeError::lock_held)
+            .is_some(),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
     first.close().await;
     assert_eq!(second.snapshot(2).await["client"]["localPeerId"], peer_id);
     second.close().await;

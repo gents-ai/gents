@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use events::EventName;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;

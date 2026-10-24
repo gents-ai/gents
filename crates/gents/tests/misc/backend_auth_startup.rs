@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};

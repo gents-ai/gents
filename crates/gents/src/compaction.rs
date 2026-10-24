@@ -8,19 +8,31 @@ use futures::future::BoxFuture;
 
 pub use gents_loop::compaction::*;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CompactionSettingsError {
+    #[error("compaction {name} must be positive")]
+    NotPositive { name: &'static str },
+    #[error(transparent)]
+    OutOfRange(#[from] std::num::TryFromIntError),
+}
+
 pub(crate) fn reduction_options_for_agent(
     behavior: &crate::config::ResolvedAgent,
-) -> anyhow::Result<ReductionOptions> {
+) -> Result<ReductionOptions, CompactionSettingsError> {
     let mut options = ReductionOptions {
         mode: behavior.compaction_strategy().reduction_mode(),
         ..ReductionOptions::default()
     };
     if let Some(config) = &behavior.compaction {
-        fn setting(value: Option<i64>, fallback: usize, name: &str) -> anyhow::Result<usize> {
+        fn setting(
+            value: Option<i64>,
+            fallback: usize,
+            name: &'static str,
+        ) -> Result<usize, CompactionSettingsError> {
             match value {
                 None => Ok(fallback),
                 Some(value) if value > 0 => Ok(usize::try_from(value)?),
-                Some(_) => anyhow::bail!("compaction {name} must be positive"),
+                Some(_) => Err(CompactionSettingsError::NotPositive { name }),
             }
         }
         options.tool_result_max_chars = setting(

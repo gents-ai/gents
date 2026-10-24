@@ -66,7 +66,13 @@ pub fn encode_journal(journal: &[ActionJournalEntry]) -> String {
     serde_json::to_string(journal).unwrap_or_else(|_| "[]".to_string())
 }
 
-pub fn decode_journal(raw: Option<&str>) -> Result<Vec<ActionJournalEntry>> {
+#[derive(Debug, thiserror::Error)]
+pub enum CallbackRunError {
+    #[error(transparent)]
+    Journal(#[from] serde_json::Error),
+}
+
+pub fn decode_journal(raw: Option<&str>) -> Result<Vec<ActionJournalEntry>, CallbackRunError> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(Vec::new());
     };

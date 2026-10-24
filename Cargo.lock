@@ -4797,6 +4797,7 @@ dependencies = [
  "shlex",
  "subtle",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tokio-util",
@@ -4831,6 +4832,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
@@ -4853,11 +4855,12 @@ dependencies = [
 name = "gents-desktop"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "clap",
  "gents",
  "gents-desktop-core",
+ "gents-protocol",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4896,6 +4899,7 @@ dependencies = [
  "tauri-plugin",
  "tauri-plugin-fs",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "toml 0.8.2",
@@ -4935,9 +4939,11 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "ts-rs",
+ "url",
  "uuid",
  "wiremock",
 ]
@@ -4972,6 +4978,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4994,25 +5001,25 @@ dependencies = [
 name = "gents-fs-runner"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "globset",
  "ignore",
  "regex",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "gents-lean-contract"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "chrono",
  "defra-node",
  "gents-protocol",
  "gents-schemas",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -5064,7 +5071,6 @@ dependencies = [
 name = "gents-media-host"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "base64 0.22.1",
  "block2",
  "cpal",
@@ -5074,13 +5080,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "gents-migration"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "crypto",
  "defra-core",
  "defra-node",
@@ -5103,7 +5109,6 @@ dependencies = [
 name = "gents-protocol"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "axum",
  "base64 0.22.1",
  "bs58",
@@ -5118,6 +5123,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "ts-rs",

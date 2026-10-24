@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use tracing::Instrument;
@@ -21,6 +20,48 @@ impl BackendProviderOauthExt for BackendProviderKind {
         }
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackendProviderError {
+    #[error("ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the node DID first")]
+    ChatGptCodexCredentialMissing,
+    #[error("Grok OAuth model discovery requires an OAuthCredential document; run `gents grok-login` for the node DID first")]
+    GrokCredentialMissing,
+    #[error("Claude subscription model discovery requires an OAuthCredential document; run `gents claude-login --node-did <did>` for the node DID first")]
+    ClaudeCredentialMissing,
+    #[error("querying {provider} models endpoint {url}")]
+    Transport {
+        provider: &'static str,
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error(transparent)]
+    ModelDiscoveryHttp(#[from] ModelDiscoveryHttpError),
+    #[error("decoding {provider} model discovery response from {url}: {body}")]
+    DecodeResponse {
+        provider: &'static str,
+        url: String,
+        body: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    ChatGptHeaders(#[from] crate::chatgpt_codex::ChatGptCodexHeaderError),
+    #[error(transparent)]
+    GrokHeaders(#[from] crate::xai_grok_oauth::XaiGrokHeaderError),
+}
+
+impl BackendProviderError {
+    pub fn model_discovery_http(&self) -> Option<&ModelDiscoveryHttpError> {
+        match self {
+            Self::ModelDiscoveryHttp(http) => Some(http),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = BackendProviderError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{provider} model discovery failed at {url}: {status} {body}")]
@@ -267,9 +308,7 @@ pub async fn discover_models(
         if kind == BackendProviderKind::ChatGptCodex {
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
-                anyhow::bail!(
-                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the node DID first"
-                );
+                return Err(BackendProviderError::ChatGptCodexCredentialMissing);
             };
             request = request.bearer_auth(&credential.access_token);
             let headers = match crate::chatgpt_codex::build_chatgpt_codex_headers(
@@ -279,7 +318,7 @@ pub async fn discover_models(
                 Ok(headers) => headers,
                 Err(error) => {
                     tracing::Span::current().record("failure_class", "auth");
-                    return Err(error);
+                    return Err(BackendProviderError::ChatGptHeaders(error));
                 }
             };
             for (name, value) in headers {
@@ -294,16 +333,14 @@ pub async fn discover_models(
         } else if kind == BackendProviderKind::XaiGrokOAuth {
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
-                anyhow::bail!(
-                    "Grok OAuth model discovery requires an OAuthCredential document; run `gents grok-login` for the node DID first"
-                );
+                return Err(BackendProviderError::GrokCredentialMissing);
             };
             request = request.bearer_auth(&credential.access_token);
             let headers = match crate::xai_grok_oauth::build_xai_grok_oauth_headers() {
                 Ok(headers) => headers,
                 Err(error) => {
                     tracing::Span::current().record("failure_class", "auth");
-                    return Err(error);
+                    return Err(BackendProviderError::GrokHeaders(error));
                 }
             };
             for (name, value) in headers {
@@ -314,9 +351,7 @@ pub async fn discover_models(
         } else if kind == BackendProviderKind::ClaudeCliSubscription {
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
-                anyhow::bail!(
-                    "Claude subscription model discovery requires an OAuthCredential document; run `gents claude-login --node-did <did>` for the node DID first"
-                );
+                return Err(BackendProviderError::ClaudeCredentialMissing);
             };
             request = request
                 .bearer_auth(&credential.access_token)
@@ -352,8 +387,10 @@ pub async fn discover_models(
             Ok(response) => response,
             Err(error) => {
                 tracing::Span::current().record("failure_class", "transport");
-                return Err(error).with_context(|| {
-                    format!("querying {provider_name} models endpoint {models_url}")
+                return Err(BackendProviderError::Transport {
+                    provider: provider_name,
+                    url: models_url.clone(),
+                    source: error,
                 });
             }
         };
@@ -365,26 +402,25 @@ pub async fn discover_models(
             .unwrap_or_else(|_| "<unreadable body>".to_string());
         if !status.is_success() {
             tracing::Span::current().record("failure_class", "http_status");
-            return Err(ModelDiscoveryHttpError {
-                provider: provider_name.to_string(),
-                url: models_url.to_string(),
-                status: status.as_u16(),
-                body: truncate_probe_body(&body),
-            }
-            .into());
+            return Err(BackendProviderError::ModelDiscoveryHttp(
+                ModelDiscoveryHttpError {
+                    provider: provider_name.to_string(),
+                    url: models_url.to_string(),
+                    status: status.as_u16(),
+                    body: truncate_probe_body(&body),
+                },
+            ));
         }
 
         let models: OpenAiModelsResponse = match serde_json::from_str(&body) {
             Ok(models) => models,
             Err(error) => {
                 tracing::Span::current().record("failure_class", "decode");
-                return Err(error).with_context(|| {
-                    format!(
-                        "decoding {} model discovery response from {}: {}",
-                        provider_name,
-                        models_url,
-                        truncate_probe_body(&body)
-                    )
+                return Err(BackendProviderError::DecodeResponse {
+                    provider: provider_name,
+                    url: models_url.clone(),
+                    body: truncate_probe_body(&body),
+                    source: error,
                 });
             }
         };
@@ -399,9 +435,10 @@ pub async fn discover_models(
             .filter_map(ChatGptCodexModelRecord::into_advertised);
         let mut models = Vec::new();
         for model in openai_models.chain(chatgpt_codex_models) {
-            if !models.iter().any(|advertised: &AdvertisedModel| {
-                advertised.model_name == model.model_name
-            }) {
+            if !models
+                .iter()
+                .any(|advertised: &AdvertisedModel| advertised.model_name == model.model_name)
+            {
                 models.push(model);
             }
         }
@@ -738,10 +775,9 @@ mod tests {
         .await
         .expect_err("426 from /models-v2 must fail discovery");
 
-        let http = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<ModelDiscoveryHttpError>())
-            .expect("426 must surface as ModelDiscoveryHttpError so the CLI appends version-gate guidance");
+        let http = error.model_discovery_http().expect(
+            "426 must surface as ModelDiscoveryHttpError so the CLI appends version-gate guidance",
+        );
         assert_eq!(http.status, 426, "{http}");
         assert!(
             http.is_client_version_gate(),
@@ -999,10 +1035,9 @@ mod tests {
         .await
         .expect_err("401 from /v1/models must fail discovery");
 
-        let http = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<ModelDiscoveryHttpError>())
-            .expect("401 must surface as ModelDiscoveryHttpError so the CLI appends claude-login guidance");
+        let http = error.model_discovery_http().expect(
+            "401 must surface as ModelDiscoveryHttpError so the CLI appends claude-login guidance",
+        );
         assert!(http.is_auth(), "{http}");
     }
 
@@ -1018,7 +1053,7 @@ mod tests {
         .await
         .expect_err("Claude discovery without a credential must fail");
 
-        let message = format!("{error:#}");
+        let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
         assert!(
             message.contains("requires an OAuthCredential document")
                 && message.contains("--node-did"),

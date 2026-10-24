@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 
 use crate::config_client::DesiredStateApplyPlan;
@@ -101,7 +102,7 @@ pub fn text_gate(
     }
     if baseline.target == TargetField::TaskPromptTemplate {
         let current = baseline_text(baseline)
-            .map_err(|error| reject("unexpected_change", format!("{error:#}")))?;
+            .map_err(|error| reject("unexpected_change", ErrorChain(&error).to_string()))?;
         let (current, candidate) = (template_variables(&current)?, template_variables(text)?);
         let dropped: Vec<&String> = current.difference(&candidate).collect();
         if !dropped.is_empty() {
@@ -116,7 +117,12 @@ pub fn text_gate(
 }
 
 fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), StructuralRejection> {
-    let invalid = |error: anyhow::Error| reject("template_invalid", format!("{error:#}"));
+    let invalid = |error: anyhow::Error| {
+        reject(
+            "template_invalid",
+            format!("{}", ErrorChain(error.as_ref())),
+        )
+    };
     let mut config = baseline.config.clone();
     let task = config
         .tasks
@@ -129,15 +135,16 @@ fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), Struc
             )
         })?;
     task.prompt_template = text.to_owned();
-    task.validate().map_err(invalid)?;
-    let plan = DesiredStateApplyPlan::from_pack_config(&config).map_err(invalid)?;
+    task.validate().map_err(|error| invalid(error.into()))?;
+    let plan =
+        DesiredStateApplyPlan::from_pack_config(&config).map_err(|error| invalid(error.into()))?;
     let references = ConfigReferences::from_documents(
         &config.node.node_did,
         plan.documents()
             .iter()
             .map(|document| (document.collection, document.add.clone())),
     )
-    .map_err(invalid)?;
+    .map_err(|error| invalid(error.into()))?;
     plan.documents()
         .iter()
         .filter(|document| document.collection == Collection::Trigger)

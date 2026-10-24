@@ -1,3 +1,11 @@
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutionOriginError {
+    #[error("unknown execution_origin {origin:?}")]
+    Unknown { origin: String },
+    #[error("execution_origin is required")]
+    Required,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionOrigin {
     Interactive,
@@ -12,12 +20,14 @@ impl ExecutionOrigin {
         }
     }
 
-    pub fn from_persisted(value: Option<&str>) -> anyhow::Result<Self> {
+    pub fn from_persisted(value: Option<&str>) -> Result<Self, ExecutionOriginError> {
         match value {
             Some("interactive") => Ok(Self::Interactive),
             Some("scheduled") => Ok(Self::Scheduled),
-            Some(other) => anyhow::bail!("unknown execution_origin {other:?}"),
-            None => anyhow::bail!("execution_origin is required"),
+            Some(other) => Err(ExecutionOriginError::Unknown {
+                origin: other.to_owned(),
+            }),
+            None => Err(ExecutionOriginError::Required),
         }
     }
 }

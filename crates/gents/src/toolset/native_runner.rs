@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
@@ -16,6 +15,55 @@ const _: () =
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
 static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NativeRunnerError {
+    #[error("serializing native filesystem request for {tool_name}")]
+    SerializeRequest {
+        tool_name: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("native filesystem runner for {tool_name} failed to spawn: {error}")]
+    SpawnFailed {
+        tool_name: &'static str,
+        error: String,
+    },
+    #[error("native filesystem runner binary not found; set {RUNNER_ENV}, install gents-fs-runner next to the gents binary, or run a gents binary with the built-in native filesystem runner")]
+    BinaryNotFound,
+    #[error("canonicalizing native filesystem base {}", base.display())]
+    CanonicalizeBase {
+        base: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("native filesystem base {} is outside root {} or is not a directory", base.display(), root.display())]
+    BaseOutsideRoot { base: PathBuf, root: PathBuf },
+    #[error("native filesystem runner for {tool_name} returned no output")]
+    NoOutput { tool_name: &'static str },
+    #[error("native filesystem runner for {tool_name} returned an error: {error}")]
+    ReturnedError {
+        tool_name: &'static str,
+        error: String,
+    },
+    #[error("native filesystem runner for {tool_name} exited with {code:?}: {error}")]
+    ExitedWithError {
+        tool_name: &'static str,
+        code: Option<i32>,
+        error: String,
+    },
+    #[error("native filesystem runner for {tool_name} exited with {code:?}; stderr_truncated={stderr_truncated}; stdout_truncated={stdout_truncated}; stderr={stderr}; stdout={stdout}")]
+    ExitedWithOutput {
+        tool_name: &'static str,
+        code: Option<i32>,
+        stderr_truncated: bool,
+        stdout_truncated: bool,
+        stderr: String,
+        stdout: String,
+    },
+    #[error("decoding native filesystem runner response")]
+    DecodeResponse(#[source] serde_json::Error),
+}
 
 pub fn enable_self_runner() {
     SELF_RUNNER_ENABLED.store(true, Ordering::Relaxed);
@@ -146,7 +194,7 @@ impl NativeFsRunner {
             (runner.argv, None)
         };
         let stdin = serde_json::to_vec(&request)
-            .with_context(|| format!("serializing native filesystem request for {tool_name}"))?;
+            .map_err(|source| NativeRunnerError::SerializeRequest { tool_name, source })?;
         if stdin.len() > gents_fs_runner::MAX_REQUEST_BYTES {
             return Err(ToolError::reported_failure(
                 FailureClass::ArgumentInvalid,
@@ -194,10 +242,9 @@ impl NativeFsRunner {
             ManagedExecOutcome::Cancelled { .. } => Ok(format!(
                 "native filesystem runner for {tool_name} was cancelled"
             )),
-            ManagedExecOutcome::SpawnFailed { error } => Err(anyhow!(
-                "native filesystem runner for {tool_name} failed to spawn: {error}"
-            )
-            .into()),
+            ManagedExecOutcome::SpawnFailed { error } => {
+                Err(NativeRunnerError::SpawnFailed { tool_name, error }.into())
+            }
         }
     }
 
@@ -245,10 +292,7 @@ fn resolve_runner_command(root: &Path, base: &Path) -> Result<RunnerCommand, Too
         });
     }
 
-    Err(anyhow!(
-        "native filesystem runner binary not found; set {RUNNER_ENV}, install gents-fs-runner next to the gents binary, or run a gents binary with the built-in native filesystem runner"
-    )
-    .into())
+    Err(NativeRunnerError::BinaryNotFound.into())
 }
 
 fn runner_argv(program: String, root: &Path, base: &Path) -> Vec<String> {
@@ -278,18 +322,19 @@ fn self_runner_argv(program: String, root: &Path, base: &Path) -> Vec<String> {
     argv
 }
 
-fn resolve_base_dir(root: &Path, base: &Path) -> Result<PathBuf, ToolError> {
-    let canonical = std::fs::canonicalize(base)
-        .with_context(|| format!("canonicalizing native filesystem base {}", base.display()))?;
+fn resolve_base_dir(root: &Path, base: &Path) -> Result<PathBuf, NativeRunnerError> {
+    let canonical =
+        std::fs::canonicalize(base).map_err(|source| NativeRunnerError::CanonicalizeBase {
+            base: base.to_path_buf(),
+            source,
+        })?;
     if canonical.is_dir() && canonical.starts_with(root) {
         Ok(canonical)
     } else {
-        Err(anyhow!(
-            "native filesystem base {} is outside root {} or is not a directory",
-            canonical.display(),
-            root.display()
-        )
-        .into())
+        Err(NativeRunnerError::BaseOutsideRoot {
+            base: canonical,
+            root: root.to_path_buf(),
+        })
     }
 }
 
@@ -336,44 +381,45 @@ fn handle_exited(
     if code == Some(0) {
         let response = response?;
         if response.ok {
-            return response.output.ok_or_else(|| {
-                anyhow!("native filesystem runner for {tool_name} returned no output").into()
-            });
+            return response
+                .output
+                .ok_or(NativeRunnerError::NoOutput { tool_name }.into());
         }
-        return Err(anyhow!(
-            "native filesystem runner for {tool_name} returned an error: {}",
-            response
+        return Err(NativeRunnerError::ReturnedError {
+            tool_name,
+            error: response
                 .error
-                .unwrap_or_else(|| "unknown error".to_string())
-        )
+                .unwrap_or_else(|| "unknown error".to_string()),
+        }
         .into());
     }
 
     if let Ok(response) = response {
         if let Some(error) = response.error {
-            return Err(anyhow!(
-                "native filesystem runner for {tool_name} exited with {:?}: {error}",
-                code
-            )
+            return Err(NativeRunnerError::ExitedWithError {
+                tool_name,
+                code,
+                error,
+            }
             .into());
         }
     }
 
     let stderr = String::from_utf8_lossy(&stderr);
     let stdout_preview = String::from_utf8_lossy(&stdout);
-    Err(anyhow!(
-        "native filesystem runner for {tool_name} exited with {:?}; stderr_truncated={stderr_truncated}; stdout_truncated={stdout_truncated}; stderr={}; stdout={}",
+    Err(NativeRunnerError::ExitedWithOutput {
+        tool_name,
         code,
-        truncate_error_preview(&stderr),
-        truncate_error_preview(&stdout_preview)
-    )
+        stderr_truncated,
+        stdout_truncated,
+        stderr: truncate_error_preview(&stderr),
+        stdout: truncate_error_preview(&stdout_preview),
+    }
     .into())
 }
 
-fn decode_runner_response(stdout: &[u8]) -> Result<NativeFsRunnerResponse, ToolError> {
-    serde_json::from_slice(stdout)
-        .context("decoding native filesystem runner response")
-        .map_err(Into::into)
+fn decode_runner_response(stdout: &[u8]) -> Result<NativeFsRunnerResponse, NativeRunnerError> {
+    serde_json::from_slice(stdout).map_err(NativeRunnerError::DecodeResponse)
 }
 
 pub(crate) fn parse_glob_match_paths(raw: &str, base: &Path) -> Vec<PathBuf> {

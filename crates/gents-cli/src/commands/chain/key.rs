@@ -1,4 +1,7 @@
-use anyhow::{bail, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::{
     address_from_secret, attestation_payload, binding_storage_key, chain_key_binding_by_id_query,
@@ -15,6 +18,34 @@ use crate::cli::args::{
 use crate::home_state::{load_initialized_home_identity, read_init_config, resolve_home_dir};
 use crate::{print_json, resolve_config_access, resolve_node_did};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ChainKeyError {
+    #[error("no initialized home at {}", home.display())]
+    NoInitializedHome { home: PathBuf },
+    #[error("chain key binding {binding_id:?} already exists; choose another --name")]
+    BindingExists { binding_id: String },
+    #[error("chain key binding {binding_id:?} not found")]
+    BindingNotFound { binding_id: String },
+    #[error("chain key binding is not owned by the local node")]
+    NotOwned,
+    #[error("chain key binding already exists for this node")]
+    BindingAlreadyExists,
+    #[error("duplicate chain key binding within node scope")]
+    DuplicateBinding,
+    #[error("chain key lookup returned mismatched scoped identity")]
+    MismatchedLookup,
+    #[error("invalid or duplicate chain key identity in node list")]
+    InvalidNodeList,
+    #[error("response missing ChainKeyBinding rows")]
+    MissingRows,
+    #[error("ChainKeyBinding rows must be an array")]
+    RowsNotArray,
+    #[error("ChainKeyBinding row must be an object")]
+    RowNotObject,
+    #[error("decoding ChainKeyBinding rows")]
+    DecodeRows(#[source] serde_json::Error),
+}
+
 pub(crate) async fn dispatch(command: ChainKeyCommand) -> Result<()> {
     match command {
         ChainKeyCommand::Generate(args) => generate(args).await,
@@ -26,8 +57,9 @@ pub(crate) async fn dispatch(command: ChainKeyCommand) -> Result<()> {
 
 async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.access.home.as_deref());
-    let init = read_init_config(&home_dir)?
-        .ok_or_else(|| anyhow::anyhow!("no initialized home at {}", home_dir.display()))?;
+    let init = read_init_config(&home_dir)?.ok_or_else(|| ChainKeyError::NoInitializedHome {
+        home: home_dir.clone(),
+    })?;
     let identity = load_initialized_home_identity(&home_dir, &init)?;
     let node_did = identity.did().to_string();
     let (access, _) =
@@ -44,10 +76,7 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
         .await?
         .is_some()
     {
-        bail!(
-            "chain key binding {:?} already exists; choose another --name",
-            binding_id
-        );
+        return Err(ChainKeyError::BindingExists { binding_id }.into());
     }
 
     let mut secret = generate_secp256k1_secret();
@@ -91,29 +120,30 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
         return match cleanup {
             Ok(()) => Err(error).context("storing chain key in OS keyring"),
             Err(cleanup_error) => Err(error).context(format!(
-                "storing chain key in OS keyring; cleanup also failed: {cleanup_error:#}"
+                "storing chain key in OS keyring; cleanup also failed: {}",
+                ErrorChain(cleanup_error.as_ref())
             )),
         };
     }
     secret.fill(0);
 
-    print_json(&json!({
+    Ok(print_json(&json!({
         "binding_id": binding_id,
         "address": address,
         "key_backend": KEY_BACKEND_KEYRING,
         "node_did": node_did,
-    }))
+    }))?)
 }
 
 async fn list(args: ChainKeyAccessArgs) -> Result<()> {
     let principal = resolve_node_did(args.home.as_deref(), None)?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let docs = load_bindings(&access, &principal).await?;
-    print_json(&json!({
+    Ok(print_json(&json!({
         "node_did": principal,
         "count": docs.len(),
         "bindings": docs.iter().map(public_binding_json).collect::<Vec<_>>(),
-    }))
+    }))?)
 }
 
 async fn show(args: ChainKeyShowArgs) -> Result<()> {
@@ -122,11 +152,13 @@ async fn show(args: ChainKeyShowArgs) -> Result<()> {
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
     let doc = load_binding(&access, &principal, &args.binding_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("chain key binding {:?} not found", args.binding_id))?;
+        .ok_or_else(|| ChainKeyError::BindingNotFound {
+            binding_id: args.binding_id.clone(),
+        })?;
     if doc.node_did != principal {
-        bail!("chain key binding is not owned by the local node");
+        return Err(ChainKeyError::NotOwned.into());
     }
-    print_json(&public_binding_json(&doc))
+    Ok(print_json(&public_binding_json(&doc))?)
 }
 
 async fn revoke(args: ChainKeyShowArgs) -> Result<()> {
@@ -135,9 +167,11 @@ async fn revoke(args: ChainKeyShowArgs) -> Result<()> {
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
     let mut doc = load_binding(&access, &principal, &args.binding_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("chain key binding {:?} not found", args.binding_id))?;
+        .ok_or_else(|| ChainKeyError::BindingNotFound {
+            binding_id: args.binding_id.clone(),
+        })?;
     if doc.node_did != principal {
-        bail!("chain key binding is not owned by the local node");
+        return Err(ChainKeyError::NotOwned.into());
     }
     let already_revoked = doc
         .revoked_at
@@ -150,12 +184,12 @@ async fn revoke(args: ChainKeyShowArgs) -> Result<()> {
     KeyringChainKeyStore
         .delete(&binding_storage_key(&doc.node_did, &args.binding_id))
         .context("deleting revoked chain key from OS keyring")?;
-    print_json(&json!({
+    Ok(print_json(&json!({
         "binding_id": doc.binding_id,
         "address": doc.address,
         "revoked_at": doc.revoked_at,
         "tags": doc.tags,
-    }))
+    }))?)
 }
 
 fn public_binding_json(doc: &ChainKeyBindingDocument) -> Value {
@@ -181,10 +215,9 @@ async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> 
                     )?)
                     .await?,
                 )?;
-                anyhow::ensure!(
-                    rows.len() <= 1,
-                    "duplicate chain key binding within node scope"
-                );
+                if rows.len() > 1 {
+                    return Err(ChainKeyError::DuplicateBinding.into());
+                }
                 txn.execute(&upsert_chain_key_binding_mutation(doc)?)
                     .await?;
                 Ok(())
@@ -204,14 +237,16 @@ async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) ->
                     )?)
                     .await?,
                 )?;
-                anyhow::ensure!(
-                    rows.is_empty(),
-                    "chain key binding already exists for this node"
-                );
+                if !rows.is_empty() {
+                    return Err(ChainKeyError::BindingAlreadyExists.into());
+                }
                 let response = txn
                     .execute(&create_chain_key_binding_mutation(doc)?)
                     .await?;
-                gents_protocol::graphql::extract_mutation_doc_id(&response, "ChainKeyBinding")
+                Ok(gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "ChainKeyBinding",
+                )?)
             })
         })
         .await
@@ -238,10 +273,9 @@ async fn load_bindings(
     )?;
     let mut ids = rapidhash::RapidHashSet::default();
     for row in &rows {
-        anyhow::ensure!(
-            row.node_did == node_did && ids.insert(row.binding_id.clone()),
-            "invalid or duplicate chain key identity in node list"
-        );
+        if row.node_did != node_did || !ids.insert(row.binding_id.clone()) {
+            return Err(ChainKeyError::InvalidNodeList.into());
+        }
     }
     Ok(rows)
 }
@@ -256,37 +290,34 @@ async fn load_binding(
             .execute(&chain_key_binding_by_id_query(node_did, binding_id)?)
             .await?,
     )?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "duplicate chain key binding within node scope"
-    );
-    anyhow::ensure!(
-        rows.iter()
-            .all(|row| row.node_did == node_did && row.binding_id == binding_id),
-        "chain key lookup returned mismatched scoped identity"
-    );
+    if rows.len() > 1 {
+        return Err(ChainKeyError::DuplicateBinding.into());
+    }
+    if !rows
+        .iter()
+        .all(|row| row.node_did == node_did && row.binding_id == binding_id)
+    {
+        return Err(ChainKeyError::MismatchedLookup.into());
+    }
     Ok(rows.pop())
 }
 
-fn decode_binding_rows(value: &Value) -> Result<Vec<ChainKeyBindingDocument>> {
+fn decode_binding_rows(value: &Value) -> Result<Vec<ChainKeyBindingDocument>, ChainKeyError> {
     let rows = value
         .pointer("/data/ChainKeyBinding")
         .or_else(|| value.get("ChainKeyBinding"))
         .cloned()
-        .context("response missing ChainKeyBinding rows")?;
+        .ok_or(ChainKeyError::MissingRows)?;
     if rows.is_null() {
         return Ok(Vec::new());
     }
-    let mut rows = rows
-        .as_array()
-        .context("ChainKeyBinding rows must be an array")?
-        .clone();
+    let mut rows = rows.as_array().ok_or(ChainKeyError::RowsNotArray)?.clone();
     for row in &mut rows {
         row.as_object_mut()
-            .context("ChainKeyBinding row must be an object")?
+            .ok_or(ChainKeyError::RowNotObject)?
             .remove("_docID");
     }
-    serde_json::from_value(Value::Array(rows)).context("decoding ChainKeyBinding rows")
+    serde_json::from_value(Value::Array(rows)).map_err(ChainKeyError::DecodeRows)
 }
 
 #[cfg(test)]

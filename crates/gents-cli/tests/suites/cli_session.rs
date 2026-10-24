@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn session_list_and_show_include_request_count() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn session_list_and_show_include_request_count() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -45,7 +46,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
     let agent_id = config["node"]
         .get("default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing default_agent_id after export"))?
+        .ok_or("missing default_agent_id after export")?
         .to_string();
 
     let session_id = format!("session-{}", Uuid::new_v4().simple());
@@ -111,7 +112,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                 .iter()
                 .find(|row| row.get("session_id").and_then(Value::as_str) == Some(&session_id))
         })
-        .ok_or_else(|| anyhow!("session list did not include {session_id}: {list}"))?;
+        .ok_or_else(|| format!("session list did not include {session_id}: {list}"))?;
     assert_eq!(
         list_row.get("request_count").and_then(Value::as_u64),
         Some(2)
@@ -148,8 +149,8 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_fork_against_a_running_server_refuses_with_the_holder_and_the_graphql_escape(
-) -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+) -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 

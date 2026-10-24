@@ -1338,6 +1338,7 @@ async fn load_source_in_txn(
             .filter(|row| row.segment.source == prepared.source)
             .collect()
     })
+    .map_err(Into::into)
 }
 
 #[cfg(test)]

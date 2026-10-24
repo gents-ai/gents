@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, ensure, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Map, Value};
 
 use crate::config_client::ConfigAccess;
@@ -17,7 +18,7 @@ pub struct DefraBoundQueryError(anyhow::Error);
 
 impl std::fmt::Display for DefraBoundQueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -109,7 +110,9 @@ impl BoundedQueryTool {
             )),
             "filter field collides with a reserved query argument"
         );
-        crate::document_config::reject_protected_collection_name(&self.decl.collection)
+        Ok(crate::document_config::reject_protected_collection_name(
+            &self.decl.collection,
+        )?)
     }
 
     async fn filter_parameters(&self) -> Result<Map<String, Value>> {
@@ -817,7 +820,11 @@ mod tests {
         let err = Tool::call(&tool, BoundedQueryParams(Map::new()))
             .await
             .unwrap_err();
-        assert!(format!("{err:#}").contains("protected"), "{err:#}");
+        assert!(
+            format!("{}", ErrorChain(&err)).contains("protected"),
+            "{}",
+            ErrorChain(&err)
+        );
     }
 
     #[tokio::test]

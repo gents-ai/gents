@@ -1,7 +1,8 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::Result;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
+use super::util::BridgeCommandError;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{
     GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalView,
@@ -37,12 +38,14 @@ pub async fn session_goal(
     }))
 }
 
-fn budget(raw: Option<String>) -> Result<Option<i64>> {
-    raw.map(|raw| {
+fn budget(raw: Option<String>) -> Result<Option<i64>, BridgeCommandError> {
+    raw.map(|raw| -> Result<i64, BridgeCommandError> {
         let budget: i64 = raw
             .parse()
-            .context("token budget must be a positive whole number within the runtime limit")?;
-        ensure!(budget > 0, "token budget must be positive");
+            .map_err(BridgeCommandError::GoalBudgetNotNumeric)?;
+        if budget <= 0 {
+            return Err(BridgeCommandError::GoalBudgetNotPositive);
+        }
         Ok(budget)
     })
     .transpose()
@@ -113,11 +116,11 @@ pub async fn control_goal(
             input,
         )
         .await
-        .map_err(BridgeError::classify_transport_error)?;
+        .map_err(|error| BridgeError::classify_transport_error(error.as_ref()))?;
     goal_control_result(session_id, receipt.outcome)
 }
 
-fn invalid_goal_argument(error: anyhow::Error) -> BridgeError {
+fn invalid_goal_argument(error: BridgeCommandError) -> BridgeError {
     BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string())
 }
 
@@ -178,8 +181,8 @@ mod tests {
 
     #[test]
     fn goal_control_transport_lookalike_is_not_a_confirmed_rejection() {
-        let error = BridgeError::classify_transport_error(anyhow::anyhow!(
-            "Runtime rejected goal control: wait for this session to finish before starting a goal"
+        let error = BridgeError::classify_transport_error(&std::io::Error::other(
+            "Runtime rejected goal control: wait for this session to finish before starting a goal",
         ));
         assert_eq!(error.code, BridgeErrorCode::Unknown);
     }

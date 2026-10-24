@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
@@ -19,6 +19,26 @@ use cooldown::{
     PROCESSED_REQUEST_COOLDOWN,
 };
 pub(crate) use query::{agent_request_from_mutation_response, AGENT_REQUEST_FIELDS};
+
+#[derive(Debug, thiserror::Error)]
+pub enum WatcherError {
+    #[error("agent request is missing {field}")]
+    MissingField { field: &'static str },
+    #[error("agent request request_hop must fit in u32")]
+    RequestHopOverflow(#[source] std::num::TryFromIntError),
+    #[error("agent request execution_lease_secs must be non-negative")]
+    NegativeLeaseSecs,
+    #[error("agent request max_total_tokens must be non-negative")]
+    NegativeMaxTotalTokens,
+    #[error("AgentRequest query result is not an array")]
+    QueryResultNotArray,
+    #[error("agent request agent_id must be a canonical nonblank identifier")]
+    NonCanonicalAgentId,
+    #[error("auxiliary request requires parent-only provenance, not delegated authority")]
+    AuxiliaryProvenance,
+    #[error(transparent)]
+    ToolCallTransition(#[from] IllegalToolCallTransition),
+}
 
 #[derive(Debug, Clone)]
 pub struct AgentRequest {
@@ -70,39 +90,47 @@ impl AgentRequest {
 }
 
 impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
-    type Error = anyhow::Error;
+    type Error = WatcherError;
 
-    fn try_from(row: gents_protocol::row::AgentRequestRow) -> Result<Self> {
+    fn try_from(row: gents_protocol::row::AgentRequestRow) -> Result<Self, WatcherError> {
         let request_hop = row
             .request_hop
             .map(u32::try_from)
             .transpose()
-            .context("agent request request_hop must fit in u32")?
+            .map_err(WatcherError::RequestHopOverflow)?
             .unwrap_or(0);
         let execution_lease_secs = match row.execution_lease_secs {
-            Some(secs) if secs < 0 => {
-                anyhow::bail!("agent request execution_lease_secs must be non-negative");
-            }
+            Some(secs) if secs < 0 => return Err(WatcherError::NegativeLeaseSecs),
             other => other,
         };
         let request = Self {
-            purpose: row.purpose.context("agent request is missing purpose")?,
-            doc_id: row.doc_id.context("agent request is missing _docID")?,
+            purpose: row
+                .purpose
+                .ok_or(WatcherError::MissingField { field: "purpose" })?,
+            doc_id: row
+                .doc_id
+                .ok_or(WatcherError::MissingField { field: "_docID" })?,
             request_id: row.request_id,
-            node_did: row.node_did.context("agent request is missing node_did")?,
+            node_did: row
+                .node_did
+                .ok_or(WatcherError::MissingField { field: "node_did" })?,
             requester_did: normalize_optional_string(row.requester_did),
-            agent_id: row.agent_id.context("agent request is missing agent_id")?,
-            session_id: row
-                .session_id
-                .context("agent request is missing session_id")?,
-            content: row.content.context("agent request is missing content")?,
+            agent_id: row
+                .agent_id
+                .ok_or(WatcherError::MissingField { field: "agent_id" })?,
+            session_id: row.session_id.ok_or(WatcherError::MissingField {
+                field: "session_id",
+            })?,
+            content: row
+                .content
+                .ok_or(WatcherError::MissingField { field: "content" })?,
             retry_parent_request_doc_id: normalize_optional_string(row.retry_parent_request_doc_id),
             max_total_tokens: row.max_total_tokens,
             input: row.input.unwrap_or_default(),
             execution_origin: normalize_optional_string(row.execution_origin),
-            created_at: row
-                .created_at
-                .context("agent request is missing created_at")?,
+            created_at: row.created_at.ok_or(WatcherError::MissingField {
+                field: "created_at",
+            })?,
             deadline: normalize_optional_string(row.deadline),
             execution_generation: normalize_optional_string(row.execution_generation),
             execution_lease_secs,
@@ -134,28 +162,26 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
-pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
-    anyhow::ensure!(
-        !req.agent_id.is_empty() && req.agent_id.trim() == req.agent_id,
-        "agent request agent_id must be a canonical nonblank identifier"
-    );
+pub fn validate_agent_request(req: &AgentRequest) -> Result<(), WatcherError> {
+    if req.agent_id.is_empty() || req.agent_id.trim() != req.agent_id {
+        return Err(WatcherError::NonCanonicalAgentId);
+    }
     if req.max_total_tokens.is_some_and(|limit| limit < 0) {
-        anyhow::bail!("agent request max_total_tokens must be non-negative");
+        return Err(WatcherError::NegativeMaxTotalTokens);
     }
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
     let has_parent_req_doc = req.caused_by_parent_request_doc_id.is_some();
     let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
     let auxiliary_parent_link = req.purpose.is_auxiliary();
-    if auxiliary_parent_link {
-        anyhow::ensure!(
-            has_parent_req
-                && has_parent_req_doc
-                && !has_parent_tc
-                && !has_parent_tc_doc
-                && req.request_hop == 0,
-            "auxiliary request requires parent-only provenance, not delegated authority"
-        );
+    if auxiliary_parent_link
+        && !(has_parent_req
+            && has_parent_req_doc
+            && !has_parent_tc
+            && !has_parent_tc_doc
+            && req.request_hop == 0)
+    {
+        return Err(WatcherError::AuxiliaryProvenance);
     }
     let request_only_control_link = has_parent_req
         && !has_parent_tc

@@ -3,7 +3,7 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         lean_case.request_count_before + 1
     );
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -64,12 +64,12 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     let agent_id = config["node"]
         .get("default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default_agent_id"))?
+        .ok_or("exported bundle missing default_agent_id")?
         .to_string();
     let node_did = config["node"]
         .get("node_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing node_did"))?
+        .ok_or("exported bundle missing node_did")?
         .to_string();
 
     let task_id = format!("greet-{}", Uuid::new_v4().simple());
@@ -83,9 +83,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     }]);
     write_json_file(&config_path, &config)?;
 
-    let root_str = root
-        .to_str()
-        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let root_str = root.to_str().ok_or("manifest root path is not UTF-8")?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -113,7 +111,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
                 .iter()
                 .find(|task| task.get("task_id").and_then(Value::as_str) == Some(task_id.as_str()))
         })
-        .ok_or_else(|| anyhow!("task list output missing {task_id}: {list}"))?;
+        .ok_or_else(|| format!("task list output missing {task_id}: {list}"))?;
     assert_eq!(
         listed_task.get("runnable").and_then(Value::as_bool),
         Some(true)
@@ -168,12 +166,12 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     let request_id = fire
         .get("request_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("fire output missing request_id: {fire}"))?
+        .ok_or_else(|| format!("fire output missing request_id: {fire}"))?
         .to_string();
     let request_doc_id = fire
         .get("request_doc_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("fire output missing request_doc_id: {fire}"))?;
+        .ok_or_else(|| format!("fire output missing request_doc_id: {fire}"))?;
     assert!(!request_doc_id.is_empty());
 
     let response = graphql_query(
@@ -238,7 +236,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_task_run_rejects_disabled_task() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -270,12 +268,12 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     let agent_id = config["node"]
         .get("default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default_agent_id"))?
+        .ok_or("exported bundle missing default_agent_id")?
         .to_string();
     let node_did = config["node"]
         .get("node_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing node_did"))?
+        .ok_or("exported bundle missing node_did")?
         .to_string();
 
     let task_id = format!("disabled-{}", Uuid::new_v4().simple());
@@ -288,9 +286,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     }]);
     write_json_file(&config_path, &config)?;
 
-    let root_str = root
-        .to_str()
-        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let root_str = root.to_str().ok_or("manifest root path is not UTF-8")?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -335,8 +331,8 @@ fn lean_manual_dispatch_case() -> Result<&'static lean_vocab_test::LeanTriggerDi
         cases.len(),
         "Lean trigger dispatch case-count sentinel drifted"
     );
-    cases
+    Ok(cases
         .iter()
         .find(|case| case.name == "manual_unconditional")
-        .ok_or_else(|| anyhow!("Lean TriggerDispatch contracts did not emit manual_unconditional"))
+        .ok_or("Lean TriggerDispatch contracts did not emit manual_unconditional")?)
 }

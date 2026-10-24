@@ -1,9 +1,12 @@
 //! Single I/O owner for authenticated enrollment authority and its effects.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+
+use super::error::P2pReconcileError;
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
@@ -95,14 +98,14 @@ pub trait PeerAdmissionAuthority: Send + Sync {
 }
 
 impl EnrollmentAuthorityHandle {
-    pub fn current(&self) -> Result<Arc<EnrollmentProjection>> {
+    pub fn current(&self) -> Result<Arc<EnrollmentProjection>, P2pReconcileError> {
         match self.receiver.borrow().clone() {
             EnrollmentAuthorityState::Ready(projection) => Ok(projection),
-            EnrollmentAuthorityState::Pending => {
-                anyhow::bail!("enrollment authority has not completed its first projection")
-            }
+            EnrollmentAuthorityState::Pending => Err(P2pReconcileError::EnrollmentAuthorityPending),
             EnrollmentAuthorityState::Failed(error) => {
-                anyhow::bail!("enrollment authority projection failed: {error}")
+                Err(P2pReconcileError::EnrollmentAuthorityProjectionFailed {
+                    error: error.to_string(),
+                })
             }
         }
     }
@@ -318,7 +321,8 @@ impl EnrollmentAuthorityOwner {
     }
 
     fn publish_failed(&self, error: &anyhow::Error) {
-        let next = EnrollmentAuthorityState::Failed(Arc::from(format!("{error:#}")));
+        let next =
+            EnrollmentAuthorityState::Failed(Arc::from(ErrorChain(error.as_ref()).to_string()));
         self.sender.send_if_modified(|current| {
             if *current == next {
                 return false;
@@ -405,6 +409,7 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_authorization_fence(&projection, &member_did, &member_peer)
+                        .map_err(anyhow::Error::from)
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
@@ -438,6 +443,7 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_peer_authorization_fence(&projection, &member_peer)
+                        .map_err(anyhow::Error::from)
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
@@ -451,6 +457,7 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_member_authorization_fence(&projection, &member_did)
+                        .map_err(anyhow::Error::from)
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
@@ -466,11 +473,10 @@ pub(crate) fn exact_authorization_fence(
     projection: &EnrollmentProjection,
     member_did: &str,
     member_peer: &str,
-) -> Result<Option<EnrollmentAuthorizationFence>> {
-    anyhow::ensure!(
-        projection.conflict.is_none(),
-        "enrollment root authority is conflicted"
-    );
+) -> Result<Option<EnrollmentAuthorizationFence>, P2pReconcileError> {
+    if projection.conflict.is_some() {
+        return Err(P2pReconcileError::EnrollmentRootAuthorityConflicted);
+    }
     let matches = projection
         .active
         .iter()
@@ -480,10 +486,9 @@ pub(crate) fn exact_authorization_fence(
         })
         .collect::<Vec<_>>();
     let [active] = matches.as_slice() else {
-        anyhow::ensure!(
-            matches.is_empty(),
-            "enrollment authority has multiple active generations for member"
-        );
+        if !matches.is_empty() {
+            return Err(P2pReconcileError::MultipleActiveGenerationsForMember);
+        }
         return Ok(None);
     };
     Ok(Some(EnrollmentAuthorizationFence {
@@ -504,21 +509,19 @@ pub(crate) fn exact_authorization_fence(
 fn exact_member_authorization_fence(
     projection: &EnrollmentProjection,
     member_did: &str,
-) -> Result<Option<EnrollmentAuthorizationFence>> {
-    anyhow::ensure!(
-        projection.conflict.is_none(),
-        "enrollment root authority is conflicted"
-    );
+) -> Result<Option<EnrollmentAuthorizationFence>, P2pReconcileError> {
+    if projection.conflict.is_some() {
+        return Err(P2pReconcileError::EnrollmentRootAuthorityConflicted);
+    }
     let matches = projection
         .active
         .iter()
         .filter(|active| active.request.candidate_did == member_did)
         .collect::<Vec<_>>();
     let [active] = matches.as_slice() else {
-        anyhow::ensure!(
-            matches.is_empty(),
-            "enrollment authority has multiple active generations for member DID"
-        );
+        if !matches.is_empty() {
+            return Err(P2pReconcileError::MultipleActiveGenerationsForMemberDid);
+        }
         return Ok(None);
     };
     exact_authorization_fence(
@@ -531,21 +534,19 @@ fn exact_member_authorization_fence(
 fn exact_peer_authorization_fence(
     projection: &EnrollmentProjection,
     member_peer: &str,
-) -> Result<Option<EnrollmentAuthorizationFence>> {
-    anyhow::ensure!(
-        projection.conflict.is_none(),
-        "enrollment root authority is conflicted"
-    );
+) -> Result<Option<EnrollmentAuthorizationFence>, P2pReconcileError> {
+    if projection.conflict.is_some() {
+        return Err(P2pReconcileError::EnrollmentRootAuthorityConflicted);
+    }
     let matches = projection
         .active
         .iter()
         .filter(|active| active.request.candidate_peer == member_peer)
         .collect::<Vec<_>>();
     let [active] = matches.as_slice() else {
-        anyhow::ensure!(
-            matches.is_empty(),
-            "enrollment authority has multiple active generations for transport peer"
-        );
+        if !matches.is_empty() {
+            return Err(P2pReconcileError::MultipleActiveGenerationsForTransportPeer);
+        }
         return Ok(None);
     };
     exact_authorization_fence(
@@ -874,6 +875,7 @@ async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &
     )
     .await
     .map(|_| ())
+    .map_err(Into::into)
 }
 
 fn upsert_enrollment_route_mutation(
@@ -1486,7 +1488,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!read_error.is_denied());
-        assert!(format!("{read_error:#}").contains("injected enrollment projection read failure"));
+        assert!(ErrorChain(&read_error)
+            .to_string()
+            .contains("injected enrollment projection read failure"));
         command_task.await.unwrap();
 
         let replacement_request_id = replacement_request.request_id.clone();

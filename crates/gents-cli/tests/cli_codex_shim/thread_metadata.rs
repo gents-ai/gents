@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -52,7 +52,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     send_client_request(
@@ -123,7 +123,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
     .await?;
     let _: codex::ThreadSetNameResponse = read_typed_response(&mut ws, request_id(3))
         .await
-        .context("reading early thread/name/set response")?;
+        .map_err(|error| format!("reading early thread/name/set response: {error}"))?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadRead {
@@ -137,7 +137,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
     .await?;
     let renamed: codex::ThreadReadResponse = read_typed_response(&mut ws, request_id(4))
         .await
-        .context("reading thread/read after early rename")?;
+        .map_err(|error| format!("reading thread/read after early rename: {error}"))?;
     assert_eq!(
         renamed.thread.name.as_deref(),
         Some("Named before first turn"),
@@ -232,8 +232,8 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -285,7 +285,7 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;

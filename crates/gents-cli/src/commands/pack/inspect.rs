@@ -34,21 +34,21 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
             }))
         })
         .collect::<Result<Vec<_>>>()?;
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "origin_tag": gents::pack::pack_origin_tag(&manifest.name)?,
         "source": pack.describe(),
         "dependency_origins": dependency_origins,
         "manifest": manifest,
         "digest": pack.digest(),
         "files": files,
-    }))
+    }))?)
 }
 
 fn show_config(pack: &super::PackSource) -> Result<()> {
     let preview = gents::pack::authoring::preview_config(pack.manifest(), &|path| {
         pack.asset(path).map(Vec::from)
     })?;
-    crate::print_json(&preview)
+    Ok(crate::print_json(&preview)?)
 }
 
 pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
@@ -59,7 +59,9 @@ pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
         let path = std::path::Path::new(&args.target);
         gents::pack::authoring::verify_pack_file(path)?
     };
-    crate::print_json(&json!({ "verified": true, "pack": header }))
+    Ok(crate::print_json(
+        &json!({ "verified": true, "pack": header }),
+    )?)
 }
 
 const COMPARED_OWNER: &str = "did:key:zPackDiffPlaceholderOwner";
@@ -68,7 +70,7 @@ pub(super) async fn diff(args: PackDiffArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let a = super::resolve_pack_source(&args.a, args.registry.as_deref(), &home).await?;
     let b = super::resolve_pack_source(&args.b, args.registry.as_deref(), &home).await?;
-    crate::print_json(&pack_diff(&a, &b)?)
+    Ok(crate::print_json(&pack_diff(&a, &b)?)?)
 }
 
 pub(super) fn pack_diff(a: &super::PackSource, b: &super::PackSource) -> Result<serde_json::Value> {

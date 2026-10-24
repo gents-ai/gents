@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
@@ -15,6 +16,43 @@ use crate::cli::args::{AccountsCommand, AccountsTargetArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access, resolve_node_did};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AccountsError {
+    #[error("invalid usage read signature length")]
+    SignatureLength,
+    #[error("usage read issued_at")]
+    IssuedAt(#[source] chrono::ParseError),
+    #[error("usage read request is issued in the future")]
+    IssuedInFuture,
+    #[error("usage read request expired")]
+    Expired,
+    #[error(
+        "{needle:?} is a backend, not a signed-in account; manage it with `gents config backend`"
+    )]
+    BackendNotAccount { needle: String },
+    #[error("no account {needle:?} on this node; `gents accounts list` shows them")]
+    NoAccount { needle: String },
+    #[error("{needle:?} names several accounts: {ids}; pass --provider or one of these ids")]
+    AmbiguousAccount { needle: String, ids: String },
+    #[error(
+        "usage refresh runs in the runtime; start it with `gents serve` or list without --refresh"
+    )]
+    RefreshNeedsRuntime,
+    #[error(
+        "removing an account asks for confirmation; pass --yes when not running in a terminal"
+    )]
+    ConfirmationRequired,
+    #[error("runtime refused the usage read ({status}): {message}")]
+    RuntimeRefused {
+        status: reqwest::StatusCode,
+        message: String,
+    },
+    #[error("the account is no longer stored")]
+    AccountNotStored,
+    #[error("{report}\n\nprobe failed for: {labels}")]
+    ProbesFailed { report: String, labels: String },
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct AccountRow {
@@ -84,18 +122,18 @@ impl UsageReadCommand {
     }
 
     pub(crate) fn validate_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
-        anyhow::ensure!(self.sig.len() == 64, "invalid usage read signature length");
+        if self.sig.len() != 64 {
+            return Err(AccountsError::SignatureLength.into());
+        }
         let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)
-            .context("usage read issued_at")?
+            .map_err(AccountsError::IssuedAt)?
             .with_timezone(&chrono::Utc);
-        anyhow::ensure!(
-            issued <= now + chrono::Duration::seconds(5),
-            "usage read request is issued in the future"
-        );
-        anyhow::ensure!(
-            now - issued <= chrono::Duration::seconds(60),
-            "usage read request expired"
-        );
+        if issued > now + chrono::Duration::seconds(5) {
+            return Err(AccountsError::IssuedInFuture.into());
+        }
+        if now - issued > chrono::Duration::seconds(60) {
+            return Err(AccountsError::Expired.into());
+        }
         Ok(())
     }
 }
@@ -129,7 +167,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             match output
                 .ensure_supported("accounts list", &[OutputFormat::Table, OutputFormat::Json])?
             {
-                OutputFormat::Json => print_json(&serde_json::to_value(rows)?),
+                OutputFormat::Json => Ok(print_json(&serde_json::to_value(rows)?)?),
                 _ => {
                     print!("{}", render_table(&rows));
                     Ok(())
@@ -142,9 +180,9 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             label,
         } => {
             let (access, did) = target_access(&target).await?;
-            print_json(
+            Ok(print_json(
                 &label_account(&access, &did, &account, target.provider.as_deref(), &label).await?,
-            )
+            )?)
         }
         AccountsCommand::Disable { target, account } => {
             let (access, did) = target_access(&target).await?;
@@ -156,7 +194,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
                 &mut std::io::stderr(),
             )
             .await?;
-            print_json(&result)
+            Ok(print_json(&result)?)
         }
         AccountsCommand::Remove {
             target,
@@ -188,7 +226,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
                 confirmed,
             )
             .await?;
-            print_json(&result)
+            Ok(print_json(&result)?)
         }
     }
 }
@@ -213,7 +251,7 @@ pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Sn
     let (backends, profiles) = access
         .transact_write("accounts.config", |txn| {
             Box::pin(async move {
-                Ok((
+                Ok::<_, anyhow::Error>((
                     gents::config_client::list_inference_backends_in_txn(txn, node_did).await?,
                     gents::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
                 ))
@@ -250,7 +288,11 @@ impl Snapshot {
         self.profiles_on(&serving)
     }
 
-    pub(crate) fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
+    pub(crate) fn pick(
+        &self,
+        needle: &str,
+        provider: Option<&str>,
+    ) -> Result<&AccountSummary, AccountsError> {
         let candidates: Vec<_> = self
             .accounts
             .iter()
@@ -268,20 +310,21 @@ impl Snapshot {
                 .iter()
                 .any(|backend| backend.name == needle || backend.backend_id == needle) =>
             {
-                anyhow::bail!(
-                    "{needle:?} is a backend, not a signed-in account; manage it with `gents config backend`"
-                )
+                Err(AccountsError::BackendNotAccount {
+                    needle: needle.to_owned(),
+                })
             }
-            [] => anyhow::bail!(
-                "no account {needle:?} on this node; `gents accounts list` shows them"
-            ),
-            many => anyhow::bail!(
-                "{needle:?} names several accounts: {}; pass --provider or one of these ids",
-                many.iter()
+            [] => Err(AccountsError::NoAccount {
+                needle: needle.to_owned(),
+            }),
+            many => Err(AccountsError::AmbiguousAccount {
+                needle: needle.to_owned(),
+                ids: many
+                    .iter()
                     .map(|account| account.credential_id.as_str())
                     .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+                    .join(", "),
+            }),
         }
     }
 }
@@ -414,12 +457,15 @@ pub async fn request_usage_reads(
     let status = response.status();
     if !status.is_success() {
         let body: Value = response.json().await.unwrap_or_default();
-        anyhow::bail!(
-            "runtime refused the usage read ({status}): {}",
-            body.get("error")
+        return Err(AccountsError::RuntimeRefused {
+            status,
+            message: body
+                .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error")
-        );
+                .to_owned(),
+        }
+        .into());
     }
     response
         .json()
@@ -472,16 +518,15 @@ pub(crate) async fn list_with_usage(
                 Ok(reads) => Some(reads),
                 Err(error) if refresh => return Err(error),
                 Err(error) => {
-                    writeln!(warnings, "usage not read: {error:#}")?;
+                    writeln!(warnings, "usage not read: {}", ErrorChain(error.as_ref()))?;
                     None
                 }
             }
         }
         ConfigAccess::Local(_) => {
-            anyhow::ensure!(
-                !refresh,
-                "usage refresh runs in the runtime; start it with `gents serve` or list without --refresh"
-            );
+            if refresh {
+                return Err(AccountsError::RefreshNeedsRuntime.into());
+            }
             None
         }
     };
@@ -698,10 +743,9 @@ pub async fn remove_account(
 ) -> Result<Value> {
     let snapshot = snapshot(access, node_did).await?;
     let account = snapshot.pick(account, provider)?.clone();
-    anyhow::ensure!(
-        confirmed,
-        "removing an account asks for confirmation; pass --yes when not running in a terminal"
-    );
+    if !confirmed {
+        return Err(AccountsError::ConfirmationRequired.into());
+    }
     let (deleted, kept) = access
         .transact_write("accounts.remove", |txn| {
             let account = account.clone();
@@ -737,7 +781,7 @@ pub async fn remove_account(
                     &deleted,
                 )
                 .await?;
-                Ok((deleted, kept))
+                Ok::<_, anyhow::Error>((deleted, kept))
             })
         })
         .await?;
@@ -781,21 +825,26 @@ where
         .await?
         {
             Some(credential) => probe(credential).await,
-            None => Err(anyhow::anyhow!("the account is no longer stored")),
+            None => Err(AccountsError::AccountNotStored.into()),
         };
         match probed {
             Ok(text) => blocks.push(format!("{}\n{text}", account.label)),
             Err(error) => {
-                blocks.push(format!("{}: probe failed: {error:#}", account.label));
+                blocks.push(format!(
+                    "{}: probe failed: {}",
+                    ErrorChain(error.as_ref()),
+                    account.label
+                ));
                 failed.push(account.label);
             }
         }
     }
-    anyhow::ensure!(
-        failed.is_empty(),
-        "{}\n\nprobe failed for: {}",
-        blocks.join("\n\n"),
-        failed.join(", ")
-    );
+    if !failed.is_empty() {
+        return Err(AccountsError::ProbesFailed {
+            report: blocks.join("\n\n"),
+            labels: failed.join(", "),
+        }
+        .into());
+    }
     Ok(blocks)
 }

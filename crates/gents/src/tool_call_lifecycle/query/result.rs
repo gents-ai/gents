@@ -20,8 +20,8 @@ enum ReadSource<'a, 'txn> {
 impl ReadSource<'_, '_> {
     async fn execute(self, query: &str) -> Result<Value> {
         match self {
-            Self::Access(access) => access.execute(query).await,
-            Self::Txn(txn) => txn.execute(query).await,
+            Self::Access(access) => Ok(access.execute(query).await?),
+            Self::Txn(txn) => Ok(txn.execute(query).await?),
         }
     }
 
@@ -808,9 +808,10 @@ async fn scoped_canonical_headers(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .context("canonical header query omitted AgentMessage rows")?;
-    rows.iter()
+    Ok(rows
+        .iter()
         .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect()
+        .collect::<Result<_, _>>()?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -947,6 +948,7 @@ fn verify_exact_call_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn generated_plugin_child_terminal_presentation_matches_execution_owner() {
@@ -1161,7 +1163,7 @@ mod tests {
                 txn.execute_with_variables(&format!(
                     r#"mutation($output: JSON) {{ update_AgentToolCall(docID: "{doc}", input: {{ terminal_output: $output }}) {{ _docID }} }}"#
                 ), &serde_json::json!({"output": foreign})).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
         assert!(
@@ -1265,7 +1267,8 @@ mod tests {
             error
                 .to_string()
                 .contains("invalid plugin effect provenance"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         drop(request_owner);
         node.shutdown().await;
@@ -1340,7 +1343,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("ambiguous invocation reply"));
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
@@ -1384,7 +1387,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("carries no native tool-result"));
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

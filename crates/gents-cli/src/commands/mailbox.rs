@@ -58,12 +58,12 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         },
     )
     .await?;
-    print_json(&serde_json::json!({
+    Ok(print_json(&serde_json::json!({
         "request_id": submitted.request_id,
         "request_doc_id": submitted.request_doc_id,
         "session_id": submitted.session_id,
         "mailbox_item_id": item.doc_id,
-    }))
+    }))?)
 }
 
 async fn access_and_principal(
@@ -101,7 +101,7 @@ async fn list(args: MailboxListArgs) -> Result<()> {
                 .await?,
         )?
     };
-    print_json(&serde_json::to_value(items)?)
+    Ok(print_json(&serde_json::to_value(items)?)?)
 }
 
 async fn show(args: MailboxItemArgs) -> Result<()> {
@@ -114,7 +114,7 @@ async fn show(args: MailboxItemArgs) -> Result<()> {
     if item.requester_did != principal {
         bail!("MailboxItem is not owned by the local node");
     }
-    print_json(&serde_json::to_value(item)?)
+    Ok(print_json(&serde_json::to_value(item)?)?)
 }
 
 async fn dismiss(args: MailboxItemArgs) -> Result<()> {
@@ -147,7 +147,7 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
             .await?
             .context("dismissed MailboxItem disappeared")?
     };
-    print_json(&serde_json::to_value(item)?)
+    Ok(print_json(&serde_json::to_value(item)?)?)
 }
 
 async fn load_item(access: &ConfigAccess, doc_id: &str) -> Result<Option<MailboxItem>> {

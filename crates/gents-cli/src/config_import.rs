@@ -106,12 +106,12 @@ fn select_apply_docs_for_collection(
     let diff = planned.collections.get(collection);
     let docs = desired_bundle.docs_for_collection(collection)?;
 
-    select_apply_collection_docs(
+    Ok(select_apply_collection_docs(
         &docs,
         collection.unique_field(),
         collection.graphql_type(),
         diff,
-    )
+    )?)
 }
 
 #[cfg(test)]

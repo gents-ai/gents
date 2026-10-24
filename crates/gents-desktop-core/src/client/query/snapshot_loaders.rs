@@ -316,11 +316,11 @@ fn task_request_boundary_queries(rows: &[AgentRequestRow]) -> Result<Vec<String>
         let node = row
             .node_did
             .as_deref()
-            .context("task request lacks node scope")?;
+            .ok_or(ClientQueryError::TaskNodeScope)?;
         let trigger = row
             .caused_by_trigger_id
             .as_deref()
-            .context("task request lacks trigger scope")?;
+            .ok_or(ClientQueryError::TaskTriggerScope)?;
         groups
             .entry((node, trigger))
             .or_insert_with(Vec::new)
@@ -331,7 +331,9 @@ fn task_request_boundary_queries(rows: &[AgentRequestRow]) -> Result<Vec<String>
         if rows.len() < 8 {
             continue;
         }
-        anyhow::ensure!(rows.len() == 8, "task candidate page exceeded its limit");
+        if rows.len() != 8 {
+            return Err(ClientQueryError::TaskCandidatePageLimit);
+        }
         let boundary = rows.last().expect("nonempty candidate page");
         let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "node_did": {"_eq": node}, "caused_by_trigger_id": {"_eq": trigger},
@@ -404,7 +406,11 @@ pub(super) fn scoped_session_heads(
 
 pub(super) fn complete_request_rows(data: &Value, root: &str) -> Result<Vec<AgentRequestRow>> {
     let (rows, complete) = parse_query_rows_with_completeness::<AgentRequestRow>(data, root)?;
-    anyhow::ensure!(complete, "request query {root} returned malformed rows");
+    if !complete {
+        return Err(ClientQueryError::MalformedRequestRows {
+            root: root.to_owned(),
+        });
+    }
     Ok(rows)
 }
 
@@ -417,18 +423,17 @@ fn snapshot_request_rows(data: &Value) -> Result<Vec<AgentRequestRow>> {
 
 fn parse_task_request_rows(data: &Value) -> Result<Vec<AgentRequestRow>> {
     let Some(fields) = data.as_object() else {
-        bail!("task request query returned a non-object payload");
+        return Err(ClientQueryError::TaskRequestPayload);
     };
     let mut requests = Vec::new();
     for root in fields.keys().filter(|root| root.starts_with("trigger_")) {
         let rows = complete_request_rows(data, root)?;
-        anyhow::ensure!(
-            rows.iter().all(|row| {
-                gents_protocol::request_admission::RequestPurpose::is_public(row.purpose)
-                    && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            }),
-            "task request query returned a non-public or unidentified row"
-        );
+        if !rows.iter().all(|row| {
+            gents_protocol::request_admission::RequestPurpose::is_public(row.purpose)
+                && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+        }) {
+            return Err(ClientQueryError::TaskRequestRow);
+        }
         requests.extend(rows);
     }
     Ok(requests)
@@ -606,7 +611,9 @@ where
 {
     let rows = data
         .get(root)
-        .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
+        .ok_or_else(|| ClientQueryError::MissingRootField {
+            root: root.to_owned(),
+        })?;
     match rows {
         Value::Null => Ok((Vec::new(), Vec::new(), true)),
         Value::Array(rows) => {
@@ -652,9 +659,10 @@ where
             }
             Ok((parsed, sources, complete))
         }
-        other => Err(anyhow!(
-            "query result for {root} returned non-array payload: {other}"
-        )),
+        other => Err(ClientQueryError::NonArrayPayload {
+            root: root.to_owned(),
+            payload: other.clone(),
+        }),
     }
 }
 

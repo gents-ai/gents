@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
@@ -241,7 +242,8 @@ where
         let shutdown_result = self.shutdown_slots().await;
         match (fatal_error, shutdown_result) {
             (Some(error), Err(shutdown_error)) => Err(error.context(format!(
-                "agent slot shutdown also failed: {shutdown_error:#}"
+                "agent slot shutdown also failed: {}",
+                ErrorChain(shutdown_error.as_ref())
             ))),
             (Some(error), Ok(())) => Err(error),
             (None, result) => result,
@@ -303,11 +305,8 @@ where
                     .await;
             }
             Err(error) => {
-                let receiver_closed = error.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<ActiveSnapshotReceiverClosed>()
-                        .is_some()
-                });
+                let receiver_closed =
+                    find_source::<ActiveSnapshotReceiverClosed>(error.as_ref()).is_some();
                 tracing::error!(
                     generation = next_generation,
                     added_agents = diff.added,
@@ -318,9 +317,8 @@ where
                     error = %error,
                     "runtime reconcile apply failed; keeping previous active generation"
                 );
-                self.runtime_status
-                    .publish_error(&format!("{error:#}"))
-                    .await;
+                let message = ErrorChain(error.as_ref()).to_string();
+                self.runtime_status.publish_error(&message).await;
                 if receiver_closed {
                     return Err(error).context(
                         "runtime reconcile cannot continue without active snapshot owner",

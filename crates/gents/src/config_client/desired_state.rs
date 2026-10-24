@@ -12,6 +12,76 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Debug, thiserror::Error)]
+pub enum DesiredStateError {
+    #[error("canonical configuration root has no struct fields")]
+    CanonicalRootFields,
+    #[error("decode canonical desired configuration (field path)")]
+    DecodeCanonical(#[source] serde_path_to_error::Error<serde_json::Error>),
+    #[error("canonical configuration did not serialize as an object")]
+    CanonicalNotObject,
+    #[error("canonical replacement defaults do not roundtrip")]
+    CanonicalRoundtrip(#[source] serde_json::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("desired commitment must be a document object")]
+    CommitmentNotObject,
+    #[error("configuration reference requires owner and ID")]
+    ReferenceRequired,
+    #[error("node reference must match owner")]
+    NodeReferenceMismatch,
+    #[error("desired configuration documents[{index}] {collection} {operation}")]
+    DocumentProjection {
+        index: usize,
+        collection: &'static str,
+        operation: &'static str,
+        #[source]
+        source: Box<DesiredStateError>,
+    },
+    #[error("missing desired configuration")]
+    MissingDesiredConfiguration,
+    #[error("configuration requires node_did")]
+    NodeDidRequired,
+    #[error("configuration requires logical ID")]
+    LogicalIdRequired,
+    #[error("configuration replacement cannot change owner or logical ID")]
+    ReplacementIdentityChanged,
+    #[error("duplicate desired configuration {collection} {owner:?}/{id:?}")]
+    DuplicateDocument {
+        collection: &'static str,
+        owner: String,
+        id: String,
+    },
+    #[error("duplicate or replaced removal {collection} {owner:?}/{id:?}")]
+    DuplicateRemoval {
+        collection: &'static str,
+        owner: String,
+        id: String,
+    },
+    #[error("duplicate expectation {collection} {owner:?}/{id:?}")]
+    DuplicateExpectation {
+        collection: &'static str,
+        owner: String,
+        id: String,
+    },
+    #[error("pack requires node")]
+    PackNodeRequired,
+    #[error(transparent)]
+    Stale(#[from] StaleExpectation),
+    #[error("Node replacement would clear default_agent_id {current_default:?}; include the current default or another enabled agent in the replacement")]
+    NodeDefaultAgentCleared { current_default: String },
+    #[error(transparent)]
+    Template(#[from] crate::template::TemplateError),
+    #[error("trigger {trigger_id} {field} references doc.{name}, but {source_collection} has no field {name:?}; its fields are {fields}")]
+    TriggerFieldUnknown {
+        trigger_id: String,
+        field: String,
+        name: String,
+        source_collection: String,
+        fields: String,
+    },
+}
+
 #[derive(Default)]
 struct RootFields(Option<&'static [&'static str]>);
 impl<'de> serde::Deserializer<'de> for &mut RootFields {
@@ -41,7 +111,7 @@ impl<'de> serde::Deserializer<'de> for &mut RootFields {
     serde::forward_to_deserialize_any! { bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string bytes byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map enum identifier ignored_any }
 }
 
-pub(crate) fn canonical_struct_fields<T>() -> Result<&'static [&'static str]>
+pub(crate) fn canonical_struct_fields<T>() -> Result<&'static [&'static str], DesiredStateError>
 where
     T: DeserializeOwned,
 {
@@ -50,22 +120,24 @@ where
     fields
         .0
         .filter(|fields| !fields.is_empty())
-        .context("canonical configuration root has no struct fields")
+        .ok_or(DesiredStateError::CanonicalRootFields)
 }
 
-fn project<T>(value: Option<&Value>) -> Result<(&'static [&'static str], Option<Value>)>
+fn project<T>(
+    value: Option<&Value>,
+) -> Result<(&'static [&'static str], Option<Value>), DesiredStateError>
 where
     T: DeserializeOwned + Serialize,
 {
     let fields = canonical_struct_fields::<T>()?;
     let normalized = value
-        .map(|value| -> Result<Value> {
+        .map(|value| -> Result<Value, DesiredStateError> {
             let config: T = serde_path_to_error::deserialize(value.clone())
-                .context("decode canonical desired configuration (field path)")?;
+                .map_err(DesiredStateError::DecodeCanonical)?;
             let mut config = serde_json::to_value(config)?;
             let object = config
                 .as_object_mut()
-                .context("canonical configuration did not serialize as an object")?;
+                .ok_or(DesiredStateError::CanonicalNotObject)?;
             for field in fields {
                 object.entry((*field).to_owned()).or_insert_with(|| {
                     if *field == "enabled" {
@@ -77,7 +149,7 @@ where
             }
             object.remove("updated_at");
             let _: T = serde_json::from_value(config.clone())
-                .context("canonical replacement defaults do not roundtrip")?;
+                .map_err(DesiredStateError::CanonicalRoundtrip)?;
             Ok(config)
         })
         .transpose()?;
@@ -87,7 +159,7 @@ where
 pub fn config_projection(
     collection: Collection,
     value: Option<&Value>,
-) -> Result<(&'static [&'static str], Option<Value>)> {
+) -> Result<(&'static [&'static str], Option<Value>), DesiredStateError> {
     use crate::document_config::*;
     match collection {
         Collection::Node => project::<Node>(value),
@@ -120,11 +192,11 @@ pub fn config_projection(
     }
 }
 
-pub fn desired_state_document_digest(value: &Value) -> Result<String> {
+pub fn desired_state_document_digest(value: &Value) -> Result<String, DesiredStateError> {
     let mut value = value.clone();
     let root = value
         .as_object_mut()
-        .context("desired commitment must be a document object")?;
+        .ok_or(DesiredStateError::CommitmentNotObject)?;
     root.remove("updated_at");
     root.retain(|_, value| !value.is_null() && !value.as_array().is_some_and(Vec::is_empty));
     Ok(format!(
@@ -133,13 +205,18 @@ pub fn desired_state_document_digest(value: &Value) -> Result<String> {
     ))
 }
 
-fn reference_filter(collection: Collection, owner: &str, id: &str) -> Result<String> {
-    anyhow::ensure!(
-        !owner.trim().is_empty() && !id.trim().is_empty(),
-        "configuration reference requires owner and ID"
-    );
+fn reference_filter(
+    collection: Collection,
+    owner: &str,
+    id: &str,
+) -> Result<String, DesiredStateError> {
+    if owner.trim().is_empty() || id.trim().is_empty() {
+        return Err(DesiredStateError::ReferenceRequired);
+    }
     if collection == Collection::Node {
-        anyhow::ensure!(id == owner, "node reference must match owner");
+        if id != owner {
+            return Err(DesiredStateError::NodeReferenceMismatch);
+        }
         Ok(format!(
             r#"{{ node_did: {{ _eq: "{}" }} }}"#,
             escape_graphql_string(owner)
@@ -492,7 +569,7 @@ pub fn validate_event_trigger_document_fields(
     task: &crate::document_config::Task,
     source: &crate::document_config::EventSource,
     declared: &BTreeMap<String, SchemaField>,
-) -> Result<()> {
+) -> Result<(), DesiredStateError> {
     for (field, template) in event_trigger_templates(trigger, task) {
         let Some(template) =
             template.filter(|template| !crate::template::template_guards_undefined(template))
@@ -524,17 +601,18 @@ pub fn validate_event_trigger_document_fields(
             {
                 continue;
             }
-            anyhow::bail!(
-                "trigger {} {field} references doc.{name}, but {} has no field {name:?}; its fields are {}",
-                trigger.trigger_id,
-                source.source_collection,
-                declared
+            return Err(DesiredStateError::TriggerFieldUnknown {
+                trigger_id: trigger.trigger_id.to_string(),
+                field: field.to_string(),
+                name: name.to_string(),
+                source_collection: source.source_collection.to_string(),
+                fields: declared
                     .keys()
                     .filter(|name| own_field(name))
                     .cloned()
                     .collect::<Vec<_>>()
-                    .join(", ")
-            );
+                    .join(", "),
+            });
         }
     }
     Ok(())
@@ -944,8 +1022,17 @@ impl std::fmt::Display for StaleExpectation {
 
 impl std::error::Error for StaleExpectation {}
 
-pub fn stale_expectation(error: &anyhow::Error) -> Option<&StaleExpectation> {
-    error.downcast_ref::<StaleExpectation>()
+pub fn stale_expectation<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a StaleExpectation> {
+    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
+        cause.downcast_ref::<StaleExpectation>().or_else(|| {
+            match cause.downcast_ref::<DesiredStateError>() {
+                Some(DesiredStateError::Stale(stale)) => Some(stale),
+                _ => None,
+            }
+        })
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -955,7 +1042,9 @@ pub struct DesiredStateApplyPlan {
     expected: Vec<DesiredStateExpectation>,
 }
 impl DesiredStateApplyPlan {
-    pub fn from_pack_config(config: &crate::document_config::PackConfig) -> Result<Self> {
+    pub fn from_pack_config(
+        config: &crate::document_config::PackConfig,
+    ) -> Result<Self, DesiredStateError> {
         let bundle = serde_json::to_value(config)?;
         let mut documents = Vec::new();
         for collection in Collection::ALL {
@@ -965,7 +1054,10 @@ impl DesiredStateApplyPlan {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default(),
-                None => vec![bundle.get("node").context("pack requires node")?.clone()],
+                None => vec![bundle
+                    .get("node")
+                    .ok_or(DesiredStateError::PackNodeRequired)?
+                    .clone()],
             };
             documents.extend(values.into_iter().map(|value| DesiredStateApplyDocument {
                 collection,
@@ -976,7 +1068,7 @@ impl DesiredStateApplyPlan {
         Self::new(documents)
     }
 
-    pub fn new(mut documents: Vec<DesiredStateApplyDocument>) -> Result<Self> {
+    pub fn new(mut documents: Vec<DesiredStateApplyDocument>) -> Result<Self, DesiredStateError> {
         let mut identities = BTreeSet::new();
         for (index, document) in documents.iter_mut().enumerate() {
             for (operation, value) in [
@@ -984,25 +1076,26 @@ impl DesiredStateApplyPlan {
                 ("replacement", &mut document.update),
             ] {
                 *value = config_projection(document.collection, Some(value))
-                    .with_context(|| {
-                        format!(
-                            "desired configuration documents[{index}] {} {operation}",
-                            document.collection.graphql_type()
-                        )
+                    .map_err(|source| DesiredStateError::DocumentProjection {
+                        index,
+                        collection: document.collection.graphql_type(),
+                        operation,
+                        source: Box::new(source),
                     })?
                     .1
-                    .context("missing desired configuration")?;
+                    .ok_or(DesiredStateError::MissingDesiredConfiguration)?;
             }
             let (owner, id) = document_identity(document.collection, &document.add)?;
-            anyhow::ensure!(
-                document_identity(document.collection, &document.update)? == (owner, id),
-                "configuration replacement cannot change owner or logical ID"
-            );
-            anyhow::ensure!(
-                identities.insert((document.collection, owner.to_owned(), id.to_owned())),
-                "duplicate desired configuration {} {owner:?}/{id:?}",
-                document.collection.graphql_type()
-            );
+            if document_identity(document.collection, &document.update)? != (owner, id) {
+                return Err(DesiredStateError::ReplacementIdentityChanged);
+            }
+            if !identities.insert((document.collection, owner.to_owned(), id.to_owned())) {
+                return Err(DesiredStateError::DuplicateDocument {
+                    collection: document.collection.graphql_type(),
+                    owner: owner.to_owned(),
+                    id: id.to_owned(),
+                });
+            }
         }
         documents.sort_by_key(|document| {
             let (owner, id) = document_identity(document.collection, &document.add)
@@ -1021,7 +1114,10 @@ impl DesiredStateApplyPlan {
             expected: Vec::new(),
         })
     }
-    pub fn with_removals(mut self, removals: Vec<(Collection, String, String)>) -> Result<Self> {
+    pub fn with_removals(
+        mut self,
+        removals: Vec<(Collection, String, String)>,
+    ) -> Result<Self, DesiredStateError> {
         let mut identities: BTreeSet<_> = self
             .documents
             .iter()
@@ -1033,11 +1129,13 @@ impl DesiredStateApplyPlan {
             .collect();
         for (collection, owner, id) in &removals {
             reference_filter(*collection, owner, id)?;
-            anyhow::ensure!(
-                identities.insert((*collection, owner.clone(), id.clone())),
-                "duplicate or replaced removal {} {owner:?}/{id:?}",
-                collection.graphql_type()
-            );
+            if !identities.insert((*collection, owner.clone(), id.clone())) {
+                return Err(DesiredStateError::DuplicateRemoval {
+                    collection: collection.graphql_type(),
+                    owner: owner.clone(),
+                    id: id.clone(),
+                });
+            }
         }
         self.removals = removals;
         Ok(self)
@@ -1051,21 +1149,24 @@ impl DesiredStateApplyPlan {
         &self.documents
     }
 
-    pub fn with_expected(mut self, expected: Vec<DesiredStateExpectation>) -> Result<Self> {
+    pub fn with_expected(
+        mut self,
+        expected: Vec<DesiredStateExpectation>,
+    ) -> Result<Self, DesiredStateError> {
         let mut identities = BTreeSet::new();
         for expectation in &expected {
             reference_filter(expectation.collection, &expectation.owner, &expectation.id)?;
-            anyhow::ensure!(
-                identities.insert((
-                    expectation.collection,
-                    expectation.owner.clone(),
-                    expectation.id.clone()
-                )),
-                "duplicate expectation {} {:?}/{:?}",
-                expectation.collection.graphql_type(),
-                expectation.owner,
-                expectation.id
-            );
+            if !identities.insert((
+                expectation.collection,
+                expectation.owner.clone(),
+                expectation.id.clone(),
+            )) {
+                return Err(DesiredStateError::DuplicateExpectation {
+                    collection: expectation.collection.graphql_type(),
+                    owner: expectation.owner.clone(),
+                    id: expectation.id.clone(),
+                });
+            }
         }
         self.expected = expected;
         Ok(self)
@@ -1076,17 +1177,20 @@ impl DesiredStateApplyPlan {
     }
 }
 
-fn document_identity(collection: Collection, value: &Value) -> Result<(&str, &str)> {
+fn document_identity(
+    collection: Collection,
+    value: &Value,
+) -> Result<(&str, &str), DesiredStateError> {
     let owner = value
         .get("node_did")
         .and_then(Value::as_str)
         .filter(|v| !v.trim().is_empty())
-        .context("configuration requires node_did")?;
+        .ok_or(DesiredStateError::NodeDidRequired)?;
     let id = value
         .get(collection.unique_field())
         .and_then(Value::as_str)
         .filter(|v| !v.trim().is_empty())
-        .context("configuration requires logical ID")?;
+        .ok_or(DesiredStateError::LogicalIdRequired)?;
     Ok((owner, id))
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -1126,13 +1230,14 @@ async fn ensure_expectations_hold(
         })
         .collect::<Vec<_>>();
     let records = read_identity_records(txn, &identities).await?;
-    ensure_expectations_match(plan, &records)
+    ensure_expectations_match(plan, &records)?;
+    Ok(())
 }
 
 fn ensure_expectations_match(
     plan: &DesiredStateApplyPlan,
     records: &BTreeMap<DesiredStateRecordKey, DesiredStateRecord>,
-) -> Result<()> {
+) -> Result<(), DesiredStateError> {
     let mut drifted = Vec::new();
     for expectation in plan.expected() {
         let found = records
@@ -1157,20 +1262,21 @@ fn ensure_expectations_match(
     if drifted.is_empty() {
         Ok(())
     } else {
-        Err(anyhow::Error::new(StaleExpectation { drifted }))
+        Err(DesiredStateError::Stale(StaleExpectation { drifted }))
     }
 }
 
-fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<()> {
+fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<(), DesiredStateError> {
     if let Some(default) = current.get("default_agent_id").and_then(Value::as_str) {
-        anyhow::ensure!(
-            candidate
-                .get("default_agent_id")
-                .and_then(Value::as_str)
-                .is_some(),
-            "Node replacement would clear default_agent_id {default:?}; \
-             include the current default or another enabled agent in the replacement"
-        );
+        if candidate
+            .get("default_agent_id")
+            .and_then(Value::as_str)
+            .is_none()
+        {
+            return Err(DesiredStateError::NodeDefaultAgentCleared {
+                current_default: default.to_owned(),
+            });
+        }
     }
     Ok(())
 }
@@ -1305,7 +1411,7 @@ pub async fn apply_desired_state_plan(
         .map(|document| {
             document_identity(document.collection, &document.add).map(|(owner, _)| owner)
         })
-        .collect::<Result<_>>()?;
+        .collect::<Result<_, DesiredStateError>>()?;
     owners.extend(plan.removals().iter().map(|(_, owner, _)| owner.as_str()));
     let mut introspected = IntrospectedFields::new();
     for owner in owners {

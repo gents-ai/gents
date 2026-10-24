@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use super::error::DocumentConfigError;
+
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
+
 /// Each referencing trigger keeps its own scheduling cursor against this
 /// shared cadence.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -49,13 +53,14 @@ pub struct ScheduleObservation {
 }
 
 impl ScheduleCadence {
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         match self {
             Self::Interval { interval_secs } => {
-                anyhow::ensure!(
-                    *interval_secs >= 1,
-                    "schedule interval_secs must be >= 1; got {interval_secs}"
-                );
+                if *interval_secs < 1 {
+                    return Err(DocumentConfigError::ScheduleIntervalNotPositive {
+                        interval_secs: *interval_secs,
+                    });
+                }
                 Ok(())
             }
             Self::Cron {
@@ -63,21 +68,20 @@ impl ScheduleCadence {
                 timezone,
                 missed_run_policy,
             } => {
-                anyhow::ensure!(
-                    !expression.trim().is_empty(),
-                    "cron schedule requires a non-empty expression"
-                );
-                anyhow::ensure!(
-                    !timezone.trim().is_empty(),
-                    "cron schedule requires timezone"
-                );
+                if expression.trim().is_empty() {
+                    return Err(DocumentConfigError::CronExpressionBlank);
+                }
+                if timezone.trim().is_empty() {
+                    return Err(DocumentConfigError::CronTimezoneBlank);
+                }
                 crate::schedule_cron::validate_cron_schedule(
                     expression,
                     timezone,
                     missed_run_policy.map(|policy| match policy {
                         crate::schedule_cron::CronMissedRunPolicy::LatestOnly => "latest_only",
                     }),
-                )
+                )?;
+                Ok(())
             }
         }
     }

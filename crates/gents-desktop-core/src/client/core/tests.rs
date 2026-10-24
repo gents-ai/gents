@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -15,6 +16,8 @@ use super::route_manager::cleanup_saved_peer_p2p;
 use super::supervisor::{probe_p2p_health, repair_saved_peer, saved_peer_needs_repair};
 use super::*;
 use crate::client::{PeerDirectory, PeerRecord};
+
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Default)]
 struct RecordingP2P {
@@ -146,7 +149,10 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(error) => panic!("shutdown did not release the claim: {error:#}"),
+                Err(error) => panic!(
+                    "shutdown did not release the claim: {}",
+                    gents_protocol::error_chain::ErrorChain(&error)
+                ),
             }
         }
     })
@@ -1098,7 +1104,8 @@ async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
         error
             .to_string()
             .contains("no local enrollment request enroll-missing"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(core
         .active_status_enrollment_requests()
@@ -1242,12 +1249,13 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "enrollment": { "token": &offer },
         STATUS_REPLICATED_SCHEMA_FIELD: changed_request,
     });
-    let error = format!(
-        "{:#}",
+    let error = ErrorChain(
         core.request_status_enrollment(&request_skew)
             .await
             .unwrap_err()
-    );
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("refusing to enroll with an incompatible runtime")
             && error.contains("AgentRequest"),
@@ -1258,10 +1266,13 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "enrollment": { "token": offer },
         STATUS_REPLICATED_SCHEMA_FIELD: next_release,
     });
-    let error = format!(
-        "{:#}",
-        core.request_status_enrollment(&skewed).await.unwrap_err()
-    );
+    let error = ErrorChain(
+        core.request_status_enrollment(&skewed)
+            .await
+            .unwrap_err()
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("update the app and the runtime to the same version")
             && error.contains("AgentSession"),
@@ -1340,7 +1351,7 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         Err(error) => error,
     };
     assert_eq!(
-        gents::storage_backend::incompatible_store(&error, paths.node_data_dir())
+        gents::storage_backend::incompatible_store(error.as_ref(), paths.node_data_dir())
             .map(|store| store.kind),
         Some(gents::storage_backend::IncompatibleStoreKind::MissingStoreKey)
     );
@@ -1384,7 +1395,7 @@ async fn bootstrap_connect_waits_for_the_peer_connection_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> anyhow::Result<()> {
+async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> TestResult {
     use gents::NodeIdentity;
     use wiremock::{
         matchers::{body_string_contains, method, path},
@@ -1611,7 +1622,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
 }
 
 #[tokio::test]
-async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Result<()> {
+async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
@@ -1678,7 +1689,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> anyhow::Result<()> {
+async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> TestResult {
     use gents::NodeIdentity;
     use wiremock::{
         matchers::{body_string_contains, method, path},

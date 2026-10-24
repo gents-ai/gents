@@ -1,5 +1,6 @@
 //! Read-only pack and project mounts reach a plugin job's steps end to end.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -367,7 +368,7 @@ async fn read_write_bind_with_mounts_is_refused_with_the_next_call() {
         )
         .await
         .expect_err("a read-write call cannot mount assets");
-    let message = format!("{error:#}");
+    let message = ErrorChain(error.as_ref()).to_string();
     assert!(
         message.contains("this call writes; run it without mounted workflows"),
         "{message}"

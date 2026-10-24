@@ -1,23 +1,27 @@
-use anyhow::{bail, Result};
+use gents_protocol::graphql::GraphqlError;
 use serde_json::Value;
 
+use super::error::DefraQueryFailure;
 use crate::graphql::escape_graphql_string;
 
-pub(crate) fn render_filter(filter: &Value) -> Result<String> {
+pub(crate) fn render_filter(filter: &Value) -> Result<String, DefraQueryFailure> {
     if !filter.is_object() {
-        bail!("filter must be a JSON object");
+        return Err(DefraQueryFailure::FilterNotObject);
     }
     render_value(filter)
 }
 
-fn render_value(value: &Value) -> Result<String> {
+fn render_value(value: &Value) -> Result<String, DefraQueryFailure> {
     match value {
         Value::Null => Ok("null".to_string()),
         Value::Bool(b) => Ok(b.to_string()),
         Value::Number(n) => Ok(n.to_string()),
         Value::String(s) => Ok(format!("\"{}\"", escape_graphql_string(s))),
         Value::Array(items) => {
-            let rendered = items.iter().map(render_value).collect::<Result<Vec<_>>>()?;
+            let rendered = items
+                .iter()
+                .map(render_value)
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(format!("[{}]", rendered.join(", ")))
         }
         Value::Object(map) => {
@@ -34,7 +38,7 @@ fn render_value(value: &Value) -> Result<String> {
     }
 }
 
-pub(crate) fn validate_identifier(name: &str) -> Result<()> {
+pub(crate) fn validate_identifier(name: &str) -> Result<(), GraphqlError> {
     crate::graphql::validate_graphql_name(name)
 }
 

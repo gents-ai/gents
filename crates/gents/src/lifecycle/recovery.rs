@@ -1,11 +1,43 @@
 use super::*;
-use anyhow::Context;
 use gents_protocol::row::AgentRequestRow;
 
 #[path = "canonical_recovery.rs"]
 mod canonical_recovery;
+pub(crate) use canonical_recovery::CanonicalRecoveryError;
 
 pub(super) use canonical_recovery::request_segments;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RecoveryError {
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error("terminal AgentRequest is missing _docID")]
+    MissingDocId,
+    #[error("routed AgentRequest is missing requester_did")]
+    MissingRequester,
+    #[error("terminal AgentRequest is missing lifecycle_state")]
+    MissingLifecycle,
+    #[error("terminal AgentRequest is missing terminal_redrive_attempts")]
+    MissingAttempts,
+    #[error("terminal AgentRequest terminal_redrive_attempts must fit in u32")]
+    AttemptsOutOfRange(#[source] std::num::TryFromIntError),
+}
+
+impl crate::config_client::TransactionFailure for RecoveryError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = RecoveryError> = std::result::Result<T, E>;
 
 #[cfg(test)]
 pub(crate) use canonical_recovery::{
@@ -23,7 +55,7 @@ impl RequestLifecycle {
     pub async fn recover_all(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
-    ) -> Result<RecoveryReport> {
+    ) -> anyhow::Result<RecoveryReport> {
         let active = recover_active_requests(node, node_did).await?;
         crate::trigger_engine::durable::recover_outcomes(node, node_did).await?;
         let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
@@ -111,21 +143,14 @@ impl RequestLifecycle {
 
         let mut candidates: Vec<(String, String, String, RequestLifecycleState, u32)> = Vec::new();
         for row in rows {
-            let doc_id = row
-                .doc_id
-                .context("terminal AgentRequest is missing _docID")?;
-            let requester_did = row
-                .requester_did
-                .context("routed AgentRequest is missing requester_did")?;
-            let lifecycle_state = row
-                .lifecycle_state
-                .context("terminal AgentRequest is missing lifecycle_state")?;
+            let doc_id = row.doc_id.ok_or(RecoveryError::MissingDocId)?;
+            let requester_did = row.requester_did.ok_or(RecoveryError::MissingRequester)?;
+            let lifecycle_state = row.lifecycle_state.ok_or(RecoveryError::MissingLifecycle)?;
             let attempts = row
                 .terminal_redrive_attempts
-                .context("terminal AgentRequest is missing terminal_redrive_attempts")
+                .ok_or(RecoveryError::MissingAttempts)
                 .and_then(|attempts| {
-                    u32::try_from(attempts)
-                        .context("terminal AgentRequest terminal_redrive_attempts must fit in u32")
+                    u32::try_from(attempts).map_err(RecoveryError::AttemptsOutOfRange)
                 })?;
             candidates.push((
                 doc_id,
@@ -224,7 +249,7 @@ impl RequestLifecycle {
     pub async fn repair_terminal_requests(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
-    ) -> Result<TerminalRepairReport> {
+    ) -> anyhow::Result<TerminalRepairReport> {
         Ok(recover_active_requests(node, node_did).await?.requests)
     }
 }
@@ -232,7 +257,7 @@ impl RequestLifecycle {
 async fn recover_active_requests(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-) -> Result<ActiveRequestRecoveryReport> {
+) -> anyhow::Result<ActiveRequestRecoveryReport> {
     let active_states = RequestLifecycleState::graphql_list([
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
@@ -361,7 +386,7 @@ async fn recover_active_requests(
             Ok(canonical_recovery::RecoveryResult::Lost) => {
                 report.requests.awaiting_outcome += 1;
             }
-            Err(error) if definitive_output_corruption(&error) => {
+            Err(error) if definitive_output_corruption(error.as_ref()) => {
                 // Failed recovery rolled back. Revoke only the same observed
                 // lease tuple; a renewal/recovery winner makes this lose. This
                 // metadata-only escape never repairs or chooses payload twins.
@@ -402,11 +427,12 @@ async fn recover_active_requests(
 /// Missing replica dependencies and access/storage failures are not proof of
 /// corruption. Only typed contradictory or malformed immutable facts authorize
 /// the model's metadata-only revocation escape.
-fn definitive_output_corruption(error: &anyhow::Error) -> bool {
+fn definitive_output_corruption(error: &(dyn std::error::Error + 'static)) -> bool {
+    use gents_protocol::error_chain::find_source;
     use gents_protocol::output::recovery::RecoveryPlanError;
     use gents_protocol::output::ReconstructionError;
     matches!(
-        error.downcast_ref::<RecoveryPlanError>(),
+        find_source::<RecoveryPlanError>(error),
         Some(
             RecoveryPlanError::IdentityConflict { .. }
                 | RecoveryPlanError::ConflictingOrdinal { .. }
@@ -414,7 +440,7 @@ fn definitive_output_corruption(error: &anyhow::Error) -> bool {
                 | RecoveryPlanError::MalformedExtent
         )
     ) || matches!(
-        error.downcast_ref::<ReconstructionError>(),
+        find_source::<ReconstructionError>(error),
         Some(
             ReconstructionError::ConflictingSegments { .. }
                 | ReconstructionError::ConflictingClosures { .. }

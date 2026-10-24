@@ -28,7 +28,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         &home,
         manifest,
         &pack.digest,
-        |path| pack.archive.asset(path),
+        |path| Ok(pack.archive.asset(path)?),
         args.grant_authority,
     )?;
     let identity = gents::pack::PackIdentity::new(
@@ -67,18 +67,19 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         .await
         .context("the plugins were installed locally, but their node notification was not confirmed; retry to reconcile")?;
 
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),
         "version": manifest.version,
         "plugins": installed,
         "home": home,
-    }))
+    }))?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::pack::registry::tests::serve_fake_pack;
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::atomic::Ordering;
 
     use super::super::store;
@@ -224,7 +225,13 @@ mod tests {
         let error = install(args(&format!("{namespace}/echo"), base_url, home.path()))
             .await
             .expect_err("a digest mismatch must be refused");
-        assert!(format!("{error:#}").contains(&"0".repeat(64)), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains(&"0".repeat(64)),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert!(store::list_records(home.path()).unwrap().is_empty());
     }
 
@@ -243,8 +250,11 @@ mod tests {
             .await
             .expect_err("an artifact from another namespace must be refused");
         assert!(
-            format!("{error:#}").contains("different identity"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("different identity"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(store::list_records(home.path()).unwrap().is_empty());
     }
@@ -307,7 +317,7 @@ mod instruction_tests {
             home.path(),
             archive.manifest(),
             archive.digest(),
-            |path| archive.asset(path),
+            |path| Ok(archive.asset(path)?),
             false,
         )
         .unwrap();

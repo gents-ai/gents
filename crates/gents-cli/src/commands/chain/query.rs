@@ -6,6 +6,22 @@ use serde_json::{json, Value};
 use crate::cli::args::ChainQueryArgs;
 use crate::{print_json, resolve_config_access, resolve_node_did};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ChainQueryError {
+    #[error("parsing RPC params JSON")]
+    ParamsJson(#[source] serde_json::Error),
+    #[error("RPC params must be a JSON array")]
+    ParamsNotArray,
+    #[error("response missing EthTool rows")]
+    MissingRows,
+    #[error("EthTool rows must be an array")]
+    RowsNotArray,
+    #[error("EthTool row must be an object")]
+    RowNotObject,
+    #[error("decoding EthTool rows")]
+    DecodeRows(#[source] serde_json::Error),
+}
+
 pub(crate) async fn dispatch(args: ChainQueryArgs) -> Result<()> {
     let principal = resolve_node_did(args.access.home.as_deref(), None)?;
     let (access, _) =
@@ -49,20 +65,20 @@ pub(crate) async fn dispatch(args: ChainQueryArgs) -> Result<()> {
         .call(&args.method, params)
         .await
         .with_context(|| format!("calling {} on {}", args.method, args.tool_id))?;
-    print_json(&json!({
+    Ok(print_json(&json!({
         "tool_id": args.tool_id,
         "method": args.method,
         "result": result,
-    }))
+    }))?)
 }
 
-fn parse_params(raw: Option<&str>) -> Result<Value> {
+fn parse_params(raw: Option<&str>) -> std::result::Result<Value, ChainQueryError> {
     match raw.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(json!([])),
         Some(text) => {
-            let value: Value = serde_json::from_str(text).context("parsing RPC params JSON")?;
+            let value: Value = serde_json::from_str(text).map_err(ChainQueryError::ParamsJson)?;
             if !value.is_array() {
-                bail!("RPC params must be a JSON array");
+                return Err(ChainQueryError::ParamsNotArray);
             }
             Ok(value)
         }
@@ -88,23 +104,25 @@ async fn load_eth_tool(
     Ok(rows.pop())
 }
 
-fn decode_eth_tool_rows(value: &Value) -> Result<Vec<EthToolDocument>> {
+fn decode_eth_tool_rows(
+    value: &Value,
+) -> std::result::Result<Vec<EthToolDocument>, ChainQueryError> {
     let rows = value
         .pointer("/data/EthTool")
         .or_else(|| value.get("EthTool"))
         .cloned()
-        .context("response missing EthTool rows")?;
+        .ok_or(ChainQueryError::MissingRows)?;
     if rows.is_null() {
         return Ok(Vec::new());
     }
     let mut rows = rows
         .as_array()
-        .context("EthTool rows must be an array")?
+        .ok_or(ChainQueryError::RowsNotArray)?
         .clone();
     for row in &mut rows {
         row.as_object_mut()
-            .context("EthTool row must be an object")?
+            .ok_or(ChainQueryError::RowNotObject)?
             .remove("_docID");
     }
-    serde_json::from_value(Value::Array(rows)).context("decoding EthTool rows")
+    serde_json::from_value(Value::Array(rows)).map_err(ChainQueryError::DecodeRows)
 }

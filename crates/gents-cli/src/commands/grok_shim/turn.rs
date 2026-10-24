@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -189,7 +190,7 @@ pub(super) enum PromptSender {
 impl PromptSender {
     pub(super) async fn send_line(&self, line: String) -> Result<()> {
         match self {
-            PromptSender::Live { outbound } => outbound.send(line).await,
+            PromptSender::Live { outbound } => Ok(outbound.send(line).await?),
             PromptSender::Replay { inner } => {
                 let mut value: Value = serde_json::from_str(&line)?;
                 value["params"]["_meta"]["isReplay"] = Value::Bool(true);
@@ -579,7 +580,7 @@ impl TurnManager {
                             )
                             .await
                         {
-                            tracing::warn!(error = %format_args!("{error:#}"),
+                            tracing::warn!(error = %format_args!("{}", ErrorChain(error.as_ref())),
                             session_id = %observed_session, "Grok graph run observation failed");
                         }
                         for error in job_cursor
@@ -592,7 +593,7 @@ impl TurnManager {
                             )
                             .await
                         {
-                            tracing::warn!(error = %format_args!("{error:#}"),
+                            tracing::warn!(error = %format_args!("{}", ErrorChain(error.as_ref())),
                             session_id = %observed_session, "Grok job observation failed");
                         }
                     }
@@ -2140,7 +2141,7 @@ async fn wait_for_retry_or_cancel(
 }
 
 fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize) -> bool {
-    if !gents_protocol::graphql::graphql_transport_error_in_chain(error)
+    if !gents_protocol::graphql::graphql_transport_error_in_chain(error.as_ref())
         || *consecutive >= MAX_TRANSIENT_GRAPHQL_READ_RETRIES
     {
         return false;
@@ -5375,7 +5376,8 @@ mod tests {
         let error = result.expect_err("a prompt gated across disconnect must be rejected");
         assert!(
             error.to_string().contains("already disconnected"),
-            "rejection must name the closed connection, got: {error:#}"
+            "rejection must name the closed connection, got: {}",
+            ErrorChain(error.as_ref())
         );
 
         {

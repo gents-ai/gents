@@ -3,7 +3,7 @@ use rapidhash::{HashSetExt, RapidHashSet};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use super::{AgentRequest, DefraWatcher};
+use super::{AgentRequest, DefraWatcher, WatcherError};
 
 mod rows;
 use rows::{is_aged_background_completion_wakeup, is_pending, preclaim_signal, PreclaimSignal};
@@ -136,16 +136,20 @@ impl DefraWatcher {
         }
 
         self.order_by_native_arrival(&mut rows).await?;
-        prioritize_aged_background_wakes(claimable_pending_rows_from_rows(rows), chrono::Utc::now())
-            .into_iter()
-            .map(AgentRequest::try_from)
-            .collect()
+        let requests = prioritize_aged_background_wakes(
+            claimable_pending_rows_from_rows(rows),
+            chrono::Utc::now(),
+        )
+        .into_iter()
+        .map(AgentRequest::try_from)
+        .collect::<Result<Vec<_>, WatcherError>>()?;
+        Ok(requests)
     }
 
     async fn terminalize_incoherent_pending_request(
         &self,
         row: &AgentRequestRow,
-        error: &anyhow::Error,
+        error: &WatcherError,
     ) {
         let failure_reason =
             format!("request rejected at ingest: incoherent durable lineage ({error})");
@@ -303,9 +307,11 @@ impl DefraWatcher {
 }
 
 #[cfg(test)]
-fn active_runtime_rows(data: Option<&serde_json::Value>) -> anyhow::Result<Vec<AgentRequestRow>> {
+fn active_runtime_rows(
+    data: Option<&serde_json::Value>,
+) -> Result<Vec<AgentRequestRow>, serde_json::Error> {
     match data.and_then(|d| d.get("AgentRequest")) {
-        Some(value) => Ok(serde_json::from_value(value.clone())?),
+        Some(value) => serde_json::from_value(value.clone()),
         None => Ok(Vec::new()),
     }
 }
@@ -319,13 +325,11 @@ struct MalformedPendingRow {
 
 fn parse_active_runtime_rows(
     data: Option<&serde_json::Value>,
-) -> anyhow::Result<(Vec<AgentRequestRow>, Vec<MalformedPendingRow>)> {
+) -> Result<(Vec<AgentRequestRow>, Vec<MalformedPendingRow>), WatcherError> {
     let Some(value) = data.and_then(|data| data.get("AgentRequest")) else {
         return Ok((Vec::new(), Vec::new()));
     };
-    let values = value
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("AgentRequest query result is not an array"))?;
+    let values = value.as_array().ok_or(WatcherError::QueryResultNotArray)?;
     let mut rows = Vec::with_capacity(values.len());
     let mut malformed = Vec::new();
     for value in values {
@@ -352,12 +356,11 @@ pub(crate) fn agent_request_from_mutation_response(
     response: &defra_node::QueryResponse,
     field: &str,
 ) -> anyhow::Result<Option<AgentRequest>> {
-    crate::graphql::single_mutation_document(response, field)?
+    let row = crate::graphql::single_mutation_document(response, field)?
         .cloned()
         .map(serde_json::from_value::<AgentRequestRow>)
-        .transpose()?
-        .map(AgentRequest::try_from)
-        .transpose()
+        .transpose()?;
+    Ok(row.map(AgentRequest::try_from).transpose()?)
 }
 
 fn prioritize_aged_background_wakes(

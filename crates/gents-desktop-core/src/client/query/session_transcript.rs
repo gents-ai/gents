@@ -51,18 +51,22 @@ pub(super) async fn read_request_documents(
         let data = access.execute(&query, operation).await?;
         let batch_rows: Vec<AgentRequestRow> = parse_query_rows(&data, AGENT_REQUEST_NAME)?;
         for row in &batch_rows {
-            let doc_id = row
-                .doc_id
-                .as_ref()
-                .with_context(|| format!("{operation} lacks physical identity"))?;
-            anyhow::ensure!(
-                batch.contains(doc_id),
-                "{operation} returned an unrelated document"
-            );
-            anyhow::ensure!(
-                observed.insert(doc_id.to_owned()),
-                "{operation} duplicated a document"
-            );
+            let doc_id =
+                row.doc_id
+                    .as_ref()
+                    .ok_or_else(|| ClientQueryError::MissingPhysicalIdentity {
+                        operation: operation.to_owned(),
+                    })?;
+            if !batch.contains(doc_id) {
+                return Err(ClientQueryError::UnrelatedDocument {
+                    operation: operation.to_owned(),
+                });
+            }
+            if !observed.insert(doc_id.to_owned()) {
+                return Err(ClientQueryError::DuplicatedDocument {
+                    operation: operation.to_owned(),
+                });
+            }
         }
         rows.extend(batch_rows);
     }
@@ -83,11 +87,11 @@ fn insert_exact_header(
     row: TranscriptMessageRow,
 ) -> Result<()> {
     if let Some(existing) = headers.get(&row.doc_id) {
-        anyhow::ensure!(
-            existing.message == row.message,
-            "conflicting canonical header facts share physical identity {}",
-            row.doc_id
-        );
+        if existing.message != row.message {
+            return Err(ClientQueryError::ConflictingHeaderFacts {
+                doc_id: row.doc_id.clone(),
+            });
+        }
         return Ok(());
     }
     headers.insert(row.doc_id.clone(), row);
@@ -111,8 +115,7 @@ fn validate_known_header_identities(
             &row.doc_id,
             &row.message.node_did,
             row.message.requester_did.as_deref(),
-        )
-        .map_err(anyhow::Error::new)?;
+        )?;
     }
     Ok(())
 }
@@ -122,11 +125,11 @@ fn insert_exact_segment(
     row: OutputSegmentRow,
 ) -> Result<()> {
     if let Some(existing) = records.get(&row.doc_id) {
-        anyhow::ensure!(
-            existing.segment == row.segment,
-            "conflicting canonical output facts share physical identity {}",
-            row.doc_id
-        );
+        if existing.segment != row.segment {
+            return Err(ClientQueryError::ConflictingOutputFacts {
+                doc_id: row.doc_id.clone(),
+            });
+        }
         return Ok(());
     }
     records.insert(row.doc_id.clone(), row);
@@ -166,9 +169,10 @@ async fn load_page_canonical_dependencies(
             continue;
         }
         if depth > MAX_FORK_ORIGIN_DEPTH {
-            bail!(
-                "canonical fork origin chain exceeds bounded depth {MAX_FORK_ORIGIN_DEPTH} at {origin_id}"
-            );
+            return Err(ClientQueryError::ForkOriginDepth {
+                limit: MAX_FORK_ORIGIN_DEPTH,
+                origin_id,
+            });
         }
         let origin_id_escaped = escape_graphql_string(&origin_id);
         let query = format!(
@@ -191,7 +195,7 @@ async fn load_page_canonical_dependencies(
                     || origin.message.node_did != node_did
                     || origin.message.requester_did != requester_did
                 {
-                    bail!("exact canonical fork origin crossed its authorized scope");
+                    return Err(ClientQueryError::ForkOriginScope);
                 }
                 if let MessagePublication::Fork {
                     origin_message_doc_id,
@@ -208,7 +212,7 @@ async fn load_page_canonical_dependencies(
                 validate_known_header_identities(&known_headers)?;
                 dependencies.origin_headers.push(origin);
             }
-            _ => bail!("exact canonical fork origin has conflicting physical rows: {origin_id}"),
+            _ => return Err(ClientQueryError::ForkOriginConflict { origin_id }),
         }
     }
 
@@ -229,9 +233,9 @@ async fn load_page_canonical_dependencies(
         })
         .collect::<BTreeSet<_>>();
     if close_scopes.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
-        bail!(
-            "canonical transcript page names more than {MAX_CANONICAL_DEPENDENCY_ROWS} output closures"
-        );
+        return Err(ClientQueryError::OutputClosureLimit {
+            limit: MAX_CANONICAL_DEPENDENCY_ROWS,
+        });
     }
 
     let mut closures = Vec::new();
@@ -260,13 +264,15 @@ async fn load_page_canonical_dependencies(
                         || closure.segment.node_did != *node_did
                         || closure.segment.requester_did != *requester_did
                     {
-                        bail!("exact canonical output closure crossed its authorized scope");
+                        return Err(ClientQueryError::OutputClosureScope);
                     }
                     closures.push(closure);
                 }
-                _ => bail!(
-                    "exact canonical output closure has conflicting physical rows: {close_id}"
-                ),
+                _ => {
+                    return Err(ClientQueryError::OutputClosureConflict {
+                        close_id: close_id.clone(),
+                    })
+                }
             }
         }
     }
@@ -326,18 +332,18 @@ async fn load_page_canonical_dependencies(
                 parse_canonical_rows(&data, &format!("source{index}"), decode_output_segment_row)?;
             queried_rows = queried_rows.saturating_add(rows.len());
             if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
-                bail!(
-                    "canonical output request {} exceeds bounded dependency read of {MAX_CANONICAL_DEPENDENCY_ROWS} rows",
-                    request_scope.0
-                );
+                return Err(ClientQueryError::OutputSourceLimit {
+                    request_id: request_scope.0.clone(),
+                    limit: MAX_CANONICAL_DEPENDENCY_ROWS,
+                });
             }
             for row in rows {
-                anyhow::ensure!(
-                    row.segment.request_doc_id == request_scope.0
-                        && row.segment.node_did == request_scope.1
-                        && row.segment.requester_did == request_scope.2,
-                    "canonical output source crossed its authorized request scope"
-                );
+                if !(row.segment.request_doc_id == request_scope.0
+                    && row.segment.node_did == request_scope.1
+                    && row.segment.requester_did == request_scope.2)
+                {
+                    return Err(ClientQueryError::OutputSourceScope);
+                }
                 if expected_sources.contains(&serde_json::to_string(&row.segment.source)?) {
                     insert_exact_segment(&mut records, row)?;
                 }
@@ -393,7 +399,9 @@ async fn resolve_transcript_cursor_sequence(
         {
             return Ok(sequence);
         }
-        bail!("session transcript cursor is no longer present: {cursor}");
+        return Err(ClientQueryError::CursorMissing {
+            cursor: cursor.to_owned(),
+        });
     }
     let session_id = escape_graphql_string(session_id);
     let message_key = escape_graphql_string(cursor);
@@ -420,7 +428,9 @@ async fn resolve_transcript_cursor_sequence(
     let rows: Vec<TranscriptCursorRow> = parse_query_rows(&data, AGENT_MESSAGE_NAME)?;
     rows.first()
         .and_then(|row| row.sequence)
-        .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
+        .ok_or_else(|| ClientQueryError::CursorMissing {
+            cursor: cursor.to_owned(),
+        })
 }
 
 pub fn session_transcript_requester_scope(
@@ -624,7 +634,7 @@ async fn load_session_transcript_window_with_access(
 ) -> Result<SessionTranscriptQueryPage> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
-        bail!("session transcript query requires a session id");
+        return Err(ClientQueryError::TranscriptSessionId);
     }
     let limit = requested_limit
         .unwrap_or(DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE)
@@ -703,9 +713,7 @@ async fn load_session_transcript_window_with_access(
     if let Some(sequence) = deferred_message_sequence {
         messages.retain(|row| row.message.sequence != sequence);
         if messages.is_empty() {
-            bail!(
-                "session transcript has more than {limit} messages at sequence {sequence}; the sequence-atomic page budget cannot represent it losslessly"
-            );
+            return Err(ClientQueryError::MessageSequenceBudget { limit, sequence });
         }
     }
 
@@ -713,9 +721,7 @@ async fn load_session_transcript_window_with_access(
         .iter()
         .any(|row| row.message_sequence.is_none())
     {
-        bail!(
-            "session transcript contains legacy tool calls without a message sequence; bounded pagination cannot represent that schema state losslessly"
-        );
+        return Err(ClientQueryError::LegacyToolCalls);
     }
     let crossed_message_boundary = deferred_message_sequence.is_some_and(|boundary| {
         queried_tool_calls
@@ -743,10 +749,10 @@ async fn load_session_transcript_window_with_access(
         tool_calls.retain(|row| row.message_sequence != Some(deferred_sequence));
         messages.retain(|row| beyond(i64::from(row.message.sequence), deferred_sequence));
         if tool_calls.is_empty() {
-            bail!(
-                "session transcript has more than {} tool calls at sequence {deferred_sequence}; the sequence-atomic tool budget cannot represent it losslessly",
-                SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET
-            );
+            return Err(ClientQueryError::ToolCallSequenceBudget {
+                limit: SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET,
+                sequence: deferred_sequence,
+            });
         }
     }
     /* A tool's result arrives in a later delivery message, which a page cut
@@ -968,7 +974,7 @@ async fn load_session_context_store_with_access(
 ) -> Result<ClientStore> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
-        bail!("session context query requires a session id");
+        return Err(ClientQueryError::ContextSessionId);
     }
     let escaped_session_id = escape_graphql_string(session_id);
     let node_filter = node_did
@@ -1053,14 +1059,12 @@ async fn load_session_compaction_entries_with_access(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
-    anyhow::ensure!(
-        !session_id.trim().is_empty(),
-        "session compactions require a session id"
-    );
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "session compactions require a node DID"
-    );
+    if session_id.trim().is_empty() {
+        return Err(ClientQueryError::CompactionSessionId);
+    }
+    if node_did.trim().is_empty() {
+        return Err(ClientQueryError::CompactionNodeDid);
+    }
     let session_id = escape_graphql_string(session_id.trim());
     let scope = scope_filter(node_did.trim(), requester_did);
     let query = format!(
@@ -1084,7 +1088,7 @@ pub async fn load_session_diagnostics_store(
 ) -> Result<ClientStore> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
-        bail!("session diagnostics query requires a session id");
+        return Err(ClientQueryError::DiagnosticsSessionId);
     }
     let escaped_session_id = escape_graphql_string(session_id);
     let node_filter = node_did
@@ -1141,7 +1145,8 @@ mod dependency_identity_tests {
     };
 
     #[tokio::test]
-    async fn context_compactions_keep_the_exact_requester_scope() -> Result<()> {
+    async fn context_compactions_keep_the_exact_requester_scope(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for (key, owner, requester) in [
