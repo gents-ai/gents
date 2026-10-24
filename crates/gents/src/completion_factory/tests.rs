@@ -766,6 +766,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     call_state: "completed"
                     prompt_tokens: {prompt}
                     completion_tokens: {completion}
+                    usage_completeness: "complete"
                     queue_depth_at_enqueue: 0
                     controller_generation: 1
                     backend_config_fingerprint: "fp"

@@ -66,6 +66,36 @@ impl TokenUsageColumns {
 }
 
 impl TokenUsage {
+    /// Normalize providers that report visible output separately from reasoning.
+    pub fn with_separate_reasoning(mut self) -> Self {
+        self.output_tokens = self
+            .output_tokens
+            .zip(self.reasoning_output_tokens)
+            .and_then(|(output, reasoning)| output.checked_add(reasoning));
+        self
+    }
+
+    /// Retain bounded core counters and discard contradictory breakdowns so
+    /// every stored observation remains readable without establishing a charge.
+    pub fn for_storage(self) -> Self {
+        let bounded = |value: Option<u64>| value.filter(|value| *value <= TOKEN_COUNTER_LIMIT);
+        let mut stored = Self {
+            input_tokens: bounded(self.input_tokens),
+            output_tokens: bounded(self.output_tokens),
+            cached_input_tokens: bounded(self.cached_input_tokens),
+            cache_creation_input_tokens: bounded(self.cache_creation_input_tokens),
+            reasoning_output_tokens: bounded(self.reasoning_output_tokens),
+            provider_total_tokens: bounded(self.provider_total_tokens),
+            final_response: self.final_response && self.validate().is_ok(),
+        };
+        if stored.validate().is_err() {
+            stored.cached_input_tokens = None;
+            stored.cache_creation_input_tokens = None;
+            stored.reasoning_output_tokens = None;
+        }
+        stored
+    }
+
     pub fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("input", self.input_tokens),
@@ -179,7 +209,9 @@ pub struct TokenUsageSummary {
 
 impl TokenUsageSummary {
     pub fn charged_total(&self) -> Option<u64> {
-        (self.incomplete_calls == 0).then_some(self.input.known + self.output.known)
+        (self.incomplete_calls == 0)
+            .then(|| self.input.known.checked_add(self.output.known))
+            .flatten()
     }
 
     pub fn fresh_input(&self) -> Option<u64> {

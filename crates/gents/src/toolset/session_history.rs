@@ -1167,22 +1167,33 @@ fn aggregate_inference_usage(rows: &[InferenceDetailRow]) -> Result<SessionToken
     let observations = rows
         .iter()
         .map(|row| row.usage.observation())
-        .collect::<Result<Vec<_>>>()?;
-    let summary = gents_protocol::usage::TokenUsageSummary::from_observations(observations)?;
+        .collect::<Result<Vec<_>>>();
+    let calls_with_usage = rows
+        .iter()
+        .filter(|row| {
+            row.usage.observation().ok().is_some_and(|usage| {
+                usage.completeness() == gents_protocol::usage::UsageCompleteness::Complete
+            })
+        })
+        .count() as i64;
+    let summary = observations
+        .and_then(gents_protocol::usage::TokenUsageSummary::from_observations)
+        .ok();
+    let calls = i64::try_from(rows.len()).context("too many inference calls")?;
     Ok(SessionTokenUsage {
-        model_calls: summary.calls as i64,
-        calls_with_usage: (summary.calls - summary.incomplete_calls) as i64,
-        calls_missing_usage: summary.incomplete_calls as i64,
-        input_tokens: summary.input.observed(),
-        cached_input_tokens: summary.cache_read.observed(),
-        cache_creation_input_tokens: summary.cache_write.observed(),
-        reasoning_output_tokens: summary.reasoning.observed(),
-        provider_total_tokens: summary.provider_total.observed(),
-        fresh_input_tokens: summary.fresh_input(),
-        output_tokens: summary.output.observed(),
-        charged_tokens: summary.charged_total(),
+        model_calls: calls,
+        calls_with_usage,
+        calls_missing_usage: calls - calls_with_usage,
+        input_tokens: summary.and_then(|value| value.input.observed()),
+        cached_input_tokens: summary.and_then(|value| value.cache_read.observed()),
+        cache_creation_input_tokens: summary.and_then(|value| value.cache_write.observed()),
+        reasoning_output_tokens: summary.and_then(|value| value.reasoning.observed()),
+        provider_total_tokens: summary.and_then(|value| value.provider_total.observed()),
+        fresh_input_tokens: summary.and_then(|value| value.fresh_input()),
+        output_tokens: summary.and_then(|value| value.output.observed()),
+        charged_tokens: summary.and_then(|value| value.charged_total()),
         api_duration_ms,
-        incomplete: summary.incomplete_calls > 0,
+        incomplete: summary.is_none() || calls_with_usage != calls,
     })
 }
 
@@ -2003,6 +2014,7 @@ mod tests {
                 queued_at: "2026-06-03T10:05:30Z"
                 prompt_tokens: 100
                 completion_tokens: 20
+                usage_completeness: "complete"
                 cached_input_tokens: 40
                 context_accounting_json: "{accounting}"
             }}) {{ _docID }}
@@ -2416,7 +2428,7 @@ mod tests {
             let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
                 call_id: "{id}", call_kind: "{kind}", backend_id: "backend-a", call_state: "completed", call_seq: {sequence}, request_id: "request-a-new",
                 request_doc_id: "{}", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", queued_at: "2026-06-04T12:00:00Z",
-                prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, context_accounting_json: "{encoded}"
+                prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, usage_completeness: "complete", context_accounting_json: "{encoded}"
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
             crate::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
             let observed = load_session_inference_observation(
@@ -2544,7 +2556,7 @@ mod tests {
             .unwrap();
         let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
             call_id: "foreign-usage", call_seq: 1, call_kind: "inference", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
-            request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0,
+            request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0, usage_completeness: "complete",
             queued_at: "2026-06-04T12:00:00Z"
         }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
         crate::graphql::ensure_no_errors(&response, "foreign usage fixture").unwrap();
@@ -2702,8 +2714,8 @@ mod tests {
         .unwrap();
         assert_eq!(snapshot.token_usage.model_calls, 3);
         assert_eq!(snapshot.token_usage.calls_with_usage, 1);
-        assert_eq!(snapshot.token_usage.input_tokens, Some(100));
-        assert_eq!(snapshot.token_usage.output_tokens, Some(20));
+        assert_eq!(snapshot.token_usage.input_tokens, None);
+        assert_eq!(snapshot.token_usage.output_tokens, None);
         assert_eq!(snapshot.token_usage.charged_tokens, None);
         assert!(snapshot.token_usage.incomplete);
         assert!(snapshot
@@ -2713,7 +2725,7 @@ mod tests {
                 matches!(observation, super::super::ParentAuditUsageObservation::Unavailable {
                 parent_request_id, error, ..
             } if parent_request_id == "request-a-new"
-                && error.contains("only one persisted token component"))
+                && error.contains("cache read exceeds"))
             }));
     }
 
@@ -2784,6 +2796,7 @@ mod tests {
                 queued_at: "2026-06-03T11:05:01Z"
                 prompt_tokens: 900
                 completion_tokens: 90
+                usage_completeness: "complete"
             }}) {{ _docID }} }}"#,
             escape_graphql_string(outsider_doc_id)
         );

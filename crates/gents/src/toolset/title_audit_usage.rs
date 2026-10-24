@@ -49,10 +49,8 @@ struct CallRow {
     backend_id: String,
     call_state: String,
     ended_at: Option<String>,
-    prompt_tokens: Option<i64>,
-    completion_tokens: Option<i64>,
-    #[serde(default)]
-    usage_completeness: Option<gents_protocol::usage::UsageCompleteness>,
+    #[serde(flatten)]
+    usage: gents_protocol::usage::TokenUsageColumns,
 }
 
 fn decode_calls_for_node(values: &[serde_json::Value], node_did: &str) -> Result<Vec<CallRow>> {
@@ -89,13 +87,7 @@ where
 }
 
 fn observed_usage(row: &CallRow) -> Result<gents_protocol::usage::TokenUsage> {
-    gents_protocol::usage::TokenUsageColumns {
-        prompt_tokens: row.prompt_tokens,
-        completion_tokens: row.completion_tokens,
-        usage_completeness: row.usage_completeness,
-        ..Default::default()
-    }
-    .observation()
+    row.usage.observation()
 }
 
 fn totals_for_call(row: &CallRow) -> Result<AuditUsageTokens> {
@@ -222,7 +214,7 @@ fn project_goal_catalog(
     let parts = || {
         calls
             .values()
-            .map(|call| (call.prompt_tokens, call.completion_tokens))
+            .map(|call| (call.usage.prompt_tokens, call.usage.completion_tokens))
     };
     let total = crate::provider_usage::sum_charged_from_persisted_parts(parts())?;
     let (input, output, _) = crate::provider_usage::sum_persisted_usage_columns(
@@ -292,7 +284,7 @@ pub(crate) async fn load_session_goal_usage(
         .collect::<Vec<_>>()
         .join(", ");
     let response = txn.execute(&format!(
-        r#"{{ InferenceCall(filter: {{ node_did: {{ _eq: "{}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens usage_completeness }} }}"#,
+        r#"{{ InferenceCall(filter: {{ node_did: {{ _eq: "{}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#,
         escape_graphql_string(node_did),
     )).await?;
     let raw_calls = response
@@ -405,7 +397,7 @@ async fn load_parent_catalog(
     let response = graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ InferenceCall(filter: {{ request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens usage_completeness }} }}"#
+            r#"{{ InferenceCall(filter: {{ request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#
         ),
         "load exact parent and auxiliary inference usage",
     )
@@ -511,10 +503,13 @@ mod tests {
                     backend_id: row.backend.clone(),
                     call_state: row.state.clone(),
                     ended_at: row.terminal_stamp.map(|stamp| stamp.to_string()),
-                    prompt_tokens: usage.map(|usage| usage.prompt_tokens as i64),
-                    completion_tokens: usage.map(|usage| usage.completion_tokens as i64),
-                    usage_completeness: usage
-                        .map(|_| gents_protocol::usage::UsageCompleteness::Complete),
+                    usage: gents_protocol::usage::TokenUsageColumns {
+                        prompt_tokens: usage.map(|usage| usage.prompt_tokens as i64),
+                        completion_tokens: usage.map(|usage| usage.completion_tokens as i64),
+                        usage_completeness: usage
+                            .map(|_| gents_protocol::usage::UsageCompleteness::Complete),
+                        ..Default::default()
+                    },
                 }
             })
             .collect();
