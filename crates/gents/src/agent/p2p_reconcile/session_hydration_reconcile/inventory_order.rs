@@ -136,7 +136,7 @@ impl<'a> Publications<'a> {
                         [MessageBlock::ToolResult {
                             tool_call_doc_id: named,
                             ..
-                        }] => named == tool_call_doc_id && request == &tool.request,
+                        }] => named == tool_call_doc_id && request == tool.request,
                         blocks => {
                             !blocks.is_empty()
                                 && blocks
