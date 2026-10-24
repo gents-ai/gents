@@ -93,36 +93,23 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     .await
     .unwrap();
     let paths = DesktopPaths::from_root(root.path().join("client"));
-    let seed = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await
-            .unwrap(),
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            paths.clone(),
+            ClientCoreOptions {
+                operator_identity_interaction:
+                    gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
+                ..ClientCoreOptions::default()
+            },
+        )
+        .await
+        .unwrap(),
     );
-    seed.shutdown().await.unwrap();
-    drop(seed);
-    let mut installation = tokio::process::Command::new(executable)
-        .args(["--serve", "--home"])
-        .arg(paths.root())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
+    let listener = gents_desktop_bridge::host::local::LocalListener::bind(&paths)
+        .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if gents_desktop_bridge::host::local::connect(&paths)
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            assert!(installation.try_wait().unwrap().is_none());
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .unwrap();
+    let installation =
+        gents_desktop_bridge::host::ClientHostService::start(Arc::clone(&core), listener);
     let mut client = support::Attachment::start(&paths).await;
     client
         .call(1, "client_connect_local", json!({"nodeHome": home}))
@@ -148,20 +135,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     let snapshot = reopened.snapshot(5).await;
     assert_eq!(snapshot["client"]["deployments"][0]["nodeDid"], node);
     reopened.close().await;
-    #[cfg(unix)]
-    {
-        // SAFETY: this PID belongs to the live child started above.
-        assert_eq!(
-            unsafe { libc::kill(installation.id().unwrap() as libc::pid_t, libc::SIGINT) },
-            0
-        );
-    }
-    #[cfg(windows)]
-    installation.kill().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(30), installation.wait())
-        .await
-        .unwrap()
-        .unwrap();
+    installation.shutdown().await.unwrap();
+    core.shutdown().await.unwrap();
     service.kill().await.unwrap();
     service.wait().await.unwrap();
 }
