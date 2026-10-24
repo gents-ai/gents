@@ -9,10 +9,13 @@ use tauri::State;
 use tauri_plugin_fs::FsExt;
 
 #[tauri::command]
-pub async fn desktop_attachment_read<R: tauri::Runtime>(
+pub async fn desktop_attachment_read<R>(
     app: tauri::AppHandle<R>,
     path: String,
-) -> Result<RequestAttachment, BridgeError> {
+) -> Result<RequestAttachment, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let scope = app
         .try_fs_scope()
         .ok_or_else(|| BridgeError::untyped("Native file selection is unavailable"))?;
