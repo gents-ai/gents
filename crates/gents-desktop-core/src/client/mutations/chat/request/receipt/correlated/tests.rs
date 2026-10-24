@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use gents::identity::{KeyIdentity, NodeIdentity};
@@ -150,22 +148,12 @@ fn identity(value: u64) -> String {
 /// Decisions run through the production receipt owner; all expected transitions
 /// are emitted by the executable model, including malformed initial records.
 fn model_cases() -> Result<Vec<Value>> {
-    let proofs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
-    let output = Command::new("lake")
-        .args([
-            "env",
-            "lean",
-            "--run",
-            "Proofs/Conformance/ClientSubmissionReceipt.lean",
-        ])
-        .current_dir(proofs)
-        .output()?;
-    anyhow::ensure!(
-        output.status.success(),
-        "executing receipt owner: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let cases: Vec<Value> = serde_json::from_slice(&output.stdout)?;
+    let output = gents_lean_contract::run_prepared_generator(
+        &gents_lean_contract::proofs_dir()?,
+        "Proofs.Conformance.ClientSubmissionReceipt:olean",
+        "Proofs/Conformance/ClientSubmissionReceipt.lean",
+    )?;
+    let cases: Vec<Value> = serde_json::from_str(&output)?;
     anyhow::ensure!(!cases.is_empty(), "the model emitted no receipt traces");
     Ok(cases)
 }
