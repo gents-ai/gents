@@ -63,6 +63,13 @@ pub(super) async fn resolve_chat_submission(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("resolving an earlier send requires its session_id"))?;
+    core.verify_submission_attachments(
+        node_did,
+        session_id,
+        request_id,
+        request.attachments.as_deref().unwrap_or_default(),
+    )
+    .await?;
     match core
         .resolve_chat_submission(node_did, session_id, request_id, &request.content)
         .await

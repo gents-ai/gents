@@ -2,10 +2,20 @@ import { useCallback, type SetStateAction } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
-export type DraftStore = StoreApi<{ drafts: Record<string, string> }>;
+export type DraftAttachment = {
+  id: string;
+  name: string;
+  content?: import("@source-inc/gents-desktop-client").RequestAttachment;
+  preview?: string;
+  error?: string;
+};
+export type DraftStore = StoreApi<{
+  drafts: Record<string, string>;
+  attachments: Record<string, DraftAttachment[]>;
+}>;
 
 export function createDraftStore(): DraftStore {
-  return createStore(() => ({ drafts: {} }));
+  return createStore(() => ({ drafts: {}, attachments: {} }));
 }
 
 export function writeDraft(
@@ -34,4 +44,19 @@ export function useDraft(
     [store, key],
   );
   return [draft, setDraft];
+}
+
+export function writeAttachments(
+  store: DraftStore,
+  key: string,
+  update: (items: DraftAttachment[]) => DraftAttachment[],
+) {
+  store.setState((state) => {
+    const before = state.attachments[key] ?? [];
+    const after = update(before);
+    for (const item of before)
+      if (item.preview && !after.some((a) => a.preview === item.preview))
+        URL.revokeObjectURL(item.preview);
+    return { attachments: { ...state.attachments, [key]: after } };
+  });
 }

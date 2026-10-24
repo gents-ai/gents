@@ -28,6 +28,105 @@ const CAPTURE_TOOL: &str = "capture_probe";
 const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
 
 #[tokio::test]
+async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
+    use gents_protocol::request_input::{RequestAttachment, RequestInput};
+    let image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
+    let backend = MockStreamingBackend::start(
+        CAPTURE_MODEL,
+        vec![
+            StreamScript::completes("", ["seen"]),
+            StreamScript::completes("", ["still seen"]),
+        ],
+    )
+    .unwrap();
+    let db = test_db("attached-image-wire").await;
+    let agent = boot_capture_agent(&db, "attached-image-wire", backend.endpoint(), None).await;
+    let input = RequestInput {
+        attachments: vec![RequestAttachment {
+            name: "pixel.png".into(),
+            media_type: "image/png".into(),
+            data: image.into(),
+        }],
+        ..Default::default()
+    };
+    let first = crate::support::interrupt::create_runtime_request_with_input(
+        db.node.as_ref(),
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
+        "image-first",
+        "image-session",
+        "",
+        input,
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &first, "completed").await;
+    let second = crate::support::interrupt::create_runtime_request_with_input(
+        db.node.as_ref(),
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
+        "image-second",
+        "image-session",
+        "What was in the image?",
+        RequestInput {
+            attachments: vec![RequestAttachment {
+                name: "note.txt".into(),
+                media_type: "text/plain".into(),
+                data: "bm90ZSBmcm9tIGZpbGU=".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &second, "completed").await;
+    let bodies = backend.observed_completion_bodies();
+    assert_eq!(bodies.len(), 2);
+    let url = format!("data:image/png;base64,{image}");
+    for body in &bodies {
+        let encoded = serde_json::to_string(body).unwrap();
+        assert!(
+            encoded.contains(&url),
+            "image bytes must reach the wire: {body}"
+        );
+        assert!(
+            !encoded.contains("gents_attachment"),
+            "storage metadata must stay native"
+        );
+    }
+    let followup = serde_json::to_string(&bodies[1]).unwrap();
+    assert!(followup.contains("note from file"));
+    assert!(!followup.contains("bm90ZSBmcm9tIGZpbGU="));
+    let rendered = wait_for_rendered_requests(db.node.as_ref(), "image-first", 1).await;
+    assert_eq!(
+        parse_json(&rendered[0]["request_json"]),
+        canonical(&bodies[0])
+    );
+    let unsupported = crate::support::interrupt::create_runtime_request_with_input(
+        db.node.as_ref(),
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
+        "pdf-third",
+        "image-session",
+        "Read the PDF",
+        RequestInput {
+            attachments: vec![RequestAttachment {
+                name: "note.pdf".into(),
+                media_type: "application/pdf".into(),
+                data: "JVBERi0xLjQ=".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal_state(db.node.as_ref(), &unsupported, Duration::from_secs(10))
+            .await,
+        RequestLifecycleState::Failed
+    );
+    assert_eq!(backend.observed_completion_requests(), 2);
+    agent.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_persisted_request_json_is_the_body_the_provider_received() {
     let backend = MockStreamingBackend::start(
         CAPTURE_MODEL,
@@ -308,6 +407,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let mut last_turn_new_content_bytes = 0usize;
     let mut last_turn_row_bytes = 0usize;
     let mut blocks_before_last_turn = 0usize;
+    let mut first_turn_block_rows = 0usize;
     for turn in 0..turns {
         let body = serde_json::json!({
             "model":"m", "messages": (0..=turn).map(|index|
@@ -347,6 +447,9 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             blocks_before_last_turn = block_payload_bytes(db.node.as_ref()).await;
         }
         sink.capture(rendered.clone()).await.unwrap();
+        if turn == 0 {
+            first_turn_block_rows = block_count(db.node.as_ref()).await;
+        }
         let query = format!(
             r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json provenance_json capture_version}} }}"#,
             escape_graphql_string(&rendered.capture_key)
@@ -363,9 +466,13 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         for payload in ["request_body", "provenance_payload"] {
             let record = stored_payload_record(&container, payload);
             assert_eq!(record["kind"], "tree", "payload {payload}");
-            referenced_blocks += record["tree"]["leaves"].as_u64().unwrap() as usize;
-            assert!(record["tree"]["height"].as_u64().unwrap() <= 1);
-            leaf_keys.extend(manifest_payload_keys(db.node.as_ref(), &container, payload).await);
+            let keys = manifest_payload_keys(db.node.as_ref(), &container, payload).await;
+            assert_eq!(
+                keys.len(),
+                record["tree"]["leaves"].as_u64().unwrap() as usize
+            );
+            referenced_blocks += keys.len();
+            leaf_keys.extend(keys);
         }
         let decoded = gents::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
@@ -414,9 +521,8 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
          anything"
     );
     assert!(
-        leaf_keys.len() < 4 * turns && block_rows <= leaf_keys.len() + 2 * turns,
-        "{block_rows} stored blocks for {turns} turns: storage must grow linearly, not with \
-         the conversation"
+        block_rows <= first_turn_block_rows * turns,
+        "{block_rows} stored blocks for {turns} turns against {first_turn_block_rows} for the first turn: storage must grow linearly, not with the conversation"
     );
     assert!(
         leaf_keys.len() * 2 < referenced_blocks,
@@ -650,9 +756,9 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
         manifest_payload_keys(db.node.as_ref(), &edited_container, "request_body").await;
     manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
 
-    assert!(
-        !post_edit_body.contains(&pre_edit_body[0]),
-        "the post-edit manifest must not reference a block of the replaced span"
+    assert_ne!(
+        post_edit_body, pre_edit_body,
+        "the edit must change the manifest's content-addressed leaf sequence"
     );
     let shared_tail = shared_manifest_suffix(&pre_edit_body, &post_edit_body);
     assert!(

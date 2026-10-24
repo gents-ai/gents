@@ -349,6 +349,57 @@ fn transcript_read_scope(
     }
 }
 
+pub async fn message_attachments(
+    core: &gents_desktop_core::client::ClientCore,
+    session_id: &str,
+    node_did: &str,
+    message_key: &str,
+) -> Result<Vec<gents_protocol::request_input::RequestAttachment>, BridgeError> {
+    if let Some(reason) = core.session_unreadable_reason(session_id, node_did) {
+        return Err(BridgeError::untyped(reason));
+    }
+    let scope = transcript_read_scope(core, session_id, node_did);
+    let access = scope
+        .operator_access
+        .unwrap_or_else(|| gents::config_client::ConfigAccess::local(core.node_arc()));
+    let escape = gents::graphql::escape_graphql_string;
+    let requester = scope
+        .requester_scope
+        .as_deref()
+        .map(|did| format!(", requester_did: {{ _eq: \"{}\" }}", escape(did)))
+        .unwrap_or_default();
+    let query = format!("{{ AgentMessage(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }}, message_key: {{ _eq: \"{}\" }}{requester} }}, limit: 2) {{ _docID }} }}", escape(session_id), escape(node_did), escape(message_key));
+    let rows = access
+        .execute(&query)
+        .await
+        .map_err(|e| BridgeError::untyped(format!("{e:#}")))?;
+    let rows = rows["data"]["AgentMessage"]
+        .as_array()
+        .ok_or_else(|| BridgeError::untyped("Message attachments are unavailable"))?;
+    if rows.len() != 1 {
+        return Err(BridgeError::untyped(
+            "The attachment message is missing or ambiguous",
+        ));
+    }
+    let doc_id = rows[0]["_docID"]
+        .as_str()
+        .ok_or_else(|| BridgeError::untyped("The attachment message has no identity"))?;
+    let (header, message) = gents::session::load_canonical_message(
+        &access,
+        doc_id,
+        node_did,
+        scope.requester_scope.as_deref(),
+    )
+    .await
+    .map_err(|e| BridgeError::untyped(format!("{e:#}")))?;
+    if header.session_id != session_id || header.message_key != message_key {
+        return Err(BridgeError::untyped(
+            "The attachment message belongs to another session",
+        ));
+    }
+    Ok(gents_protocol::request_input::RequestAttachment::from_message(&message))
+}
+
 /// A stretch of a session's display rows by message number, read without
 /// the session's request state, so a reader can page in either direction and
 /// open around any message. The rows of the newest stretch match what the

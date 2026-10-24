@@ -1,3 +1,4 @@
+import type { RequestAttachment } from "../generated/RequestAttachment.js";
 import type { DesktopBackgroundToolRequest } from "../generated/DesktopBackgroundToolRequest.js";
 import type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
 import type { SessionForkResult } from "../generated/SessionForkResult.js";
@@ -117,6 +118,13 @@ export type ManagedServerAuthorityInput = {
 };
 
 export type DesktopApiAdapter = {
+  readAttachment(path: string): Promise<RequestAttachment>;
+  requestAttachments(
+    nodeDid: string,
+    sessionId: string,
+    requestId: string,
+    messageKey?: string,
+  ): Promise<RequestAttachment[]>;
   fetchSessionGoal: (
     nodeDid: string,
     sessionId: string,
