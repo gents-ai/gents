@@ -6,6 +6,9 @@ pub use background::background_tool;
 mod chat;
 #[path = "commands/chat_resolve.rs"]
 mod chat_resolve;
+#[path = "commands/chat_submission.rs"]
+mod chat_submission;
+pub use chat_submission::{acknowledge_chat_submission, recover_chat_submission};
 #[path = "commands/goal.rs"]
 mod goal;
 pub use goal::{control_goal, session_goal};

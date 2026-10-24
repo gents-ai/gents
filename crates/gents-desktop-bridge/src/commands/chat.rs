@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
@@ -62,6 +62,22 @@ pub async fn send_chat_message(
     let node_did = request.node_did.trim().to_string();
     if node_did.is_empty() {
         bail!("node_did is required");
+    }
+    let caller_intent = super::chat_submission::intent(core, &request)?;
+    if let Some(intent) = caller_intent.as_ref() {
+        match core.recover_caller_submission(intent).await {
+            Ok(None) => {}
+            recovered => {
+                return super::chat_submission::sent(
+                    core,
+                    intent,
+                    recovered.and_then(|receipt| {
+                        receipt.context("retained submission reply omitted its result")
+                    }),
+                )
+                .await;
+            }
+        }
     }
     if let Some(request_id) = super::chat_resolve::resolve_target(&request) {
         return super::chat_resolve::resolve_chat_submission(core, &node_did, &request, request_id)
@@ -131,6 +147,7 @@ pub async fn send_chat_message(
             &content,
             agent_id.as_deref(),
             SubmitRequestOptions {
+                caller_intent: caller_intent.clone(),
                 caused_by_source_doc_id: request.caused_by_source_doc_id,
                 input,
                 ..SubmitRequestOptions::default()
@@ -138,7 +155,10 @@ pub async fn send_chat_message(
         )
         .await;
 
-    super::chat_resolve::sent(submitted)
+    match caller_intent.as_ref() {
+        Some(intent) => super::chat_submission::sent(core, intent, submitted).await,
+        None => super::chat_resolve::sent(submitted),
+    }
 }
 
 pub async fn retry_request(

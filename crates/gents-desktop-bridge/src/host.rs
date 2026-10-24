@@ -574,6 +574,16 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::RecoverSubmission { request } => encode(
+                crate::commands::recover_chat_submission(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::AcknowledgeSubmission { receipt } => encode(
+                crate::commands::acknowledge_chat_submission(&self.core, receipt)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::Retry {
                 request_id,
                 node_did,

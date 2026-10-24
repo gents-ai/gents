@@ -1,4 +1,6 @@
 export type { ChatSendResult } from "../generated/ChatSendResult.js";
+export type { ChatSubmissionReceipt } from "../generated/ChatSubmissionReceipt.js";
+export type { ChatSubmissionRecovery } from "../generated/ChatSubmissionRecovery.js";
 export type { CommandDenialView } from "../generated/CommandDenialView.js";
 export type { DesktopSessionSnapshot } from "../generated/DesktopSessionSnapshot.js";
 export type { SessionHydrationView } from "../generated/SessionHydrationView.js";

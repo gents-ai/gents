@@ -101,6 +101,10 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),
+    recoverChatSubmission: (request) =>
+      invokeDesktop("desktop_chat_submission_recover", { request }),
+    acknowledgeChatSubmission: (receipt) =>
+      invokeDesktop("desktop_chat_submission_acknowledge", { receipt }),
     steerPendingMessage: (request) =>
       invokeDesktop("desktop_pending_message_steer", { request }),
     editPendingQueue: (request) =>

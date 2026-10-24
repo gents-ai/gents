@@ -292,6 +292,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ToolServiceTestResult,
         TaskRunResult,
         ChatSendResult,
+        ChatSubmissionReceipt,
+        ChatSubmissionRecovery,
         ClientUpdateEvent,
         SessionHydrationView,
         SyncHealthView,

@@ -234,6 +234,12 @@ pub enum ClientCommand {
     },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
+    #[serde(rename = "desktop_chat_submission_recover")]
+    RecoverSubmission { request: ChatSendRequest },
+    #[serde(rename = "desktop_chat_submission_acknowledge")]
+    AcknowledgeSubmission {
+        receipt: crate::types::ChatSubmissionReceipt,
+    },
     #[serde(rename = "desktop_request_retry")]
     Retry {
         #[serde(rename = "requestId")]
@@ -300,6 +306,8 @@ impl ClientCommand {
         "desktop_session_provenance",
         "desktop_goal_control",
         "desktop_chat_send",
+        "desktop_chat_submission_recover",
+        "desktop_chat_submission_acknowledge",
         "desktop_request_retry",
         "desktop_pending_queue_edit",
         "desktop_pending_message_steer",

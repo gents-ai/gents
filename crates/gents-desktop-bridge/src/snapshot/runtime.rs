@@ -412,6 +412,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
     deployments.sort_by(|left, right| left.label.cmp(&right.label));
 
     DesktopRuntimeSnapshot {
+        client_did: core.node_identity().did().to_owned(),
         local_peer_id: core.local_peer_id().to_string(),
         listen_addresses: core.listen_addresses().to_vec(),
         p2p_health: to_health_view(&sync_state.transport),
