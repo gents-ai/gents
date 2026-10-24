@@ -25,8 +25,28 @@ use crate::cli::args::{
 use crate::cli::output_format::OutputFormat;
 use crate::commands::chat::streaming::sanitize_summary_text;
 use crate::home_state::resolve_node_did;
-use crate::request_helpers::print_ndjson;
+use crate::request_helpers::{print_ndjson, RequestHelpersError};
 use crate::{print_json, resolve_config_access};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum JobCommandError {
+    #[error("no running server for this home; start it, or pass --graphql")]
+    NoRunningServer,
+    #[error("not found: {error}")]
+    NotObservable { error: JobReadError },
+    #[error(transparent)]
+    Read(#[from] JobReadError),
+    #[error("not found: no job matches `{selector}`; list jobs with `gents job list`")]
+    NotFound { selector: String },
+    #[error("`{selector}` matches more than one job; show one with:\n{calls}")]
+    Ambiguous { selector: String, calls: String },
+    #[error("workflow_control_unknown_run\nnext:\n  gents job list")]
+    UnknownRun,
+    #[error(transparent)]
+    Print(#[from] RequestHelpersError),
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+}
 
 pub(crate) const ACTIVE_STATES: [JobState; 3] =
     [JobState::Running, JobState::Paused, JobState::AwaitingUser];
@@ -63,7 +83,7 @@ async fn job_watch(args: JobWatchArgs) -> Result<()> {
     let (access, session_id, tool_call_id) = match watch_target(&args).await {
         Ok(target) => target,
         Err(error) => {
-            let (message, code) = pre_poll_failure(&error);
+            let (message, code) = pre_poll_failure(error.as_ref());
             eprintln!("{message}");
             std::process::exit(code);
         }
@@ -132,20 +152,15 @@ async fn watch_target(args: &JobWatchArgs) -> Result<(ConfigAccess, String, Stri
 }
 
 /// The message and exit code of a watch that cannot start polling: not observable.
-fn pre_poll_failure(error: &anyhow::Error) -> (String, i32) {
-    (
-        format!("{}", ErrorChain(error.as_ref())),
-        NOT_OBSERVABLE_EXIT,
-    )
+fn pre_poll_failure(error: &(dyn std::error::Error + 'static)) -> (String, i32) {
+    (format!("{}", ErrorChain(error)), NOT_OBSERVABLE_EXIT)
 }
 
 /// A Local access holds the home store claim, which would block `gents server`.
-fn require_served(access: &ConfigAccess) -> Result<()> {
+fn require_served(access: &ConfigAccess) -> Result<(), JobCommandError> {
     match access {
         ConfigAccess::Graphql(_) => Ok(()),
-        ConfigAccess::Local(_) => {
-            anyhow::bail!("no running server for this home; start it, or pass --graphql")
-        }
+        ConfigAccess::Local(_) => Err(JobCommandError::NoRunningServer),
     }
 }
 
@@ -219,8 +234,8 @@ async fn watch_views<Poll, PollFut, Sleep, SleepFut>(
     mut sleep: Sleep,
     interval: Duration,
     until_terminal: bool,
-    mut on_change: impl FnMut(&JobView) -> Result<()>,
-) -> Result<Result<JobView, JobReadError>>
+    mut on_change: impl FnMut(&JobView) -> Result<(), JobCommandError>,
+) -> Result<Result<JobView, JobReadError>, JobCommandError>
 where
     Poll: FnMut() -> PollFut,
     PollFut: Future<Output = Result<JobView, JobReadError>>,
@@ -305,7 +320,7 @@ async fn control_job(
     access: &ConfigAccess,
     view: &JobView,
     kind: JobControlKind,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>, JobCommandError> {
     let result = control(access, &operator_scope(view), &view.tool_call_id, kind).await;
     control_lines(kind, view, result)
 }
@@ -316,7 +331,7 @@ pub(crate) fn control_lines(
     kind: JobControlKind,
     view: &JobView,
     result: Result<JobControlOutcome, JobReadError>,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>, JobCommandError> {
     let verb = match kind {
         JobControlKind::Stop => "stop",
         JobControlKind::Pause => "pause",
@@ -342,9 +357,9 @@ pub(crate) fn control_lines(
             "next:".to_owned(),
             format!("  gents job show {}", view.address),
         ]),
-        Err(JobReadError::NotAJob | JobReadError::NotAuthorized) => Err(anyhow::anyhow!(
-            "workflow_control_unknown_run\nnext:\n  gents job list"
-        )),
+        Err(JobReadError::NotAJob | JobReadError::NotAuthorized) => {
+            Err(JobCommandError::UnknownRun)
+        }
         Err(error) => Err(read_error(error)),
     }
 }
@@ -402,10 +417,10 @@ fn state_filter(args: &[JobStateArg]) -> StateFilter {
 
 /// A reader error as the command's error: its `Display` is the message, and an
 /// unobservable row is "not found" with no retry.
-pub(crate) fn read_error(error: JobReadError) -> anyhow::Error {
+pub(crate) fn read_error(error: JobReadError) -> JobCommandError {
     match error {
-        JobReadError::NotYetObservable => anyhow::anyhow!("not found: {error}"),
-        error => anyhow::Error::new(error),
+        JobReadError::NotYetObservable => JobCommandError::NotObservable { error },
+        error => JobCommandError::Read(error),
     }
 }
 
@@ -414,7 +429,7 @@ pub(crate) async fn resolve_job(
     actor: &str,
     selector: &str,
     session: Option<&str>,
-) -> Result<JobView> {
+) -> Result<JobView, JobCommandError> {
     if let Some((session_id, tool_call_id)) = split_address(selector) {
         return load_job_view(
             access,
@@ -447,7 +462,7 @@ pub(crate) fn pick_job<'a>(
     actor: &str,
     selector: &str,
     session: Option<&str>,
-) -> Result<&'a JobView> {
+) -> Result<&'a JobView, JobCommandError> {
     if split_address(selector).is_some() {
         return views
             .iter()
@@ -493,19 +508,21 @@ pub(crate) fn pick_job<'a>(
     Ok(latest)
 }
 
-fn not_found(selector: &str) -> anyhow::Error {
-    anyhow::anyhow!("not found: no job matches `{selector}`; list jobs with `gents job list`")
+fn not_found(selector: &str) -> JobCommandError {
+    JobCommandError::NotFound {
+        selector: selector.to_owned(),
+    }
 }
 
-fn ambiguous(selector: &str, candidates: &[&JobView]) -> anyhow::Error {
+fn ambiguous(selector: &str, candidates: &[&JobView]) -> JobCommandError {
     let calls: Vec<String> = candidates
         .iter()
         .map(|view| format!("  gents job show {}", view.address))
         .collect();
-    anyhow::anyhow!(
-        "`{selector}` matches more than one job; show one with:\n{}",
-        calls.join("\n")
-    )
+    JobCommandError::Ambiguous {
+        selector: selector.to_owned(),
+        calls: calls.join("\n"),
+    }
 }
 
 /// The job's next calls, from the fixed `workflow` spelling. A host refusal code
@@ -1311,8 +1328,7 @@ mod tests {
 
     #[test]
     fn pre_poll_failure_exits_4_with_the_message() {
-        let error = anyhow::anyhow!("no running server for this home; start it, or pass --graphql");
-        let (message, code) = pre_poll_failure(&error);
+        let (message, code) = pre_poll_failure(&JobCommandError::NoRunningServer);
         assert_eq!(code, 4);
         assert!(message.contains("--graphql"), "{message}");
         let (message, code) = pre_poll_failure(&not_found("alpha"));

@@ -7,17 +7,17 @@ use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::toolset::{load_session_inference_observation, SessionTokenUsage};
 use serde_json::{json, Value};
 
+use super::error::GrokShimError;
 use crate::caused_sessions::{load_caused_sessions, SessionScope};
 
 fn context_info(
     observation: &gents::toolset::SessionInferenceObservation,
     configured_window: u64,
-) -> Result<Value> {
+) -> Result<Value, GrokShimError> {
     let Some(context) = observation.latest_context.as_ref() else {
-        anyhow::ensure!(
-            observation.token_usage.model_calls == 0,
-            "context accounting is unavailable for this session's persisted inference calls"
-        );
+        if observation.token_usage.model_calls != 0 {
+            return Err(GrokShimError::ContextAccountingUnavailable);
+        }
         return Ok(
             json!({"used":0, "total":configured_window, "freeTokens":configured_window,
             "usagePct":0, "usageCategories":[]}),

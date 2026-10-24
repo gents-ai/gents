@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use super::edit::{apply_add, PackEdit};
+use super::edit::{apply_add, PackEdit, PackEditError};
 use crate::cli::{PackAddCommand, PackImportArgs, PackImportFrom, PackScaffoldArgs, PackTemplate};
 
 #[derive(Default)]
@@ -11,6 +11,34 @@ struct Report {
     converted: Vec<String>,
     needs_port: Vec<String>,
     dropped: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ImportError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Edit(#[from] PackEditError),
+    #[error("running git clone")]
+    GitLaunch(#[source] std::io::Error),
+    #[error("git clone of {url} failed")]
+    GitCloneFailed { url: String },
+    #[error("reading the cloned commit")]
+    ReadCommit(#[source] std::io::Error),
+    #[error("{} is not a plugin gents recognizes; name its kind with --from", root.display())]
+    NotRecognized { root: PathBuf },
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not valid JSON", path.display())]
+    NotJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 pub(crate) async fn import(args: PackImportArgs) -> Result<()> {
@@ -92,23 +120,27 @@ fn is_git_url(source: &str) -> bool {
     source.starts_with("https://") || source.starts_with("git@") || source.ends_with(".git")
 }
 
-fn clone(url: &str, into: &Path) -> Result<String> {
+fn clone(url: &str, into: &Path) -> Result<String, ImportError> {
     let status = std::process::Command::new("git")
         .args(["clone", "--depth", "1", "--quiet", url])
         .arg(into)
         .status()
-        .context("running git clone")?;
-    anyhow::ensure!(status.success(), "git clone of {url} failed");
+        .map_err(ImportError::GitLaunch)?;
+    if !status.success() {
+        return Err(ImportError::GitCloneFailed {
+            url: url.to_owned(),
+        });
+    }
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(into)
         .args(["rev-parse", "HEAD"])
         .output()
-        .context("reading the cloned commit")?;
+        .map_err(ImportError::ReadCommit)?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn detect(root: &Path) -> Result<PackImportFrom> {
+fn detect(root: &Path) -> Result<PackImportFrom, ImportError> {
     Ok(if root.join(".claude-plugin/plugin.json").is_file() {
         PackImportFrom::Claude
     } else if root.join(".codex-plugin/plugin.json").is_file() {
@@ -122,18 +154,21 @@ fn detect(root: &Path) -> Result<PackImportFrom> {
     } else if root.join("SKILL.md").is_file() {
         PackImportFrom::Skill
     } else {
-        anyhow::bail!(
-            "{} is not a plugin gents recognizes; name its kind with --from",
-            root.display()
-        )
+        return Err(ImportError::NotRecognized {
+            root: root.to_path_buf(),
+        });
     })
 }
 
-fn read_json(path: &Path) -> Result<Value> {
-    serde_json::from_slice(
-        &std::fs::read(path).with_context(|| format!("reading {}", path.display()))?,
-    )
-    .with_context(|| format!("{} is not valid JSON", path.display()))
+fn read_json(path: &Path) -> Result<Value, ImportError> {
+    let bytes = std::fs::read(path).map_err(|source| ImportError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| ImportError::NotJson {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn plugin_manifest(root: &Path, from: PackImportFrom) -> Result<Value> {
@@ -350,7 +385,7 @@ fn copy_support_files(
     pack: &mut PackEdit,
     report: &mut Report,
     skill: &str,
-) -> Result<()> {
+) -> Result<(), ImportError> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)?.filter_map(Result::ok).collect();
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
@@ -414,7 +449,7 @@ fn write_prompt(pack: &PackEdit, path: &str, source: &Path) -> Result<()> {
     std::fs::write(pack.dir.join(path), body + "\n").with_context(|| format!("writing {path}"))
 }
 
-fn add(pack: &mut PackEdit, command: PackAddCommand) -> Result<()> {
+fn add(pack: &mut PackEdit, command: PackAddCommand) -> Result<(), PackEditError> {
     apply_add(pack, command)
 }
 

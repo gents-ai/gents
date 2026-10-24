@@ -7,9 +7,10 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
 use serde_json::json;
+
+use crate::request_helpers::RequestHelpersError;
 
 /// `$GROK_HOME` (config-directory override), else `$HOME/.grok`.
 pub(super) fn default_grok_home() -> Option<PathBuf> {
@@ -47,7 +48,7 @@ pub(super) fn write_record(
     grok_home: &Path,
     cwd: &str,
     session_id: &str,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<PathBuf>, RequestHelpersError> {
     if !Path::new(cwd).is_absolute() || !is_plain_segment(session_id) {
         return Ok(None);
     }

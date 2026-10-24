@@ -65,7 +65,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::New(args) => scaffold::new(args),
         PackCommand::Init(args) => scaffold::init(args),
         PackCommand::Import(args) => import::import(args).await,
-        PackCommand::Add(args) => edit::add(args),
+        PackCommand::Add(args) => Ok(edit::add(args)?),
         PackCommand::RemovePart(args) => Ok(edit::remove_part(args)?),
         PackCommand::Fmt(args) => Ok(edit::fmt(args)?),
         PackCommand::Diff(args) => inspect::diff(args).await,

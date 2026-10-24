@@ -1406,7 +1406,7 @@ impl TurnManager {
         let submitted = if let Some(super::goals::GoalCommand::Create {
             objective,
             token_budget,
-        }) = super::goals::GoalCommand::from_prompt(request)?
+        }) = super::goals::GoalCommand::from_prompt(request)
         {
             crate::create_goal_backed_agent_request_local(
                 &self.node,

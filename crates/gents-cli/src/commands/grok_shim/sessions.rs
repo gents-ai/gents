@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -16,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::error::GrokShimError;
+
+type Result<T, E = GrokShimError> = std::result::Result<T, E>;
 
 const PAGE_SIZE: usize = 128;
 
@@ -124,10 +125,9 @@ async fn scan_requests(
     session: Option<&str>,
     mut visit: impl FnMut(AgentRequestRow),
 ) -> Result<()> {
-    ensure!(
-        !principal.trim().is_empty(),
-        "session history requires a node DID"
-    );
+    if principal.trim().is_empty() {
+        return Err(GrokShimError::NodeDidRequired);
+    }
     let agent = escape_graphql_string(principal);
     let session_filter = session
         .map(|id| format!(r#"session_id: {{_eq: "{}"}},"#, escape_graphql_string(id)))
@@ -155,21 +155,21 @@ async fn scan_requests(
                 .as_ref()
                 .and_then(|data| data.get("AgentRequest"))
                 .cloned()
-                .context("missing session request rows")?,
+                .ok_or(GrokShimError::MissingRequestRows)?,
         )?;
         let done = page.len() < PAGE_SIZE;
         if let Some(last) = page.last() {
-            ensure!(
-                last.request_id > after,
-                "session request pagination did not advance"
-            );
+            if last.request_id <= after {
+                return Err(GrokShimError::PaginationDidNotAdvance);
+            }
             after = last.request_id.clone();
         }
-        ensure!(
-            page.iter()
-                .all(|row| row.doc_id.as_deref().is_some_and(|id| !id.is_empty())),
-            "history request lacks physical identity"
-        );
+        if !page
+            .iter()
+            .all(|row| row.doc_id.as_deref().is_some_and(|id| !id.is_empty()))
+        {
+            return Err(GrokShimError::RequestWithoutDocId);
+        }
         for row in page {
             visit(row);
         }
@@ -197,7 +197,9 @@ pub(super) async fn load(
     behavior: &str,
     session: &str,
 ) -> Result<Vec<AgentRequestRow>> {
-    ensure!(!session.trim().is_empty(), "session ID must not be empty");
+    if session.trim().is_empty() {
+        return Err(GrokShimError::SessionIdEmpty);
+    }
     let response = graphql_with_transaction_retry(
         node,
         &format!(
@@ -214,17 +216,15 @@ pub(super) async fn load(
         .as_ref()
         .and_then(|data| data.get("AgentSession"))
         .and_then(Value::as_array)
-        .context("missing session owner rows")?;
-    ensure!(
-        owners.len() == 1 && readable_owner(&owners[0], principal, behavior),
-        "session is not readable by this bound agent"
-    );
+        .ok_or(GrokShimError::MissingOwnerRows)?;
+    if owners.len() != 1 || !readable_owner(&owners[0], principal, behavior) {
+        return Err(GrokShimError::SessionNotReadable);
+    }
     let rows = requests(node, principal, Some(session)).await?;
-    ensure!(
-        owners[0].get("requester_did").and_then(Value::as_str) == Some(principal)
-            || !rows.is_empty(),
-        "legacy session has no authorized request history"
-    );
+    if owners[0].get("requester_did").and_then(Value::as_str) != Some(principal) && rows.is_empty()
+    {
+        return Err(GrokShimError::LegacySessionWithoutHistory);
+    }
     Ok(rows)
 }
 
@@ -307,7 +307,7 @@ async fn list_entries(
             .as_ref()
             .and_then(|data| data.get("AgentSession"))
             .and_then(Value::as_array)
-            .context("missing history session owners")?;
+            .ok_or(GrokShimError::MissingHistoryOwners)?;
         for owner in owners {
             if !readable_owner(owner, principal, behavior) {
                 continue;

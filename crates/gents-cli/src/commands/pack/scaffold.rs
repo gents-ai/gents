@@ -97,10 +97,8 @@ pub(crate) fn write_plugin_source(
     source: &Path,
     name: &str,
     language: Option<&str>,
-) -> Result<String> {
-    Ok(gents::pack::authoring::write_plugin_source(
-        source, name, language,
-    )?)
+) -> Result<String, gents::pack::authoring::scaffold::ScaffoldError> {
+    gents::pack::authoring::write_plugin_source(source, name, language)
 }
 
 #[cfg(test)]

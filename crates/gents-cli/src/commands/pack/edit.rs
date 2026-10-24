@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use serde_json::{json, Map, Value};
 
 use crate::cli::{PackAddArgs, PackAddCommand, PackFmtArgs, PackPart, PackRemovePartArgs};
@@ -73,6 +72,32 @@ pub(super) enum PackEditError {
     NoSchema { id: String },
     #[error("the pack has no plugin {id:?}")]
     PluginNotFound { id: String },
+    #[error("the pack has no task {task:?}; add it first")]
+    NoTask { task: String },
+    #[error("the pack has no agent {agent:?}; add it first")]
+    NoAgent { agent: String },
+    #[error("the pack has no plugin {plugin:?}; add it first")]
+    NoPluginToStage { plugin: String },
+    #[error("{collection:?} is not a collection name; use PascalCase")]
+    NotPascalCase { collection: String },
+    #[error("name the stage's --task or --plugin")]
+    StageTargetMissing,
+    #[error("plugin names are snake_case")]
+    PluginNameNotSnakeCase,
+    #[error("the pack already has a plugin {name:?}")]
+    PluginExists { name: String },
+    #[error("artifact parent")]
+    ArtifactParent,
+    #[error("instructions parent")]
+    InstructionsParent,
+    #[error("{} is not a compiled plugin", path.display())]
+    NotCompiledPlugin {
+        path: PathBuf,
+        #[source]
+        source: afterburner_cloud::afterburner_afb::AfbError,
+    },
+    #[error(transparent)]
+    Scaffold(#[from] gents::pack::authoring::scaffold::ScaffoldError),
 }
 
 type Result<T, E = PackEditError> = std::result::Result<T, E>;
@@ -283,23 +308,22 @@ pub(crate) fn fmt(args: PackFmtArgs) -> Result<()> {
     PackEdit::load(&dir)?.save()
 }
 
-pub(crate) fn add(args: PackAddArgs) -> anyhow::Result<()> {
+pub(crate) fn add(args: PackAddArgs) -> Result<()> {
     let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
     let mut pack = PackEdit::load(&dir)?;
     apply_add(&mut pack, args.command)?;
-    Ok(pack.save()?)
+    pack.save()
 }
 
-pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> anyhow::Result<()> {
+pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<()> {
     match command {
-        PackAddCommand::Agent { id, slot } => Ok(add_agent(pack, &id, slot.as_deref())?),
+        PackAddCommand::Agent { id, slot } => add_agent(pack, &id, slot.as_deref()),
         PackAddCommand::Task { id, agent } => {
             check_id(&id)?;
             pack.require_new("tasks", "task_id", &id)?;
-            anyhow::ensure!(
-                pack.has("agents", "agent_id", &agent),
-                "the pack has no agent {agent:?}; add it first"
-            );
+            if !pack.has("agents", "agent_id", &agent) {
+                return Err(PackEditError::NoAgent { agent });
+            }
             let prompt = format!("tasks/{}/prompt.md", snake(&id));
             pack.create_file(&prompt, "Describe what this task does.\n")?;
             pack.list("tasks")?.push(json!({
@@ -314,10 +338,9 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> anyhow:
             check_id(&id)?;
             pack.require_new("triggers", "trigger_id", &id)?;
             pack.require_new("event_sources", "event_source_id", &id)?;
-            anyhow::ensure!(
-                pack.has("tasks", "task_id", &task),
-                "the pack has no task {task:?}; add it first"
-            );
+            if !pack.has("tasks", "task_id", &task) {
+                return Err(PackEditError::NoTask { task });
+            }
             pack.list("event_sources")?.push(json!({
                 "event_source_id": id,
                 "display_name": format!("{on} created"),
@@ -334,14 +357,14 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> anyhow:
             Ok(())
         }
         PackAddCommand::Schema { collection } => {
-            anyhow::ensure!(
-                collection
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_uppercase())
-                    && collection.chars().all(|c| c.is_ascii_alphanumeric()),
-                "{collection:?} is not a collection name; use PascalCase"
-            );
+            if !(collection
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase())
+                && collection.chars().all(|c| c.is_ascii_alphanumeric()))
+            {
+                return Err(PackEditError::NotPascalCase { collection });
+            }
             let path = format!("schemas/{}.graphql", super_snake(&collection));
             pack.create_file(
                 &path,
@@ -354,8 +377,12 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> anyhow:
             check_id(&id)?;
             pack.require_new("skills", "skill_id", &id)?;
             let body = match from {
-                Some(path) => std::fs::read_to_string(&path)
-                    .with_context(|| format!("reading {}", path.display()))?,
+                Some(path) => {
+                    std::fs::read_to_string(&path).map_err(|source| PackEditError::Read {
+                        path: path.clone(),
+                        source,
+                    })?
+                }
                 None => format!("# {}\n\nWhen and how to use this skill.\n", title(&id)),
             };
             let path = format!("skills/{}/SKILL.md", snake(&id));
@@ -402,24 +429,23 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> anyhow:
         } => {
             let target = match (task, plugin) {
                 (Some(task), _) => {
-                    anyhow::ensure!(
-                        pack.has("tasks", "task_id", &task),
-                        "the pack has no task {task:?}; add it first"
-                    );
+                    if !pack.has("tasks", "task_id", &task) {
+                        return Err(PackEditError::NoTask { task });
+                    }
                     json!({"kind": "task", "task_id": task})
                 }
                 (None, Some(plugin)) => {
-                    anyhow::ensure!(
-                        pack.manifest["plugins"]
-                            .as_array()
-                            .is_some_and(|rows| rows.iter().any(|row| row["name"] == plugin)),
-                        "the pack has no plugin {plugin:?}; add it first"
-                    );
+                    if !pack.manifest["plugins"]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().any(|row| row["name"] == plugin))
+                    {
+                        return Err(PackEditError::NoPluginToStage { plugin });
+                    }
                     json!({"kind": "plugin", "plugin": plugin})
                 }
-                (None, None) => anyhow::bail!("name the stage's --task or --plugin"),
+                (None, None) => return Err(PackEditError::StageTargetMissing),
             };
-            Ok(add_stage(
+            add_stage(
                 pack,
                 &node,
                 &graph,
@@ -427,7 +453,7 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> anyhow:
                 &input,
                 &output,
                 from.as_deref(),
-            )?)
+            )
         }
     }
 }
@@ -486,19 +512,22 @@ fn add_plugin(
     name: &str,
     language: Option<&str>,
     prebuilt: Option<&Path>,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        name.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-            && name.as_bytes().first().is_some_and(u8::is_ascii_lowercase),
-        "plugin names are snake_case"
-    );
-    anyhow::ensure!(
-        !pack.manifest["plugins"]
-            .as_array()
-            .is_some_and(|plugins| plugins.iter().any(|plugin| plugin["name"] == name)),
-        "the pack already has a plugin {name:?}"
-    );
+) -> Result<()> {
+    if !(name
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        && name.as_bytes().first().is_some_and(u8::is_ascii_lowercase))
+    {
+        return Err(PackEditError::PluginNameNotSnakeCase);
+    }
+    if pack.manifest["plugins"]
+        .as_array()
+        .is_some_and(|plugins| plugins.iter().any(|plugin| plugin["name"] == name))
+    {
+        return Err(PackEditError::PluginExists {
+            name: name.to_owned(),
+        });
+    }
     let artifact = format!("plugins/{name}.afb");
     let mut entry = json!({
         "name": name,
@@ -508,15 +537,28 @@ fn add_plugin(
     });
     match prebuilt {
         Some(file) => {
-            let bytes =
-                std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
-            let afb = afterburner_cloud::Afb::from_bytes(&bytes)
-                .with_context(|| format!("{} is not a compiled plugin", file.display()))?;
+            let bytes = std::fs::read(file).map_err(|source| PackEditError::Read {
+                path: file.to_path_buf(),
+                source,
+            })?;
+            let afb = afterburner_cloud::Afb::from_bytes(&bytes).map_err(|source| {
+                PackEditError::NotCompiledPlugin {
+                    path: file.to_path_buf(),
+                    source,
+                }
+            })?;
             entry["language"] = json!(afb.manifest.package.language);
             let target = pack.dir.join(&artifact);
-            anyhow::ensure!(!target.exists(), "{artifact} already exists");
-            std::fs::create_dir_all(target.parent().context("artifact parent")?)?;
-            std::fs::write(&target, bytes).with_context(|| format!("writing {artifact}"))?;
+            if target.exists() {
+                return Err(PackEditError::AlreadyExists {
+                    path: artifact.clone(),
+                });
+            }
+            std::fs::create_dir_all(target.parent().ok_or(PackEditError::ArtifactParent)?)?;
+            std::fs::write(&target, bytes).map_err(|source| PackEditError::Write {
+                path: PathBuf::from(&artifact),
+                source,
+            })?;
         }
         None => {
             let names_language = super::scaffold::write_plugin_source(
@@ -530,9 +572,15 @@ fn add_plugin(
     }
     let (instructions, markdown) = super::scaffold::tool_markdown(name);
     let instructions_path = pack.dir.join(&instructions);
-    std::fs::create_dir_all(instructions_path.parent().context("instructions parent")?)?;
-    std::fs::write(&instructions_path, markdown)
-        .with_context(|| format!("writing {instructions}"))?;
+    std::fs::create_dir_all(
+        instructions_path
+            .parent()
+            .ok_or(PackEditError::InstructionsParent)?,
+    )?;
+    std::fs::write(&instructions_path, markdown).map_err(|source| PackEditError::Write {
+        path: PathBuf::from(&instructions),
+        source,
+    })?;
     entry["instructions"] = json!(instructions);
     pack.add_asset(&instructions);
     pack.add_asset(&artifact);
@@ -903,11 +951,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            ErrorChain(duplicate.as_ref())
-                .to_string()
-                .contains("already has"),
+            ErrorChain(&duplicate).to_string().contains("already has"),
             "{}",
-            ErrorChain(duplicate.as_ref())
+            ErrorChain(&duplicate)
         );
         let dangling = apply_add(
             &mut pack,
@@ -918,11 +964,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            ErrorChain(dangling.as_ref())
-                .to_string()
-                .contains("no agent"),
+            ErrorChain(&dangling).to_string().contains("no agent"),
             "{}",
-            ErrorChain(dangling.as_ref())
+            ErrorChain(&dangling)
         );
     }
 

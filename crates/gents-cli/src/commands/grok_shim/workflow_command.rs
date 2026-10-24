@@ -2,7 +2,6 @@
 //! `/workflow` reaches the model as ordinary prompt text.
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
 use gents::plugin_job::control::control;
@@ -10,7 +9,8 @@ use gents::plugin_job::view::{list_jobs, JobFilter, StateFilter};
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError, JobView};
 
 use crate::commands::job::{
-    clean, control_lines, operator_scope, read_error, resolve_job, state_name, ACTIVE_STATES,
+    clean, control_lines, operator_scope, read_error, resolve_job, state_name, JobCommandError,
+    ACTIVE_STATES,
 };
 
 #[derive(Debug, PartialEq)]
@@ -47,7 +47,7 @@ impl WorkflowCommand {
         node: &Arc<EmbeddedNode>,
         principal: &str,
         session: &str,
-    ) -> Result<String> {
+    ) -> String {
         let access = ConfigAccess::local(node.clone());
         let (kind, handle) = match self {
             Self::Runs => return overview(&access, principal, session, "Workflow runs:").await,
@@ -64,34 +64,22 @@ impl WorkflowCommand {
         };
         let view = match resolve_job(&access, principal, handle, Some(session)).await {
             Ok(view) if view.session_id == session => view,
-            Ok(_) => return Ok(UNKNOWN_RUN.to_owned()),
-            Err(error) => {
-                return Ok(match error.downcast_ref::<JobReadError>() {
-                    Some(typed)
-                        if !matches!(
-                            typed,
-                            JobReadError::NotAJob | JobReadError::NotAuthorized
-                        ) =>
-                    {
-                        error.to_string()
-                    }
-                    _ => UNKNOWN_RUN.to_owned(),
-                })
+            Ok(_) => return UNKNOWN_RUN.to_owned(),
+            Err(JobCommandError::Read(typed))
+                if !matches!(typed, JobReadError::NotAJob | JobReadError::NotAuthorized) =>
+            {
+                return typed.to_string();
             }
+            Err(_) => return UNKNOWN_RUN.to_owned(),
         };
         let result = control(&access, &operator_scope(&view), &view.tool_call_id, kind).await;
-        Ok(control_reply(kind, &view, result))
+        control_reply(kind, &view, result)
     }
 }
 
 const UNKNOWN_RUN: &str = "workflow_control_unknown_run\nnext:\n  /workflow runs";
 
-async fn overview(
-    access: &ConfigAccess,
-    principal: &str,
-    session: &str,
-    header: &str,
-) -> Result<String> {
+async fn overview(access: &ConfigAccess, principal: &str, session: &str, header: &str) -> String {
     let views = match list_jobs(
         access,
         &JobFilter {
@@ -104,10 +92,10 @@ async fn overview(
     .await
     {
         Ok(views) => views,
-        Err(error) => return Ok(read_error(error).to_string()),
+        Err(error) => return read_error(error).to_string(),
     };
     if views.is_empty() {
-        return Ok("No active workflow runs in this session.".to_owned());
+        return "No active workflow runs in this session.".to_owned();
     }
     let mut lines = vec![header.to_owned()];
     lines.extend(views.iter().map(|view| {
@@ -118,7 +106,7 @@ async fn overview(
             view.address
         )
     }));
-    Ok(lines.join("\n"))
+    lines.join("\n")
 }
 
 /// The host-turn text for one control result: the shim's answer for an applied

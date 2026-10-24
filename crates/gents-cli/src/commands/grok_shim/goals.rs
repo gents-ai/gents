@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::goal::{GoalDocument, GoalStatus};
@@ -7,6 +7,16 @@ use std::sync::Arc;
 
 use super::projection::{ProjectionEngine, UpdateTimestamps};
 use super::turn::{PromptSender, PromptSenderLine};
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum GoalsError {
+    #[error("unrecognized persisted goal status")]
+    UnrecognizedStatus,
+    #[error("unrecognized persisted goal state")]
+    UnrecognizedState,
+    #[error("missing previously delivered goal identity")]
+    MissingDeliveredId,
+}
 
 #[derive(Debug, PartialEq)]
 pub(super) enum GoalCommand {
@@ -21,11 +31,11 @@ pub(super) enum GoalCommand {
 }
 
 impl GoalCommand {
-    pub(super) fn parse(text: &str) -> Result<Option<Self>> {
+    pub(super) fn parse(text: &str) -> Option<Self> {
         let text = text.trim();
         let mut words = text.split_whitespace();
         if words.next() != Some("/goal") {
-            return Ok(None);
+            return None;
         }
         let args = text.strip_prefix("/goal").unwrap().trim();
         let command = match args.to_ascii_lowercase().as_str() {
@@ -58,10 +68,10 @@ impl GoalCommand {
                 }
             }
         };
-        Ok(Some(command))
+        Some(command)
     }
 
-    pub(super) fn from_prompt(request: &super::turn::PromptRequest) -> Result<Option<Self>> {
+    pub(super) fn from_prompt(request: &super::turn::PromptRequest) -> Option<Self> {
         if let [block] = request.prompt.as_slice() {
             if block.kind == "text"
                 && block
@@ -72,7 +82,7 @@ impl GoalCommand {
                 return Self::parse(&block.text);
             }
         }
-        Ok(None)
+        None
     }
 
     pub(super) async fn execute(
@@ -109,7 +119,7 @@ impl GoalCommand {
             _ => None,
         };
         if let Some(status) = status {
-            let state = goal.state().context("unrecognized persisted goal state")?;
+            let state = goal.state().ok_or(GoalsError::UnrecognizedState)?;
             if gents::goal::apply_operator_status_transition(state, status).is_err() {
                 return Ok(format!(
                     "Goal remains {}. This control is not available in that state.",
@@ -166,7 +176,7 @@ impl GoalCursor {
                     .delivered
                     .as_ref()
                     .and_then(|row| row["goal_id"].as_str())
-                    .context("missing previously delivered goal identity")?;
+                    .ok_or(GoalsError::MissingDeliveredId)?;
                 base_update(id, "", "cleared", 0)
             }
         };
@@ -207,11 +217,8 @@ fn base_update(id: &str, objective: &str, status: &str, elapsed_ms: u64) -> Valu
         "total_worker_rounds":0, "total_verify_rounds":0})
 }
 
-fn project(goal: &GoalDocument, now: DateTime<Utc>) -> Result<Value> {
-    let status = match goal
-        .parsed_status()
-        .context("unrecognized persisted goal status")?
-    {
+fn project(goal: &GoalDocument, now: DateTime<Utc>) -> Result<Value, GoalsError> {
+    let status = match goal.parsed_status().ok_or(GoalsError::UnrecognizedStatus)? {
         GoalStatus::Active => "active",
         GoalStatus::Paused => "user_paused",
         GoalStatus::Blocked => "blocked",
@@ -260,10 +267,10 @@ mod tests {
             ("/goal resume", GoalCommand::Resume),
             ("/goal clear", GoalCommand::Clear),
         ] {
-            assert_eq!(GoalCommand::parse(text).unwrap(), Some(expected));
+            assert_eq!(GoalCommand::parse(text), Some(expected));
         }
         for text in ["Explain /goal pause", "/goals pause", "hello"] {
-            assert_eq!(GoalCommand::parse(text).unwrap(), None);
+            assert_eq!(GoalCommand::parse(text), None);
         }
         for (text, objective, token_budget) in [
             ("/goal pause extra", "pause extra", None),
@@ -287,7 +294,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                GoalCommand::parse(text).unwrap(),
+                GoalCommand::parse(text),
                 Some(GoalCommand::Create {
                     objective: objective.into(),
                     token_budget,

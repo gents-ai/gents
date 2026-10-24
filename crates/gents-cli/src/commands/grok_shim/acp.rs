@@ -8,6 +8,7 @@ use futures_util::future::BoxFuture;
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_protocol::error_chain::find_source;
 use serde_json::{json, Value};
 
 use super::projection::caused_sessions::{
@@ -134,7 +135,10 @@ struct SessionLoadReservation<'a> {
 }
 
 impl<'a> SessionLoadReservation<'a> {
-    fn reserve(loading: &'a std::sync::Mutex<BTreeSet<String>>, session_id: &str) -> Result<Self> {
+    fn reserve(
+        loading: &'a std::sync::Mutex<BTreeSet<String>>,
+        session_id: &str,
+    ) -> Result<Self, AcpError> {
         if !loading
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -388,7 +392,7 @@ impl AcpService {
                 }
             }
             Err(error) => {
-                let code = error_code_for(&error);
+                let code = error_code_for(error.as_ref());
                 tracing::warn!(%error, %method, code, "grok shim ACP request failed");
                 AcpDispatch {
                     notifications: prompt_sender.take_lines().await,
@@ -498,7 +502,7 @@ impl AcpService {
             SESSION_PROMPT_METHOD => self.handle_session_prompt(request, prompt_sender).await,
             SESSION_LOAD_METHOD => self.handle_session_load(request, prompt_sender).await,
             INTERJECT_METHOD | COMPACT_CONVERSATION_METHOD => {
-                Err(shaped_stub_error(&request.method, &request.params))
+                Err(shaped_stub_error(&request.method, &request.params).into())
             }
             SUBAGENT_GET_METHOD | SUBAGENT_LIST_RUNNING_METHOD | SUBAGENT_CANCEL_METHOD => {
                 self.handle_subagent_ext_request(request.method.as_str(), request)
@@ -511,7 +515,8 @@ impl AcpService {
                 if params.session_id.trim().is_empty() || params.task_id.trim().is_empty() {
                     return Err(invalid_params(
                         "task kill requires non-empty sessionId and taskId",
-                    ));
+                    )
+                    .into());
                 }
                 let sessions = self
                     .sessions
@@ -588,7 +593,8 @@ impl AcpService {
             return Err(invalid_params(format!(
                 "unsupported auth method {method_id:?}; the Grok shim advertises only \
                  {GENTS_AUTH_METHOD_ID:?}"
-            )));
+            ))
+            .into());
         }
         Ok(RequestOutcome {
             notifications: Vec::new(),
@@ -632,7 +638,8 @@ impl AcpService {
                     "model {requested:?} is not in the bound catalog; the Grok shim serves \
                      {:?} from the bound Agent/InferenceProfile",
                     self.config.current_model.model_id
-                )));
+                ))
+                .into());
             }
         }
 
@@ -648,7 +655,7 @@ impl AcpService {
                 .unwrap_or_else(|error| error.into_inner())
                 .contains(&session_id)
             {
-                return Err(invalid_params("session is loading on this connection"));
+                return Err(invalid_params("session is loading on this connection").into());
             }
             sessions.insert(session_id.clone(), AcpSessionState::new());
         }
@@ -709,9 +716,7 @@ impl AcpService {
         let session_id = required_session_id(&request.params)?;
         let _reservation = SessionLoadReservation::reserve(&self.loading_sessions, &session_id)?;
         if self.sessions.lock().await.contains_key(&session_id) {
-            return Err(invalid_params(
-                "session is already attached on this connection",
-            ));
+            return Err(invalid_params("session is already attached on this connection").into());
         }
         let attached_at = chrono::Utc::now().to_rfc3339();
         let rows = super::sessions::load(
@@ -781,7 +786,8 @@ impl AcpService {
                 "model {requested:?} is not in the bound catalog; the Grok shim serves \
                  {:?} from the bound Agent/InferenceProfile",
                 self.config.current_model.model_id
-            )));
+            ))
+            .into());
         }
         if let Some(effort) = request
             .params
@@ -793,7 +799,8 @@ impl AcpService {
                  advertised catalog is text-only with supportsReasoningEffort=false, and a \
                  selected effort is not plumbed into SubmitRequestOptions or provider \
                  inference, so it is rejected rather than silently stored"
-            )));
+            ))
+            .into());
         }
 
         {
@@ -894,7 +901,8 @@ impl AcpService {
             if session.resume_from.is_some() {
                 return Err(invalid_params(
                     "session replay has not handed off to live observation",
-                ));
+                )
+                .into());
             }
         }
         if let [block] = parsed.prompt.as_slice() {
@@ -905,7 +913,6 @@ impl AcpService {
                     .is_none_or(|meta| meta.as_object().is_some_and(|meta| meta.is_empty()))
             {
                 let goal = super::goals::GoalCommand::parse(&block.text)
-                    .map_err(|error| invalid_params(error.to_string()))?
                     .filter(|command| !matches!(command, super::goals::GoalCommand::Create { .. }));
                 let workflow = super::workflow_command::WorkflowCommand::parse(&block.text);
                 if goal.is_some() || workflow.is_some() {
@@ -933,7 +940,7 @@ impl AcpService {
                                     &self.config.node_did,
                                     &parsed.session_id,
                                 )
-                                .await?
+                                .await
                         }
                         (None, None) => unreachable!("a host command matched above"),
                     };
@@ -988,17 +995,18 @@ impl AcpService {
             let id = request.params.get("subagentId");
             match id {
                 None | Some(Value::Null) => {
-                    return Err(invalid_params("subagent request requires a subagentId"));
+                    return Err(invalid_params("subagent request requires a subagentId").into());
                 }
                 Some(value) if !value.is_string() => {
                     return Err(invalid_params(format!(
                         "subagent request requires a string subagentId, got {value:?}"
-                    )));
+                    ))
+                    .into());
                 }
                 Some(value) if value.as_str().is_some_and(|id| id.trim().is_empty()) => {
-                    return Err(invalid_params(
-                        "subagent request requires a non-empty subagentId",
-                    ));
+                    return Err(
+                        invalid_params("subagent request requires a non-empty subagentId").into(),
+                    );
                 }
                 _ => {}
             }
@@ -1010,7 +1018,8 @@ impl AcpService {
                     if !known.contains_key(&session) {
                         return Err(invalid_params(
                             "subagent request names an unknown connection session",
-                        ));
+                        )
+                        .into());
                     }
                     vec![session]
                 }
@@ -1051,7 +1060,7 @@ pub(crate) enum AcpError {
     SessionNotLoaded,
 }
 
-fn shaped_stub_error(method: &str, params: &Value) -> anyhow::Error {
+fn shaped_stub_error(method: &str, params: &Value) -> AcpError {
     let session = optional_session_id(params).unwrap_or_default();
     let message = match method {
         INTERJECT_METHOD => format!(
@@ -1070,25 +1079,24 @@ fn shaped_stub_error(method: &str, params: &Value) -> anyhow::Error {
         ),
         other => format!("method {other:?} is not supported by the Gents Grok shim"),
     };
-    AcpError::ShapedMethodNotFound { message }.into()
+    AcpError::ShapedMethodNotFound { message }
 }
 
-fn error_code_for(error: &anyhow::Error) -> i64 {
-    match error.downcast_ref::<AcpError>() {
+fn error_code_for(error: &(dyn std::error::Error + 'static)) -> i64 {
+    match find_source::<AcpError>(error) {
         Some(AcpError::ShapedMethodNotFound { .. }) => JSONRPC_METHOD_NOT_FOUND,
         Some(AcpError::InvalidParams { .. }) => JSONRPC_INVALID_PARAMS,
         Some(_) | None => JSONRPC_INTERNAL_ERROR,
     }
 }
 
-fn invalid_params(message: impl Into<String>) -> anyhow::Error {
+fn invalid_params(message: impl Into<String>) -> AcpError {
     AcpError::InvalidParams {
         message: message.into(),
     }
-    .into()
 }
 
-fn required_session_id(params: &Value) -> Result<String> {
+fn required_session_id(params: &Value) -> Result<String, AcpError> {
     params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -2893,10 +2901,9 @@ mod tests {
     fn shaped_stub_maps_to_method_not_found_code() {
         let error = shaped_stub_error(SESSION_LOAD_METHOD, &json!({ "sessionId": "s1" }));
         assert_eq!(error_code_for(&error), -32601);
-        let unknown: anyhow::Error = AcpError::ShapedMethodNotFound {
+        let unknown = AcpError::ShapedMethodNotFound {
             message: "unsupported".to_string(),
-        }
-        .into();
+        };
         assert_eq!(error_code_for(&unknown), -32601);
     }
 
@@ -2904,10 +2911,11 @@ mod tests {
     fn internal_and_param_errors_map_to_their_codes() {
         let missing_session = required_session_id(&json!({})).expect_err("missing session id");
         assert_eq!(error_code_for(&missing_session), -32602);
-        let internal = anyhow::anyhow!("boom");
+        let internal = std::io::Error::other("boom");
         assert_eq!(error_code_for(&internal), -32603);
-        let internal_looking =
-            anyhow::anyhow!("storage failed while reading session requires a non-empty sessionId");
+        let internal_looking = std::io::Error::other(
+            "storage failed while reading session requires a non-empty sessionId",
+        );
         assert_eq!(error_code_for(&internal_looking), -32603);
         let typed = invalid_params("any message");
         assert_eq!(error_code_for(&typed), -32602);

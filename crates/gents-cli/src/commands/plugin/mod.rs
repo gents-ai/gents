@@ -11,12 +11,22 @@ use serde_json::json;
 
 use crate::cli::args::{PluginCommand, PluginListArgs, PluginPublishArgs, PluginRemoveArgs};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PluginCommandError {
+    #[error(transparent)]
+    Store(#[from] gents::plugin::store::PluginStoreError),
+    #[error(transparent)]
+    Print(#[from] crate::request_helpers::RequestHelpersError),
+    #[error("encoding plugin manifold")]
+    EncodeManifold(#[source] serde_json::Error),
+}
+
 pub(crate) async fn dispatch(command: PluginCommand) -> Result<()> {
     match command {
         PluginCommand::Build(args) => build::dispatch(args),
         PluginCommand::Publish(args) => publish(args).await,
         PluginCommand::Install(args) => install::install(args).await,
-        PluginCommand::List(args) => list(args),
+        PluginCommand::List(args) => Ok(list(args)?),
         PluginCommand::Remove(args) => remove(args).await,
         PluginCommand::Run(args) => run::run(args).await,
         PluginCommand::Bind(args) => bind::bind(args).await,
@@ -98,7 +108,7 @@ fn plugin_pack(
     Ok(gents::pack_archive::pack_dir(dir)?)
 }
 
-fn list(args: PluginListArgs) -> Result<()> {
+fn list(args: PluginListArgs) -> Result<(), PluginCommandError> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let records = store::list_records(&home)?;
     Ok(crate::print_json(&json!({ "plugins": records }))?)
@@ -144,7 +154,7 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
 
 pub(crate) fn declaration_from_artifact(
     afb: &afterburner_cloud::Afb,
-) -> Result<gents::pack::PackPlugin> {
+) -> Result<gents::pack::PackPlugin, PluginCommandError> {
     let package = &afb.manifest.package;
     Ok(gents::pack::PackPlugin {
         name: package.name.clone(),
@@ -156,7 +166,9 @@ pub(crate) fn declaration_from_artifact(
         source: None,
         language: package.language.clone(),
         input_schema: serde_json::json!({"type": "object"}),
-        manifold: Some(serde_json::to_value(&afb.manifold).context("encoding plugin manifold")?),
+        manifold: Some(
+            serde_json::to_value(&afb.manifold).map_err(PluginCommandError::EncodeManifold)?,
+        ),
         instructions: None,
         bind_dir: None,
         limits: None,
