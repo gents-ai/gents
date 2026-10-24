@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use chrono::Utc;
 use gents::config_client::ConfigClientError;
 use gents::document_config::ToolServiceRegistry;
@@ -16,13 +16,17 @@ use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 use super::util::BridgeCommandError;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum McpRegistryError {
+pub enum McpRegistryError {
     #[error(transparent)]
     Graphql(#[from] ConfigClientError),
     #[error("no enabled ToolServiceRegistry row for service_id={service_id}")]
     NoEnabledRow { service_id: String },
     #[error(transparent)]
     DecodeRow(#[from] serde_json::Error),
+    #[error("node_did must not be empty")]
+    EmptyNodeDid,
+    #[error("service_id must not be empty")]
+    EmptyServiceId,
 }
 
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
@@ -121,14 +125,14 @@ pub async fn probe_mcp_service(
     core: &ClientCore,
     node_did: &str,
     service_id: &str,
-) -> Result<McpServiceProbeResult> {
+) -> Result<McpServiceProbeResult, McpRegistryError> {
     let node_did = node_did.trim();
     if node_did.is_empty() {
-        bail!("node_did must not be empty");
+        return Err(McpRegistryError::EmptyNodeDid);
     }
     let service_id = service_id.trim();
     if service_id.is_empty() {
-        bail!("service_id must not be empty");
+        return Err(McpRegistryError::EmptyServiceId);
     }
     let registry_entry = load_registry_entry(core, node_did, service_id).await?;
     let service = McpHealthCheckService {

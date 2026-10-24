@@ -123,9 +123,7 @@ pub(super) async fn save(
         .map_or(0, |settings| settings.selection.revision)
         != expected
     {
-        return Err(super::backend_error(
-            workspace::SelectionError::Stale.into(),
-        ));
+        return Err(super::backend_error(workspace::SelectionError::Stale));
     }
     let reviewer = if request.mode == Mode::AutoReview {
         // Configuring the Task may use only the existing signer cache; opening
@@ -158,8 +156,8 @@ pub(super) async fn save(
         workspace::save_mode(&home, &key, expected, request.mode, reviewer.as_ref())
     })
     .await
-    .map_err(|error| super::backend_error(error.into()))?
-    .map_err(|error| super::backend_error(error.into()))?;
+    .map_err(super::backend_error)?
+    .map_err(super::backend_error)?;
     local.settings = Some(settings);
     Ok(local.view())
 }
@@ -177,7 +175,7 @@ async fn target(
     let record = super::approvals::peer(core, &request.node_did).await?;
     let support = gents_desktop_core::local_runtime::workspace_permission_support(&record)
         .await
-        .map_err(|error| super::backend_error(error.into()))?;
+        .map_err(super::backend_error)?;
     if record.operator_graphql().is_none() || record.local_node_home.is_none() {
         return Ok(Target::Unavailable(
             WorkspacePermissionsState::RemoteUnavailable { support },
@@ -189,14 +187,14 @@ async fn target(
         ));
     };
     let home = gents_desktop_core::local_runtime::hosted_runtime_home(&record)
-        .map_err(|error| super::backend_error(error.into()))?
+        .map_err(super::backend_error)?
         .to_owned();
     let requester = core.node_identity().did().to_owned();
     tokio::task::spawn_blocking(move || local_target(&home, &requester, &request, support))
         .await
-        .map_err(|error| super::backend_error(error.into()))?
+        .map_err(super::backend_error)?
         .map(|local| Target::Local(Box::new(local)))
-        .map_err(|error| super::backend_error(error.into()))
+        .map_err(super::backend_error)
 }
 
 fn local_target(

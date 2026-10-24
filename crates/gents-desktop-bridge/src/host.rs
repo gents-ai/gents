@@ -26,6 +26,12 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::projection::SnapshotGrants;
 use protocol::ClientCommand;
 
+#[derive(Debug, thiserror::Error)]
+enum HostError {
+    #[error("Connect this local runtime before managing its accounts.")]
+    AccountsNotConnected,
+}
+
 /// Transport attachments share the existing core and never own its shutdown.
 /// The installation host must stop and join attachments before closing the core.
 pub struct ClientHost {
@@ -115,7 +121,7 @@ impl ClientHost {
                         self.core
                             .read_inference_setup_state(&node_did)
                             .await
-                            .map_err(|error| backend_error(error.into()))?,
+                            .map_err(backend_error)?,
                     );
                 }
                 self.core
@@ -193,9 +199,7 @@ impl ClientHost {
                     .core
                     .operator_observation_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Connect this local runtime before managing its accounts.")
-                    });
+                    .ok_or_else(|| anyhow::Error::from(HostError::AccountsNotConnected));
                 encode(
                     crate::accounts::observe_provider_accounts(
                         &self.pending_oauth_credentials,
@@ -210,7 +214,7 @@ impl ClientHost {
                 let provider = crate::accounts::login::provider(request.method)?;
                 let signed = crate::accounts::login::sign_in(&self.pending_oauth_credentials,
                     || self.core.operator_graphql(&request.node_did).map(gents::ConfigAccess::Graphql)
-                        .ok_or_else(|| anyhow::anyhow!("Connect this local runtime before managing its accounts.")),
+                        .ok_or_else(|| anyhow::Error::from(HostError::AccountsNotConnected)),
                     &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
                     async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
                 ).await?;
@@ -237,7 +241,7 @@ impl ClientHost {
                     false,
                 )
                 .await
-                .map_err(|error| backend_error(error.into()))?;
+                .map_err(backend_error)?;
                 if self.core.refresh_store().await.is_err() {
                     tracing::warn!("Account disconnected; its client observation is unavailable");
                 }
@@ -261,7 +265,7 @@ impl ClientHost {
                     &request.label,
                 )
                 .await
-                .map_err(|error| backend_error(error.into()))?;
+                .map_err(backend_error)?;
                 if self.core.refresh_store().await.is_err() {
                     tracing::warn!("Account renamed; its client observation is unavailable");
                 }
@@ -298,9 +302,7 @@ impl ClientHost {
                     .core
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Connect this local runtime before managing its accounts.")
-                    });
+                    .ok_or_else(|| anyhow::Error::from(HostError::AccountsNotConnected));
                 let credential = crate::accounts::retry_pending_credential(
                     &self.pending_oauth_credentials,
                     access,
@@ -318,7 +320,7 @@ impl ClientHost {
                 encode(
                     settings::catalog(&self.core, &node_did)
                         .await
-                        .map_err(|error| backend_error(error.into()))?,
+                        .map_err(backend_error)?,
                 )
             }
             ClientCommand::ConfigRead {
@@ -327,8 +329,7 @@ impl ClientHost {
                 id,
             } => {
                 self.require_configured_runtime(&node_did).await?;
-                let target =
-                    settings::target(&collection).map_err(|error| backend_error(error.into()))?;
+                let target = settings::target(&collection).map_err(backend_error)?;
                 encode(
                     self.core
                         .read_config_editor(&node_did, target, &id)
@@ -344,8 +345,7 @@ impl ClientHost {
                 content,
             } => {
                 self.require_configured_runtime(&node_did).await?;
-                let target =
-                    settings::target(&collection).map_err(|error| backend_error(error.into()))?;
+                let target = settings::target(&collection).map_err(backend_error)?;
                 encode(
                     self.core
                         .save_config_editor(&node_did, target, &id, &revision, &content)
@@ -358,7 +358,7 @@ impl ClientHost {
                 encode(
                     actions::catalog(&self.core, &node_did)
                         .await
-                        .map_err(|error| backend_error(error.into()))?,
+                        .map_err(backend_error)?,
                 )
             }
             ClientCommand::StartTask {
@@ -456,7 +456,7 @@ impl ClientHost {
                 let home = match node_home {
                     Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),
                     _ => gents_desktop_core::local_runtime::default_node_home()
-                        .map_err(|error| backend_error(error.into()))?,
+                        .map_err(backend_error)?,
                 };
                 if !home.is_absolute() {
                     return Err(BridgeError::new(
@@ -660,10 +660,13 @@ impl ClientHost {
 }
 
 fn encode(value: impl Serialize) -> Result<Value, BridgeError> {
-    serde_json::to_value(value).map_err(|error| backend_error(error.into()))
+    serde_json::to_value(value).map_err(backend_error)
 }
 
-fn backend_error(error: anyhow::Error) -> BridgeError {
+fn backend_error<E>(error: E) -> BridgeError
+where
+    E: std::fmt::Display,
+{
     BridgeError::new(BridgeErrorCode::Backend, error.to_string())
 }
 
