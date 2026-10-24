@@ -203,7 +203,7 @@ theorem fork_retains_only_authorized_physical_origin :
     summary forkSource forkRequest = .selected 1 0 0 false := by native_decide
 
 def getSnapshot (value : SourceInput) : Snapshot :=
-  (snapshot value.model admission).toOption.getD ⟨admission, [], []⟩
+  (snapshot value.model admission).toOption.getD ⟨admission, [], [], []⟩
 
 def large : SourceInput := source 65
 def largeSnapshot : Snapshot := getSnapshot large
@@ -259,9 +259,9 @@ theorem cursor_cannot_skip_partial_page :
   native_decide
 
 def firstEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV2, "page-0", admission.node, true, firstPage.toWire "snapshot-digest"⟩
+  ⟨.fileInventoryV3, "page-0", admission.node, true, firstPage.toWire "snapshot-digest"⟩
 def secondEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV2, "page-1", admission.node, true, secondPage.toWire "snapshot-digest"⟩
+  ⟨.fileInventoryV3, "page-1", admission.node, true, secondPage.toWire "snapshot-digest"⟩
 def receiving : Receiver := ⟨admission, []⟩
 def receivedFirst : Receiver := ⟨admission, [⟨"page-0", firstEnvelope⟩]⟩
 def receivedBoth : Option Receiver := do
@@ -270,7 +270,7 @@ def receivedBoth : Option Receiver := do
 
 def unknownSnapshot : Snapshot := getSnapshot {source 1 with projections := []}
 def unknownEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV2, "unknown-page", admission.node, true,
+  ⟨.fileInventoryV3, "unknown-page", admission.node, true,
     (makePage unknownSnapshot 0).toWire "unknown-digest"⟩
 
 structure ReceiverInput where
@@ -305,7 +305,7 @@ def receiverInputs : List ReceiverInput :=
   , {name := "incorrect_next_cursor", envelope :=
       {firstEnvelope with page := {firstEnvelope.page with next := none}}}
   , {name := "duplicate_entry_identity", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata⟩}}}
+      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata, .unresolved⟩}}}
   , {name := "contradictory_projection_binding", state := receivedFirst, requestKey := "page-1",
       envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
         (secondEnvelope.page.entries.map fun entry => {entry with projection := (projection 1).id})}}}

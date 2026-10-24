@@ -111,11 +111,16 @@ private def captureJson : Capture → String
   | .unknown => tagged "unknown"
   | .observed projection => tagged "observed" [("projection", projectionJson projection)]
 
+private def windowJson (value : Order.Window) : String := object
+  [("tool", toString value.tool), ("admitted", toString value.admitted),
+   ("delivered", toString value.delivered)]
+
 private def snapshotJson (value : Snapshot) : String := object
   [("admission", hydrationRequestJson value.admission),
    ("documents", jsonArray (value.documents.map hydrationDocumentKeyJson)),
    ("tools", jsonArray (value.tools.map fun row => object
-      [("tool", toolJson row.tool), ("capture", captureJson row.capture)]))]
+      [("tool", toolJson row.tool), ("capture", captureJson row.capture)])),
+   ("ordering", jsonArray (value.ordering.map (optional windowJson)))]
 
 private def selectionResultJson (result : Except Error Snapshot) : String :=
   match result with
@@ -158,7 +163,10 @@ private def publicationCaseJson (value : PublicationCase) : String := object
 private def entryJson (value : Entry) : String := object
   [("tool", toString value.tool), ("request", toString value.request), ("scope", scopeJson value.scope),
    ("projection", toString value.projection), ("observation", toString value.observation),
-   ("change", changeJson value.change)]
+   ("change", changeJson value.change),
+   ("order", match value.order with
+     | .unresolved => tagged "unresolved"
+     | .ordered index entries => tagged "ordered" [("index", toString index), ("entries", toString entries)])]
 
 private def cursorJson (value : Cursor) : String := object
   [("snapshot", snapshotJson value.snapshot), ("offset", toString value.offset)]
@@ -273,7 +281,7 @@ private def wirePageJson (value : WirePage) : String := object
 private def envelopeJson (value : PageEnvelope) : String := object
   [("purpose", jsonString (match value.purpose with
       | .transcriptV1 => "transcript_v1"
-      | .fileInventoryV2 => "file_inventory_v2")),
+      | .fileInventoryV3 => "file_inventory_v3")),
    ("request_key", jsonString value.requestKey), ("signer", jsonString value.signer),
    ("signature_verified", boolString value.signatureVerified), ("page", wirePageJson value.page)]
 
@@ -576,9 +584,6 @@ private def receiverInputJson (value : Examples.ReceiverInput) : String := objec
 
 def receiverCasesJson : String := jsonArray (receiverInputs.map receiverInputJson)
 
-private def windowJson (value : Order.Window) : String := object
-  [("tool", toString value.tool), ("admitted", toString value.admitted),
-   ("delivered", toString value.delivered)]
 
 def orderingWindowCasesJson : String := jsonArray (Order.Examples.windowCases.map
   fun (name, selected, closure, tool) => object
@@ -598,6 +603,11 @@ def orderingComparisonCasesJson : String := jsonArray (Order.Examples.comparison
      ("root", jsonString root), ("path", jsonString path),
      ("expected", optional (fun ids => jsonArray (ids.map toString))
        (Order.comparison selected closure node root path))])
+
+def orderingEntryCasesJson : String := jsonArray (Order.Examples.entryCases.map
+  fun (name, entries) => object
+    [("name", jsonString name), ("entries", jsonArray (entries.map entryJson)),
+     ("expected", boolString (coherentEntries entries))])
 
 /-- IDs, DIDs and image hashes are the existing models' abstract names. Native
 adapters bind them to actual Defra-created physical IDs, authenticated key

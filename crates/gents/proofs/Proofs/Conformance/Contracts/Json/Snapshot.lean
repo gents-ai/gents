@@ -571,6 +571,8 @@ def snapshotJson : String :=
       ++ Conformance.FileInventoryContracts.orderingResolutionCasesJson ++ ","
     ++ "\"file_inventory_order_comparison_cases\":"
       ++ Conformance.FileInventoryContracts.orderingComparisonCasesJson ++ ","
+    ++ "\"file_inventory_order_entry_cases\":"
+      ++ Conformance.FileInventoryContracts.orderingEntryCasesJson ++ ","
     ++ "\"file_image_hydration_cases\":"
       ++ Conformance.FileImageHydrationContracts.casesJson ++ ","
     ++ "\"file_image_hydration_route_cases\":"
