@@ -52,11 +52,14 @@ def CapturedChange.metadata (change : CapturedChange) : Change :=
   ⟨change.root, change.path, change.before.metadata, change.after.metadata⟩
 
 structure Observation where
-  id : DocId
+  id : Option DocId
   tool : DocId
   request : DocId
   scope : FileImages.Scope
   changes : List CapturedChange
+  /-- Only the native producer of a read-only operation can supply this witness.
+  It is not inferred from success, a name, empty output or missing capture. -/
+  verifiedUnchanged : Bool := false
   deriving DecidableEq, Repr
 
 /-- This is a distinct immutable metadata projection. Storing it inside the
@@ -68,18 +71,24 @@ The current owner comes from the transaction-bound ACP observation, not the
 stored metadata JSON or its authored node/signer columns. -/
 structure Projection where
   id : DocId
-  observation : DocId
+  observation : Option DocId
   tool : DocId
   request : DocId
   scope : FileImages.Scope
   /-- DefraDB's current authenticated document owner, not an authored JSON claim. -/
   owner : String
   changes : List Change
+  verifiedUnchanged : Bool := false
   deriving DecidableEq, Repr
 
 def Observation.metadata (observation : Observation) (projectionId : DocId) : Projection :=
   ⟨projectionId, observation.id, observation.tool, observation.request,
-    observation.scope, observation.scope.node, observation.changes.map CapturedChange.metadata⟩
+    observation.scope, observation.scope.node, observation.changes.map CapturedChange.metadata,
+    observation.verifiedUnchanged⟩
+
+def Observation.wellFormed (observation : Observation) : Bool :=
+  if observation.verifiedUnchanged then observation.id.isNone && observation.changes.isEmpty
+  else observation.id.isSome && !observation.changes.isEmpty
 
 /-- `accepted` is supplied by the existing physical tool acceptance owner,
 including its coordinator block and direct/spawn/plugin provenance checks.
@@ -106,7 +115,7 @@ def publish (pre : ToolCallContext) (action : ToolCallContext.Action)
       actual.accepted && actual.id == pre.callId && actual.request == pre.requestId &&
       actual.state == pre.state && observation.scope == actual.scope &&
       observation.tool == post.callId && observation.request == post.requestId &&
-      !observation.changes.isEmpty then
+      observation.wellFormed then
     some (observation.metadata projectionId)
   else none
 
@@ -307,7 +316,9 @@ def validScope (scope : FileImages.Scope) : Bool :=
 def Projection.matches (projection : Projection) (tool : Tool) : Bool :=
   projection.tool == tool.id && projection.request == tool.request &&
     projection.scope == tool.scope && projection.owner == tool.scope.node &&
-    !projection.changes.isEmpty &&
+    (if projection.verifiedUnchanged then
+      projection.observation.isNone && projection.changes.isEmpty
+     else projection.observation.isSome && !projection.changes.isEmpty) &&
     projection.changes.all (fun change => !change.root.isEmpty && !change.path.isEmpty) &&
     (projection.changes.map (fun change => (change.root, change.path))).Nodup
 
@@ -369,7 +380,7 @@ private def assembleSnapshot (source : Source) (admission : Request) : Except Er
   let observed := tools.filterMap fun fact => match fact.capture with
     | .observed projection => some projection
     | _ => none
-  if !(observed.map (·.id)).Nodup || !(observed.map (·.observation)).Nodup then
+  if !(observed.map (·.id)).Nodup || !(observed.filterMap (·.observation)).Nodup then
     .error .rejected
   else
     let input ← match closureInputFor source.catalog.closureInputs admission with
@@ -443,10 +454,12 @@ structure Entry where
 
 def Snapshot.rawEntries (value : Snapshot) : List Entry :=
   value.tools.flatMap fun fact => match fact.capture with
-    | .observed projection => projection.changes.map fun change =>
-        ⟨fact.tool.id, fact.tool.request, fact.tool.scope,
-          projection.id, projection.observation, change, .unresolved,
-          some (value.requestCoverage fact.tool.scope fact.tool.request)⟩
+    | .observed projection => match projection.observation with
+        | none => []
+        | some observation => projection.changes.map fun change =>
+            ⟨fact.tool.id, fact.tool.request, fact.tool.scope,
+              projection.id, observation, change, .unresolved,
+              some (value.requestCoverage fact.tool.scope fact.tool.request)⟩
     | _ => []
 
 def Snapshot.orderedTools (value : Snapshot) (node root path : String) : Option (List DocId) := do

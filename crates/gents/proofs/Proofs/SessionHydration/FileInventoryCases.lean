@@ -12,7 +12,12 @@ def change (id : Nat) : CapturedChange :=
   ⟨"workspace", "src/" ++ toString id ++ ".rs", .file "before" "old bytes",
     .file "after" "new bytes"⟩
 def observation (id : Nat) : Observation :=
-  ⟨2000 + id, id, (tool id).request, scope, [change id]⟩
+  ⟨some (2000 + id), id, (tool id).request, scope, [change id], false⟩
+def unchangedObservation (id : Nat) : Observation :=
+  { observation id with id := none, changes := [], verifiedUnchanged := true }
+
+def unchangedProjection (id : Nat) : Projection := (unchangedObservation id).metadata (3000 + id)
+
 def projection (id : Nat) : Projection := (observation id).metadata (3000 + id)
 
 def input (ids : List Nat) : ClosureInput :=
@@ -72,7 +77,15 @@ structure SelectionCase where
   expected : Summary := .rejected
 
 def selectionCases : List SelectionCase :=
-  [ ⟨"accepted_terminal_capture", source 1, .selected 1 0 0 false⟩
+  [ ⟨"verified_unchanged_terminal", {source 1 with projections := [unchangedProjection 1]}, .selected 0 0 0 true⟩
+  , ⟨"multiple_verified_unchanged", {source 2 with projections := [unchangedProjection 1, unchangedProjection 2]}, .selected 0 0 0 true⟩
+  , ⟨"unchanged_claim_cannot_carry_images", {source 1 with projections :=
+      [{projection 1 with verifiedUnchanged := true}]}, .rejected⟩
+  , ⟨"unchanged_claim_cannot_retain_image_identity", {source 1 with projections :=
+      [{unchangedProjection 1 with observation := some 2001}]}, .rejected⟩
+  , ⟨"unchanged_claim_cannot_precede_terminal", {source 1 with
+      tools := [{tool 1 with state := .running}], projections := [unchangedProjection 1]}, .rejected⟩
+  , ⟨"accepted_terminal_capture", source 1, .selected 1 0 0 false⟩
   , ⟨"valid_empty_closure", source 0, .selected 0 0 0 true⟩
   , ⟨"legacy_missing_capture_is_unknown", {source 1 with projections := []}, .selected 0 0 1 false⟩
   , ⟨"active_missing_capture_is_pending",
@@ -142,7 +155,26 @@ structure PublicationCase where
   expected : Bool
 
 def publicationCases : List PublicationCase :=
-  [ {name := "completed_retains_capture", action := .complete, expected := true}
+  [ {name := "verified_unchanged_commits", action := .complete, observation := unchangedObservation 1, expected := true}
+  , {name := "unchanged_cancel_retains_witness", action := .cancelDuringRun .userCancelled,
+      observation := unchangedObservation 1, expected := true}
+  , {name := "unchanged_timeout_retains_witness", action := .timeout,
+      observation := unchangedObservation 1, expected := true}
+  , {name := "unchanged_losing_terminal_publishes_nothing", action := .complete, won := false,
+      observation := unchangedObservation 1, expected := false}
+  , {name := "unchanged_rollback_publishes_nothing", action := .complete, write := .failed,
+      observation := unchangedObservation 1, expected := false}
+  , {name := "empty_capture_without_witness_is_invalid", action := .complete,
+      observation := {unchangedObservation 1 with verifiedUnchanged := false}, expected := false}
+  , {name := "unchanged_cannot_claim_images", action := .complete,
+      observation := {observation 1 with verifiedUnchanged := true}, expected := false}
+  , {name := "unchanged_wrong_physical_tool", action := .complete,
+      observation := {unchangedObservation 1 with tool := 2}, expected := false}
+  , {name := "unchanged_wrong_request", action := .complete,
+      observation := {unchangedObservation 1 with request := 999}, expected := false}
+  , {name := "unchanged_wrong_scope", action := .complete,
+      observation := {unchangedObservation 1 with scope := {scope with requester := "other"}}, expected := false}
+  , {name := "completed_retains_capture", action := .complete, expected := true}
   , {name := "failed_retains_partial_capture", action := .fail .external, expected := true}
   , {name := "timeout_retains_partial_capture", action := .timeout, expected := true}
   , {name := "cancelled_retains_partial_capture", action := .cancelDuringRun .userCancelled, expected := true}
@@ -243,7 +275,7 @@ theorem membership_change_is_stale :
 
 theorem metadata_change_is_stale :
     page ({large with projections := large.projections.map (fun value =>
-      if value.tool = 1 then {value with observation := 9999} else value)} : SourceInput).model
+      if value.tool = 1 then {value with observation := some 9999} else value)} : SourceInput).model
       admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩) = .stale := by native_decide
 
 theorem v1_receipt_is_not_upgraded_to_snapshot :
@@ -305,13 +337,13 @@ def receiverInputs : List ReceiverInput :=
   , {name := "incorrect_next_cursor", envelope :=
       {firstEnvelope with page := {firstEnvelope.page with next := none}}}
   , {name := "duplicate_entry_identity", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata, .unresolved, none⟩}}}
+      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id.getD 0, (change 1).metadata, .unresolved, none⟩}}}
   , {name := "contradictory_projection_binding", state := receivedFirst, requestKey := "page-1",
       envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
         (secondEnvelope.page.entries.map fun entry => {entry with projection := (projection 1).id})}}}
   , {name := "contradictory_observation_binding", state := receivedFirst, requestKey := "page-1",
       envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
-        (secondEnvelope.page.entries.map fun entry => {entry with observation := (observation 1).id})}}}
+        (secondEnvelope.page.entries.map fun entry => {entry with observation := (observation 1).id.getD 0})}}}
   , {name := "empty_digest", envelope := {firstEnvelope with page :=
       {firstEnvelope.page with binding := {firstEnvelope.page.binding with digest := ""}}}}
   , {name := "oversized_page", envelope := {firstEnvelope with page :=

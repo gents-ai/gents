@@ -212,7 +212,10 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             let observation_input = json!({ "tool_call_doc_id": tool_id, "request_doc_id": request_id,
                 "node_did": scope.node_did, "session_id": scope.session_id, "requester_did": scope.requester_did,
                 "file_changes": batch });
-            let observation = ConfigAccess::transact_local_write(&node, None, "test.inventory.model_observation", |txn| {
+            let observation = if projection["observation"].is_null() {
+                None
+            } else {
+                Some(ConfigAccess::transact_local_write(&node, None, "test.inventory.model_observation", |txn| {
                 let input = &observation_input;
                 Box::pin(async move {
                     let response = txn.execute_with_variables(
@@ -220,7 +223,8 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                         &json!({"input": input})).await?;
                     crate::graphql::created_doc_id(&response, "ToolFileChange")
                 })
-            }).await.unwrap();
+            }).await.unwrap())
+            };
             let mut changes = Vec::new();
             for modeled in projection["changes"].as_array().unwrap() {
                 let mut metadata = FileChangeMetadata::from(&change);
@@ -241,7 +245,9 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             let input = json!({ "tool_call_doc_id": tool_id, "observation_doc_id": observation,
                 "request_doc_id": projected_request, "node_did": actor(&projection["scope"]["node"]),
                 "session_id": actor(&projection["scope"]["session"]),
-                "requester_did": actor(&projection["scope"]["requester"]), "changes": changes });
+                "requester_did": actor(&projection["scope"]["requester"]),
+                "verified_unchanged": projection["verified_unchanged"].as_bool().filter(|value| *value),
+                "changes": if changes.is_empty() { None } else { Some(changes) } });
             let foreign = if projection["owner"] != "node-1" {
                 let key_path = fixture.path.join("foreign-projection.key");
                 Some(
@@ -942,7 +948,11 @@ fn generated_request_coverage_uses_only_selected_physical_scope() {
                     let projection = Projection {
                         doc_id: document(&value["id"]),
                         tool_call_doc_id: document(&tool["id"]),
-                        observation_doc_id: document(&value["observation"]),
+                        observation_doc_id: (!value["observation"].is_null())
+                            .then(|| document(&value["observation"])),
+                        verified_unchanged: value["verified_unchanged"]
+                            .as_bool()
+                            .filter(|value| *value),
                         request_doc_id: document(&tool["request"]),
                         node_did: scope.node_did.clone(),
                         session_id: scope.session_id.clone(),
@@ -955,7 +965,7 @@ fn generated_request_coverage_uses_only_selected_physical_scope() {
                             request_doc_id: projection.request_doc_id.clone(),
                             scope: scope.clone(),
                             projection_doc_id: projection.doc_id.clone(),
-                            observation_doc_id: projection.observation_doc_id.clone(),
+                            observation_doc_id: projection.observation_doc_id.clone().unwrap(),
                             change: change.clone(),
                             order: None,
                             request_coverage: None,
