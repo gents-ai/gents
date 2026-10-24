@@ -5,7 +5,7 @@ import type { ReconstructionState } from "./ReconstructionState.js";
 import type { RequestOriginView } from "./RequestOriginView.js";
 import type { RequestTurnView } from "./RequestTurnView.js";
 
-export type MessageView = { requestTurn?: RequestTurnView | null, messageKey: string, requestId: string | null, ownsTurn: boolean, sequence: number | null, role: string | null, displayRole: string | null, displayContent: string | null, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, reasoning: string | null, hasToolCalls: boolean, hasToolResults: boolean,
+export type MessageView = { startedGoalId?: string | null, requestTurn?: RequestTurnView | null, messageKey: string, requestId: string | null, ownsTurn: boolean, sequence: number | null, role: string | null, displayRole: string | null, displayContent: string | null, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, reasoning: string | null, hasToolCalls: boolean, hasToolResults: boolean,
 /**
  * Durable even while an immutable dependency is still replicating.
  */

@@ -213,6 +213,7 @@ pub(super) fn build_rendered_timeline(
                 (Some(_), _) | (None, true) => (
                     true,
                     Some(RenderedTimelineItem::UserMessage {
+                        started_goal_id: message.started_goal_id.clone(),
                         item_key: message.message_key.clone(),
                         request_id: message.request_id.clone(),
                         owns_turn: message.owns_turn,
@@ -305,6 +306,7 @@ mod tests {
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
         MessageView {
+            started_goal_id: None,
             request_turn: None,
             message_key: key.to_string(),
             request_id: Some("request-1".to_string()),
