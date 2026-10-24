@@ -10424,7 +10424,7 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.35.0"
-source = "git+https://github.com/jackzampolin/rig?rev=01136d50c24232cac8953f2fb2ebf14d07fa32f4#01136d50c24232cac8953f2fb2ebf14d07fa32f4"
+source = "git+https://github.com/jackzampolin/rig?rev=b12a51c9c544e1b0f5b3961e0293cf8868868730#b12a51c9c544e1b0f5b3961e0293cf8868868730"
 dependencies = [
  "as-any",
  "async-stream",
