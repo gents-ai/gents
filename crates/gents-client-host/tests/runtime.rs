@@ -77,6 +77,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRetry,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorDelivery,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReview,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReviewPermissions,
@@ -101,6 +103,7 @@ impl Journey {
             Self::EditorGoalRemoval => Some("goal-removal"),
             Self::EditorGoalReplacement => Some("goal-replacement"),
             Self::EditorRetry => Some("retry"),
+            Self::EditorDelivery => Some("delivery"),
             Self::EditorReview => Some("review"),
             Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorInventory => Some("review-inventory"),
@@ -114,6 +117,34 @@ impl Journey {
 
 const STEERING_INPUT: &str = "Steering input from the installed editor.";
 const STEERING_REPLY: &str = "Steering input received.";
+
+#[cfg(feature = "editor-e2e")]
+#[cfg_attr(
+    windows,
+    ignore = "installed reply-loss relay requires a POSIX executable fixture"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_recovers_the_original_message_after_a_lost_helper_reply() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorDelivery)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-delivery-canonical.json")
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> Result<()> {
@@ -504,6 +535,32 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorDelivery) {
+                let user = request["messages"]
+                    .as_array()
+                    .and_then(|messages| {
+                        messages
+                            .iter()
+                            .rev()
+                            .find(|message| message["role"] == "user")
+                    })
+                    .map(Value::to_string)
+                    .unwrap_or_default();
+                for (prompt, reply) in [
+                    (
+                        "Keep this later draft after recovery.",
+                        "Follow-up delivery response.",
+                    ),
+                    (
+                        "Return the installed delivery recovery response.",
+                        "Installed delivery response.",
+                    ),
+                ] {
+                    if user.contains(prompt) {
+                        return ChatAction::Sse(fake_llm::completion_text_sse(reply));
+                    }
+                }
+            }
             if matches!(
                 journey,
                 Journey::EditorRelatedWork | Journey::EditorRelatedWorkFailure
@@ -753,7 +810,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
         .context("runtime default agent")?;
-    if matches!(journey, Journey::Conversation) {
+    if matches!(journey, Journey::Conversation | Journey::EditorDelivery) {
+        if matches!(journey, Journey::EditorDelivery) {
+            client
+                .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+                .await;
+            id += 1;
+            wait_chat_deployment(&mut client, &mut id, node_did).await?;
+        }
         configure_inference(
             &mut client,
             &mut id,
@@ -1806,6 +1870,72 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         std::fs::write(
             root.join("editor-goal-recovery-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
+    if matches!(journey, Journey::EditorDelivery) {
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "delivery",
+        )
+        .await?;
+        let marker: Value =
+            serde_json::from_slice(&std::fs::read(root.join("editor-reply-loss.json"))?)?;
+        let request_id = marker["requestId"]
+            .as_str()
+            .context("missing retained caller identity in dropped reply")?;
+        let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id session_id content admission_signature lifecycle_state}} }}",
+            gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session));
+        let rows = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let rows = access.execute(&query).await?;
+                let requests = rows["data"]["AgentRequest"]
+                    .as_array()
+                    .context("missing admitted request rows")?;
+                let original: Vec<_> = requests
+                    .iter()
+                    .filter(|row| row["request_id"] == request_id)
+                    .collect();
+                let follow_up: Vec<_> = requests
+                    .iter()
+                    .filter(|row| row["content"] == "Keep this later draft after recovery.")
+                    .collect();
+                ensure!(
+                    original.len() == 1 && follow_up.len() == 1,
+                    "installed recovery duplicated or lost its authored requests: {rows}"
+                );
+                ensure!(
+                    original[0]["content"] == "Return the installed delivery recovery response.",
+                    "installed recovery changed its authored input"
+                );
+                ensure!(
+                    requests
+                        .iter()
+                        .all(|row| row["content"] != "Next draft remains editable."),
+                    "the unsent draft was submitted"
+                );
+                ensure!(
+                    original[0]["admission_signature"]
+                        .as_str()
+                        .is_some_and(|signature| !signature.is_empty()),
+                    "installed request has no admission signature"
+                );
+                if original[0]["lifecycle_state"] == "completed"
+                    && follow_up[0]["lifecycle_state"] == "completed"
+                {
+                    return Ok::<_, anyhow::Error>(rows);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .context("installed recovered conversation did not complete")??;
+        std::fs::write(
+            root.join("editor-delivery-canonical.json"),
+            serde_json::to_vec_pretty(&rows)?,
         )?;
     }
     if matches!(journey, Journey::EditorRetry) {
