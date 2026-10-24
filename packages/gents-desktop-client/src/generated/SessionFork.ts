@@ -5,4 +5,9 @@ export type SessionFork = { source_session_id: string, at_user_turn: number,
  * Exact edit anchor committed with the child. Absence does not authorize
  * replay of a caller-selected destination (Lean `SessionFork.decideEditFork`).
  */
-before_message_key?: string | null, };
+before_message_key?: string | null,
+/**
+ * Native DID that authored the retained fork, independent of a shared
+ * runtime operator requester scope. This records creation, not a grant.
+ */
+edit_client_did?: string | null, };
