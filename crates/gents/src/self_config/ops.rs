@@ -1183,7 +1183,25 @@ pub(crate) async fn profile_backend_id(
         .and_then(|(_, doc)| doc.get("backend_id")?.as_str().map(ToOwned::to_owned))
         .with_context(|| format!("InferenceProfile {profile_id:?} not found"))
 }
-pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MergedSelectionError {
+    #[error(transparent)]
+    Tools(#[from] GuardError),
+    #[error("{message}")]
+    Lsp { message: String },
+    #[error(transparent)]
+    Validate(Box<crate::document_config::DocumentConfigError>),
+}
+
+impl From<crate::document_config::DocumentConfigError> for MergedSelectionError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::Validate(Box::new(error))
+    }
+}
+
+pub(crate) fn validate_merged_selection(
+    merged: &Map<String, Value>,
+) -> Result<(), MergedSelectionError> {
     let tools = decode_merged::<Tools>("Tools", merged)?;
     if let Some(lsp) = tools
         .integrations
@@ -1191,7 +1209,7 @@ pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<(
         .and_then(|group| group.lsp.as_ref())
     {
         crate::toolset::lsp::LspConfigDocument::parse_self_config(lsp.config.as_deref())
-            .map_err(anyhow::Error::msg)?;
+            .map_err(|message| MergedSelectionError::Lsp { message })?;
     }
     Ok(tools.validate()?)
 }

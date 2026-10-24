@@ -138,7 +138,7 @@ impl GraphRunCursor {
 
 impl ObservedView for GraphRunView {
     fn is_terminal(&self) -> Result<bool> {
-        self.status().map(GraphRunStatus::is_terminal)
+        Ok(self.status().map(GraphRunStatus::is_terminal)?)
     }
 
     /// Counting only facts that grow over a run's life (stage, request and

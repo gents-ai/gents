@@ -112,6 +112,12 @@ impl From<anyhow::Error> for SelfConfigError {
     }
 }
 
+impl From<crate::graph_pipeline::GraphPipelineError> for SelfConfigError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self(error.into())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum OutcomeTextError {
     #[error("serialize outcome: {error}")]
@@ -564,15 +570,21 @@ fn automation_request(
     });
     request
 }
-fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
+#[derive(Debug, thiserror::Error)]
+#[error("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")]
+struct AutomationKindError {
+    kind: String,
+}
+
+fn automation_target(kind: &str) -> Result<SelfConfigTarget, AutomationKindError> {
     match kind {
         "task" => Ok(SelfConfigTarget::Task),
         "schedule" => Ok(SelfConfigTarget::Schedule),
         "trigger" => Ok(SelfConfigTarget::Trigger),
         "event_source" => Ok(SelfConfigTarget::EventSource),
-        _ => {
-            bail!("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")
-        }
+        _ => Err(AutomationKindError {
+            kind: kind.to_owned(),
+        }),
     }
 }
 
@@ -647,7 +659,20 @@ pub struct ConfigureAgentParams {
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
 
-async fn node_default_agent(node: &EmbeddedNode, node_did: &str) -> Result<Option<String>> {
+#[derive(Debug, thiserror::Error)]
+enum NodeDefaultAgentError {
+    #[error(transparent)]
+    Query(#[from] crate::config_client::ConfigClientError),
+    #[error("Node query returned no rows")]
+    MissingRows,
+    #[error("ambiguous node identity")]
+    AmbiguousIdentity,
+}
+
+async fn node_default_agent(
+    node: &EmbeddedNode,
+    node_did: &str,
+) -> Result<Option<String>, NodeDefaultAgentError> {
     let query = format!(
         r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_id }} }}"#,
         escape_graphql_string(node_did)
@@ -660,8 +685,10 @@ async fn node_default_agent(node: &EmbeddedNode, node_did: &str) -> Result<Optio
         .as_ref()
         .and_then(|data| data.get("Node"))
         .and_then(Value::as_array)
-        .context("Node query returned no rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous node identity");
+        .ok_or(NodeDefaultAgentError::MissingRows)?;
+    if rows.len() > 1 {
+        return Err(NodeDefaultAgentError::AmbiguousIdentity);
+    }
     Ok(rows
         .first()
         .and_then(|row| row.get("default_agent_id"))

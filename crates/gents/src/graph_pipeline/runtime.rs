@@ -58,6 +58,141 @@ pub enum GraphPipelineError {
     UnboundWorkspaceSeal,
     #[error("graph input workspace field {name} must be a string")]
     WorkspaceFieldNotString { name: String },
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error("graph must be materialized before activation")]
+    GraphNotMaterialized,
+    #[error("graph {graph_id:?} belongs to a different node")]
+    GraphOwnedByOtherNode { graph_id: String },
+    #[error("candidate graph revision does not exist")]
+    CandidateRevisionMissing,
+    #[error("candidate revision is not complete for this graph and owner")]
+    CandidateRevisionIncomplete,
+    #[error("active pointer selects a revision that is not runnable")]
+    ActivePointerNotRunnable,
+    #[error("graph activation conflict: expected previous {expected:?}, found {found:?}")]
+    ActivationConflict {
+        expected: Option<String>,
+        found: Option<String>,
+    },
+    #[error("candidate revision is not validated and ready for activation")]
+    CandidateNotReady,
+    #[error("candidate revision is missing _docID")]
+    CandidateRevisionDocIdMissing,
+    #[error("GraphDefinition is missing _docID")]
+    DefinitionDocIdMissing,
+    #[error("active graph revision is missing")]
+    ActiveRevisionMissing,
+    #[error("graph does not exist")]
+    GraphMissing,
+    #[error("unrecognized persisted graph run status {status:?}")]
+    UnrecognizedRunStatus { status: String },
+    #[error("pinned GraphRevision is missing plan_json")]
+    PinnedRevisionPlanJsonMissing,
+    #[error("pinned GraphRevision {digest:?} is missing or ambiguous")]
+    PinnedRevisionAmbiguous { digest: String },
+    #[error("pinned GraphRevision plan failed immutable identity verification")]
+    PinnedRevisionUnverified,
+    #[error("group observation is outside the graph run scope")]
+    GroupOutsideRunScope,
+    #[error("graph group observation names a callback binding")]
+    GroupCallbackBinding,
+    #[error("group observation names an unplanned trigger")]
+    GroupUnplannedTrigger,
+    #[error("result document is missing _docID")]
+    ResultDocIdMissing,
+    #[error("result document {document_id} has no current commit CID")]
+    ResultCommitCidMissing { document_id: String },
+    #[error("collection {collection} version has no Fields array")]
+    CollectionFieldsMissing { collection: String },
+    #[error("result collection {collection} is unavailable")]
+    ResultCollectionUnavailable { collection: String },
+    #[error("reconstructing result {name} document {document_id} at {commit_cid}")]
+    ReconstructResult {
+        name: String,
+        document_id: String,
+        commit_cid: String,
+        #[source]
+        source: Box<crate::config_client::ConfigClientError>,
+    },
+    #[error("result {name} document {document_id} at {commit_cid} reconstructed {rows} rows")]
+    ReconstructedRowCount {
+        name: String,
+        document_id: String,
+        commit_cid: String,
+        rows: usize,
+    },
+    #[error("result {name} commit {commit_cid} reconstructed the wrong document")]
+    ReconstructedWrongDocument { name: String, commit_cid: String },
+    #[error("historical result document has no composite commit")]
+    HistoricalCommitMissing,
+    #[error("result {name} document {document_id} reconstructed commit {reconstructed}, expected {expected}")]
+    ReconstructedCommitMismatch {
+        name: String,
+        document_id: String,
+        reconstructed: String,
+        expected: String,
+    },
+    #[cfg(test)]
+    #[error("native query failed: {errors}")]
+    NativeQueryFailed { errors: String },
+    #[error("cannot enable a graph without an active revision")]
+    CannotEnableWithoutRevision,
+    #[error("active graph revision is not runnable")]
+    ActiveRevisionNotRunnable,
+    #[error("{collection} query omitted rows")]
+    QueryOmittedRows { collection: String },
+    #[error("{collection} has invalid {field}")]
+    InvalidRowField { collection: String, field: String },
+    #[error("finding running graph runs")]
+    LiveRunQuery {
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("refusing to preview a GraphPlan with an invalid digest")]
+    PreviewPlanDigestInvalid,
+    #[error("unexpected route artifact collection {collection:?}")]
+    UnexpectedRouteArtifactCollection { collection: crate::Collection },
+    #[error("graph publication requires exactly one durable run")]
+    PublicationRunCount,
+    #[error("{reason}")]
+    PublicationDenied { reason: &'static str },
+    #[error("graph run is missing its publication generation")]
+    PublicationRunMissingGeneration,
+    #[error("graph run publication generation exhausted")]
+    PublicationGenerationExhausted,
+    #[error("graph run is missing its document ID")]
+    PublicationRunMissingDocId,
+    #[error("multiple GraphDefinition rows share graph_id {graph_id:?}")]
+    MultipleGraphDefinitionRows { graph_id: String },
+    #[error("multiple GraphRevision rows share digest {digest:?}")]
+    MultipleGraphRevisionRows { digest: String },
+    #[error("graph revision does not belong to this graph and owner")]
+    RevisionOwnershipMismatch,
+    #[error("graph revision is missing plan_json")]
+    RevisionPlanJsonMissing,
+    #[error("graph revision is missing digest")]
+    RevisionDigestMissing,
+    #[error("graph revision plan failed immutable identity verification")]
+    RevisionPlanUnverified,
+}
+
+impl crate::config_client::TransactionFailure for GraphPipelineError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::GraphqlResponse(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -260,7 +395,7 @@ fn revision_visibility_authorized(status: &str, active_pointer: bool, run_pin: b
 pub(crate) async fn load_runtime_graph_artifacts_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
-) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+) -> Result<(BTreeSet<String>, BTreeSet<String>), GraphPipelineError> {
     let owner = escape_graphql_string(node_did);
     let response = txn
         .execute(&format!(
@@ -274,17 +409,22 @@ pub(crate) async fn load_runtime_graph_artifacts_in_txn(
     }}"#
         ))
         .await?;
-    let digests = |collection: &str, field: &str| -> Result<BTreeSet<String>> {
+    let digests = |collection: &str, field: &str| -> Result<BTreeSet<String>, GraphPipelineError> {
         let rows = response
             .get("data")
             .and_then(|data| data.get(collection))
             .and_then(Value::as_array)
-            .with_context(|| format!("{collection} query omitted rows"))?;
+            .ok_or_else(|| GraphPipelineError::QueryOmittedRows {
+                collection: collection.to_owned(),
+            })?;
         rows.iter()
             .filter_map(|row| match row.get(field) {
                 None | Some(Value::Null) => None,
                 Some(Value::String(value)) if !value.is_empty() => Some(Ok(value.clone())),
-                _ => Some(Err(anyhow::anyhow!("{collection} has invalid {field}"))),
+                _ => Some(Err(GraphPipelineError::InvalidRowField {
+                    collection: collection.to_owned(),
+                    field: field.to_owned(),
+                })),
             })
             .collect()
     };
@@ -301,12 +441,15 @@ pub(crate) async fn load_visible_package_artifact_ids(
     pinned_revision_digests: &BTreeSet<String>,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
     ConfigAccess::transact_local_readonly(node, None, "graph_pipeline.visible_artifacts", |txn| {
-        Box::pin(load_visible_package_artifact_ids_in_txn(
-            txn,
-            node_did,
-            active_revision_digests,
-            pinned_revision_digests,
-        ))
+        Box::pin(async move {
+            Ok(load_visible_package_artifact_ids_in_txn(
+                txn,
+                node_did,
+                active_revision_digests,
+                pinned_revision_digests,
+            )
+            .await?)
+        })
     })
     .await
 }
@@ -316,7 +459,7 @@ pub(crate) async fn load_visible_package_artifact_ids_in_txn(
     node_did: &str,
     active_revision_digests: &BTreeSet<String>,
     pinned_revision_digests: &BTreeSet<String>,
-) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+) -> Result<(BTreeSet<String>, BTreeSet<String>), GraphPipelineError> {
     let revision_digests = active_revision_digests
         .union(pinned_revision_digests)
         .cloned()
@@ -508,7 +651,7 @@ pub(crate) async fn fence_graph_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
     run_id: &str,
     revision_digest: &str,
-) -> Result<()> {
+) -> Result<(), GraphPipelineError> {
     let response = txn
         .execute(&format!(
             r#"{{ GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -518,7 +661,7 @@ pub(crate) async fn fence_graph_publication_in_txn(
         ))
         .await?;
     let [run] = rows(&response, "GraphRun") else {
-        anyhow::bail!("graph publication requires exactly one durable run");
+        return Err(GraphPipelineError::PublicationRunCount);
     };
     fence_observed_graph_publication_in_txn(txn, run, revision_digest).await
 }
@@ -527,7 +670,7 @@ pub(super) async fn fence_observed_graph_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
     run: &Value,
     revision_digest: &str,
-) -> Result<()> {
+) -> Result<(), GraphPipelineError> {
     txn.execute(&graph_publication_generation_update(run, revision_digest)?)
         .await?;
     Ok(())
@@ -536,21 +679,21 @@ pub(super) async fn fence_observed_graph_publication_in_txn(
 pub(super) fn graph_publication_generation_update(
     run: &Value,
     revision_digest: &str,
-) -> Result<String> {
+) -> Result<String, GraphPipelineError> {
     if let Some(reason) = graph_publication_denial(std::slice::from_ref(run), revision_digest) {
-        anyhow::bail!(reason);
+        return Err(GraphPipelineError::PublicationDenied { reason });
     }
     let generation = run
         .get("update_generation")
         .and_then(Value::as_i64)
-        .context("graph run is missing its publication generation")?;
+        .ok_or(GraphPipelineError::PublicationRunMissingGeneration)?;
     let next = generation
         .checked_add(1)
-        .context("graph run publication generation exhausted")?;
+        .ok_or(GraphPipelineError::PublicationGenerationExhausted)?;
     let doc_id = run
         .get("_docID")
         .and_then(Value::as_str)
-        .context("graph run is missing its document ID")?;
+        .ok_or(GraphPipelineError::PublicationRunMissingDocId)?;
     Ok(format!(
         "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
         escape_graphql_string(doc_id),
@@ -572,7 +715,7 @@ pub(super) fn planned_workspace_authority(plan: &GraphPlan, node_id: &str) -> Op
     Some(ceiling.as_str())
 }
 
-fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
+fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision, GraphPipelineError> {
     let mut task_ids = plan
         .nodes
         .iter()
@@ -595,9 +738,9 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
 pub fn prospective_graph_artifact_identities(
     owner_did: &str,
     plan: &GraphPlan,
-) -> Result<Vec<ProspectiveGraphArtifactIdentity>> {
+) -> Result<Vec<ProspectiveGraphArtifactIdentity>, GraphPipelineError> {
     if !verify_graph_plan_digest(plan) {
-        anyhow::bail!("refusing to preview a GraphPlan with an invalid digest");
+        return Err(GraphPipelineError::PreviewPlanDigestInvalid);
     }
     let mut documents = vec![
         ProspectiveGraphArtifactIdentity {
@@ -622,7 +765,11 @@ pub fn prospective_graph_artifact_identities(
             crate::Collection::Trigger => "trigger_id",
             crate::Collection::Callback => "callback_id",
             crate::Collection::CallbackBinding => "binding_id",
-            other => anyhow::bail!("unexpected route artifact collection {other:?}"),
+            other => {
+                return Err(GraphPipelineError::UnexpectedRouteArtifactCollection {
+                    collection: other,
+                })
+            }
         };
         documents.push(ProspectiveGraphArtifactIdentity {
             collection: collection.graphql_type().to_owned(),
@@ -649,7 +796,7 @@ async fn query_graph_definition(
     txn: &ConfigApplyTxn<'_>,
     owner_did: &str,
     graph_id: &str,
-) -> Result<Option<Value>> {
+) -> Result<Option<Value>, GraphPipelineError> {
     let query = format!(
         r#"{{
             GraphDefinition(filter: {{ node_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -662,12 +809,17 @@ async fn query_graph_definition(
     let response = txn.execute(&query).await?;
     let rows = rows(&response, "GraphDefinition");
     if rows.len() > 1 {
-        anyhow::bail!("multiple GraphDefinition rows share graph_id {graph_id:?}");
+        return Err(GraphPipelineError::MultipleGraphDefinitionRows {
+            graph_id: graph_id.to_owned(),
+        });
     }
     Ok(rows.first().cloned())
 }
 
-async fn query_graph_revision(txn: &ConfigApplyTxn<'_>, digest: &str) -> Result<Option<Value>> {
+async fn query_graph_revision(
+    txn: &ConfigApplyTxn<'_>,
+    digest: &str,
+) -> Result<Option<Value>, GraphPipelineError> {
     let query = format!(
         r#"{{
             GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -681,29 +833,35 @@ async fn query_graph_revision(txn: &ConfigApplyTxn<'_>, digest: &str) -> Result<
     let response = txn.execute(&query).await?;
     let rows = rows(&response, "GraphRevision");
     if rows.len() > 1 {
-        anyhow::bail!("multiple GraphRevision rows share digest {digest:?}");
+        return Err(GraphPipelineError::MultipleGraphRevisionRows {
+            digest: digest.to_owned(),
+        });
     }
     Ok(rows.first().cloned())
 }
 
-fn verified_revision_plan(revision: &Value, graph_id: &str, owner_did: &str) -> Result<GraphPlan> {
+fn verified_revision_plan(
+    revision: &Value,
+    graph_id: &str,
+    owner_did: &str,
+) -> Result<GraphPlan, GraphPipelineError> {
     if revision.get("graph_id").and_then(Value::as_str) != Some(graph_id)
         || revision.get("owner_did").and_then(Value::as_str) != Some(owner_did)
     {
-        anyhow::bail!("graph revision does not belong to this graph and owner");
+        return Err(GraphPipelineError::RevisionOwnershipMismatch);
     }
     let plan: GraphPlan = serde_json::from_str(
         revision
             .get("plan_json")
             .and_then(Value::as_str)
-            .context("graph revision is missing plan_json")?,
+            .ok_or(GraphPipelineError::RevisionPlanJsonMissing)?,
     )?;
     let digest = revision
         .get("digest")
         .and_then(Value::as_str)
-        .context("graph revision is missing digest")?;
+        .ok_or(GraphPipelineError::RevisionDigestMissing)?;
     if plan.graph_id != graph_id || plan.digest != digest || !verify_graph_plan_digest(&plan) {
-        anyhow::bail!("graph revision plan failed immutable identity verification");
+        return Err(GraphPipelineError::RevisionPlanUnverified);
     }
     Ok(plan)
 }
@@ -712,7 +870,7 @@ async fn query_enabled_task_ids(
     txn: &ConfigApplyTxn<'_>,
     owner_did: &str,
     task_ids: &[String],
-) -> Result<BTreeSet<String>> {
+) -> Result<BTreeSet<String>, GraphPipelineError> {
     let task_ids = graphql_string_list_literal(task_ids);
     let owner_did = escape_graphql_string(owner_did);
     let response = txn
@@ -734,7 +892,7 @@ async fn create_document(
     txn: &ConfigApplyTxn<'_>,
     collection: &str,
     document: &Value,
-) -> Result<String> {
+) -> Result<String, GraphPipelineError> {
     validate_collection_identifier(collection)?;
     let input = graphql_input_literal(document)?;
     let mutation = format!("mutation {{ create_{collection}(input: {input}) {{ _docID }} }}");
@@ -749,7 +907,7 @@ async fn update_document(
     collection: &str,
     doc_id: &str,
     document: &Value,
-) -> Result<()> {
+) -> Result<(), GraphPipelineError> {
     validate_collection_identifier(collection)?;
     let input = graphql_input_literal(document)?;
     let mutation = format!(
@@ -861,7 +1019,7 @@ async fn materialize_in_txn(
             anyhow::bail!("stored graph revision does not match compiled plan identity");
         }
         if revision.get("artifacts_complete").and_then(Value::as_bool) == Some(true) {
-            return materialization_receipt(plan);
+            return Ok(materialization_receipt(plan)?);
         }
         if revision.get("status").and_then(Value::as_str) != Some("validated") {
             anyhow::bail!("incomplete graph revision is not in validated state");
@@ -967,7 +1125,7 @@ async fn materialize_in_txn(
     )
     .await?;
 
-    materialization_receipt(plan)
+    Ok(materialization_receipt(plan)?)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1070,7 +1228,7 @@ pub async fn activate_graph_revision(
     graph_id: &str,
     digest: &str,
     expected_previous: Option<&str>,
-) -> Result<ActivationReceipt> {
+) -> Result<ActivationReceipt, GraphPipelineError> {
     digest_hex(digest)?;
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
@@ -1093,7 +1251,7 @@ pub async fn activate_graph_revision_with_access(
     graph_id: &str,
     digest: &str,
     expected_previous: Option<&str>,
-) -> Result<ActivationReceipt> {
+) -> Result<ActivationReceipt, GraphPipelineError> {
     digest_hex(digest)?;
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
@@ -1113,12 +1271,14 @@ async fn activate_in_txn(
     digest: &str,
     expected_previous: Option<&str>,
     now: &str,
-) -> Result<ActivationReceipt> {
+) -> Result<ActivationReceipt, GraphPipelineError> {
     let definition = query_graph_definition(txn, owner_did, graph_id)
         .await?
-        .context("graph must be materialized before activation")?;
+        .ok_or(GraphPipelineError::GraphNotMaterialized)?;
     if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-        anyhow::bail!("graph {graph_id:?} belongs to a different node");
+        return Err(GraphPipelineError::GraphOwnedByOtherNode {
+            graph_id: graph_id.to_owned(),
+        });
     }
     let current = definition
         .get("active_revision_digest")
@@ -1127,12 +1287,12 @@ async fn activate_in_txn(
         .map(ToOwned::to_owned);
     let revision = query_graph_revision(txn, digest)
         .await?
-        .context("candidate graph revision does not exist")?;
+        .ok_or(GraphPipelineError::CandidateRevisionMissing)?;
     if revision.get("graph_id").and_then(Value::as_str) != Some(graph_id)
         || revision.get("owner_did").and_then(Value::as_str) != Some(owner_did)
         || revision.get("artifacts_complete").and_then(Value::as_bool) != Some(true)
     {
-        anyhow::bail!("candidate revision is not complete for this graph and owner");
+        return Err(GraphPipelineError::CandidateRevisionIncomplete);
     }
     verified_revision_plan(&revision, graph_id, owner_did)?;
     if current.as_deref() == Some(digest) {
@@ -1149,7 +1309,7 @@ async fn activate_in_txn(
             true,
         );
         if !gate.may_start {
-            anyhow::bail!("active pointer selects a revision that is not runnable");
+            return Err(GraphPipelineError::ActivePointerNotRunnable);
         }
         return Ok(ActivationReceipt {
             graph_id: graph_id.to_owned(),
@@ -1158,11 +1318,10 @@ async fn activate_in_txn(
         });
     }
     if current.as_deref() != expected_previous {
-        anyhow::bail!(
-            "graph activation conflict: expected previous {:?}, found {:?}",
-            expected_previous,
-            current
-        );
+        return Err(GraphPipelineError::ActivationConflict {
+            expected: expected_previous.map(str::to_owned),
+            found: current.clone(),
+        });
     }
     let gate = revision_gate_decision(
         revision
@@ -1177,7 +1336,7 @@ async fn activate_in_txn(
         false,
     );
     if !gate.may_activate {
-        anyhow::bail!("candidate revision is not validated and ready for activation");
+        return Err(GraphPipelineError::CandidateNotReady);
     }
 
     if let Some(previous) = current.as_deref() {
@@ -1196,7 +1355,7 @@ async fn activate_in_txn(
     let revision_doc_id = revision
         .get("_docID")
         .and_then(Value::as_str)
-        .context("candidate revision is missing _docID")?;
+        .ok_or(GraphPipelineError::CandidateRevisionDocIdMissing)?;
     update_document(
         txn,
         "GraphRevision",
@@ -1207,7 +1366,7 @@ async fn activate_in_txn(
     let definition_doc_id = definition
         .get("_docID")
         .and_then(Value::as_str)
-        .context("GraphDefinition is missing _docID")?;
+        .ok_or(GraphPipelineError::DefinitionDocIdMissing)?;
     update_document(
         txn,
         "GraphDefinition",
@@ -1230,12 +1389,14 @@ pub(crate) async fn load_active_graph_plan_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner_did: &str,
     graph_id: &str,
-) -> Result<Option<GraphPlan>> {
+) -> Result<Option<GraphPlan>, GraphPipelineError> {
     let definition = query_graph_definition(txn, owner_did, graph_id)
         .await?
-        .context("graph does not exist")?;
+        .ok_or(GraphPipelineError::GraphMissing)?;
     if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-        anyhow::bail!("graph {graph_id:?} belongs to a different node");
+        return Err(GraphPipelineError::GraphOwnedByOtherNode {
+            graph_id: graph_id.to_owned(),
+        });
     }
     let Some(digest) = definition
         .get("active_revision_digest")
@@ -1246,7 +1407,7 @@ pub(crate) async fn load_active_graph_plan_in_txn(
     };
     let revision = query_graph_revision(txn, digest)
         .await?
-        .context("active graph revision is missing")?;
+        .ok_or(GraphPipelineError::ActiveRevisionMissing)?;
     Ok(Some(verified_revision_plan(
         &revision, graph_id, owner_did,
     )?))
@@ -1256,7 +1417,7 @@ pub async fn load_active_graph_plan_with_access(
     access: &ConfigAccess,
     owner_did: &str,
     graph_id: &str,
-) -> Result<Option<GraphPlan>> {
+) -> Result<Option<GraphPlan>, GraphPipelineError> {
     access
         .transact_readonly("graph_pipeline.load_active_plan", move |txn| {
             Box::pin(async move { load_active_graph_plan_in_txn(txn, owner_did, graph_id).await })
@@ -1270,22 +1431,24 @@ async fn set_graph_enabled_in_txn(
     graph_id: &str,
     enabled: bool,
     now: &str,
-) -> Result<()> {
+) -> Result<(), GraphPipelineError> {
     let definition = query_graph_definition(txn, owner_did, graph_id)
         .await?
-        .context("graph does not exist")?;
+        .ok_or(GraphPipelineError::GraphMissing)?;
     if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-        anyhow::bail!("graph {graph_id:?} belongs to a different node");
+        return Err(GraphPipelineError::GraphOwnedByOtherNode {
+            graph_id: graph_id.to_owned(),
+        });
     }
     if enabled {
         let digest = definition
             .get("active_revision_digest")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .context("cannot enable a graph without an active revision")?;
+            .ok_or(GraphPipelineError::CannotEnableWithoutRevision)?;
         let revision = query_graph_revision(txn, digest)
             .await?
-            .context("active graph revision is missing")?;
+            .ok_or(GraphPipelineError::ActiveRevisionMissing)?;
         verified_revision_plan(&revision, graph_id, owner_did)?;
         if !revision_gate_decision(
             revision
@@ -1301,13 +1464,13 @@ async fn set_graph_enabled_in_txn(
         )
         .may_start
         {
-            anyhow::bail!("active graph revision is not runnable");
+            return Err(GraphPipelineError::ActiveRevisionNotRunnable);
         }
     }
     let doc_id = definition
         .get("_docID")
         .and_then(Value::as_str)
-        .context("GraphDefinition is missing _docID")?;
+        .ok_or(GraphPipelineError::DefinitionDocIdMissing)?;
     update_document(
         txn,
         "GraphDefinition",
@@ -1322,7 +1485,7 @@ pub async fn set_graph_enabled_with_access(
     owner_did: &str,
     graph_id: &str,
     enabled: bool,
-) -> Result<()> {
+) -> Result<(), GraphPipelineError> {
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
     access

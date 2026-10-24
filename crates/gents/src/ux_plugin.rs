@@ -399,7 +399,7 @@ where
 pub fn lint_pack_dir(
     dir: &Path,
     ux: &[PackUxPlugin],
-) -> Result<BTreeMap<String, Vec<lint::Finding>>> {
+) -> std::result::Result<BTreeMap<String, Vec<lint::Finding>>, UxPluginError> {
     let mut out = BTreeMap::new();
     for plugin in ux {
         let Some(entry) = &plugin.entry else {

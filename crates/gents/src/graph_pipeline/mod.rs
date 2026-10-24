@@ -36,8 +36,8 @@ pub use runtime::{
     prospective_graph_artifact_identities, publish_graph_plan, revision_gate_decision,
     run_graph_tool_result, run_receipt_from_tool_result, set_graph_enabled_with_access,
     start_graph_run, start_graph_run_with_access, ActivationReceipt, EntryInputOrigin,
-    GraphArtifactIdentityScope, GraphRunReceipt, GraphRunTerminalDecision, MaterializedRevision,
-    ProspectiveGraphArtifactIdentity, PublishedGraph, RevisionGateDecision,
+    GraphArtifactIdentityScope, GraphPipelineError, GraphRunReceipt, GraphRunTerminalDecision,
+    MaterializedRevision, ProspectiveGraphArtifactIdentity, PublishedGraph, RevisionGateDecision,
 };
 pub(crate) use runtime::{
     fence_graph_publication_in_txn, fence_graph_root_request_in_txn, graph_artifact_is_reserved,

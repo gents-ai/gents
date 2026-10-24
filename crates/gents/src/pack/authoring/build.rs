@@ -1,18 +1,58 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::Serialize;
 use serde_json::json;
 
 use crate::pack::{PackManifest, PackPlugin};
+
+#[derive(Debug, thiserror::Error)]
+pub enum BuildError {
+    #[error("manifest.json has no assets list")]
+    AssetsKeyMissing,
+    #[error("manifest.json assets is not a list")]
+    AssetsNotList,
+    #[error("manifest.json assets list is not closed")]
+    AssetsNotClosed,
+    #[error("walked outside the plugin")]
+    OutsidePlugin,
+    #[error("creating {}", path.display())]
+    Create {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("removing {}", path.display())]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+type Result<T, E = BuildError> = std::result::Result<T, E>;
 
 pub trait PluginCompiler {
     fn builder_id(&self) -> &str {
         BUILDER_ID
     }
 
-    fn load_and_validate(&self, owner: &str, dir: &Path) -> Result<()>;
-    fn compile(&self, owner: &str, dir: &Path, out_path: &Path) -> Result<()>;
+    fn load_and_validate(&self, owner: &str, dir: &Path) -> anyhow::Result<()>;
+    fn compile(&self, owner: &str, dir: &Path, out_path: &Path) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Serialize)]
@@ -35,8 +75,8 @@ pub struct PluginReport {
 pub fn build_all(
     root: &Path,
     compiler: &dyn PluginCompiler,
-    out: impl Fn(&Path) -> Result<Option<PathBuf>>,
-) -> Result<Vec<BuildReport>> {
+    out: impl Fn(&Path) -> anyhow::Result<Option<PathBuf>>,
+) -> anyhow::Result<Vec<BuildReport>> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
         .with_context(|| format!("reading {}", root.display()))?
         .filter_map(|entry| entry.ok())
@@ -61,7 +101,7 @@ pub fn build_pack(
     dir: &Path,
     compiler: &dyn PluginCompiler,
     out: Option<&Path>,
-) -> Result<BuildReport> {
+) -> anyhow::Result<BuildReport> {
     let manifest_path = dir.join("manifest.json");
     let manifest_bytes = std::fs::read(&manifest_path)
         .with_context(|| format!("reading the pack manifest at {}", manifest_path.display()))?;
@@ -145,7 +185,7 @@ pub fn build_pack(
     })
 }
 
-pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
+pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> anyhow::Result<()> {
     let plans = crate::graph_package::compile_pack_graphs(
         manifest,
         &|path| std::fs::read(dir.join(path)).with_context(|| format!("reading {path}")),
@@ -177,15 +217,9 @@ pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
 fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
     let key = text
         .find("\"assets\"")
-        .context("manifest.json has no assets list")?;
-    let open = key
-        + text[key..]
-            .find('[')
-            .context("manifest.json assets is not a list")?;
-    let close = open
-        + text[open..]
-            .find(']')
-            .context("manifest.json assets list is not closed")?;
+        .ok_or(BuildError::AssetsKeyMissing)?;
+    let open = key + text[key..].find('[').ok_or(BuildError::AssetsNotList)?;
+    let close = open + text[open..].find(']').ok_or(BuildError::AssetsNotClosed)?;
     let line_start = text[..key].rfind('\n').map_or(0, |i| i + 1);
     let indent = &text[line_start..key];
     let items = assets
@@ -205,7 +239,7 @@ pub fn build_plugin(
     manifest: &PackManifest,
     plugin: &PackPlugin,
     compiler: &dyn PluginCompiler,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let artifact_path = dir.join(&plugin.artifact);
     let Some(source) = &plugin.source else {
         anyhow::ensure!(
@@ -278,7 +312,7 @@ pub fn build_plugin(
 pub const BUILDER_ID: &str = concat!("gents/", env!("CARGO_PKG_VERSION"));
 
 fn tree_digest(dir: &Path) -> Result<String> {
-    fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             if entry.file_name() == "target" && dir == root {
@@ -294,13 +328,16 @@ fn tree_digest(dir: &Path) -> Result<String> {
     }
     use sha2::Digest;
     let mut files = Vec::new();
-    walk(dir, dir, &mut files).with_context(|| format!("reading {}", dir.display()))?;
+    walk(dir, dir, &mut files).map_err(|source| BuildError::Read {
+        path: dir.to_path_buf(),
+        source,
+    })?;
     files.sort();
     let mut hasher = sha2::Sha256::new();
     for file in files {
         let relative = file
             .strip_prefix(dir)
-            .context("walked outside the plugin")?;
+            .map_err(|_| BuildError::OutsidePlugin)?;
         let bytes = std::fs::read(&file)?;
         hasher.update(relative.to_string_lossy().as_bytes());
         hasher.update([0]);
@@ -338,9 +375,16 @@ fn mirror(from: &Path, to: &Path) -> Result<()> {
 }
 
 fn mirror_level(from: &Path, to: &Path, top: bool) -> Result<()> {
-    std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+    std::fs::create_dir_all(to).map_err(|source| BuildError::Create {
+        path: to.to_path_buf(),
+        source,
+    })?;
     let mut kept = std::collections::BTreeSet::new();
-    for entry in std::fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
+    let entries = std::fs::read_dir(from).map_err(|source| BuildError::Read {
+        path: from.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
         let entry = entry?;
         let name = entry.file_name();
         if name == "target" || name.to_string_lossy().starts_with('.') {
@@ -354,7 +398,11 @@ fn mirror_level(from: &Path, to: &Path, top: bool) -> Result<()> {
         }
         kept.insert(name);
     }
-    for entry in std::fs::read_dir(to).with_context(|| format!("reading {}", to.display()))? {
+    let entries = std::fs::read_dir(to).map_err(|source| BuildError::Read {
+        path: to.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
         let entry = entry?;
         let name = entry.file_name();
         let generated =
@@ -368,7 +416,10 @@ fn mirror_level(from: &Path, to: &Path, top: bool) -> Result<()> {
         } else {
             std::fs::remove_file(&path)
         }
-        .with_context(|| format!("removing {}", path.display()))?;
+        .map_err(|source| BuildError::Remove {
+            path: path.clone(),
+            source,
+        })?;
     }
     Ok(())
 }
@@ -377,7 +428,10 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
     if std::fs::read(path).is_ok_and(|current| current == bytes) {
         return Ok(());
     }
-    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+    std::fs::write(path, bytes).map_err(|source| BuildError::Write {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(test)]
@@ -403,11 +457,11 @@ mod tests {
     }
 
     impl PluginCompiler for RefusingCompiler {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> Result<()> {
+        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> anyhow::Result<()> {
             self.called.store(true, std::sync::atomic::Ordering::SeqCst);
             anyhow::bail!("no compiler in this test")
         }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> Result<()> {
+        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> anyhow::Result<()> {
             unreachable!("load_and_validate refuses first")
         }
     }

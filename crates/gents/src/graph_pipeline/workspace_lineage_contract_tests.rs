@@ -504,16 +504,16 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
     }
     #[async_trait::async_trait]
     impl GraphRunQuery for Native<'_> {
-        async fn execute_graph_query(&self, text: &str) -> Result<Value> {
+        async fn execute_graph_query(&self, text: &str) -> Result<Value, GraphPipelineError> {
             let response = self
                 .node
                 .execute_request_in_txn(defra_node::QueryRequest::new(text), self.handle)
                 .await;
-            anyhow::ensure!(
-                !response.has_errors(),
-                "native query failed: {:?}",
-                response.errors
-            );
+            if response.has_errors() {
+                return Err(GraphPipelineError::NativeQueryFailed {
+                    errors: format!("{:?}", response.errors),
+                });
+            }
             Ok(json!({"data":response.data.unwrap_or(Value::Null)}))
         }
     }

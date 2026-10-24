@@ -1,7 +1,7 @@
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::llm::tool::{Tool, ToolDefinition};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{bail, ensure, Context};
 use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -11,6 +11,43 @@ use std::sync::Arc;
 mod help;
 #[cfg(test)]
 mod tests;
+
+type Result<T, E = SchemaToolError> = std::result::Result<T, E>;
+
+/// Messages are model-facing: each names the corrective next step, so keep them stable.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SchemaToolError {
+    #[error("positional ID conflicts with target_id; supply one ID")]
+    PositionalIdConflict,
+    #[error("options.digest must be a nonempty string returned by preview")]
+    DigestNotString,
+    #[error("help accepts argv only; use this call to inspect the topic")]
+    HelpWithOptions,
+    #[error("{message}")]
+    ArgumentCorrection { message: String },
+    #[error("preview is a command word, not an option; use RESOURCE preview VERB, then apply the returned next_call")]
+    PreviewOption,
+    #[error(transparent)]
+    Identifier(#[from] gents_protocol::graphql::GraphqlError),
+    #[error("{name} is a Gents-managed schema; its evolution belongs to the product migration registry. Use config for its documents")]
+    ManagedSchema { name: String },
+    #[error("options.patch must be an RFC 6902 JSON array")]
+    PatchNotArray,
+    #[error("options.patch cannot be empty")]
+    PatchEmpty,
+    #[error("every patch operation must be an object")]
+    PatchOperationNotObject,
+    #[error("patch op must be add, remove, replace, test, copy or move")]
+    PatchOperationUnknown,
+    #[error("patch add/replace/test requires value (null is allowed)")]
+    PatchValueRequired,
+    #[error("patch {key} is required")]
+    PatchFieldRequired { key: &'static str },
+    #[error("collection renames require a separately reviewed migration; this tool preserves collection names")]
+    PatchRenamesCollection,
+    #[error("patch {key} must address fields within {prefix}; collection renames/copies require a separately reviewed migration")]
+    PatchOutsidePrefix { key: &'static str, prefix: String },
+}
 
 pub const SCHEMA_TOOL_NAME: &str = "schema";
 
@@ -44,10 +81,9 @@ impl SchemaCommand {
         );
         if takes_id {
             let id = args.argv.pop().unwrap();
-            ensure!(
-                args.target_id.as_ref().is_none_or(|value| value == &id),
-                "positional ID conflicts with target_id; supply one ID"
-            );
+            if !args.target_id.as_ref().is_none_or(|value| value == &id) {
+                return Err(SchemaToolError::PositionalIdConflict);
+            }
             args.target_id = Some(id);
         }
         let digest = args
@@ -58,7 +94,7 @@ impl SchemaCommand {
                     .as_str()
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned)
-                    .context("options.digest must be a nonempty string returned by preview")
+                    .ok_or(SchemaToolError::DigestNotString)
             })
             .transpose()?;
         Ok(Self {
@@ -92,7 +128,10 @@ struct SchemaDigestMismatch;
 
 #[derive(Debug, thiserror::Error)]
 #[error("SDL definition is invalid")]
-struct SchemaSdlFailure;
+struct SchemaSdlFailure {
+    #[source]
+    source: query::QueryError,
+}
 
 #[derive(Clone)]
 pub struct SchemaTool {
@@ -104,7 +143,7 @@ impl SchemaTool {
         Self { node }
     }
 
-    async fn execute(&self, command: &SchemaCommand) -> Result<Value> {
+    async fn execute(&self, command: &SchemaCommand) -> anyhow::Result<Value> {
         let args = &command.args;
         let access = ConfigAccess::local(self.node.clone());
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
@@ -116,7 +155,7 @@ impl SchemaTool {
                 "options.{key} is required; read help for this command"
             ))
         };
-        let text = |key: &str| -> Result<&str> {
+        let text = |key: &str| -> anyhow::Result<&str> {
             option(key)?
                 .as_str()
                 .filter(|s| !s.is_empty())
@@ -185,7 +224,8 @@ impl SchemaTool {
                 if words[0] == "view" {
                     text("query")?;
                 }
-                let definitions = query::parse_sdl(text("sdl")?).context(SchemaSdlFailure)?;
+                let definitions =
+                    query::parse_sdl(text("sdl")?).map_err(|source| SchemaSdlFailure { source })?;
                 ensure!(
                     !definitions.is_empty(),
                     "SDL must declare at least one collection"
@@ -310,7 +350,7 @@ impl SchemaTool {
     }
 }
 
-async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
+async fn find_version(access: &ConfigAccess, id: &str) -> anyhow::Result<Value> {
     access
         .collection_versions()
         .await?
@@ -321,39 +361,54 @@ async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
 
 fn ensure_application_collection(name: &str) -> Result<()> {
     crate::graphql::validate_collection_identifier(name)?;
-    ensure!(!crate::migration::DEFAULT_REGISTRY.managed_names().any(|n| n==name), "{name} is a Gents-managed schema; its evolution belongs to the product migration registry. Use config for its documents");
+    if crate::migration::DEFAULT_REGISTRY
+        .managed_names()
+        .any(|n| n == name)
+    {
+        return Err(SchemaToolError::ManagedSchema {
+            name: name.to_owned(),
+        });
+    }
     Ok(())
 }
 
 fn validate_patch(collection: &str, patch: &Value) -> Result<()> {
-    let ops = patch
-        .as_array()
-        .context("options.patch must be an RFC 6902 JSON array")?;
-    ensure!(!ops.is_empty(), "options.patch cannot be empty");
+    let ops = patch.as_array().ok_or(SchemaToolError::PatchNotArray)?;
+    if ops.is_empty() {
+        return Err(SchemaToolError::PatchEmpty);
+    }
     let prefix = format!("/{collection}/");
     for op in ops {
-        ensure!(op.is_object(), "every patch operation must be an object");
-        ensure!(
-            matches!(
-                op["op"].as_str(),
-                Some("add" | "remove" | "replace" | "test" | "copy" | "move")
-            ),
-            "patch op must be add, remove, replace, test, copy or move"
-        );
-        ensure!(
-            !matches!(op["op"].as_str(), Some("add" | "replace" | "test"))
-                || op.get("value").is_some(),
-            "patch add/replace/test requires value (null is allowed)"
-        );
+        if !op.is_object() {
+            return Err(SchemaToolError::PatchOperationNotObject);
+        }
+        if !matches!(
+            op["op"].as_str(),
+            Some("add" | "remove" | "replace" | "test" | "copy" | "move")
+        ) {
+            return Err(SchemaToolError::PatchOperationUnknown);
+        }
+        if matches!(op["op"].as_str(), Some("add" | "replace" | "test"))
+            && op.get("value").is_none()
+        {
+            return Err(SchemaToolError::PatchValueRequired);
+        }
         for key in ["path", "from"] {
             if key == "from" && !matches!(op["op"].as_str(), Some("copy" | "move")) {
                 continue;
             }
             let path = op[key]
                 .as_str()
-                .context(format!("patch {key} is required"))?;
-            ensure!(path != format!("/{collection}/Name"), "collection renames require a separately reviewed migration; this tool preserves collection names");
-            ensure!(path.starts_with(&prefix), "patch {key} must address fields within {prefix}; collection renames/copies require a separately reviewed migration");
+                .ok_or(SchemaToolError::PatchFieldRequired { key })?;
+            if path == format!("/{collection}/Name") {
+                return Err(SchemaToolError::PatchRenamesCollection);
+            }
+            if !path.starts_with(&prefix) {
+                return Err(SchemaToolError::PatchOutsidePrefix {
+                    key,
+                    prefix: prefix.clone(),
+                });
+            }
         }
     }
     Ok(())
@@ -431,7 +486,7 @@ impl SchemaTool {
         if args.argv.first().is_some_and(|s| s == "help") {
             if args.target_id.is_some() || !args.options.is_empty() {
                 return Err(schema_error(
-                    anyhow::anyhow!("help accepts argv only; use this call to inspect the topic"),
+                    &SchemaToolError::HelpWithOptions,
                     json!({"tool":"schema","args":{"argv":args.argv}}),
                 ));
             }
@@ -440,18 +495,18 @@ impl SchemaTool {
                 .map_err(|error| {
                     let mut argv = vec!["help".to_owned()];
                     argv.extend(help::recovery_path(&args.argv[1..]));
-                    schema_error(error, json!({"tool":"schema","args":{"argv":argv}}))
+                    schema_error(&error, json!({"tool":"schema","args":{"argv":argv}}))
                 });
         }
         if let Some((message, next)) = argument_correction(&args) {
             return Err(schema_error(
-                anyhow::anyhow!(message),
+                &SchemaToolError::ArgumentCorrection { message },
                 json!({"tool":"schema","args":next}),
             ));
         }
         let command = match SchemaCommand::parse(args.clone()) {
             Ok(command) => command,
-            Err(error) => return Err(schema_error(error, help_call(&args))),
+            Err(error) => return Err(schema_error(&error, help_call(&args))),
         };
         let args = &command.args;
         if let Some(value) = args.options.get("preview") {
@@ -463,9 +518,10 @@ impl SchemaTool {
                 } else if let Some(digest) = &command.digest {
                     next = apply_call(&next, digest);
                 }
-                return Err(schema_error(anyhow::anyhow!(
-                    "preview is a command word, not an option; use RESOURCE preview VERB, then apply the returned next_call"
-                ), json!({"tool":"schema","args":next})));
+                return Err(schema_error(
+                    &SchemaToolError::PreviewOption,
+                    json!({"tool":"schema","args":next}),
+                ));
             }
         }
         match self.execute(&command).await {
@@ -494,7 +550,7 @@ impl SchemaTool {
                 } else {
                     help_call(args)
                 };
-                Err(schema_error(error, recovery))
+                Err(schema_error(error.as_ref(), recovery))
             }
         }
     }
@@ -610,8 +666,6 @@ fn sdl_help_call(args: &SchemaParams, error: &str) -> Value {
     json!({"tool":"schema","args":{"argv":argv}})
 }
 
-fn schema_error(error: anyhow::Error, recovery: Value) -> SchemaError {
-    SchemaError(
-        json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":recovery}).to_string(),
-    )
+fn schema_error(error: &(dyn std::error::Error + 'static), recovery: Value) -> SchemaError {
+    SchemaError(json!({"error":format!("{}", ErrorChain(error)),"recovery":recovery}).to_string())
 }

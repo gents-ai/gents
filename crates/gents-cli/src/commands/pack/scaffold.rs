@@ -98,7 +98,9 @@ pub(crate) fn write_plugin_source(
     name: &str,
     language: Option<&str>,
 ) -> Result<String> {
-    gents::pack::authoring::write_plugin_source(source, name, language)
+    Ok(gents::pack::authoring::write_plugin_source(
+        source, name, language,
+    )?)
 }
 
 #[cfg(test)]

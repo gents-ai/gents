@@ -35,6 +35,42 @@ pub enum GraphPackageError {
     GitOutputNotUtf8(#[from] std::string::FromUtf8Error),
     #[error("Git emitted non-UTF-8 diff output")]
     GitDiffNotUtf8(#[source] std::string::FromUtf8Error),
+    #[error("graph {graph_id:?} has no entry named {name:?}")]
+    EntryNotNamed { graph_id: String, name: String },
+    #[error("graph {graph_id:?} declares no entry")]
+    NoEntries { graph_id: String },
+    #[error("graph {graph_id:?} has {count} entries; name the entry to start (one of: {names})")]
+    AmbiguousEntries {
+        graph_id: String,
+        count: usize,
+        names: String,
+    },
+    #[error("entry {entry_name:?} input is missing string field {field:?}")]
+    RequiredStringField { entry_name: String, field: String },
+    #[error("selected graph is not in package")]
+    SelectedGraphNotInPackage,
+    #[error("selected graph is ambiguous in package")]
+    SelectedGraphAmbiguous,
+    #[error("package contains no graph intent")]
+    PackageNoGraphIntent,
+    #[error("package contains multiple graphs; use the explicit graph selection entry point")]
+    PackageMultipleGraphs,
+    #[error("package graph definition is ambiguous within owner")]
+    PackageGraphDefinitionAmbiguous,
+    #[error("the shipped plan for graph {graph_id} is not a plan")]
+    ShippedPlanNotPlan {
+        graph_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "graph {graph_id} was built into this pack by compiler {shipped_compiler} and compiles differently here ({compiled_compiler}); rebuild the pack with gents pack build"
+    )]
+    ShippedPlanDrift {
+        graph_id: String,
+        shipped_compiler: String,
+        compiled_compiler: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -168,25 +204,22 @@ pub fn check_graph_pack(
 pub fn verify_shipped_plan(
     compiled: &crate::graph_pipeline::GraphPlan,
     asset: &dyn Fn(&str) -> Option<Vec<u8>>,
-) -> Result<()> {
+) -> Result<(), GraphPackageError> {
     let Some(bytes) = asset(&graph_plan_path(&compiled.graph_id)) else {
         return Ok(());
     };
     let shipped: crate::graph_pipeline::GraphPlan =
-        serde_json::from_slice(&bytes).with_context(|| {
-            format!(
-                "the shipped plan for graph {} is not a plan",
-                compiled.graph_id
-            )
+        serde_json::from_slice(&bytes).map_err(|source| GraphPackageError::ShippedPlanNotPlan {
+            graph_id: compiled.graph_id.clone(),
+            source,
         })?;
-    anyhow::ensure!(
-        shipped.digest == compiled.digest,
-        "graph {} was built into this pack by compiler {} and compiles differently here ({}); \
-         rebuild the pack with gents pack build",
-        compiled.graph_id,
-        shipped.compiler_version,
-        compiled.compiler_version
-    );
+    if shipped.digest != compiled.digest {
+        return Err(GraphPackageError::ShippedPlanDrift {
+            graph_id: compiled.graph_id.clone(),
+            shipped_compiler: shipped.compiler_version.clone(),
+            compiled_compiler: compiled.compiler_version.clone(),
+        });
+    }
     Ok(())
 }
 

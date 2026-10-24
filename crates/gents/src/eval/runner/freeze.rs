@@ -408,7 +408,10 @@ pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRe
     })
 }
 
-fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec<String>> {
+fn select_cases(
+    request: &RunRequest,
+    definition: &EvalDefinition,
+) -> Result<Vec<String>, EvalError> {
     let mut selected = match &request.case_ids {
         Some(requested) => {
             let mut selected = Vec::with_capacity(requested.len());
@@ -427,8 +430,7 @@ fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec
                     return Err(refused(format!(
                         "case {case_id:?} is on the {:?} split, not the requested {:?} split",
                         case.split, request.split
-                    ))
-                    .into());
+                    )));
                 }
                 selected.push(case.case_id.clone());
             }
@@ -447,8 +449,7 @@ fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec
         return Err(refused(format!(
             "eval definition {:?} selects no case on the {:?} split",
             definition.definition_id, request.split
-        ))
-        .into());
+        )));
     }
     Ok(selected)
 }
@@ -498,34 +499,39 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
     })
 }
 
-fn copyable_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+fn copyable_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, EvalError> {
     let mut files = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        for entry in std::fs::read_dir(&dir)
-            .with_context(|| format!("reading pack directory {}", dir.display()))?
-        {
+        for entry in std::fs::read_dir(&dir).map_err(|source| EvalError::ReadPackDirectory {
+            path: dir.clone(),
+            source,
+        })? {
             let entry = entry?;
             let path = entry.path();
             let kind = entry.file_type()?;
-            anyhow::ensure!(
-                !kind.is_symlink(),
-                "pack entry {} is a symlink; a pack carries its own bytes",
-                path.display()
-            );
+            if kind.is_symlink() {
+                return Err(EvalError::PackSymlink { path });
+            }
             if kind.is_dir() {
                 pending.push(path);
                 continue;
             }
             let relative = path
                 .strip_prefix(root)
-                .with_context(|| format!("{} is outside the pack", path.display()))?
+                .map_err(|source| EvalError::PackPathOutside {
+                    path: path.clone(),
+                    source,
+                })?
                 .to_str()
-                .with_context(|| format!("pack path {} is not UTF-8", path.display()))?
+                .ok_or_else(|| EvalError::PackPathNotUtf8 { path: path.clone() })?
                 .to_owned();
             files.insert(
                 relative,
-                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
+                std::fs::read(&path).map_err(|source| EvalError::ReadPath {
+                    path: path.clone(),
+                    source,
+                })?,
             );
         }
     }

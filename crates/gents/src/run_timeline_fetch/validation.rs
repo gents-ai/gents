@@ -1,3 +1,4 @@
+use super::error::{Result, RunTimelineError};
 use super::*;
 
 pub(super) fn merge_timeline_request(
@@ -6,12 +7,11 @@ pub(super) fn merge_timeline_request(
 ) -> Result<()> {
     if let Some(existing) = rows.iter().find(|row| row.request_id == request.request_id) {
         if existing.doc_id != request.doc_id {
-            anyhow::bail!(
-                "request_id {} is ambiguous across AgentRequest documents {:?} and {:?}",
-                request.request_id,
-                existing.doc_id,
-                request.doc_id
-            );
+            return Err(RunTimelineError::AmbiguousRequest {
+                request_id: request.request_id,
+                existing_doc_id: existing.doc_id.clone(),
+                doc_id: request.doc_id,
+            });
         }
     } else {
         rows.push(request);
@@ -23,12 +23,11 @@ pub(super) fn ensure_unique_timeline_request_ids(rows: &[TimelineRequestRow]) ->
     let mut seen = std::collections::BTreeMap::<&str, &Option<String>>::new();
     for request in rows {
         if let Some(existing_doc_id) = seen.insert(&request.request_id, &request.doc_id) {
-            anyhow::bail!(
-                "request_id {} is ambiguous across AgentRequest documents {:?} and {:?}",
-                request.request_id,
-                existing_doc_id,
-                request.doc_id
-            );
+            return Err(RunTimelineError::AmbiguousRequest {
+                request_id: request.request_id.clone(),
+                existing_doc_id: existing_doc_id.clone(),
+                doc_id: request.doc_id.clone(),
+            });
         }
     }
     Ok(())
@@ -79,10 +78,13 @@ pub(super) fn timeline_request_bindings(
             request.doc_id.as_deref(),
         )?;
         match bindings.insert(doc_id.to_string(), request.request_id.clone()) {
-            Some(existing) if existing != request.request_id => anyhow::bail!(
-                "AgentRequest _docID {doc_id} is bound to both {existing} and {}",
-                request.request_id
-            ),
+            Some(existing) if existing != request.request_id => {
+                return Err(RunTimelineError::AgentRequestDocBound {
+                    doc_id: doc_id.to_owned(),
+                    existing,
+                    request_id: request.request_id.clone(),
+                })
+            }
             _ => {}
         }
     }
@@ -99,16 +101,20 @@ pub(super) fn validate_request_scoped_rows(
     rendered_requests: &[TimelineRenderedRequestRow],
 ) -> Result<()> {
     for row in messages {
-        anyhow::ensure!(
-            row.request_doc_id == row.header.request_doc_id,
-            "AgentMessage row disagrees with its canonical request reference"
-        );
+        if row.request_doc_id != row.header.request_doc_id {
+            return Err(RunTimelineError::MessageRequestMismatch);
+        }
         if let Some(doc_id) = row.header.request_doc_id.as_deref() {
-            anyhow::ensure!(
-                bindings.contains_key(doc_id),
-                "AgentMessage {} names an unresolved physical request {doc_id}",
-                row.doc_id.as_deref().unwrap_or(&row.header.message_key)
-            );
+            if !bindings.contains_key(doc_id) {
+                return Err(RunTimelineError::UnresolvedMessageRequest {
+                    message: row
+                        .doc_id
+                        .as_deref()
+                        .unwrap_or(&row.header.message_key)
+                        .to_owned(),
+                    doc_id: doc_id.to_owned(),
+                });
+            }
         }
     }
     for row in tool_calls {
@@ -189,9 +195,12 @@ pub(super) fn validate_optional_request_binding(
         (Some(request_id), Some(request_doc_id)) => {
             validate_binding_pair(bindings, collection, label, request_id, request_doc_id)
         }
-        _ => anyhow::bail!(
-            "{collection} {label} has incomplete request lineage: request_id={request_id:?} request_doc_id={request_doc_id:?}"
-        ),
+        _ => Err(RunTimelineError::IncompleteRequestLineage {
+            collection: collection.to_owned(),
+            label: label.to_owned(),
+            request_id: request_id.map(str::to_owned),
+            request_doc_id: request_doc_id.map(str::to_owned),
+        }),
     }
 }
 
@@ -217,12 +226,18 @@ pub(super) fn validate_binding_pair(
 ) -> Result<()> {
     match bindings.get(request_doc_id) {
         Some(expected) if expected == request_id => Ok(()),
-        Some(expected) => anyhow::bail!(
-            "{collection} {label} request_doc_id {request_doc_id} belongs to {expected}, not {request_id}"
-        ),
-        None => anyhow::bail!(
-            "{collection} {label} points to AgentRequest {request_doc_id}, which is outside this timeline"
-        ),
+        Some(expected) => Err(RunTimelineError::RequestDocBelongsElsewhere {
+            collection: collection.to_owned(),
+            label: label.to_owned(),
+            request_doc_id: request_doc_id.to_owned(),
+            expected: expected.clone(),
+            request_id: request_id.to_owned(),
+        }),
+        None => Err(RunTimelineError::RequestDocOutsideTimeline {
+            collection: collection.to_owned(),
+            label: label.to_owned(),
+            request_doc_id: request_doc_id.to_owned(),
+        }),
     }
 }
 
@@ -245,29 +260,27 @@ pub(super) fn validate_child_tool_bridges(
         let (tool_doc_id, logical_tool_id) = match (tool_doc_id, logical_tool_id) {
             (None, None) => continue,
             (Some(tool_doc_id), Some(logical_tool_id)) => (tool_doc_id, logical_tool_id),
-            _ => anyhow::bail!(
-                "child AgentRequest {} has incomplete parent tool lineage",
-                child.request_id
-            ),
+            _ => {
+                return Err(RunTimelineError::IncompleteParentToolLineage {
+                    request_id: child.request_id.clone(),
+                })
+            }
         };
         let tool = tool_calls
             .iter()
             .find(|tool| nonempty(tool.doc_id.as_deref()) == Some(tool_doc_id))
-            .with_context(|| {
-                format!(
-                    "child AgentRequest {} points to missing AgentToolCall {tool_doc_id}",
-                    child.request_id
-                )
+            .ok_or_else(|| RunTimelineError::MissingBridgeTool {
+                request_id: child.request_id.clone(),
+                tool_doc_id: tool_doc_id.to_owned(),
             })?;
         if nonempty(tool.request_doc_id.as_deref()) != Some(root_doc_id)
             || nonempty(tool.request_id.as_deref()) != Some(root.request_id.as_str())
             || tool.tool_call_id != logical_tool_id
         {
-            anyhow::bail!(
-                "child AgentRequest {} has a mismatched physical AgentToolCall bridge {}",
-                child.request_id,
-                tool_doc_id
-            );
+            return Err(RunTimelineError::MismatchedBridgeTool {
+                request_id: child.request_id.clone(),
+                tool_doc_id: tool_doc_id.to_owned(),
+            });
         }
     }
     Ok(())
@@ -279,7 +292,11 @@ pub(super) fn required_lineage_value<'a>(
     field: &str,
     value: Option<&'a str>,
 ) -> Result<&'a str> {
-    nonempty(value).with_context(|| format!("{collection} {label} has no {field}"))
+    nonempty(value).ok_or_else(|| RunTimelineError::MissingLineage {
+        collection: collection.to_owned(),
+        label: label.to_owned(),
+        field: field.to_owned(),
+    })
 }
 
 pub(super) fn nonempty(value: Option<&str>) -> Option<&str> {

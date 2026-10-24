@@ -93,7 +93,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
 }
 
 fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
-    gents::pack::authoring::read_manifest(dir)
+    Ok(gents::pack::authoring::read_manifest(dir)?)
 }
 
 fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConfig> {

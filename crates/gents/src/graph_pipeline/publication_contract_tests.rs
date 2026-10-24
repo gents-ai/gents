@@ -193,7 +193,7 @@ async fn publication_fence_rejects_a_revision_it_is_not_pinned_to() {
             .to_string()
             .contains("revision does not match the pinned run"),
         "unexpected denial: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     txn.discard().await.unwrap();
     let after = load_graph_run_view(&node, graph_test_owner(), &run.run_id)

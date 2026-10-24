@@ -356,12 +356,14 @@ pub(crate) async fn fence_root_workspace_in_txn(
             && explicit.workspace_seal_hash == expected.workspace_seal_hash,
         "signed graph workspace tuple differs from resolved publication evidence"
     );
-    super::super::runtime::fence_observed_graph_publication_in_txn(
-        txn,
-        &resolved.run,
-        &resolved.digest,
+    Ok(
+        super::super::runtime::fence_observed_graph_publication_in_txn(
+            txn,
+            &resolved.run,
+            &resolved.digest,
+        )
+        .await?,
     )
-    .await
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

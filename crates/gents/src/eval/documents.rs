@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use gents_protocol::error_chain::find_source;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -124,6 +125,22 @@ pub enum EvalError {
         #[source]
         source: std::path::StripPrefixError,
     },
+    #[error("reading pack directory {}", path.display())]
+    ReadPackDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("pack entry {} is a symlink; a pack carries its own bytes", path.display())]
+    PackSymlink { path: PathBuf },
+    #[error("{} is outside the pack", path.display())]
+    PackPathOutside {
+        path: PathBuf,
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+    #[error("pack path {} is not UTF-8", path.display())]
+    PackPathNotUtf8 { path: PathBuf },
 }
 
 pub const DENOMINATOR_POLICY_V1: &str = "exclude_not_evidence_v1";
@@ -291,8 +308,8 @@ impl std::fmt::Display for AlreadyCompleted {
 }
 impl std::error::Error for AlreadyCompleted {}
 
-pub fn already_completed(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<AlreadyCompleted>().is_some()
+pub fn already_completed(error: &(dyn std::error::Error + 'static)) -> bool {
+    find_source::<AlreadyCompleted>(error).is_some()
 }
 
 #[derive(Debug)]
@@ -304,8 +321,10 @@ impl std::fmt::Display for AlreadyInvalidated {
 }
 impl std::error::Error for AlreadyInvalidated {}
 
-pub fn already_invalidated(error: &anyhow::Error) -> Option<&AlreadyInvalidated> {
-    error.downcast_ref::<AlreadyInvalidated>()
+pub fn already_invalidated<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a AlreadyInvalidated> {
+    find_source::<AlreadyInvalidated>(error)
 }
 
 #[derive(Debug)]
@@ -317,8 +336,8 @@ impl std::fmt::Display for FeedbackOffTrain {
 }
 impl std::error::Error for FeedbackOffTrain {}
 
-pub fn feedback_off_train(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<FeedbackOffTrain>().is_some()
+pub fn feedback_off_train(error: &(dyn std::error::Error + 'static)) -> bool {
+    find_source::<FeedbackOffTrain>(error).is_some()
 }
 
 fn now() -> String {
@@ -870,7 +889,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            already_invalidated(&error).is_some(),
+            already_invalidated(error.as_ref()).is_some(),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -908,7 +927,11 @@ mod tests {
         let error = complete_trial(&access, OWNER, "trial-1", &rival_completion())
             .await
             .unwrap_err();
-        assert!(already_completed(&error), "{}", ErrorChain(error.as_ref()));
+        assert!(
+            already_completed(error.as_ref()),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         let after = load_trials(&access, OWNER, "run-2").await.unwrap();
         let stored = after[0].completion.as_ref().expect("the trial completed");
         assert_eq!(stored.usage.output_tokens, None, "missing usage stays null");
@@ -1011,7 +1034,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(feedback_off_train(&error), "{}", ErrorChain(error.as_ref()));
+        assert!(
+            feedback_off_train(error.as_ref()),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         append_verdict(
             &access,
             OWNER,

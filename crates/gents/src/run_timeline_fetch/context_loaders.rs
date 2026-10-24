@@ -1,3 +1,4 @@
+use super::error::{Result, RunTimelineError};
 use super::*;
 
 pub(super) async fn load_timeline_session(
@@ -5,18 +6,23 @@ pub(super) async fn load_timeline_session(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<Option<TimelineSessionRow>> {
+) -> anyhow::Result<Option<TimelineSessionRow>> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let fields = crate::session::AGENT_SESSION_FIELDS;
     let query = format!("{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ {fields} }} }}");
     let rows = load_rows::<serde_json::Value>(access, "AgentSession", &query).await?;
-    decode_timeline_session_rows(rows, node_did, session_id, requester_did)
+    Ok(decode_timeline_session_rows(
+        rows,
+        node_did,
+        session_id,
+        requester_did,
+    )?)
 }
 
 pub(super) async fn load_timeline_sessions(
     access: &ConfigAccess,
     scopes: &[(String, String, Option<String>)],
-) -> Result<Vec<TimelineSessionRow>> {
+) -> anyhow::Result<Vec<TimelineSessionRow>> {
     const BATCH_SIZE: usize = 64;
     let fields = crate::session::AGENT_SESSION_FIELDS;
     let mut sessions = Vec::new();
@@ -68,19 +74,18 @@ fn decode_timeline_session_rows(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<TimelineSessionRow>> {
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "ambiguous owner/requester-scoped timeline session"
-    );
+    if rows.len() > 1 {
+        return Err(RunTimelineError::AmbiguousSessionScope);
+    }
     rows.first()
         .map(|row| {
             let row = crate::session::decode_session_row(row)?;
-            anyhow::ensure!(
-                row.session.node_did == node_did
-                    && row.session.session_id == session_id
-                    && row.session.requester_did.as_deref() == requester_did,
-                "timeline session is outside authoritative request scope"
-            );
+            if row.session.node_did != node_did
+                || row.session.session_id != session_id
+                || row.session.requester_did.as_deref() != requester_did
+            {
+                return Err(RunTimelineError::SessionOutsideScope);
+            }
             Ok(TimelineSessionRow {
                 doc_id: Some(row.doc_id),
                 session: row.session,

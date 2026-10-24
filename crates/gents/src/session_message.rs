@@ -43,6 +43,8 @@ pub enum SessionMessageError {
     CursorOtherSession,
     #[error("invalid cursor; next call: agent_session_read with session_id and view=recent")]
     InvalidCursor(#[source] serde_json::Error),
+    #[error(transparent)]
+    CursorJson(serde_json::Error),
     #[error("session inspection omitted {collection}")]
     InspectionOmitted { collection: String },
     #[error("decoding queued session input for request {request_id}")]

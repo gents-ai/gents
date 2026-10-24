@@ -14,7 +14,7 @@ use crate::eval::runner::freeze::{definition_ref, load_definition, read_frozen_d
 use crate::eval::runner::{freeze_refused, run_dir};
 use crate::eval::{load_run, load_trials, load_verdicts, RunHeader, RunRecord};
 use crate::graphql::escape_graphql_string;
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 
 /// Every run `owner` has, oldest first (`created_at`, then `run_id`).
 pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>> {
@@ -77,7 +77,7 @@ pub async fn load_report_among(
         Some(definition) => {
             let changed = match live {
                 Ok(live) => definition_ref(&live)?.digest != frozen.digest,
-                Err(error) if unresolvable(&error) => true,
+                Err(error) if unresolvable(error.as_ref()) => true,
                 Err(error) => return Err(error),
             };
             (definition, changed)
@@ -95,7 +95,7 @@ pub async fn load_report_among(
 /// [`ReportRefused`](super::ReportRefused) carrying the reason. Transport and
 /// database errors pass through unchanged.
 fn definition_refused(error: anyhow::Error) -> anyhow::Error {
-    if unresolvable(&error) {
+    if unresolvable(error.as_ref()) {
         refused(format!("{}", ErrorChain(error.as_ref()))).into()
     } else {
         error
@@ -103,9 +103,8 @@ fn definition_refused(error: anyhow::Error) -> anyhow::Error {
 }
 
 /// A definition that is missing, invalid, tampered with or does not parse.
-fn unresolvable(error: &anyhow::Error) -> bool {
-    freeze_refused(error.as_ref()).is_some()
-        || error.chain().any(|cause| cause.is::<serde_json::Error>())
+fn unresolvable(error: &(dyn std::error::Error + 'static)) -> bool {
+    freeze_refused(error).is_some() || find_source::<serde_json::Error>(error).is_some()
 }
 
 /// `run_id`'s report, read fresh from the documents.

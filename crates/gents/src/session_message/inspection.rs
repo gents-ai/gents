@@ -60,13 +60,14 @@ impl AgentSessionReadArgs {
         Ok(())
     }
 
-    pub(crate) fn validate_target(&self, target: &SessionScope) -> Result<()> {
+    pub(crate) fn validate_target(&self, target: &SessionScope) -> Result<(), SessionMessageError> {
         self.validate()?;
         if let Some(cursor) = &self.cursor {
-            let cursor: Cursor = serde_json::from_str(cursor)?;
+            let cursor: Cursor =
+                serde_json::from_str(cursor).map_err(SessionMessageError::CursorJson)?;
             if !(cursor.node_did == target.node_did && cursor.requester_did == target.requester_did)
             {
-                return Err(SessionMessageError::CursorOtherSessionScope.into());
+                return Err(SessionMessageError::CursorOtherSessionScope);
             }
         }
         Ok(())
@@ -169,7 +170,9 @@ async fn tools_in_flight(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value>
 ///
 /// Errors are constructed fresh from the request id only: the serde cause can
 /// embed raw persisted values, so it is never chained into the error.
-fn decode_queued_input(row: &Value) -> Result<gents_protocol::request_input::RequestInput> {
+fn decode_queued_input(
+    row: &Value,
+) -> Result<gents_protocol::request_input::RequestInput, SessionMessageError> {
     let input: Option<gents_protocol::request_input::RequestInput> =
         serde_json::from_value(row["input"].clone()).map_err(|_| {
             SessionMessageError::DecodeQueuedInput {
@@ -341,7 +344,7 @@ fn tool_summaries(
     tool_calls: &RapidHashMap<String, Value>,
     header: &gents_protocol::output::TranscriptMessage,
     message: &Message,
-) -> Result<Value> {
+) -> Result<Value, SessionMessageError> {
     let mut summaries = Vec::new();
     for (index, block) in header.blocks.iter().enumerate() {
         let doc_id = match block {
@@ -531,7 +534,7 @@ mod tests {
             let error = decode_queued_input(&row).unwrap_err();
             for rendered in [
                 error.to_string(),
-                ErrorChain(error.as_ref()).to_string(),
+                ErrorChain(&error).to_string(),
                 format!("{error:?}"),
             ] {
                 assert!(rendered.contains(request_id), "{rendered}");

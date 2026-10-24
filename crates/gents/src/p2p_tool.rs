@@ -25,6 +25,36 @@ mod tests;
 pub const P2P_TOOL_NAME: &str = "p2p";
 const OVERLAY_SOURCE: &str = "engineer";
 
+/// Messages are model-facing: each names the next call, so keep them stable.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum P2pToolError {
+    #[error("{key} was sent twice, as a field and in options; send it once as a field; next call: p2p {{\"action\":\"help\"}}")]
+    DuplicateField { key: &'static str },
+    #[error("action is required, one of {ACTIONS:?}; next call: p2p {{\"action\":\"help\"}}")]
+    ActionRequired,
+    #[error("send action or the legacy argv, not both; next call: p2p {{\"action\":\"help\"}}")]
+    ActionAndArgv,
+    #[error(
+        "unknown action {action:?}; actions: {ACTIONS:?}; next call: p2p {{\"action\":\"help\"}}"
+    )]
+    UnknownAction { action: String },
+    #[error("topic applies only to action help; next call: p2p {{\"action\":\"help\"}}")]
+    TopicWithoutHelp,
+    #[error("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"{next}\"}}")]
+    UnknownHelpTopic {
+        resource: String,
+        next: &'static str,
+    },
+    #[error("running node identity is unavailable")]
+    IdentityUnavailable,
+    #[error("P2P administration requires the running node DID")]
+    AdministrationDid,
+    #[error("P2P tool node DID differs from the running request")]
+    RequestDid,
+    #[error("pairing overlay is managed by another owner; do not change its policy")]
+    OverlayOwnedElsewhere,
+}
+
 #[derive(Clone)]
 pub struct P2pTool {
     node: Arc<EmbeddedNode>,
@@ -93,7 +123,7 @@ const HELP_TOPICS: &[&str] = &[
 ];
 
 impl P2pParams {
-    fn command(self) -> Result<(Vec<String>, Map<String, Value>)> {
+    fn command(self) -> Result<(Vec<String>, Map<String, Value>), P2pToolError> {
         let mut options = self.options;
         for (key, value) in [
             ("peer_id", self.peer_id),
@@ -107,27 +137,23 @@ impl P2pParams {
             ("valid_for_secs", self.valid_for_secs),
         ] {
             if let Some(value) = value {
-                ensure!(
-                    options.insert(key.to_owned(), value).is_none(),
-                    "{key} was sent twice, as a field and in options; send it once as a field; next call: p2p {{\"action\":\"help\"}}"
-                );
+                if options.insert(key.to_owned(), value).is_some() {
+                    return Err(P2pToolError::DuplicateField { key });
+                }
             }
         }
         let Some(action) = self.action else {
-            ensure!(
-                self.topic.is_none() && !self.argv.is_empty(),
-                "action is required, one of {ACTIONS:?}; next call: p2p {{\"action\":\"help\"}}"
-            );
+            if self.topic.is_some() || self.argv.is_empty() {
+                return Err(P2pToolError::ActionRequired);
+            }
             return Ok((self.argv, options));
         };
-        ensure!(
-            self.argv.is_empty(),
-            "send action or the legacy argv, not both; next call: p2p {{\"action\":\"help\"}}"
-        );
-        ensure!(
-            ACTIONS.contains(&action.as_str()),
-            "unknown action {action:?}; actions: {ACTIONS:?}; next call: p2p {{\"action\":\"help\"}}"
-        );
+        if !self.argv.is_empty() {
+            return Err(P2pToolError::ActionAndArgv);
+        }
+        if !ACTIONS.contains(&action.as_str()) {
+            return Err(P2pToolError::UnknownAction { action });
+        }
         if action == "help" {
             return Ok((
                 std::iter::once("help".to_owned())
@@ -136,10 +162,9 @@ impl P2pParams {
                 options,
             ));
         }
-        ensure!(
-            self.topic.is_none(),
-            "topic applies only to action help; next call: p2p {{\"action\":\"help\"}}"
-        );
+        if self.topic.is_some() {
+            return Err(P2pToolError::TopicWithoutHelp);
+        }
         Ok((action.splitn(2, '_').map(str::to_owned).collect(), options))
     }
 }
@@ -179,20 +204,18 @@ impl P2pTool {
         }
     }
 
-    fn actor(&self) -> Result<Arc<dyn NodeIdentity>> {
+    fn actor(&self) -> Result<Arc<dyn NodeIdentity>, P2pToolError> {
         let identity = self
             .identity
             .clone()
-            .context("running node identity is unavailable")?;
-        ensure!(
-            self.node.node_identity_did() == Some(identity.did()),
-            "P2P administration requires the running node DID"
-        );
+            .ok_or(P2pToolError::IdentityUnavailable)?;
+        if self.node.node_identity_did() != Some(identity.did()) {
+            return Err(P2pToolError::AdministrationDid);
+        }
         if let Some(context) = crate::tool_call_lifecycle::runtime::current_tool_runtime_context() {
-            ensure!(
-                context.node_did.as_deref() == Some(identity.did()),
-                "P2P tool node DID differs from the running request"
-            );
+            if context.node_did.as_deref() != Some(identity.did()) {
+                return Err(P2pToolError::RequestDid);
+            }
         }
         Ok(identity)
     }
@@ -252,12 +275,11 @@ impl P2pTool {
         Ok(rows.into_iter().next())
     }
 
-    fn owned_overlay(&self, row: &Value, actor: &str) -> Result<()> {
-        ensure!(
-            row["node_did"].as_str() == Some(actor)
-                && row["source"].as_str() == Some(OVERLAY_SOURCE),
-            "pairing overlay is managed by another owner; do not change its policy"
-        );
+    fn owned_overlay(&self, row: &Value, actor: &str) -> Result<(), P2pToolError> {
+        if row["node_did"].as_str() != Some(actor) || row["source"].as_str() != Some(OVERLAY_SOURCE)
+        {
+            return Err(P2pToolError::OverlayOwnedElsewhere);
+        }
         Ok(())
     }
 
@@ -727,7 +749,7 @@ fn reply(outcome: Value, next_call: Option<Value>, observations: Value) -> Reply
     }
 }
 
-fn help(resource: Option<&str>) -> Result<&'static str> {
+fn help(resource: Option<&str>) -> Result<&'static str, P2pToolError> {
     Ok(match resource {
         None => "Actions: status; network_list, network_get; pairings_list, pairings_get, pairings_preview, pairings_apply, pairings_revoke; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history; sync_documents. Action help with topic status, network, pairings, enrollment, sync or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation and collection grants are explicit.",
         Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
@@ -735,7 +757,19 @@ fn help(resource: Option<&str>) -> Result<&'static str> {
         Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending, approves it and applies pairings. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for the default authorization lease and materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, so this node can pair toward it, not the reverse. Pairing in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned pairing document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted.",
         Some("sync") => "sync_documents requires peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; only application collections in the tool grant are supported. Protocol collections, including credentials, are always excluded; neither broader grants nor ACP changes enable them. See help topic scope. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
         Some("scope") => "Pairing overlays and document sync support application collections only. Gents protocol/configuration and credential collections are permanently excluded from these actions, even with broader tool grants or document ACP. Keep credentials with their existing operator owner. For an application collection, an authorized configuration owner may grant the exact P2P collection in Tools built_ins.p2p_collections, and wiring a pack plugin to an agent whose Tools enable this tool grants the collections it uses; a grant applies from the agent's next request. Native ACP still controls document access. Enrollment is a separate signed authority. Sync accepts 1-16 known document IDs, not collection-wide discovery, and cannot certify the supplying peer.",
-        Some(resource) => { let next = if resource == "pairing" { "pairings" } else if resource == "documents" { "sync" } else { "scope" }; bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"{next}\"}}") },
+        Some(resource) => {
+            let next = if resource == "pairing" {
+                "pairings"
+            } else if resource == "documents" {
+                "sync"
+            } else {
+                "scope"
+            };
+            return Err(P2pToolError::UnknownHelpTopic {
+                resource: resource.to_owned(),
+                next,
+            });
+        }
     })
 }
 
@@ -775,7 +809,7 @@ impl Tool for P2pTool {
     async fn call(&self, args: P2pParams) -> std::result::Result<String, P2pError> {
         let (argv, options) = args
             .command()
-            .map_err(|error| P2pError(format!("{}", ErrorChain(error.as_ref()))))?;
+            .map_err(|error| P2pError(format!("{}", ErrorChain(&error))))?;
         if argv.len() > 4 || serde_json::to_vec(&options).map_or(true, |bytes| bytes.len() > 16_384)
         {
             return Err(P2pError(

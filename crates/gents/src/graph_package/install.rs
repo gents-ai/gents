@@ -1,3 +1,4 @@
+use super::catalog::GraphPackageError;
 use super::LoadedGraphPackage;
 use crate::config_client::{
     apply_desired_state_plan, collection_schema_contract_digest, ConfigAccess,
@@ -53,24 +54,23 @@ pub struct PreparedGraphPackageInstall {
 fn selected_intent<'a>(
     graph_intents: &'a [GraphIntent],
     graph_id: Option<&str>,
-) -> Result<&'a GraphIntent> {
+) -> Result<&'a GraphIntent, GraphPackageError> {
     if let Some(graph_id) = graph_id {
         let mut matches = graph_intents
             .iter()
             .filter(|intent| intent.graph_id == graph_id);
-        let selected = matches.next().context("selected graph is not in package")?;
-        anyhow::ensure!(
-            matches.next().is_none(),
-            "selected graph is ambiguous in package"
-        );
+        let selected = matches
+            .next()
+            .ok_or(GraphPackageError::SelectedGraphNotInPackage)?;
+        if matches.next().is_some() {
+            return Err(GraphPackageError::SelectedGraphAmbiguous);
+        }
         return Ok(selected);
     }
     match graph_intents {
         [intent] => Ok(intent),
-        [] => anyhow::bail!("package contains no graph intent"),
-        _ => anyhow::bail!(
-            "package contains multiple graphs; use the explicit graph selection entry point"
-        ),
+        [] => Err(GraphPackageError::PackageNoGraphIntent),
+        _ => Err(GraphPackageError::PackageMultipleGraphs),
     }
 }
 
@@ -249,12 +249,11 @@ fn active_revision_digest_query(owner: &str, graph_id: &str) -> String {
     )
 }
 
-fn active_revision_digest(response: &Value) -> Result<Option<String>> {
+fn active_revision_digest(response: &Value) -> Result<Option<String>, GraphPackageError> {
     let definitions = response_rows(response, "GraphDefinition");
-    anyhow::ensure!(
-        definitions.len() <= 1,
-        "package graph definition is ambiguous within owner"
-    );
+    if definitions.len() > 1 {
+        return Err(GraphPackageError::PackageGraphDefinitionAmbiguous);
+    }
     Ok(definitions
         .first()
         .and_then(|row| row["active_revision_digest"].as_str())

@@ -2,6 +2,8 @@ use super::*;
 use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[test]
 fn admission_matches_executable_lean_owner() {
     let cases = crate::lean_vocab_test::lean_application_write_cases();
@@ -55,10 +57,10 @@ async fn fixture() -> (Arc<crate::defra_node::EmbeddedNode>, WriteTool) {
     );
     (node, tool)
 }
-async fn apply(tool: &WriteTool, preview: WriteParams) -> Result<Value> {
+async fn apply(tool: &WriteTool, preview: WriteParams) -> TestResult<Value> {
     let receipt = tool.execute(&preview).await?;
     let next = serde_json::from_value(receipt["next_call"]["args"].clone())?;
-    tool.execute(&next).await
+    Ok(tool.execute(&next).await?)
 }
 
 #[tokio::test]
@@ -394,12 +396,16 @@ mod plugin {
         node: &Arc<crate::defra_node::EmbeddedNode>,
         grant: &PluginData,
         writes: Vec<DataWrite>,
-    ) -> Result<Vec<Value>> {
-        ConfigAccess::transact_local_write(node, None, "plugin_writes_test", |txn| {
-            let writes = writes.clone();
-            Box::pin(async move { apply_plugin_writes_in_txn(txn, grant, &stamps(), writes).await })
-        })
-        .await
+    ) -> TestResult<Vec<Value>> {
+        Ok(
+            ConfigAccess::transact_local_write(node, None, "plugin_writes_test", |txn| {
+                let writes = writes.clone();
+                Box::pin(
+                    async move { apply_plugin_writes_in_txn(txn, grant, &stamps(), writes).await },
+                )
+            })
+            .await?,
+        )
     }
 
     async fn notes(node: &Arc<crate::defra_node::EmbeddedNode>) -> Value {

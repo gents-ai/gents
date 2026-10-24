@@ -380,7 +380,7 @@ pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     let verbatim = gents::eval::report::report_refused(error.as_ref())
         .map(ToString::to_string)
         .or_else(|| gents::eval::runner::freeze_refused(error.as_ref()).map(ToString::to_string))
-        .or_else(|| gents::eval::already_invalidated(&error).map(ToString::to_string))
+        .or_else(|| gents::eval::already_invalidated(error.as_ref()).map(ToString::to_string))
         .or_else(|| gents::eval::runner::provider_down(error.as_ref()).map(ToString::to_string));
     match verbatim {
         Some(text) => anyhow::anyhow!(text),

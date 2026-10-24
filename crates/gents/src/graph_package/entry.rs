@@ -154,26 +154,30 @@ pub struct PreparedEntryRun {
 pub(crate) fn select_entry<'a>(
     plan: &'a GraphPlan,
     requested: Option<&str>,
-) -> Result<&'a PlannedEntry> {
+) -> Result<&'a PlannedEntry, GraphPackageError> {
     match requested {
         Some(name) => plan
             .entries
             .iter()
             .find(|entry| entry.name == name)
-            .with_context(|| format!("graph {:?} has no entry named {name:?}", plan.graph_id)),
+            .ok_or_else(|| GraphPackageError::EntryNotNamed {
+                graph_id: plan.graph_id.clone(),
+                name: name.to_owned(),
+            }),
         None => match plan.entries.as_slice() {
             [entry] => Ok(entry),
-            [] => anyhow::bail!("graph {:?} declares no entry", plan.graph_id),
-            entries => anyhow::bail!(
-                "graph {:?} has {} entries; name the entry to start (one of: {})",
-                plan.graph_id,
-                entries.len(),
-                entries
+            [] => Err(GraphPackageError::NoEntries {
+                graph_id: plan.graph_id.clone(),
+            }),
+            entries => Err(GraphPackageError::AmbiguousEntries {
+                graph_id: plan.graph_id.clone(),
+                count: entries.len(),
+                names: entries
                     .iter()
                     .map(|entry| entry.name.as_str())
                     .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+                    .join(", "),
+            }),
         },
     }
 }
@@ -223,11 +227,13 @@ fn required_string_field<'a>(
     admitted: &'a Map<String, Value>,
     entry_name: &str,
     field: &str,
-) -> Result<&'a str> {
-    admitted
-        .get(field)
-        .and_then(Value::as_str)
-        .with_context(|| format!("entry {entry_name:?} input is missing string field {field:?}"))
+) -> Result<&'a str, GraphPackageError> {
+    admitted.get(field).and_then(Value::as_str).ok_or_else(|| {
+        GraphPackageError::RequiredStringField {
+            entry_name: entry_name.to_owned(),
+            field: field.to_owned(),
+        }
+    })
 }
 
 async fn collect_host_facts(
