@@ -166,7 +166,7 @@ pub(super) async fn load_hydration_selection_in_txn(
         .filter(|row| row.session_id == request.session_id)
         .cloned()
         .collect::<Vec<_>>();
-    let mut documents = build_canonical_closure(CanonicalClosureInput {
+    let canonical = build_canonical_selection(CanonicalClosureInput {
         root_header_ids: &root_header_ids,
         headers: &root_headers,
         segments: &output_segments,
@@ -181,6 +181,7 @@ pub(super) async fn load_hydration_selection_in_txn(
         session_id: &request.session_id,
     })
     .context("build authorized canonical hydration closure")?;
+    let mut documents = canonical.documents;
     for request_id in terminal_request_ids {
         let row = bases
             .iter()
@@ -210,6 +211,9 @@ pub(super) async fn load_hydration_selection_in_txn(
     Ok(HydrationSelection {
         documents,
         authorized_reference_closure,
+        publications: canonical.publications,
+        headers: root_headers,
+        output_segments,
     })
 }
 

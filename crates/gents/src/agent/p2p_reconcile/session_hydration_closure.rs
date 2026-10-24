@@ -107,8 +107,41 @@ fn reconstruction_failure(error: ReconstructionError) -> CanonicalClosureError {
     }
 }
 
+#[cfg(test)]
 pub fn build_canonical_closure(
     input: CanonicalClosureInput<'_>,
+) -> ClosureResult<BTreeSet<HydrationDocument>> {
+    build_selection(input, None)
+}
+
+#[derive(Debug, Clone)]
+pub struct CanonicalPublicationOrigin {
+    pub header_doc_id: String,
+    pub origin_doc_id: String,
+    pub sequence: u32,
+}
+
+pub struct CanonicalClosureSelection {
+    pub documents: BTreeSet<HydrationDocument>,
+    pub publications: Vec<CanonicalPublicationOrigin>,
+}
+
+/// Publication metadata is returned only after the same origin, payload and
+/// dependency validation that admits the selected document closure.
+pub fn build_canonical_selection(
+    input: CanonicalClosureInput<'_>,
+) -> ClosureResult<CanonicalClosureSelection> {
+    let mut publications = Vec::new();
+    let documents = build_selection(input, Some(&mut publications))?;
+    Ok(CanonicalClosureSelection {
+        documents,
+        publications,
+    })
+}
+
+fn build_selection(
+    input: CanonicalClosureInput<'_>,
+    mut publications: Option<&mut Vec<CanonicalPublicationOrigin>>,
 ) -> ClosureResult<BTreeSet<HydrationDocument>> {
     let headers = input
         .headers
@@ -175,6 +208,13 @@ pub fn build_canonical_closure(
             &mut selected,
         )?;
         collect_message_dependencies(origin, &segments, &bases, &mut selected)?;
+        if let Some(publications) = publications.as_mut() {
+            publications.push(CanonicalPublicationOrigin {
+                header_doc_id: root.doc_id.to_owned(),
+                origin_doc_id: origin.doc_id.to_owned(),
+                sequence: root.message.sequence,
+            });
+        }
     }
     collect_effect_children(&input, &segments, &bases, &mut selected)?;
     Ok(selected)

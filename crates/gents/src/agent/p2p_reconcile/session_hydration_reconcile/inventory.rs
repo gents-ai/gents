@@ -92,6 +92,7 @@ struct ToolFact {
     accepted_header_doc_id: String,
     execution_generation: String,
     capture: Capture,
+    order: Option<super::inventory_order::Window>,
 }
 
 impl FileInventorySnapshot {
@@ -181,6 +182,7 @@ impl FileInventorySnapshot {
         );
         let selected = load_hydration_selection_in_txn(txn, request).await?;
         let mut facts = Vec::new();
+        let mut admissions = Vec::new();
         let mut entries = Vec::new();
         let mut pending = 0;
         let mut unknown = 0;
@@ -264,6 +266,7 @@ impl FileInventorySnapshot {
                     InventoryRejection("file inventory projection is not owned by its source node")
                 );
                 entries.extend(projection.changes.iter().map(|change| FileInventoryEntry {
+                    order: None,
                     tool_call_doc_id: document.doc_id.clone(),
                     request_doc_id: request_doc_id.clone(),
                     scope: scope.clone(),
@@ -291,8 +294,33 @@ impl FileInventorySnapshot {
                     InventoryRejection("file inventory tool omitted its execution generation"),
                 )?,
                 capture,
+                order: None,
+            });
+            let fact = facts
+                .last()
+                .expect("the observed tool fact was just retained");
+            admissions.push(super::inventory_order::Admission {
+                document: fact.tool_call_doc_id.clone(),
+                request: fact.request_doc_id.clone(),
+                scope: fact.scope.clone(),
+                state: tool.state(),
+                accepted: true,
             });
         }
+        let actual = FileInventoryAdmission {
+            request: request.clone(),
+            session_doc_id: session.doc_id,
+        };
+        let publications =
+            super::inventory_order::Publications::new(admission, &actual, &selected, &admissions);
+        for (fact, observed) in facts.iter_mut().zip(&admissions) {
+            fact.order = publications.window(observed);
+        }
+        let ordering = facts
+            .iter()
+            .map(|fact| fact.order.clone())
+            .collect::<Vec<_>>();
+        super::inventory_order::project(&mut entries, &ordering);
         anyhow::ensure!(
             coherent_inventory_entries(&entries),
             InventoryRejection("file inventory entries are incoherent")
@@ -312,7 +340,7 @@ impl FileInventorySnapshot {
             .collect::<Vec<_>>();
         let preimage = serde_json::to_string(&(admission, documents, &facts))?;
         let digest = bs58::encode(Sha256::digest(canonical_domain_payload(
-            "gents-file-inventory-snapshot-v1",
+            "gents-file-inventory-snapshot-v2",
             [preimage.as_str()],
         )))
         .into_string();

@@ -21,7 +21,8 @@ use super::session_hydration::{
     VerifiedActiveMembership,
 };
 use super::session_hydration_closure::{
-    build_canonical_closure, CanonicalClosureInput, ScopedDocument, ToolEffectRow,
+    build_canonical_selection, CanonicalClosureInput, CanonicalPublicationOrigin, ScopedDocument,
+    ToolEffectRow,
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -33,6 +34,7 @@ use crate::session::canonical_rows::{
 
 mod file_images;
 mod inventory;
+mod inventory_order;
 mod inventory_requests;
 pub(crate) use inventory::refusal_reason as file_inventory_refusal_reason;
 pub use inventory::{FileInventoryPageError, FileInventorySnapshot};
@@ -104,6 +106,9 @@ struct LoadedHydrationAdmission {
 struct HydrationSelection {
     documents: BTreeSet<HydrationDocument>,
     authorized_reference_closure: BTreeSet<SessionHydrationDocumentKey>,
+    publications: Vec<CanonicalPublicationOrigin>,
+    headers: Vec<crate::session::canonical_rows::TranscriptMessageRow>,
+    output_segments: Vec<crate::session::canonical_rows::OutputSegmentRow>,
 }
 
 struct AdmittedHydration {
@@ -922,6 +927,9 @@ mod tests {
             Ok(HydrationSelection {
                 documents: self.catalog.documents.clone(),
                 authorized_reference_closure: self.catalog.authorized_reference_closure.clone(),
+                publications: Vec::new(),
+                headers: Vec::new(),
+                output_segments: Vec::new(),
             })
         }
         async fn authorization_is_current(

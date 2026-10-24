@@ -28,6 +28,7 @@ fn fixture() -> (
         },
     };
     let entry = FileInventoryEntry {
+        order: None,
         tool_call_doc_id: "tool-physical".into(),
         request_doc_id: "request-physical".into(),
         scope: FileImageScope {
@@ -340,6 +341,7 @@ async fn recorded_origin_review_retains_metadata_without_a_route_but_does_not_gr
     )
     .await?;
     let entry = FileInventoryEntry {
+        order: None,
         tool_call_doc_id: tool,
         request_doc_id: request,
         scope: FileImageScope {

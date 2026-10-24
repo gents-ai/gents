@@ -1,6 +1,7 @@
 import Proofs.SessionHydration.FileImages
 import Proofs.SessionHydration.Receiver
 import Proofs.ToolExecution.Executable
+import Proofs.CanonicalOutput.ToolDelivery
 
 namespace SessionHydration.FileInventory
 
@@ -229,11 +230,22 @@ private def calls (tool : Tool) (message : MessageEnvelope) : Bool :=
       | .toolCall id _ _ _ _ _ _ => id == tool.id
       | _ => false)
 
-private def delivers (tool : Tool) (message : MessageEnvelope) : Bool :=
+private def terminalReference (input : ClosureInput) (tool : Tool)
+    (reference : PayloadRef) : Bool :=
+  match resolveClose input.segments input.deniedSegments reference with
+  | .error _ => false
+  | .ok closing => CanonicalOutput.ToolDelivery.closedRecordValid
+      input.segments tool.request tool.id closing
+
+/-- A background acknowledgement uses an authored receipt source, even when its
+ToolResult shape matches a completed result. Only the existing owned tool-output
+closure establishes that the mutation finished before this publication. -/
+private def delivers (input : ClosureInput) (tool : Tool) (message : MessageEnvelope) : Bool :=
   message.header.request == some tool.request && message.header.role == .user &&
     message.header.publication == .toolDelivery tool.id &&
     (match message.blocks with
-      | [.toolResult id _ _ _] => id == tool.id
+      | [.toolResult id _ _ _] => id == tool.id &&
+          (message.blocks.flatMap blockRefs).any (terminalReference input tool)
       | _ => false)
 
 private def uniquePosition (input : ClosureInput) (messages : List MessageEnvelope)
@@ -258,7 +270,7 @@ def window (snapshot : Snapshot) (input : ClosureInput) (tool : Tool) : Option W
   let selected := messages.filter (fun message =>
     message.header.session == snapshot.admission.nativeSession)
   let admitted ← uniquePosition input selected (calls tool)
-  let delivered ← uniquePosition input selected (delivers tool)
+  let delivered ← uniquePosition input selected (delivers input tool)
   if admitted < delivered then some ⟨tool.id, admitted, delivered⟩ else none
 
 end Order
@@ -576,7 +588,7 @@ def Page.toWire (value : Page) (digest : String) : WirePage :=
 
 inductive ReceiptPurpose where
   | transcriptV1
-  | fileInventoryV3
+  | fileInventoryV2
   deriving DecidableEq, Repr
 
 /-- `signatureVerified` is the existing NodeIdentity verifier's observation
@@ -751,7 +763,7 @@ policy. Fork entries retain the attested actual scope, including origins. -/
 def advance (admission : Request) (previous : Option Prefix) (received : ReceivedPage) : Option Prefix :=
   let envelope := received.envelope
   let value := envelope.page
-  if !envelope.signatureVerified || envelope.purpose != .fileInventoryV3 ||
+  if !envelope.signatureVerified || envelope.purpose != .fileInventoryV2 ||
       envelope.signer != admission.node || received.requestKey.isEmpty ||
       envelope.requestKey != received.requestKey || value.binding.admission != admission ||
       !value.wellFormed then none

@@ -259,9 +259,9 @@ theorem cursor_cannot_skip_partial_page :
   native_decide
 
 def firstEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV3, "page-0", admission.node, true, firstPage.toWire "snapshot-digest"⟩
+  ⟨.fileInventoryV2, "page-0", admission.node, true, firstPage.toWire "snapshot-digest"⟩
 def secondEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV3, "page-1", admission.node, true, secondPage.toWire "snapshot-digest"⟩
+  ⟨.fileInventoryV2, "page-1", admission.node, true, secondPage.toWire "snapshot-digest"⟩
 def receiving : Receiver := ⟨admission, []⟩
 def receivedFirst : Receiver := ⟨admission, [⟨"page-0", firstEnvelope⟩]⟩
 def receivedBoth : Option Receiver := do
@@ -270,7 +270,7 @@ def receivedBoth : Option Receiver := do
 
 def unknownSnapshot : Snapshot := getSnapshot {source 1 with projections := []}
 def unknownEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV3, "unknown-page", admission.node, true,
+  ⟨.fileInventoryV2, "unknown-page", admission.node, true,
     (makePage unknownSnapshot 0).toWire "unknown-digest"⟩
 
 structure ReceiverInput where

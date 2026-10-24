@@ -15,10 +15,19 @@ def call (id sequence : Nat) (selectedTool : Tool := tool) : MessageEnvelope :=
       .complete, .assistant, .requestExecution 1⟩
   , key := "call-" ++ toString id, sequence, nativeId := none, blocks, createdAt := 0 }
 
+def terminalRecords (selectedTool : Tool) : List Segment :=
+  [ ⟨3000 + selectedTool.id, ⟨selectedTool.request, .tool selectedTool.id⟩,
+      .tool selectedTool.id,
+      some ⟨0, [⟨0, 0, some ⟨0, 0, .toolOutput, none, none⟩⟩], []⟩, none, 0⟩
+  , ⟨4000 + selectedTool.id, ⟨selectedTool.request, .tool selectedTool.id⟩,
+      .tool selectedTool.id, none, some (.closed .complete 1 [0]), 0⟩ ]
+
 def delivered (id sequence : Nat) (selectedTool : Tool := tool) : MessageEnvelope :=
-  { header := ⟨id, 1, some selectedTool.request, none, [], .complete, .user, .toolDelivery selectedTool.id⟩
+  let blocks := [MessageBlock.toolResult selectedTool.id "call" none
+    [.text ⟨⟨4000 + selectedTool.id, 0⟩, .full⟩]]
+  { header := ⟨id, 1, some selectedTool.request, none, blocks.flatMap blockRefs, .complete, .user, .toolDelivery selectedTool.id⟩
   , key := "delivery-" ++ toString id, sequence, nativeId := none
-  , blocks := [.toolResult selectedTool.id "call" none []], createdAt := 0 }
+  , blocks, createdAt := 0 }
 
 def snapshot (headers : List MessageEnvelope) : Snapshot :=
   { admission
@@ -27,7 +36,8 @@ def snapshot (headers : List MessageEnvelope) : Snapshot :=
 
 def input (messages : List MessageEnvelope) : ClosureInput :=
   { request := admission, bases := [], roots := [], requirements := [], messages
-  , segments := [], access := [], deniedHeaders := [], deniedSegments := [] }
+  , segments := terminalRecords tool ++ terminalRecords { tool with id := 2, request := 701 }
+  , access := [], deniedHeaders := [], deniedSegments := [] }
 
 theorem invocation_result_pair_has_canonical_positions :
     window (snapshot [call 10 3, delivered 11 5]) (input [call 10 3, delivered 11 5]) tool =
@@ -146,7 +156,11 @@ def windowCases : List (String × Snapshot × ClosureInput × Tool) :=
   let wrong := { wrong with header := { wrong.header with request := some 701 } }
   let completeFork := forkInput true
   let cutFork := forkInput false
-  [ ("canonical_invocation_result", snapshot valid, input valid, tool)
+  [ ("authored_background_receipt", snapshot valid,
+      { input valid with segments := (terminalRecords tool).map fun segment =>
+        { segment with coordinate := ⟨tool.request, .authored 11⟩ } }, tool)
+  , ("missing_terminal_output", snapshot valid, { input valid with segments := [] }, tool)
+  , ("canonical_invocation_result", snapshot valid, input valid, tool)
   , ("missing_delivery", snapshot [call 10 3], input [call 10 3], tool)
   , ("delivery_beyond_selected_cut", snapshot [call 10 3], input valid, tool)
   , ("wrong_request", snapshot [call 10 3, wrong], input [call 10 3, wrong], tool)
@@ -191,5 +205,17 @@ def entryCases : List (String × List Entry) :=
 theorem ordinal_representation_checks :
     entryCases.map (fun value => coherentEntries value.2) =
       [true, false, false, false, false, true] := by native_decide
+
+theorem authored_background_receipt_cannot_order_a_terminal_tool :
+    let headers := [call 10 3, delivered 11 5]
+    let receipt := (terminalRecords tool).map fun segment =>
+      { segment with coordinate := ⟨tool.request, .authored 11⟩ }
+    window (snapshot headers) { input headers with segments := receipt } tool = none := by
+  native_decide
+
+theorem missing_terminal_output_cannot_order_a_terminal_tool :
+    let headers := [call 10 3, delivered 11 5]
+    window (snapshot headers) { input headers with segments := [] } tool = none := by
+  native_decide
 
 end SessionHydration.FileInventory.Order.Examples
