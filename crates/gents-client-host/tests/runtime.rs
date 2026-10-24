@@ -1532,7 +1532,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "inventory acceptance must use the enrolled runtime"
         );
         id += 1;
-        run_editor_journey(
+        let editor = run_editor_journey(
             root,
             &paths,
             &host_binary,
@@ -1540,7 +1540,51 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             provider.endpoint(),
             "review-inventory",
         )
-        .await?;
+        .await;
+        if editor.is_err() {
+            let observation = client
+                .call(
+                    id,
+                    "desktop_session_file_inventory",
+                    json!({
+                        "nodeDid":node_did, "sessionId":session, "action":{"kind":"read"}
+                    }),
+                )
+                .await;
+            id += 1;
+            let mut cursors = ["current", "previous"]
+                .into_iter()
+                .filter_map(|kind| {
+                    let next = &observation[kind]["next"];
+                    (!next.is_null()).then(|| next.clone())
+                })
+                .collect::<Vec<_>>();
+            let mut observations = vec![observation];
+            while let Some(cursor) = cursors.pop() {
+                if observations.len() >= 4 {
+                    break;
+                }
+                let page = client
+                    .call(
+                        id,
+                        "desktop_session_file_inventory",
+                        json!({
+                            "nodeDid":node_did, "sessionId":session,
+                            "action":{"kind":"read", "cursor":cursor}
+                        }),
+                    )
+                    .await;
+                id += 1;
+                observations.push(page);
+            }
+            tokio::fs::write(
+                root.join("editor-inventory-failure.json"),
+                serde_json::to_vec_pretty(&observations)?,
+            )
+            .await?;
+            copy_editor_evidence(root, "editor-inventory-failure.json")?;
+        }
+        editor?;
         let evidence = editor_inventory::verify(
             &mut client,
             &mut id,

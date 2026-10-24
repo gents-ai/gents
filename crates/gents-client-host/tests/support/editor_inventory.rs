@@ -18,6 +18,7 @@ pub const REPEAT_PROMPT: &str = "Edit the same recorded file twice in sequence."
 pub const REPEAT_REPLY: &str = "The sequential recorded changes are ready for review.";
 pub const FOLLOW_PROMPT: &str = "Continue without changing any files.";
 pub const FOLLOW_REPLY: &str = "The follow-up completed without changing files.";
+const READ_CALL: &str = "inventory-repeat-read";
 const REPEAT_CALLS: [&str; 2] = ["inventory-repeat-first", "inventory-repeat-last"];
 
 fn file(index: usize) -> String {
@@ -76,6 +77,16 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
         return Some(ChatAction::Sse(fake_llm::completion_text_sse(FOLLOW_REPLY)));
     }
     if prompt == REPEAT_PROMPT {
+        if !messages
+            .iter()
+            .any(|message| message["role"] == "tool" && message["tool_call_id"] == READ_CALL)
+        {
+            return Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
+                READ_CALL,
+                "read_file",
+                &json!({"path":file(COUNT + 1), "raw_json":true}).to_string(),
+            )));
+        }
         for (index, call) in REPEAT_CALLS.iter().enumerate() {
             if !messages
                 .iter()
@@ -171,10 +182,11 @@ pub async fn verify(
     let requests: Vec<AgentRequestRow> =
         serde_json::from_value(result["data"]["AgentRequest"].clone())?;
     let mut tools = RapidHashMap::new();
+    let mut verified_read = false;
     for (prompt, expected) in [
         (PROMPT, COUNT),
         (NEXT_PROMPT, 1),
-        (REPEAT_PROMPT, 2),
+        (REPEAT_PROMPT, 3),
         (FOLLOW_PROMPT, 0),
     ] {
         let matching: Vec<_> = requests
@@ -203,7 +215,7 @@ pub async fn verify(
             .context("physical inventory tools")?;
         ensure!(
             calls.len() == expected,
-            "expected {expected} real mutations; found {}",
+            "expected {expected} real tool calls; found {}",
             calls.len()
         );
         for call in calls {
@@ -212,6 +224,32 @@ pub async fn verify(
                 "inventory mutation did not complete"
             );
             let logical = field(call, "tool_call_id")?;
+            if logical == READ_CALL {
+                ensure!(
+                    prompt == REPEAT_PROMPT && !verified_read,
+                    "read receipt scope changed"
+                );
+                let physical = escape_graphql_string(field(call, "_docID")?);
+                let rows = access.execute(&format!(
+                    "{{ ToolFileInventory(filter: {{tool_call_doc_id: {{_eq: \"{physical}\"}}}}) {{request_doc_id verified_unchanged observation_doc_id changes}} ToolFileChange(filter: {{tool_call_doc_id: {{_eq: \"{physical}\"}}}}) {{_docID}} }}"
+                )).await?;
+                let witness = rows["data"]["ToolFileInventory"]
+                    .as_array()
+                    .context("read witness")?;
+                ensure!(
+                    witness.len() == 1
+                        && witness[0]["request_doc_id"] == request_doc
+                        && witness[0]["verified_unchanged"] == true
+                        && witness[0]["observation_doc_id"].is_null()
+                        && witness[0]["changes"].is_null()
+                        && rows["data"]["ToolFileChange"]
+                            .as_array()
+                            .is_some_and(Vec::is_empty),
+                    "successful read must retain one byte-free witness without an image"
+                );
+                verified_read = true;
+                continue;
+            }
             let index: usize = if REPEAT_CALLS.contains(&logical) {
                 COUNT + 1
             } else {
@@ -228,6 +266,10 @@ pub async fn verify(
             );
         }
     }
+    ensure!(
+        verified_read,
+        "the mixed read/edit request omitted its verified read"
+    );
     ensure!(
         tools.len() == COUNT + 3,
         "new activity lost an earlier mutation"
@@ -270,6 +312,10 @@ pub async fn verify(
                     })
             })
             .context("the installed client did not retain the complete updated inventory")?;
+        ensure!(
+            snapshot.binding.coverage.pending == 0 && snapshot.binding.coverage.unknown == 0,
+            "completed read/edit inventory must establish complete coverage"
+        );
         for entry in snapshot.entries {
             let index = *tools
                 .get(&entry.tool_call_doc_id)
@@ -291,6 +337,15 @@ pub async fn verify(
                 "inventory page duplicated a physical mutation"
             );
             if index == COUNT + 1 {
+                ensure!(
+                    entry
+                        .request_coverage
+                        .as_ref()
+                        .is_some_and(|coverage| coverage.entries == 2
+                            && coverage.pending == 0
+                            && coverage.unknown == 0),
+                    "mixed request coverage must include only its two edits, with no unknown read"
+                );
                 let order = entry
                     .order
                     .context("repeated edit omitted canonical chronology")?;
@@ -368,7 +423,7 @@ pub async fn verify(
         json!({"sessionId":session, "initialCaptures":COUNT, "newCaptures":3, "receivedEntries":received.len(),
         "nativePages":pages, "imageDemands":receipts.len(), "selectedIndex":selected,
         "onlySelectedImagesRequested":true, "signedImageReceiptsVerified":true, "workingCopiesPreserved":true,
-        "canonicalRepeatedPositions":repeated_positions.len(), "exactlyOnceInputs":4}),
+        "canonicalRepeatedPositions":repeated_positions.len(), "exactlyOnceInputs":4, "verifiedUnchangedRead":verified_read}),
     )
 }
 
