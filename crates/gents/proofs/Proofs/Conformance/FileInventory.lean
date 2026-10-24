@@ -160,10 +160,15 @@ private def publicationCaseJson (value : PublicationCase) : String := object
    ("expected", optional projectionJson
       (publish value.pre value.action value.won value.write value.actual value.observation 3001))]
 
+private def coverageJson (value : Coverage) : String := object
+  [("entries", toString value.entries), ("pending", toString value.pending),
+   ("unknown", toString value.unknown)]
+
 private def entryJson (value : Entry) : String := object
   [("tool", toString value.tool), ("request", toString value.request), ("scope", scopeJson value.scope),
    ("projection", toString value.projection), ("observation", toString value.observation),
    ("change", changeJson value.change),
+   ("request_coverage", optional coverageJson value.requestCoverage),
    ("order", match value.order with
      | .unresolved => tagged "unresolved"
      | .ordered index entries => tagged "ordered" [("index", toString index), ("entries", toString entries)])]
@@ -262,10 +267,6 @@ private def pageInputJson (value : PageInput) : String := object
    ("admission", hydrationRequestJson value.admission), ("receipt", receiptJson value.receipt),
    ("cursor", optional cursorJson value.cursor),
    ("expected", pageResultJson (page value.source.model value.admission value.receipt value.cursor))]
-
-private def coverageJson (value : Coverage) : String := object
-  [("entries", toString value.entries), ("pending", toString value.pending),
-   ("unknown", toString value.unknown)]
 
 private def bindingJson (value : PageBinding) : String := object
   [("admission", hydrationRequestJson value.admission), ("digest", jsonString value.digest),
@@ -602,7 +603,10 @@ def orderingComparisonCasesJson : String := jsonArray (Order.Examples.comparison
      ("closure", closureJson closure), ("node", jsonString node),
      ("root", jsonString root), ("path", jsonString path),
      ("expected", optional (fun ids => jsonArray (ids.map toString))
-       (Order.comparison selected closure node root path))])
+       (Order.comparison selected closure node root path)),
+     ("request_coverage", jsonArray (selected.tools.map fun fact => object
+       [("tool", toString fact.tool.id),
+        ("coverage", coverageJson (selected.requestCoverage fact.tool.scope fact.tool.request))]))])
 
 def orderingEntryCasesJson : String := jsonArray (Order.Examples.entryCases.map
   fun (name, entries) => object

@@ -677,6 +677,56 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         assert!(complete.entries.iter().all(|entry| {
             entry.scope.session_id == parent && entry.scope.session_id != complete_child.session_id
         }));
+        let mut unknown_request =
+            claimed_signed_request(&node, "unknown-parent-request", &parent, &identity, None).await;
+        let mut unknown_tool = publish_accepted_on_claimed_request(
+            node.clone(),
+            &mut unknown_request,
+            &did,
+            0,
+            "external_tool",
+            "uncaptured-tool",
+            serde_json::json!({}),
+            crate::tool_call_lifecycle::AwaitMode::Foreground,
+            true,
+        )
+        .await
+        .unwrap();
+        unknown_tool.complete("uncaptured operation").await.unwrap();
+        let with_unknown =
+            FileInventorySnapshot::load(&node, &load_admission(parent.clone()).await)
+                .await
+                .unwrap();
+        assert_eq!(with_unknown.binding.coverage.unknown, 1);
+        let modeled = contracts["file_inventory_order_comparison_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "unknown_other_request")
+            .unwrap();
+        for entry in &with_unknown.entries {
+            let (_, label) = physical_tools
+                .iter()
+                .find(|(id, _)| *id == entry.tool_call_doc_id)
+                .unwrap();
+            let expected = modeled["request_coverage"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["tool"].as_u64() == Some(*label))
+                .unwrap();
+            assert_eq!(
+                entry.request_coverage,
+                Some(serde_json::from_value(expected["coverage"].clone()).unwrap())
+            );
+        }
+        assert_eq!(
+            FileInventorySnapshot::load(&node, &child_admission)
+                .await
+                .unwrap()
+                .binding,
+            snapshot.binding
+        );
         node.shutdown().await;
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
@@ -864,4 +914,86 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     assert_eq!(inventory.binding, repeated.binding);
     node.shutdown().await;
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+}
+
+#[test]
+fn generated_request_coverage_uses_only_selected_physical_scope() {
+    use serde_json::Value;
+    let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let document = |value: &Value| format!("document-{:020}", value.as_u64().unwrap());
+    let cases = contracts["file_inventory_order_comparison_cases"]
+        .as_array()
+        .unwrap();
+    for case in cases {
+        let mut facts = Vec::new();
+        let mut entries = Vec::new();
+        for row in case["snapshot"]["tools"].as_array().unwrap() {
+            let tool = &row["tool"];
+            let scope = FileImageScope {
+                node_did: tool["scope"]["node"].as_str().unwrap().into(),
+                session_id: tool["scope"]["session"].as_str().unwrap().into(),
+                requester_did: tool["scope"]["requester"].as_str().unwrap().into(),
+            };
+            let capture = match row["capture"]["kind"].as_str().unwrap() {
+                "pending" => Capture::Pending,
+                "unknown" => Capture::Unknown,
+                "observed" => {
+                    let value = &row["capture"]["projection"];
+                    let projection = Projection {
+                        doc_id: document(&value["id"]),
+                        tool_call_doc_id: document(&tool["id"]),
+                        observation_doc_id: document(&value["observation"]),
+                        request_doc_id: document(&tool["request"]),
+                        node_did: scope.node_did.clone(),
+                        session_id: scope.session_id.clone(),
+                        requester_did: scope.requester_did.clone(),
+                        changes: serde_json::from_value(value["changes"].clone()).unwrap(),
+                    };
+                    for change in &projection.changes {
+                        entries.push(FileInventoryEntry {
+                            tool_call_doc_id: projection.tool_call_doc_id.clone(),
+                            request_doc_id: projection.request_doc_id.clone(),
+                            scope: scope.clone(),
+                            projection_doc_id: projection.doc_id.clone(),
+                            observation_doc_id: projection.observation_doc_id.clone(),
+                            change: change.clone(),
+                            order: None,
+                            request_coverage: None,
+                        });
+                    }
+                    Capture::Observed {
+                        projection: Box::new(projection),
+                        owner: scope.node_did.clone(),
+                    }
+                }
+                other => panic!("unknown modeled capture {other}"),
+            };
+            facts.push(ToolFact {
+                tool_call_doc_id: document(&tool["id"]),
+                request_doc_id: document(&tool["request"]),
+                scope,
+                state: tool["state"].as_str().unwrap().into(),
+                accepted_header_doc_id: "accepted".into(),
+                execution_generation: "generation".into(),
+                capture,
+                order: None,
+            });
+        }
+        apply_request_coverage(&facts, &mut entries);
+        for entry in entries {
+            let expected = case["request_coverage"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| document(&row["tool"]) == entry.tool_call_doc_id)
+                .unwrap();
+            assert_eq!(
+                entry.request_coverage,
+                Some(serde_json::from_value(expected["coverage"].clone()).unwrap()),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+    assert_eq!(cases.len(), 13);
 }
