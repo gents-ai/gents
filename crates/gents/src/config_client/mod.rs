@@ -64,7 +64,7 @@ pub use desired_state::read_records as read_desired_state_records_in_txn;
 pub use desired_state::{
     apply_desired_state_plan, config_projection, desired_state_document_digest,
     event_trigger_document_field_names, stale_expectation, validate_event_trigger_document_fields,
-    DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan, DesiredStateError,
     DesiredStateExpectation, DriftedDocument, StaleExpectation,
 };
 pub(crate) use desired_state::{
@@ -95,7 +95,7 @@ pub(crate) use txn::TransactionOutcome;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{
     ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess, NativeOperationAbandoned,
-    ReentrantEmbeddedWrite,
+    ReceiptWriteError, ReentrantEmbeddedWrite,
 };
 
 pub use error::{ConfigClientError, TransactionConflict};

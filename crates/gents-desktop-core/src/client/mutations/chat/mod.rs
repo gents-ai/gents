@@ -5,7 +5,7 @@ mod session;
 pub use gents::interrupt_request;
 pub use request::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionOutcomeUnknown, UnresolvedSubmission,
+    ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
 pub use request::{
     resend_request, retry_request, submit_request, submit_task_request, SubmitRequestOptions,

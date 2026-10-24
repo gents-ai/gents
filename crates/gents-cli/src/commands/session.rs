@@ -199,7 +199,7 @@ async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Resu
             }}
         }}"#
     );
-    graphql_rows(access, "AgentSession", &query).await
+    Ok(graphql_rows(access, "AgentSession", &query).await?)
 }
 
 async fn add_request_count(access: &ConfigAccess, row: &mut Value) -> Result<()> {

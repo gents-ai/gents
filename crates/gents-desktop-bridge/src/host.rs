@@ -115,7 +115,7 @@ impl ClientHost {
                         self.core
                             .read_inference_setup_state(&node_did)
                             .await
-                            .map_err(backend_error)?,
+                            .map_err(|error| backend_error(error.into()))?,
                     );
                 }
                 self.core

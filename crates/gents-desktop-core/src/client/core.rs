@@ -581,7 +581,7 @@ impl ClientCore {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.store.request_resync(Some(node_did));
-                return Err(error);
+                return Err(error.into());
             }
         };
         let rows = snapshot.row_count();

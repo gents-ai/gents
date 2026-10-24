@@ -1,5 +1,4 @@
 use crate::client::store::ClientStore;
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use std::sync::Arc;
 
@@ -13,13 +12,11 @@ pub async fn rename_session(
     requester_did: &str,
     session_id: &str,
     title: &str,
-) -> Result<()> {
+) -> Result<(), ChatMutationError> {
     let mutation =
         build_rename_session_mutation(store, node_did, requester_did, session_id, title)?;
-    gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation)
-        .await
-        .map(|_| ())
-        .map_err(Into::into)
+    gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation).await?;
+    Ok(())
 }
 
 fn build_rename_session_mutation(

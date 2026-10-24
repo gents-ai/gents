@@ -1,4 +1,4 @@
-use anyhow::Result;
+use gents::config_client::ConfigClientError;
 use gents_protocol::graphql::{
     extract_mutation_doc_id as shared_extract_mutation_doc_id,
     graphql_endpoint_available as shared_graphql_endpoint_available, graphql_rows_from_response,
@@ -27,7 +27,7 @@ pub(crate) async fn graphql_rows(
     access: &ConfigAccess,
     collection_name: &str,
     query: &str,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Value>, ConfigClientError> {
     let response = access.execute(query).await?;
     Ok(graphql_rows_from_response(&response, collection_name))
 }
@@ -36,7 +36,7 @@ pub(crate) async fn graphql_rows_or_empty_if_collection_missing(
     access: &ConfigAccess,
     collection_name: &str,
     query: &str,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Value>, ConfigClientError> {
     match graphql_rows(access, collection_name, query).await {
         Ok(rows) => Ok(rows),
         Err(error) if is_collection_missing_error(collection_name, &error) => Ok(Vec::new()),
@@ -44,7 +44,10 @@ pub(crate) async fn graphql_rows_or_empty_if_collection_missing(
     }
 }
 
-pub(crate) fn is_collection_missing_error(collection_name: &str, error: &anyhow::Error) -> bool {
+pub(crate) fn is_collection_missing_error(
+    collection_name: &str,
+    error: &ConfigClientError,
+) -> bool {
     gents_protocol::graphql::is_collection_missing_error_message(
         collection_name,
         &error.to_string(),

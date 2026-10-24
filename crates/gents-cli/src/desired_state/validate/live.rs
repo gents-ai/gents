@@ -145,7 +145,8 @@ pub(crate) async fn validate_manifest_against_live(
 mod tests {
     use std::sync::Arc;
 
-    use anyhow::Result;
+    type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     use defra_node::EmbeddedNode;
     use serde_json::json;
 

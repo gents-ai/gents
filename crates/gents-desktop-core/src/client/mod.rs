@@ -22,7 +22,9 @@ pub use core::{
 };
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
-pub use mutations::{DeliveryUnconfirmed, SubmissionOutcomeUnknown, UnresolvedSubmission};
+pub use mutations::{
+    DeliveryUnconfirmed, ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
+};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
@@ -44,8 +46,9 @@ pub use query::{
     load_session_transcript_page_on, load_session_transcript_window,
     load_session_transcript_window_on, session_transcript_requester_scope,
     session_unreadable_reason, session_unsendable_reason, CanonicalTranscriptDependencies,
-    RequestPromptFact, RequestPromptOwnership, SessionTranscriptQueryPage, TranscriptSpan,
-    TranscriptWindow, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
+    ClientQueryError, RequestPromptFact, RequestPromptOwnership, SessionTranscriptQueryPage,
+    TranscriptSpan, TranscriptWindow, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE,
+    MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use schema::subscribed_collection_names;
 pub use store::{

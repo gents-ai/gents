@@ -1,13 +1,15 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
-use anyhow::Result;
+use gents::config_client::ConfigClientError;
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::post_graphql;
+
+type Result<T, E = SelfViewError> = std::result::Result<T, E>;
 
 const RECENT_REQUEST_SCAN: usize = 200;
 
@@ -131,7 +133,7 @@ struct CompactionRow {
 pub(crate) async fn load_self_view(
     graphql: &GraphqlEndpoint,
     node_did: &str,
-) -> Result<(Vec<SelfAgent>, ContextBudget, ContextIndicator)> {
+) -> Result<(Vec<SelfAgent>, ContextBudget, ContextIndicator), SelfViewError> {
     let response = post_graphql(graphql, &self_view_query(node_did)).await?;
     let envelope = decode::<SelfViewEnvelope>(response, "self view")?;
 
@@ -218,7 +220,9 @@ fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum SelfViewError {
+pub(crate) enum SelfViewError {
+    #[error(transparent)]
+    Graphql(#[from] ConfigClientError),
     #[error("{label} query response missing object data: {response}")]
     MissingData {
         label: &'static str,

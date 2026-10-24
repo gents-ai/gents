@@ -27,6 +27,32 @@ pub(crate) enum RequestHelpersError {
     HomeNotInitialized { home: PathBuf },
     #[error("local-self request target {target} does not match initialized home node {node_did}")]
     TargetMismatch { target: String, node_did: String },
+    #[error(transparent)]
+    Config(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    Cli(#[from] crate::CliError),
+    #[error("reading request content from {}", path.display())]
+    ReadRequestContent {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("provide either --content or --content-file, not both ({})", path.display())]
+    ContentAndContentFile { path: PathBuf },
+    #[error("request content is required; pass --content or --content-file")]
+    ContentRequired,
+    #[error(
+        "request_id {request_id} is ambiguous or absent across {count} AgentRequest documents"
+    )]
+    AmbiguousRequestRow { request_id: String, count: usize },
+    #[error("request {request_id} not found")]
+    RequestRowMissing { request_id: String },
+    #[error("decoding AgentRequest {request_id}")]
+    DecodeRequestRow {
+        request_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("receipt has no physical identity")]
     ReceiptWithoutPhysicalIdentity,
     #[error("receipt has no session")]
@@ -1115,21 +1141,22 @@ pub(crate) fn resolve_request_id(
 pub(crate) fn resolve_request_content(
     content: Option<&str>,
     content_file: Option<&Path>,
-) -> Result<String> {
+) -> Result<String, RequestHelpersError> {
     match (content, content_file) {
-        (Some(_), Some(path)) => anyhow::bail!(
-            "provide either --content or --content-file, not both ({})",
-            path.display()
-        ),
+        (Some(_), Some(path)) => Err(RequestHelpersError::ContentAndContentFile {
+            path: path.to_path_buf(),
+        }),
         (Some(content), None) => Ok(require_non_empty("content", content)?.to_string()),
         (None, Some(path)) => {
-            let content = fs::read_to_string(path)
-                .with_context(|| format!("reading request content from {}", path.display()))?;
+            let content = fs::read_to_string(path).map_err(|source| {
+                RequestHelpersError::ReadRequestContent {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            })?;
             Ok(require_non_empty("content-file", &content)?.to_string())
         }
-        (None, None) => {
-            anyhow::bail!("request content is required; pass --content or --content-file")
-        }
+        (None, None) => Err(RequestHelpersError::ContentRequired),
     }
 }
 
@@ -1256,7 +1283,7 @@ pub(crate) fn parse_valid_until_flag(
 pub(crate) async fn fetch_request_view(
     graphql: &GraphqlEndpoint,
     request_id: &str,
-) -> Result<AgentRequestRow> {
+) -> Result<AgentRequestRow, RequestHelpersError> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -1290,16 +1317,21 @@ pub(crate) async fn fetch_request_view(
         .cloned()
         .unwrap_or_default();
     if rows.len() != 1 {
-        anyhow::bail!(
-            "request_id {request_id} is ambiguous or absent across {} AgentRequest documents",
-            rows.len()
-        );
+        return Err(RequestHelpersError::AmbiguousRequestRow {
+            request_id: request_id.to_owned(),
+            count: rows.len(),
+        });
     }
     let row = rows
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    serde_json::from_value(row).with_context(|| format!("decoding AgentRequest {request_id}"))
+        .ok_or_else(|| RequestHelpersError::RequestRowMissing {
+            request_id: request_id.to_owned(),
+        })?;
+    serde_json::from_value(row).map_err(|source| RequestHelpersError::DecodeRequestRow {
+        request_id: request_id.to_owned(),
+        source,
+    })
 }
 
 #[cfg(test)]

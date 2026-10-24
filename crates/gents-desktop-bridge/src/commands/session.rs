@@ -3,6 +3,7 @@ use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
 };
 use crate::types::{DesktopSessionSnapshot, SessionRowsView, SessionRowsWindow};
+use gents_desktop_core::client::ClientQueryError;
 use gents_protocol::error_chain::ErrorChain;
 
 pub async fn session_snapshot(
@@ -127,7 +128,9 @@ pub async fn session_snapshot(
                 ));
             }
             Err(error) => {
-                if let Some(error) = error.downcast_ref::<BridgeError>() {
+                if let Some(ClientQueryError::ProjectionPending(error)) =
+                    error.downcast_ref::<ClientQueryError>()
+                {
                     return Err(error.clone());
                 }
                 tracing::warn!(
@@ -465,9 +468,9 @@ pub async fn session_rows(
             }
         }
     };
-    let error = |error: anyhow::Error| match error.downcast::<BridgeError>() {
-        Ok(error) => error,
-        Err(error) => BridgeError::untyped(ErrorChain(error.as_ref()).to_string()),
+    let error = |error: ClientQueryError| match error {
+        ClientQueryError::ProjectionPending(error) => error,
+        error => BridgeError::untyped(ErrorChain(&error).to_string()),
     };
     let store = core.store().snapshot();
     let render = |page: &SessionTranscriptQueryPage| {

@@ -1,8 +1,8 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
+use gents::config_client::ConfigClientError;
 use gents::tool_call_lifecycle::deadline_is_expired;
 use gents::{call_state_holds_backend_slot, UNKNOWN_PROBE_STATUS};
 use gents_protocol::row::{
@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::post_graphql;
+
+type Result<T, E = FleetSlotError> = std::result::Result<T, E>;
 
 const SNAPSHOT_SOURCE: &str = "graphql.derived_admission_state";
 
@@ -195,7 +197,7 @@ struct SlotCounts {
 
 pub(crate) async fn load_fleet_slot_snapshot(
     graphql: &GraphqlEndpoint,
-) -> Result<FleetSlotSnapshot> {
+) -> Result<FleetSlotSnapshot, FleetSlotError> {
     let generated_at = Utc::now();
     let response = post_graphql(graphql, fleet_slot_snapshot_query()).await?;
     let envelope = decode_fleet_slot_query_response(response)?;
@@ -203,7 +205,9 @@ pub(crate) async fn load_fleet_slot_snapshot(
 }
 
 #[derive(Debug, thiserror::Error)]
-enum FleetSlotError {
+pub(crate) enum FleetSlotError {
+    #[error(transparent)]
+    Graphql(#[from] ConfigClientError),
     #[error("fleet slot snapshot query response missing object data: {response}")]
     MissingData { response: Value },
     #[error("decoding fleet slot snapshot query response")]

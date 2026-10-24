@@ -1113,7 +1113,7 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("rename session", error)),
+            Err(error) => Err(self.record_mutation_error("rename session", error.into())),
         }
     }
 

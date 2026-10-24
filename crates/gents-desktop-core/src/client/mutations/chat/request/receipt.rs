@@ -8,8 +8,9 @@
 
 use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
-use gents::config_client::ConfigAccess;
+use std::error::Error;
+
+use gents::config_client::{ConfigAccess, ConfigClientError, ReceiptWriteError};
 use gents_protocol::graphql::{escape_graphql_string, GraphqlRequestOptions};
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequestRow;
@@ -18,6 +19,17 @@ use serde_json::Value;
 use super::{ChatMutationError, SubmittedRequest};
 
 pub(crate) mod journal;
+
+/// Failure of a chat submission or of its receipt reconciliation.
+#[derive(Debug, thiserror::Error)]
+pub enum ReceiptError {
+    #[error(transparent)]
+    OutcomeUnknown(Box<SubmissionOutcomeUnknown>),
+    #[error(transparent)]
+    DeliveryUnconfirmed(#[from] DeliveryUnconfirmed),
+    #[error(transparent)]
+    Write(#[from] ReceiptWriteError<ReceiptReadError>),
+}
 
 /// A prepared owner submission whose commit outcome could not be determined.
 ///
@@ -71,16 +83,12 @@ pub struct DeliveryUnconfirmed {
     pub node_did: String,
 }
 
-/// Error context attached to every receipt read, so an unreadable receipt is
-/// recognisable after `write_with_receipt` wraps it.
-const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
-
 #[derive(Debug, thiserror::Error)]
-pub(super) enum ReceiptReadError {
+pub enum ReceiptReadError {
     #[error("reading owner signed submission receipt")]
     Unreadable(#[source] Box<ReceiptReadError>),
     #[error(transparent)]
-    Query(#[from] gents::config_client::ConfigClientError),
+    Query(#[from] ConfigClientError),
     #[error("request receipt query omitted rows")]
     RowsOmitted,
     #[error("ambiguous scoped submission receipt")]
@@ -91,6 +99,8 @@ pub(super) enum ReceiptReadError {
     CrossedScope,
     #[error("submission receipt differs from prepared signed request")]
     SignatureMismatch,
+    #[error("only an owner connection can prove whether a send was delivered")]
+    NotOwnerConnection,
 }
 
 impl UnresolvedSubmission {
@@ -122,7 +132,7 @@ impl UnresolvedSubmission {
         })
     }
 
-    fn outcome_unknown(&self) -> anyhow::Error {
+    fn outcome_unknown(&self) -> ReceiptError {
         tracing::warn!(
             action = "chat_submit_receipt_unresolved",
             request_id = %self.request_id,
@@ -130,12 +140,11 @@ impl UnresolvedSubmission {
             node_did = %self.node_did,
             "owner chat submission outcome unknown; retaining signed payload for identical replay"
         );
-        SubmissionOutcomeUnknown {
+        ReceiptError::OutcomeUnknown(Box::new(SubmissionOutcomeUnknown {
             request_id: self.request_id.clone(),
             session_id: self.session_id.clone(),
             pending: self.clone(),
-        }
-        .into()
+        }))
     }
 }
 
@@ -221,42 +230,46 @@ async fn read_owner_receipt(
 pub(super) async fn commit_signed_submission(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
-) -> Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ReceiptError> {
     let written = access
         .write_with_receipt("desktop.chat.submit", &pending.mutation, || {
             owner_receipt(access, &pending.create)
         })
-        .await
-        .map_err(anyhow::Error::from);
+        .await;
     let Err(error) = written else {
         return Ok(pending.result);
     };
     if !matches!(access, ConfigAccess::Graphql(_)) {
-        return Err(error);
+        return Err(ReceiptError::Write(error));
     }
-    let receipt_unreadable = error
-        .chain()
-        .any(|cause| cause.to_string() == RECEIPT_READ_CONTEXT);
+    let receipt_unreadable = matches!(
+        error,
+        ReceiptWriteError::Receipt(ReceiptReadError::Unreadable(_))
+    );
     if !receipt_unreadable && owner_rejected(&error) {
         match owner_receipt(access, &pending.create).await {
             Ok(true) => return Ok(pending.result),
-            Ok(false) if !reports_existing_request(&error) => return Err(error),
+            Ok(false) if !reports_existing_request(&error) => {
+                return Err(ReceiptError::Write(error))
+            }
             _ => {}
         }
     }
     Err(pending.outcome_unknown())
 }
 
+fn causes<'a>(error: &'a (dyn Error + 'static)) -> impl Iterator<Item = &'a (dyn Error + 'static)> {
+    std::iter::successors(Some(error), |&cause| cause.source())
+}
+
 /// The owner processed the mutation and answered with GraphQL errors.
-fn owner_rejected(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().starts_with("graphql returned errors:"))
+fn owner_rejected(error: &(dyn Error + 'static)) -> bool {
+    causes(error).any(|cause| cause.to_string().starts_with("graphql returned errors:"))
 }
 
 /// A rejection that implies the owner already holds a request with this id.
-fn reports_existing_request(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
+fn reports_existing_request(error: &(dyn Error + 'static)) -> bool {
+    causes(error).any(|cause| {
         let text = cause.to_string().to_ascii_lowercase();
         text.contains("already exists") || text.contains("duplicate")
     })
@@ -273,7 +286,7 @@ pub async fn reconcile_unretained_submission(
     node_did: &str,
     session_id: &str,
     request_id: &str,
-) -> Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ReceiptError> {
     match submitted_request_exists(access, node_did, session_id, request_id).await {
         Ok(true) => Ok(SubmittedRequest {
             request_id: request_id.to_string(),
@@ -281,12 +294,11 @@ pub async fn reconcile_unretained_submission(
             node_did: node_did.to_string(),
             agent_id: None,
         }),
-        Ok(false) | Err(_) => Err(DeliveryUnconfirmed {
+        Ok(false) | Err(_) => Err(ReceiptError::DeliveryUnconfirmed(DeliveryUnconfirmed {
             request_id: request_id.to_string(),
             session_id: session_id.to_string(),
             node_did: node_did.to_string(),
-        }
-        .into()),
+        })),
     }
 }
 
@@ -296,9 +308,9 @@ async fn submitted_request_exists(
     node_did: &str,
     session_id: &str,
     request_id: &str,
-) -> Result<bool> {
+) -> Result<bool, ReceiptReadError> {
     let ConfigAccess::Graphql(endpoint) = access else {
-        anyhow::bail!("only an owner connection can prove whether a send was delivered");
+        return Err(ReceiptReadError::NotOwnerConnection);
     };
     // Scoped by node and session only: the requester authority may have changed
     // since the send, and an exact requester match would then prove a false
@@ -321,12 +333,14 @@ async fn submitted_request_exists(
         },
     )
     .await
-    .context(RECEIPT_READ_CONTEXT)?;
+    .map_err(|error| ReceiptReadError::Unreadable(Box::new(ReceiptReadError::Query(error))))?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("request receipt query omitted rows")?;
-    ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
+        .ok_or(ReceiptReadError::RowsOmitted)?;
+    if rows.len() > 1 {
+        return Err(ReceiptReadError::Ambiguous);
+    }
     Ok(!rows.is_empty())
 }
 
@@ -339,7 +353,7 @@ async fn submitted_request_exists(
 pub async fn resolve_unresolved_submission(
     access: &ConfigAccess,
     pending: &UnresolvedSubmission,
-) -> Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ReceiptError> {
     match owner_receipt(access, &pending.create).await {
         Ok(true) => Ok(pending.result.clone()),
         Ok(false) => commit_signed_submission(access, pending.clone()).await,
@@ -569,9 +583,9 @@ mod tests {
         let error = resolve_unresolved_submission(&access, &pending)
             .await
             .expect_err("an absent receipt for every attempt is an unknown outcome");
-        let unknown = error
-            .downcast_ref::<SubmissionOutcomeUnknown>()
-            .expect("unknown outcome is a typed error");
+        let ReceiptError::OutcomeUnknown(unknown) = &error else {
+            panic!("unknown outcome is a typed error: {error}");
+        };
         assert_eq!(unknown.request_id, REQUEST_ID);
         assert_eq!(unknown.session_id, SESSION_ID);
         assert_eq!(unknown.pending.request_id, REQUEST_ID);
@@ -658,9 +672,9 @@ mod tests {
             .expect_err("a definite rejection with no receipt fails");
 
         assert!(
-            error.downcast_ref::<SubmissionOutcomeUnknown>().is_none(),
+            !matches!(error, ReceiptError::OutcomeUnknown(_)),
             "a definite rejection must not be reported as possibly delivered: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert_eq!(create_requests(&server).await.len(), 1);
     }
@@ -698,14 +712,12 @@ mod tests {
                 .await
                 .expect_err("an unconfirmed post-send failure is not a success");
 
-            let unknown = error
-                .downcast_ref::<SubmissionOutcomeUnknown>()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "HTTP {status} must be an unknown outcome: {}",
-                        ErrorChain(error.as_ref())
-                    )
-                });
+            let ReceiptError::OutcomeUnknown(unknown) = &error else {
+                panic!(
+                    "HTTP {status} must be an unknown outcome: {}",
+                    ErrorChain(&error)
+                )
+            };
             assert_eq!(unknown.request_id, test_result().request_id);
         }
     }
@@ -728,9 +740,9 @@ mod tests {
             .expect_err("an unconfirmed duplicate rejection is not a success");
 
         assert!(
-            error.downcast_ref::<SubmissionOutcomeUnknown>().is_some(),
+            matches!(error, ReceiptError::OutcomeUnknown(_)),
             "an existing-request rejection with no visible receipt may still be delivered: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -750,14 +762,9 @@ mod tests {
         .await
         .expect_err("an absent receipt does not prove the original never commits");
 
-        let unconfirmed = error
-            .downcast_ref::<DeliveryUnconfirmed>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "absence must stay unresolved: {}",
-                    ErrorChain(error.as_ref())
-                )
-            });
+        let ReceiptError::DeliveryUnconfirmed(unconfirmed) = &error else {
+            panic!("absence must stay unresolved: {}", ErrorChain(&error))
+        };
         assert_eq!(unconfirmed.request_id, result.request_id);
         assert_eq!(unconfirmed.session_id, result.session_id);
         assert!(
@@ -781,7 +788,7 @@ mod tests {
         .await
         .expect_err("an unreadable receipt proves nothing");
 
-        assert!(error.downcast_ref::<DeliveryUnconfirmed>().is_some());
+        assert!(matches!(error, ReceiptError::DeliveryUnconfirmed(_)));
     }
 
     #[tokio::test]

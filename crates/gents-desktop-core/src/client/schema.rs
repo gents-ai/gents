@@ -7,14 +7,16 @@ pub enum SchemaError {
     MissingP2p,
     #[error(transparent)]
     Subscribe(#[from] defra_p2p_adapter::P2PError),
+    #[error(transparent)]
+    Runtime(#[from] gents::schema::SchemaError),
 }
 
-pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> anyhow::Result<()> {
+pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<(), SchemaError> {
     Ok(gents::schema::ensure_runtime_schemas(node).await?)
 }
 
 #[allow(dead_code)]
-pub async fn ensure_schemas(node: &EmbeddedNode) -> anyhow::Result<()> {
+pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<(), SchemaError> {
     ensure_runtime_schemas(node).await
 }
 

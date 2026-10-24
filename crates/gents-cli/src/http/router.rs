@@ -742,7 +742,7 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "agent": Value::Null,
                 "agents": [],
                 "context_budget": ContextBudget::default(),
-                "error": format!("self view query failed: {}", ErrorChain(error.as_ref())),
+                "error": format!("self view query failed: {}", ErrorChain(&error)),
             });
             if let Some(map) = body.as_object_mut() {
                 if let Some(health_status) = health.get("status").cloned() {
@@ -833,7 +833,7 @@ async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Response {
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            format!("fleet snapshot failed: {}", ErrorChain(error.as_ref())),
+            format!("fleet snapshot failed: {}", ErrorChain(&error)),
         )
             .into_response(),
     }
@@ -845,7 +845,7 @@ async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response 
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            format!("fleet slot snapshot failed: {}", ErrorChain(error.as_ref())),
+            format!("fleet slot snapshot failed: {}", ErrorChain(&error)),
         )
             .into_response(),
     }
@@ -857,7 +857,7 @@ async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            format!("mcp pool snapshot failed: {}", ErrorChain(error.as_ref())),
+            format!("mcp pool snapshot failed: {}", ErrorChain(&error)),
         )
             .into_response(),
     }

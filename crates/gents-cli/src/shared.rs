@@ -8,6 +8,10 @@ pub(crate) enum SharedError {
     Serialize(#[from] serde_json::Error),
     #[error("canonical configuration {key} is not a document array")]
     NotDocumentArray { key: &'static str },
+    #[error(transparent)]
+    Graphql(#[from] gents::config_client::ConfigClientError),
+    #[error("backend observation is missing or ambiguous")]
+    AmbiguousBackendObservation,
 }
 
 type Result<T, E = SharedError> = std::result::Result<T, E>;
@@ -334,17 +338,16 @@ pub(crate) async fn load_backend_observation(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
     backend_id: &str,
-) -> anyhow::Result<gents::document_config::InferenceBackendObservation> {
+) -> Result<gents::document_config::InferenceBackendObservation> {
     let query = format!(
         "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs probe_status last_probe}} }}",
         gents::graphql::escape_graphql_string(node_did),
         gents::graphql::escape_graphql_string(backend_id),
     );
     let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "backend observation is missing or ambiguous"
-    );
+    if rows.len() != 1 {
+        return Err(SharedError::AmbiguousBackendObservation);
+    }
     Ok(serde_json::from_value(rows[0].clone())?)
 }
 

@@ -6,9 +6,7 @@
 //! reconciles that exact request rather than minting a new one.
 
 use anyhow::Result;
-use gents_desktop_core::client::{
-    ClientCore, DeliveryUnconfirmed, SubmissionOutcomeUnknown, SubmittedRequest,
-};
+use gents_desktop_core::client::{ClientCore, ReceiptError, SubmittedRequest};
 
 use crate::types::{ChatSendOutcome, ChatSendRequest, ChatSendResult};
 
@@ -27,17 +25,12 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
         Ok(receipt) => return Ok(receipt.into()),
         Err(error) => error,
     };
-    let error = match error.downcast::<SubmissionOutcomeUnknown>() {
-        Ok(unknown) => {
-            return Ok(ChatSendResult::with_outcome(
-                unknown.pending.result,
-                ChatSendOutcome::DeliveryUnknown,
-            ))
-        }
-        Err(error) => error,
-    };
-    match error.downcast::<DeliveryUnconfirmed>() {
-        Ok(unconfirmed) => Ok(ChatSendResult::with_outcome(
+    match error.downcast::<ReceiptError>() {
+        Ok(ReceiptError::OutcomeUnknown(unknown)) => Ok(ChatSendResult::with_outcome(
+            unknown.pending.result,
+            ChatSendOutcome::DeliveryUnknown,
+        )),
+        Ok(ReceiptError::DeliveryUnconfirmed(unconfirmed)) => Ok(ChatSendResult::with_outcome(
             SubmittedRequest {
                 request_id: unconfirmed.request_id,
                 session_id: unconfirmed.session_id,
@@ -46,6 +39,7 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
             },
             ChatSendOutcome::DeliveryUnknown,
         )),
+        Ok(error) => Err(error.into()),
         Err(error) => Err(error),
     }
 }

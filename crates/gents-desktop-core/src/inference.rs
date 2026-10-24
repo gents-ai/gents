@@ -1,5 +1,47 @@
 use crate::client::source_matches_node;
+use gents::config_client::ConfigClientError;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceError {
+    #[error("runtime connection is missing or ambiguous")]
+    ConnectionMissing,
+    #[error("runtime has no HTTP endpoint")]
+    NoHttpEndpoint,
+    #[error("runtime endpoint is invalid")]
+    EndpointInvalid(#[source] url::ParseError),
+    #[error("runtime endpoint must be an HTTP URL without credentials")]
+    EndpointCredentials,
+    #[error("runtime endpoint has no GraphQL path")]
+    NoGraphqlPath,
+    #[error(transparent)]
+    HttpClient(reqwest::Error),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error("reading runtime model settings")]
+    ReadSettings {
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error(transparent)]
+    ReadBody(reqwest::Error),
+    #[error("runtime model settings are unavailable (HTTP {status}); reconnect the runtime and try again")]
+    SettingsUnavailable { status: u16 },
+    #[error("runtime model settings exceed the response limit")]
+    SettingsTooLarge,
+    #[error("decoding runtime model settings")]
+    DecodeSettings(#[source] serde_json::Error),
+    #[error("runtime model settings require a matching runtime version")]
+    SettingsVersion,
+    #[error("runtime model settings belong to a different node")]
+    SettingsNode,
+    #[error(transparent)]
+    Query(#[from] crate::client::ClientQueryError),
+    #[error("runtime inference configuration is incomplete")]
+    ConfigurationIncomplete,
+    #[error("runtime inference configuration requires exactly one node")]
+    ConfigurationNodeCount,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -231,23 +273,23 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
 pub async fn load_inference_setup_state(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
-) -> anyhow::Result<InferenceSetupState> {
+) -> Result<InferenceSetupState, InferenceError> {
     let store = crate::client::load_inference_configuration(access, node_did).await?;
-    anyhow::ensure!(
-        store
-            .operator_config_authoritative_node_dids
-            .contains(node_did),
-        "runtime inference configuration is incomplete"
-    );
-    anyhow::ensure!(
-        store
-            .nodes
-            .iter()
-            .filter(|row| row.node_did == node_did)
-            .count()
-            == 1,
-        "runtime inference configuration requires exactly one node"
-    );
+    if !store
+        .operator_config_authoritative_node_dids
+        .contains(node_did)
+    {
+        return Err(InferenceError::ConfigurationIncomplete);
+    }
+    if store
+        .nodes
+        .iter()
+        .filter(|row| row.node_did == node_did)
+        .count()
+        != 1
+    {
+        return Err(InferenceError::ConfigurationNodeCount);
+    }
     Ok(InferenceSetupState::project(&store, node_did))
 }
 
@@ -291,18 +333,17 @@ impl crate::client::ClientCore {
     pub async fn read_inference_setup_state(
         &self,
         node_did: &str,
-    ) -> anyhow::Result<InferenceSetupState> {
-        use anyhow::Context;
+    ) -> Result<InferenceSetupState, InferenceError> {
         let records = self.peer_records().await;
         let mut matching = records.iter().filter(|record| record.node_did == node_did);
         let record = matching
             .next()
             .filter(|_| matching.next().is_none())
-            .context("runtime connection is missing or ambiguous")?;
+            .ok_or(InferenceError::ConnectionMissing)?;
         let graphql = record
             .graphql
             .as_deref()
-            .context("runtime has no HTTP endpoint")?;
+            .ok_or(InferenceError::NoHttpEndpoint)?;
         read_inference_setup_state_from(graphql, node_did, self.node_identity().did()).await
     }
 }
@@ -311,63 +352,60 @@ async fn read_inference_setup_state_from(
     graphql: &str,
     node_did: &str,
     client_did: &str,
-) -> anyhow::Result<InferenceSetupState> {
-    use anyhow::Context;
+) -> Result<InferenceSetupState, InferenceError> {
     use gents::config_client::GraphqlEndpoint;
-    let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
-    anyhow::ensure!(
-        matches!(url.scheme(), "http" | "https")
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none(),
-        "runtime endpoint must be an HTTP URL without credentials"
-    );
+    let mut url = reqwest::Url::parse(graphql).map_err(InferenceError::EndpointInvalid)?;
+    if !(matches!(url.scheme(), "http" | "https")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none())
+    {
+        return Err(InferenceError::EndpointCredentials);
+    }
     let base = url
         .path()
         .strip_suffix("/api/v0/graphql")
-        .context("runtime endpoint has no GraphQL path")?;
+        .ok_or(InferenceError::NoGraphqlPath)?;
     let path = format!("{base}{INFERENCE_SETTINGS_PATH}");
     url.set_path(&path);
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+        .build()
+        .map_err(InferenceError::HttpClient)?;
     let endpoint = GraphqlEndpoint::as_principal(graphql, client_did);
     let mut response = endpoint
         .authorize(client.get(url))?
         .send()
         .await
-        .context("reading runtime model settings")?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",
-        response.status().as_u16()
-    );
-    anyhow::ensure!(
-        response
-            .content_length()
-            .is_none_or(|length| length <= INFERENCE_SETTINGS_MAX_BYTES as u64),
-        "runtime model settings exceed the response limit"
-    );
+        .map_err(|source| InferenceError::ReadSettings { source })?;
+    if !response.status().is_success() {
+        return Err(InferenceError::SettingsUnavailable {
+            status: response.status().as_u16(),
+        });
+    }
+    if !response
+        .content_length()
+        .is_none_or(|length| length <= INFERENCE_SETTINGS_MAX_BYTES as u64)
+    {
+        return Err(InferenceError::SettingsTooLarge);
+    }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        anyhow::ensure!(
-            bytes.len().saturating_add(chunk.len()) <= INFERENCE_SETTINGS_MAX_BYTES,
-            "runtime model settings exceed the response limit"
-        );
+    while let Some(chunk) = response.chunk().await.map_err(InferenceError::ReadBody)? {
+        if bytes.len().saturating_add(chunk.len()) > INFERENCE_SETTINGS_MAX_BYTES {
+            return Err(InferenceError::SettingsTooLarge);
+        }
         bytes.extend_from_slice(&chunk);
     }
     let response: InferenceSettingsResponse =
-        serde_json::from_slice(&bytes).context("decoding runtime model settings")?;
-    anyhow::ensure!(
-        response.contract_version == INFERENCE_SETTINGS_CONTRACT_VERSION,
-        "runtime model settings require a matching runtime version"
-    );
-    anyhow::ensure!(
-        response.state.node_did == node_did && response.state.node.node_did == node_did,
-        "runtime model settings belong to a different node"
-    );
+        serde_json::from_slice(&bytes).map_err(InferenceError::DecodeSettings)?;
+    if response.contract_version != INFERENCE_SETTINGS_CONTRACT_VERSION {
+        return Err(InferenceError::SettingsVersion);
+    }
+    if response.state.node_did != node_did || response.state.node.node_did != node_did {
+        return Err(InferenceError::SettingsNode);
+    }
     Ok(response.state)
 }
 
@@ -483,7 +521,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert!(!ErrorChain(error.as_ref())
+            assert!(!ErrorChain(&error)
                 .to_string()
                 .contains("private-runtime-error"));
         }

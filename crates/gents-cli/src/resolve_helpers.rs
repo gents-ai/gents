@@ -17,6 +17,8 @@ pub(crate) enum ResolveHelpersError {
     CliToolArgument,
     #[error("--tool-root is required when --tool-ceiling readwrite")]
     ReadwriteRequiresRoot,
+    #[error("provide either --api-key or --api-key-env-var, not both")]
+    ApiKeyConflict,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +39,7 @@ pub(crate) fn resolve_backend_config_with_preset(
     let api_key = normalize_optional_string(explicit_api_key);
     let explicit_api_key_env_var = normalize_optional_string(explicit_api_key_env_var);
     if api_key.is_some() && explicit_api_key_env_var.is_some() {
-        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
+        return Err(ResolveHelpersError::ApiKeyConflict.into());
     }
 
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;

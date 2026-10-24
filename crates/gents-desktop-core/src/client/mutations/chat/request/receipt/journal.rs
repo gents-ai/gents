@@ -1,17 +1,39 @@
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
+use gents::config_client::{ConfigAccess, ConfigClientError};
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use std::sync::Arc;
 
 use super::super::ChatMutationError;
 use super::UnresolvedSubmission;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ReceiptJournalError {
+    #[error(transparent)]
+    Client(#[from] ConfigClientError),
+    #[error(transparent)]
+    Encode(serde_json::Error),
+    #[error("pending submission query omitted rows")]
+    RowsOmitted,
+    #[error("pending submission has no payload")]
+    PayloadMissing,
+    #[error("decoding retained submission")]
+    Decode(#[source] serde_json::Error),
+    #[error(transparent)]
+    Mutation(#[from] ChatMutationError),
+    #[error("retained submission is inconsistent with its signed request")]
+    Inconsistent,
+}
+
 /// The local encrypted store retains signed intent before the owner can see it.
 /// This collection stays outside the desktop replication catalog.
-pub(crate) async fn save(node: &Arc<EmbeddedNode>, pending: &UnresolvedSubmission) -> Result<()> {
+pub(crate) async fn save(
+    node: &Arc<EmbeddedNode>,
+    pending: &UnresolvedSubmission,
+) -> Result<(), ReceiptJournalError> {
     let request_id = escape_graphql_string(&pending.request_id);
-    let payload = escape_graphql_string(&serde_json::to_string(pending)?);
+    let payload = escape_graphql_string(
+        &serde_json::to_string(pending).map_err(ReceiptJournalError::Encode)?,
+    );
     ConfigAccess::write_local(
         node,
         "desktop.chat.retain_submission",
@@ -24,7 +46,7 @@ pub(crate) async fn save(node: &Arc<EmbeddedNode>, pending: &UnresolvedSubmissio
 pub(crate) async fn load(
     node: &EmbeddedNode,
     request_id: &str,
-) -> Result<Option<UnresolvedSubmission>> {
+) -> Result<Option<UnresolvedSubmission>, ReceiptJournalError> {
     let escaped = escape_graphql_string(request_id);
     let response = graphql_with_transaction_retry(
         node,
@@ -37,30 +59,30 @@ pub(crate) async fn load(
         .as_ref()
         .and_then(|data| data.get("PendingChatSubmission"))
         .and_then(serde_json::Value::as_array)
-        .context("pending submission query omitted rows")?;
+        .ok_or(ReceiptJournalError::RowsOmitted)?;
     rows.first()
         .map(|row| {
             let payload = row
                 .get("payload")
                 .and_then(serde_json::Value::as_str)
-                .context("pending submission has no payload")?;
+                .ok_or(ReceiptJournalError::PayloadMissing)?;
             let pending: UnresolvedSubmission =
-                serde_json::from_str(payload).context("decoding retained submission")?;
-            anyhow::ensure!(
-                pending.request_id == request_id
-                    && pending.request_id == pending.create.request_id
-                    && pending.node_did == pending.create.node_did
-                    && pending.session_id == pending.create.session_id
-                    && pending.result.request_id == pending.request_id
-                    && pending.result.node_did == pending.node_did
-                    && pending.result.session_id == pending.session_id
-                    && pending.mutation
-                        == pending
-                            .create
-                            .graphql_mutation()
-                            .map_err(|reason| { ChatMutationError::CreateMutation { reason } })?,
-                "retained submission is inconsistent with its signed request"
-            );
+                serde_json::from_str(payload).map_err(ReceiptJournalError::Decode)?;
+            let consistent = pending.request_id == request_id
+                && pending.request_id == pending.create.request_id
+                && pending.node_did == pending.create.node_did
+                && pending.session_id == pending.create.session_id
+                && pending.result.request_id == pending.request_id
+                && pending.result.node_did == pending.node_did
+                && pending.result.session_id == pending.session_id
+                && pending.mutation
+                    == pending
+                        .create
+                        .graphql_mutation()
+                        .map_err(|reason| ChatMutationError::CreateMutation { reason })?;
+            if !consistent {
+                return Err(ReceiptJournalError::Inconsistent);
+            }
             Ok(pending)
         })
         .transpose()
