@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use anyhow::Result;
 use chrono::Utc;
 use gents::config_client::ConfigClientError;
 use gents::document_config::ToolServiceRegistry;
@@ -29,7 +28,11 @@ pub enum McpRegistryError {
     EmptyServiceId,
 }
 
-pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
+type Result<T, E = McpRegistryError> = std::result::Result<T, E>;
+
+pub async fn load_mcp_services_with_health(
+    core: &ClientCore,
+) -> anyhow::Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = core.selected_node_did() else {
         return Ok(Vec::new());
     };
@@ -39,7 +42,7 @@ pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPS
 pub(crate) async fn load_mcp_services_with_health_for_node(
     core: &ClientCore,
     node_did: &str,
-) -> Result<Vec<MCPServiceHealthView>> {
+) -> anyhow::Result<Vec<MCPServiceHealthView>> {
     let escaped_node = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
@@ -258,7 +261,8 @@ mod probe_scope_tests {
     use super::*;
 
     #[tokio::test]
-    async fn registry_probe_resolves_the_node_and_service_compound_key() -> Result<()> {
+    async fn registry_probe_resolves_the_node_and_service_compound_key(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (core, _tempdir) = crate::tests::support::boot_core().await;
         gents::config_client::ConfigAccess::write_local(
             &core.node_arc(),

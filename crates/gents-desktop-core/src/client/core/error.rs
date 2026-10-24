@@ -116,8 +116,6 @@ pub(crate) enum ClientCoreError {
     },
     #[error("timed out {operation}")]
     P2pOperationTimedOut { operation: String },
-    #[error(transparent)]
-    P2p(#[from] defra_p2p_adapter::P2PError),
     #[error("desktop P2P transport has no dialable shareable address")]
     P2pNoDialableAddress,
     #[error("P2P transport reported an empty peer id")]

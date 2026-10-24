@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::QueryResponse;
-use defra_p2p_adapter::{P2PError, P2POperations as P2POps, TransportPeerId};
+use defra_p2p_adapter::{P2POperations as P2POps, TransportPeerId};
 use futures::{stream, StreamExt};
 use gents::agent::p2p_reconcile::enrollment::{
     pending_request_satisfied, AuthorizationRevision as PureRevision,
@@ -35,6 +35,7 @@ use serde_json::Value;
 use tokio::time::timeout;
 
 use super::super::principal_identity::PrincipalIdentity;
+use super::p2p_ops::{p2p_local_peer_id, p2p_shareable_address};
 use super::route_manager::ClientRouteManager;
 use super::sync_state::{ClientSyncStateOwner, RuntimeSchemaObservation};
 use super::{ClientCore, ClientCoreError, P2P_OPERATION_TIMEOUT};
@@ -44,16 +45,9 @@ pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
     identity: &dyn NodeIdentity,
 ) -> Result<EndpointRecord, ClientCoreError> {
-    let peer_id = timeout(P2P_OPERATION_TIMEOUT, p2p.local_peer_id())
-        .await
-        .map_err(|_| ClientCoreError::P2pOperationTimedOut {
-            operation: "reading desktop P2P peer id".to_owned(),
-        })??;
-    let address = timeout(P2P_OPERATION_TIMEOUT, p2p.shareable_address())
-        .await
-        .map_err(|_| ClientCoreError::P2pOperationTimedOut {
-            operation: "reading desktop shareable P2P address".to_owned(),
-        })??
+    let peer_id = p2p_local_peer_id(p2p).await?;
+    let address = p2p_shareable_address(p2p)
+        .await?
         .ok_or(ClientCoreError::P2pNoDialableAddress)?;
     Ok(EndpointRecord {
         did: identity.did().to_string(),
@@ -459,10 +453,6 @@ fn select_retryable_local_request<'a>(
     Ok(Some(*row))
 }
 
-fn map_p2p_error(error: P2PError) -> anyhow::Error {
-    anyhow::anyhow!(error.to_string())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ApprovedStatusEnrollment {
     network_id: String,
@@ -674,17 +664,16 @@ async fn authenticate_enrolled_server(
     let mut stage = "discovering enrolled server address";
     let result = timeout(P2P_OPERATION_TIMEOUT, async {
         let address = enrolled_server_address(approval, known).await?;
-        let peer = TransportPeerId::new(approval.server_peer.clone()).map_err(map_p2p_error)?;
+        let peer = TransportPeerId::new(approval.server_peer.clone())?;
         stage = "checking enrolled server connection";
         if !super::bootstrap::is_connected_peer(p2p, peer.as_str()).await? {
             stage = "connecting to enrolled server";
-            p2p.connect_peer(&address).await.map_err(map_p2p_error)?;
+            p2p.connect_peer(&address).await?;
         }
         stage = "resolving enrolled server identity";
         let resolved = p2p
             .resolve_peer_identity(&peer)
-            .await
-            .map_err(map_p2p_error)?
+            .await?
             .context("enrolled server has no authenticated transport identity")?;
         validate_authenticated_server_did(&approval.admin_did, resolved.as_ref())?;
         Ok(address)
@@ -2703,7 +2692,9 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             match &self.resolved {
                 Some(did) => Ok(Some(did.clone())),
-                None => Err(P2PError::unsupported("identity challenge rejected")),
+                None => Err(defra_p2p_adapter::P2PError::unsupported(
+                    "identity challenge rejected",
+                )),
             }
         }
     }

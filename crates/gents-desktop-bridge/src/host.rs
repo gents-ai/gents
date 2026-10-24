@@ -230,9 +230,7 @@ impl ClientHost {
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
-                        BridgeError::untyped(
-                            "Connect this local runtime before managing its accounts.",
-                        )
+                        BridgeError::untyped(HostError::AccountsNotConnected.to_string())
                     })?;
                 gents::oauth_credential::set_account_enabled(
                     &access,
@@ -254,9 +252,7 @@ impl ClientHost {
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
-                        BridgeError::untyped(
-                            "Connect this local runtime before managing its accounts.",
-                        )
+                        BridgeError::untyped(HostError::AccountsNotConnected.to_string())
                     })?;
                 gents::oauth_credential::set_account_label(
                     &access,
@@ -278,9 +274,7 @@ impl ClientHost {
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
-                        BridgeError::untyped(
-                            "Connect this local runtime before managing its accounts.",
-                        )
+                        BridgeError::untyped(HostError::AccountsNotConnected.to_string())
                     })?;
                 gents_server::accounts::remove_account(
                     &access,

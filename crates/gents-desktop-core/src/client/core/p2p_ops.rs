@@ -29,6 +29,15 @@ pub(super) async fn p2p_local_peer_id(p2p: &Arc<dyn P2POps>) -> Result<String> {
     }
 }
 
+pub(super) async fn p2p_shareable_address(p2p: &Arc<dyn P2POps>) -> Result<Option<String>> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.shareable_address()).await {
+        Ok(result) => {
+            result.map_err(|error| operation_failed("reading desktop shareable P2P address", error))
+        }
+        Err(_) => Err(operation_timed_out("reading desktop shareable P2P address")),
+    }
+}
+
 pub(super) async fn p2p_listen_addresses(p2p: &Arc<dyn P2POps>) -> Result<Vec<String>> {
     match timeout(P2P_OPERATION_TIMEOUT, p2p.listen_addresses()).await {
         Ok(result) => {
