@@ -34,6 +34,8 @@ mod editor_goal_replacement;
 mod editor_history;
 #[path = "support/editor_inventory.rs"]
 mod editor_inventory;
+#[path = "support/editor_inventory_permissions.rs"]
+mod editor_inventory_permissions;
 #[path = "support/editor_related_work.rs"]
 mod editor_related_work;
 #[path = "support/editor_retry.rs"]
