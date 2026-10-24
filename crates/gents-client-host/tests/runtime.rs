@@ -1844,8 +1844,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         exercise_message_edit(&mut client, &mut id, node_did, session, agent_id).await?;
     }
     client.close().await;
-    stop(&mut host).await?;
-    stop(&mut runtime).await?;
+    stop(&mut host)
+        .await
+        .context("stopping the fixture client host")?;
+    stop(&mut runtime)
+        .await
+        .context("stopping the fixture runtime")?;
     Ok(())
 }
 
@@ -2405,7 +2409,21 @@ async fn stop(child: &mut Child) -> Result<()> {
     }
     #[cfg(windows)]
     child.interrupt()?;
-    let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await??;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    #[cfg(unix)]
+    let status = tokio::time::timeout_at(deadline, child.wait())
+        .await
+        .context("fixture process did not exit after interrupt")??;
+    #[cfg(windows)]
+    let status = {
+        let status = tokio::time::timeout_at(deadline, child.wait_for_exit())
+            .await
+            .context("fixture process did not exit after console interrupt")??;
+        tokio::time::timeout_at(deadline, child.finish_output())
+            .await
+            .context("fixture process exited but console output cleanup did not finish")??;
+        status
+    };
     ensure!(status.success(), "fixture child exited with {status}");
     Ok(())
 }

@@ -45,6 +45,14 @@ impl Names {
 
     fn entry(&self, value: &Value) -> FileInventoryEntry {
         FileInventoryEntry {
+            order: match value["order"]["kind"].as_str().unwrap() {
+                "unresolved" => None,
+                "ordered" => Some(gents_protocol::file_inventory::FileInventoryOrdinal {
+                    index: value["order"]["index"].as_u64().unwrap(),
+                    entries: value["order"]["entries"].as_u64().unwrap(),
+                }),
+                other => panic!("unknown modeled order {other}"),
+            },
             tool_call_doc_id: document(&value["tool"]),
             request_doc_id: document(&value["request"]),
             scope: FileImageScope {
@@ -125,7 +133,7 @@ impl Names {
         let page = &envelope["page"];
         let mut receipt = FileInventoryPageReceipt {
             version: if envelope["purpose"] == "file_inventory_v2" {
-                2
+                FILE_INVENTORY_RECEIPT_VERSION
             } else {
                 1
             },
@@ -205,6 +213,62 @@ fn metadata(value: &Value) -> FileImageMetadata {
         },
         kind => panic!("unrecognized modeled image metadata: {kind}"),
     }
+}
+
+#[tokio::test]
+async fn absent_order_preserves_signed_receipts_and_cannot_gain_an_ordinal() {
+    let (_directory, names) = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let names = Names {
+            source: KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap(),
+        };
+        (directory, names)
+    })
+    .await
+    .unwrap();
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let case = &contracts["file_inventory_demand_cases"][0];
+    let demand = names.demand(&case["demand"]);
+    let mut receipt = FileInventoryPageReceipt {
+        version: FILE_INVENTORY_RECEIPT_VERSION,
+        request_key: demand.derive_request_key().unwrap(),
+        signer_did: names.source.did().to_owned(),
+        page: names.page(&case["initial_page"]),
+        signature: Vec::new(),
+    };
+    let payload = receipt.signing_payload().unwrap();
+    receipt.signature = names.source.sign(&payload).await.unwrap();
+    let stored = serde_json::to_value(&receipt).unwrap();
+    assert!(stored["page"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry.get("order").is_none()));
+    let restored: FileInventoryPageReceipt = serde_json::from_value(stored).unwrap();
+    assert_eq!(restored.signing_payload().unwrap(), payload);
+    verify_reply(
+        &demand,
+        &gents_protocol::file_inventory::FileInventoryReply::Page(restored),
+        &names.source,
+    )
+    .await
+    .unwrap();
+    receipt.page.entries[0].order = Some(gents_protocol::file_inventory::FileInventoryOrdinal {
+        index: 0,
+        entries: 1,
+    });
+    assert!(verify_reply(
+        &demand,
+        &gents_protocol::file_inventory::FileInventoryReply::Page(receipt),
+        &names.source
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]

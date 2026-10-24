@@ -1373,6 +1373,30 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_order_window_cases"
+      "FileInventoryOrderWindowCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_inventory_order_resolution_cases"
+      "FileInventoryOrderResolutionCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_inventory_order_comparison_cases"
+      "FileInventoryOrderComparisonCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_inventory_order_entry_cases"
+      "FileInventoryOrderEntryCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_refusal_cases"
       "FileInventoryRefusalCases"
       "file_inventory::tests::generated_refusals_verify_exact_demand"
