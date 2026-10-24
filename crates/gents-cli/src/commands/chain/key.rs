@@ -44,6 +44,8 @@ pub(crate) enum ChainKeyError {
     RowNotObject,
     #[error("decoding ChainKeyBinding rows")]
     DecodeRows(#[source] serde_json::Error),
+    #[error(transparent)]
+    Config(#[from] gents::config_client::ConfigClientError),
 }
 
 pub(crate) async fn dispatch(command: ChainKeyCommand) -> Result<()> {
@@ -121,7 +123,7 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
             Ok(()) => Err(error).context("storing chain key in OS keyring"),
             Err(cleanup_error) => Err(error).context(format!(
                 "storing chain key in OS keyring; cleanup also failed: {}",
-                ErrorChain(cleanup_error.as_ref())
+                ErrorChain(&cleanup_error)
             )),
         };
     }
@@ -252,7 +254,7 @@ async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) ->
         .await
 }
 
-async fn delete_binding(access: &ConfigAccess, doc_id: &str) -> Result<()> {
+async fn delete_binding(access: &ConfigAccess, doc_id: &str) -> Result<(), ChainKeyError> {
     access
         .write(
             "cli.chain_key.binding.delete_incomplete",

@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
+use gents::config_client::ConfigClientError;
 use gents::graphql::escape_graphql_string;
 use gents::{
     health_checker::HealthCheckerOptions, run_health_check_cycle, HealthStatus,
@@ -43,6 +44,10 @@ pub(crate) enum McpCommandError {
     ProbeTargetBoth,
     #[error("provide a service id or --all")]
     ProbeTargetNeither,
+    #[error("registering MCP service")]
+    Register(#[source] ConfigClientError),
+    #[error("loading online MCP service registry rows")]
+    LoadRegistry(#[source] ConfigClientError),
 }
 
 pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
@@ -129,7 +134,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     access
         .write("cli.mcp.register", &mutation)
         .await
-        .context("registering MCP service")?;
+        .map_err(McpCommandError::Register)?;
     println!("registered {service_id} -> {}", args.endpoint.trim());
     Ok(())
 }
@@ -184,7 +189,7 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
 async fn load_mcp_services(
     access: &ConfigAccess,
     service_id: Option<&str>,
-) -> Result<Vec<McpHealthCheckService>> {
+) -> Result<Vec<McpHealthCheckService>, McpCommandError> {
     let registry_args = match service_id {
         Some(service_id) => format!(
             r#"filter: {{ _and: [{{ status: {{ _eq: "online" }} }}, {{ service_id: {{ _eq: "{}" }} }}] }}, limit: 1"#,
@@ -208,7 +213,7 @@ async fn load_mcp_services(
     );
     let rows = graphql_rows_or_empty_if_collection_missing(access, "ToolServiceRegistry", &query)
         .await
-        .context("loading online MCP service registry rows")?;
+        .map_err(McpCommandError::LoadRegistry)?;
     let services = rows
         .into_iter()
         .map(|row| serde_json::from_value(row).map_err(McpCommandError::ParseRegistryRow))

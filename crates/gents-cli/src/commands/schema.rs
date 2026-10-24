@@ -64,6 +64,8 @@ pub(crate) enum SchemaError {
     PatchNotArray,
     #[error("collection {collection} does not exist")]
     CollectionMissing { collection: String },
+    #[error(transparent)]
+    Config(#[from] gents::config_client::ConfigClientError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,7 +323,10 @@ async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaAppl
     })
 }
 
-async fn apply_patch_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyPatchResult> {
+async fn apply_patch_file(
+    access: &ConfigAccess,
+    path: &Path,
+) -> Result<SchemaApplyPatchResult, SchemaError> {
     let raw = fs::read_to_string(path).map_err(|source| SchemaError::ReadPatch {
         path: path.to_path_buf(),
         source,
@@ -370,7 +375,7 @@ async fn apply_patch_file(access: &ConfigAccess, path: &Path) -> Result<SchemaAp
 async fn collection_field_names(
     access: &ConfigAccess,
     collection: &str,
-) -> Result<BTreeSet<String>> {
+) -> Result<BTreeSet<String>, SchemaError> {
     let fields = access.collection_fields(collection).await?.ok_or_else(|| {
         SchemaError::CollectionMissing {
             collection: collection.to_owned(),
@@ -382,7 +387,7 @@ async fn collection_field_names(
 async fn current_collection_version(
     access: &ConfigAccess,
     collection: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<String>, SchemaError> {
     Ok(access
         .collection_version(collection)
         .await?

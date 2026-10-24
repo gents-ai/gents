@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents::adapter_projection::AdapterProjectionKind;
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline::{
@@ -13,7 +12,10 @@ use serde_json::json;
 
 use crate::config_writes::ConfigAccess;
 
-use super::load_rows;
+use super::{load_rows, TraceError};
+
+type Result<T, E = TraceError> = std::result::Result<T, E>;
+
 #[derive(Debug, Clone)]
 pub(super) struct ProjectionAcpReadScope {
     actor_did: String,
@@ -85,11 +87,9 @@ pub(super) async fn projection_acp_read_scope(
     let actor_did = actor_did
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("projection ACP enforcement requires --actor-did"))?;
+        .ok_or(TraceError::ProjectionActorRequired)?;
     let ConfigAccess::Graphql(graphql) = access else {
-        anyhow::bail!(
-            "projection ACP enforcement requires --graphql so DefraDB ACP can decide documents"
-        );
+        return Err(TraceError::ProjectionAcpNeedsGraphql);
     };
     Ok(Some(ProjectionAcpReadScope {
         actor_did: actor_did.to_string(),
@@ -158,13 +158,12 @@ pub(super) fn select_projection_acp_binding(
             }
             Some((best_mask, _)) if projection_binding_scope_dominates(*best_mask, scope_mask) => {}
             Some((_, best_row)) => {
-                anyhow::bail!(
-                    "ambiguous ProjectionAcpBinding rows for projection {} request {}: {} and {}",
-                    projection_id,
-                    request.request_id,
-                    projection_binding_label(best_row),
-                    projection_binding_label(&row)
-                );
+                return Err(TraceError::AmbiguousProjectionBinding {
+                    projection_id: projection_id.to_owned(),
+                    request_id: request.request_id.clone(),
+                    first: projection_binding_label(best_row).to_owned(),
+                    second: projection_binding_label(&row).to_owned(),
+                });
             }
         }
     }
@@ -210,55 +209,39 @@ pub(super) fn validate_projection_binding_operational_state(
     let staged_policy_id = normalize_projection_binding_field(row.staged_policy_id.as_deref());
     let previous_policy_id = normalize_projection_binding_field(row.previous_policy_id.as_deref());
     let active_policy_id = row.policy_id.trim();
+    let binding = || projection_binding_label(row).to_owned();
     match status {
         "published" => {
             if staged_policy_id.is_some() {
-                anyhow::bail!(
-                    "enabled ProjectionAcpBinding {} is published but still has staged_policy_id",
-                    projection_binding_label(row)
-                );
+                return Err(TraceError::BindingPublishedWithStaged { binding: binding() });
             }
         }
         "rotating" => {
             let Some(staged_policy_id) = staged_policy_id else {
-                anyhow::bail!(
-                    "enabled ProjectionAcpBinding {} is rotating but has no staged_policy_id",
-                    projection_binding_label(row)
-                );
+                return Err(TraceError::BindingRotatingWithoutStaged { binding: binding() });
             };
             if staged_policy_id == active_policy_id {
-                anyhow::bail!(
-                    "enabled ProjectionAcpBinding {} staged_policy_id must differ from policy_id",
-                    projection_binding_label(row)
-                );
+                return Err(TraceError::BindingStagedEqualsActive { binding: binding() });
             }
         }
         "draft" | "staged" | "retired" => {
-            anyhow::bail!(
-                "enabled ProjectionAcpBinding {} has non-operational publication_status {}; disable it or publish it before projection enforcement",
-                projection_binding_label(row),
-                status
-            );
+            return Err(TraceError::BindingNonOperational {
+                binding: binding(),
+                status: status.to_owned(),
+            });
         }
         _ => {
-            anyhow::bail!(
-                "enabled ProjectionAcpBinding {} has invalid publication_status {}",
-                projection_binding_label(row),
-                status
-            );
+            return Err(TraceError::BindingInvalidStatus {
+                binding: binding(),
+                status: status.to_owned(),
+            });
         }
     }
     if previous_policy_id == Some(active_policy_id) {
-        anyhow::bail!(
-            "enabled ProjectionAcpBinding {} previous_policy_id must differ from policy_id",
-            projection_binding_label(row)
-        );
+        return Err(TraceError::BindingPreviousEqualsActive { binding: binding() });
     }
     if previous_policy_id == staged_policy_id && previous_policy_id.is_some() {
-        anyhow::bail!(
-            "enabled ProjectionAcpBinding {} previous_policy_id must differ from staged_policy_id",
-            projection_binding_label(row)
-        );
+        return Err(TraceError::BindingPreviousEqualsStaged { binding: binding() });
     }
     Ok(())
 }
@@ -291,10 +274,9 @@ pub(super) async fn apply_projection_acp_read_filter(
         .read_allowed(scope.resource_name("AgentRequest"), request_doc_id)
         .await?
     {
-        anyhow::bail!(
-            "DefraDB ACP denied read access to root request {}",
-            rows.request.request_id
-        );
+        return Err(TraceError::RootRequestDenied {
+            request_id: rows.request.request_id.clone(),
+        });
     }
 
     let mut filtered_requests = Vec::new();
@@ -340,7 +322,7 @@ pub(super) async fn apply_projection_acp_read_filter(
         .map(|version| version.goal_doc_id.trim())
         .collect::<BTreeSet<_>>();
     if goal_doc_ids.contains("") {
-        anyhow::bail!("DefraDB ACP projection decisions require _docID for Goal history");
+        return Err(TraceError::GoalDocIdMissing);
     }
     let mut allowed_goal_doc_ids = BTreeSet::new();
     for doc_id in goal_doc_ids {
@@ -388,10 +370,9 @@ pub(super) async fn apply_projection_acp_read_filter(
     for reduction in rows.provider_context_reductions {
         let doc_id = reduction.doc_id.trim();
         if doc_id.is_empty() {
-            anyhow::bail!(
-                "DefraDB ACP projection decisions require _docID for ProviderContextReduction {}",
-                reduction.reduction_key
-            );
+            return Err(TraceError::ReductionDocIdMissing {
+                reduction_key: reduction.reduction_key.clone(),
+            });
         }
         if decider
             .read_allowed(scope.resource_name("ProviderContextReduction"), doc_id)
@@ -423,10 +404,9 @@ pub(super) async fn apply_projection_acp_read_filter(
     for rendered_request_ref in rows.rendered_request_refs {
         let doc_id = rendered_request_ref.doc_id.trim();
         if doc_id.is_empty() {
-            anyhow::bail!(
-                "DefraDB ACP projection decisions require _docID for RenderedRequest {}",
-                rendered_request_ref.request_commit_cid
-            );
+            return Err(TraceError::RenderedRequestDocIdMissing {
+                request_commit_cid: rendered_request_ref.request_commit_cid.clone(),
+            });
         }
         if decider
             .read_allowed(scope.resource_name("RenderedRequest"), doc_id)
@@ -479,7 +459,7 @@ impl<'a> ProjectionAcpReadDecider<'a> {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .context("building ACP decision client")?,
+                .map_err(TraceError::DecisionClient)?,
             cache: BTreeMap::new(),
         })
     }
@@ -505,22 +485,31 @@ impl<'a> ProjectionAcpReadDecider<'a> {
             }))
             .send()
             .await
-            .with_context(|| {
-                format!("requesting DefraDB ACP read decision for {resource_name}/{doc_id}")
+            .map_err(|source| TraceError::DecisionRequest {
+                resource: resource_name.to_owned(),
+                doc_id: doc_id.to_owned(),
+                source,
             })?;
         let status = response.status();
         let text = response
             .text()
             .await
-            .context("reading DefraDB ACP decision response")?;
+            .map_err(TraceError::DecisionResponse)?;
         if !status.is_success() {
-            anyhow::bail!(
-                "DefraDB ACP decision endpoint returned {status} for {resource_name}/{doc_id}: {text}"
-            );
+            return Err(TraceError::DecisionEndpoint {
+                status,
+                resource: resource_name.to_owned(),
+                doc_id: doc_id.to_owned(),
+                body: text,
+            });
         }
         let decision =
-            serde_json::from_str::<ProjectionAcpDecisionResponse>(&text).with_context(|| {
-                format!("parsing DefraDB ACP decision response for {resource_name}/{doc_id}")
+            serde_json::from_str::<ProjectionAcpDecisionResponse>(&text).map_err(|source| {
+                TraceError::DecisionParse {
+                    resource: resource_name.to_owned(),
+                    doc_id: doc_id.to_owned(),
+                    source,
+                }
             })?;
         self.cache.insert(key, decision.allowed);
         Ok(decision.allowed)
@@ -536,10 +525,9 @@ pub(super) fn required_doc_id<'a>(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "DefraDB ACP projection decisions require _docID for {resource_name} {label}"
-            )
+        .ok_or_else(|| TraceError::MissingAcpDocId {
+            resource: resource_name.to_owned(),
+            label: label.to_owned(),
         })
 }
 
@@ -579,11 +567,10 @@ pub(super) fn apply_projection_document_scope(
     }
 
     if !timeline_root_matches_scope(&timeline, scope) {
-        anyhow::bail!(
-            "projection scope denied request {} for {}",
-            timeline.request_id,
-            scope.description()
-        );
+        return Err(TraceError::ScopeDenied {
+            request_id: timeline.request_id.clone(),
+            scope: scope.description(),
+        });
     }
 
     let allowed_request_ids = scoped_request_ids(&timeline, scope);
@@ -746,6 +733,8 @@ mod tests {
 
     use super::*;
 
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     #[derive(Debug, Deserialize)]
     struct MockAcpDecisionRequest {
         actor: String,
@@ -780,7 +769,7 @@ mod tests {
 
     async fn spawn_mock_acp(
         allowed: BTreeMap<(String, String), bool>,
-    ) -> Result<ProjectionAcpReadScope> {
+    ) -> TestResult<ProjectionAcpReadScope> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let router = Router::new()
@@ -798,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn projection_acp_binding_selects_most_specific_matching_row() -> Result<()> {
+    fn projection_acp_binding_selects_most_specific_matching_row() -> TestResult {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
             node_did: Some("did:test:amy".to_string()),
@@ -853,7 +842,7 @@ mod tests {
                 .to_string()
                 .contains("ambiguous ProjectionAcpBinding rows"),
             "unexpected error: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -885,12 +874,12 @@ mod tests {
                 .to_string()
                 .contains("ambiguous ProjectionAcpBinding rows"),
             "unexpected error: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
     #[test]
-    fn projection_acp_binding_ignores_unscoped_rows() -> Result<()> {
+    fn projection_acp_binding_ignores_unscoped_rows() -> TestResult {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
             node_did: Some("did:test:amy".to_string()),
@@ -932,12 +921,12 @@ mod tests {
                 .to_string()
                 .contains("non-operational publication_status draft"),
             "unexpected error: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
     #[tokio::test]
-    async fn projection_acp_filter_omits_rows_denied_by_defradb_acp() -> Result<()> {
+    async fn projection_acp_filter_omits_rows_denied_by_defradb_acp() -> TestResult {
         let mut allowed = BTreeMap::new();
         for (resource_name, doc_id) in [
             ("AgentRequest", "doc-request-root"),
@@ -1000,7 +989,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projection_acp_filter_uses_configured_resource_names() -> Result<()> {
+    async fn projection_acp_filter_uses_configured_resource_names() -> TestResult {
         let mut allowed = BTreeMap::new();
         for (resource_name, doc_id) in [
             ("runtime_request", "doc-request-root"),
@@ -1041,7 +1030,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projection_acp_filter_denies_root_request_fail_closed() -> Result<()> {
+    async fn projection_acp_filter_denies_root_request_fail_closed() -> TestResult {
         let scope = spawn_mock_acp(BTreeMap::new()).await?;
         let error = apply_projection_acp_read_filter(acp_fixture_rows(), &scope)
             .await
@@ -1052,7 +1041,7 @@ mod tests {
                 .to_string()
                 .contains("DefraDB ACP denied read access to root request req-root"),
             "unexpected error: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         Ok(())
     }

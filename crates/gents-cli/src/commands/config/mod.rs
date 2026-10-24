@@ -45,7 +45,9 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             ToolsConfigCommand::List(args) => crud::config_list(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
-            ToolsConfigCommand::AgentTargetEntry(args) => tools::agent_target_entry_command(args),
+            ToolsConfigCommand::AgentTargetEntry(args) => {
+                Ok(tools::agent_target_entry_command(args)?)
+            }
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,

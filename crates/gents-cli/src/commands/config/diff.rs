@@ -7,6 +7,8 @@ use crate::desired_state;
 use crate::print_json;
 use crate::{build_desired_state_live_bundle, live_manifest_from_bundle, resolve_config_access};
 
+use super::ConfigCommandError;
+
 pub(super) async fn config_diff(args: ConfigDiffArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let bound = super::binding::load_bound_manifest(super::binding::ManifestBindingOptions {
@@ -28,7 +30,7 @@ pub(crate) async fn diff_bound_desired_manifest(
     root: &Path,
     access: &ConfigAccess,
     bound: &super::binding::BoundDesiredManifest,
-) -> Result<desired_state::DesiredStateDiffReport> {
+) -> Result<desired_state::DesiredStateDiffReport, ConfigCommandError> {
     let desired_manifest = &bound.manifest;
     let live_bundle = build_desired_state_live_bundle(access, desired_manifest).await?;
     let (live_node, live_manifest) = live_manifest_from_bundle(desired_manifest, &live_bundle)?;

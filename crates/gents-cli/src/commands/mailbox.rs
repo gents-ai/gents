@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
@@ -8,6 +8,30 @@ use crate::cli::args::{
 };
 use crate::cli::output_format::OutputFormat;
 use crate::{print_json, resolve_config_access, resolve_node_did};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MailboxError {
+    #[error("MailboxItem not found")]
+    NotFound,
+    #[error("MailboxItem is not owned by the local node")]
+    NotOwnedLocal,
+    #[error("MailboxItem is no longer open")]
+    NotOpen,
+    #[error("MailboxItem does not accept request replies")]
+    NotReplyable,
+    #[error("local-self mailbox replies require the local node as target; use the paired client for a remote target")]
+    LocalReplyTarget,
+    #[error("only requester_did may dismiss a MailboxItem")]
+    OnlyRequesterDismiss,
+    #[error("MailboxItem has unknown status {status:?}")]
+    UnknownStatus { status: String },
+    #[error("MailboxItem _docID lookup returned more than one row")]
+    DuplicateLookup,
+    #[error("dismissed MailboxItem disappeared")]
+    DismissedMissing,
+    #[error("decoding MailboxItem rows")]
+    DecodeRows(#[source] serde_json::Error),
+}
 
 pub(crate) async fn dispatch(command: MailboxCommand) -> Result<()> {
     match command {
@@ -28,23 +52,19 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(graphql.clone());
     let item = load_item(&access, &args.item.doc_id)
         .await?
-        .context("MailboxItem not found")?;
-    anyhow::ensure!(
-        item.requester_did == principal,
-        "MailboxItem is not owned by the local node"
-    );
-    anyhow::ensure!(
-        item.parsed_status() == Some(MailboxStatus::Open),
-        "MailboxItem is no longer open"
-    );
-    anyhow::ensure!(
-        item.parsed_action() == Some(gents::mailbox::MailboxAction::StartRequest),
-        "MailboxItem does not accept request replies"
-    );
-    anyhow::ensure!(
-        item.target_node_did == principal,
-        "local-self mailbox replies require the local node as target; use the paired client for a remote target"
-    );
+        .ok_or(MailboxError::NotFound)?;
+    if item.requester_did != principal {
+        return Err(MailboxError::NotOwnedLocal.into());
+    }
+    if item.parsed_status() != Some(MailboxStatus::Open) {
+        return Err(MailboxError::NotOpen.into());
+    }
+    if item.parsed_action() != Some(gents::mailbox::MailboxAction::StartRequest) {
+        return Err(MailboxError::NotReplyable.into());
+    }
+    if item.target_node_did != principal {
+        return Err(MailboxError::LocalReplyTarget.into());
+    }
     crate::request_helpers::ensure_local_request_signer(home, &item.target_node_did)?;
     let submitted = crate::create_agent_request(
         &graphql,
@@ -110,9 +130,9 @@ async fn show(args: MailboxItemArgs) -> Result<()> {
     let (access, principal) = access_and_principal(&args.access).await?;
     let item = load_item(&access, &args.doc_id)
         .await?
-        .context("MailboxItem not found")?;
+        .ok_or(MailboxError::NotFound)?;
     if item.requester_did != principal {
-        bail!("MailboxItem is not owned by the local node");
+        return Err(MailboxError::NotOwnedLocal.into());
     }
     Ok(print_json(&serde_json::to_value(item)?)?)
 }
@@ -126,9 +146,9 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
     } else {
         let before = load_item(&access, &args.doc_id)
             .await?
-            .context("MailboxItem not found")?;
+            .ok_or(MailboxError::NotFound)?;
         if before.requester_did != principal {
-            bail!("only requester_did may dismiss a MailboxItem");
+            return Err(MailboxError::OnlyRequesterDismiss.into());
         }
         match before.parsed_status() {
             Some(MailboxStatus::Open) => {
@@ -141,11 +161,16 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
                 access.write("cli.mailbox.dismiss", &mutation).await?;
             }
             Some(_) => {}
-            None => bail!("MailboxItem has unknown status {:?}", before.status),
+            None => {
+                return Err(MailboxError::UnknownStatus {
+                    status: before.status.clone(),
+                }
+                .into());
+            }
         }
         load_item(&access, &args.doc_id)
             .await?
-            .context("dismissed MailboxItem disappeared")?
+            .ok_or(MailboxError::DismissedMissing)?
     };
     Ok(print_json(&serde_json::to_value(item)?)?)
 }
@@ -162,17 +187,17 @@ async fn load_item(access: &ConfigAccess, doc_id: &str) -> Result<Option<Mailbox
         .await?;
     let mut items = decode_rows(response)?;
     if items.len() > 1 {
-        bail!("MailboxItem _docID lookup returned more than one row");
+        return Err(MailboxError::DuplicateLookup.into());
     }
     Ok(items.pop())
 }
 
-fn decode_rows(response: serde_json::Value) -> Result<Vec<MailboxItem>> {
+fn decode_rows(response: serde_json::Value) -> Result<Vec<MailboxItem>, MailboxError> {
     serde_json::from_value(
         response
             .pointer("/data/MailboxItem")
             .cloned()
             .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
     )
-    .context("decoding MailboxItem rows")
+    .map_err(MailboxError::DecodeRows)
 }

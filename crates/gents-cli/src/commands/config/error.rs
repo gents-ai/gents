@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
 use gents::backend_registry::BackendRegistryError;
+use gents::config_client::DesiredStateError;
 use gents::document_config::DocumentConfigError;
+
+use crate::config_bundle::ConfigBundleError;
+use crate::request_helpers::RequestHelpersError;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigCommandError {
@@ -55,6 +59,18 @@ pub(crate) enum ConfigCommandError {
     },
     #[error("missing task id\nNext:\n  1. Pass it positionally: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`")]
     MissingTaskId { command: String },
+    #[error(transparent)]
+    DesiredStatePlan(#[from] DesiredStateError),
+    #[error(transparent)]
+    ConfigBundle(#[from] ConfigBundleError),
+    #[error(transparent)]
+    RequestHelpers(#[from] RequestHelpersError),
+    #[error("decoding canonical InferenceBackend document")]
+    DecodeInferenceBackend(#[source] serde_json::Error),
+    #[error("decoding canonical Tools document")]
+    DecodeTools(#[source] serde_json::Error),
+    #[error("validated manifest root produced no manifest")]
+    ValidatedManifestMissing,
 }
 
 impl From<DocumentConfigError> for ConfigCommandError {

@@ -60,6 +60,10 @@ pub(crate) enum ChatError {
     ApprovalIdMismatch { displayed: String },
     #[error("approval {id} is no longer pending; wait for the current request ID")]
     ApprovalNotPending { id: String },
+    #[error(transparent)]
+    Cli(#[from] crate::CliError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
@@ -310,9 +314,12 @@ async fn submit_chat_turn_json(
     Ok(chat_turn_output(&submitted, envelope))
 }
 
-fn resolve_chat_message(message: &[String], message_file: Option<&Path>) -> Result<Option<String>> {
+fn resolve_chat_message(
+    message: &[String],
+    message_file: Option<&Path>,
+) -> Result<Option<String>, ChatError> {
     if !message.is_empty() && message_file.is_some() {
-        return Err(ChatError::MessageAndFile.into());
+        return Err(ChatError::MessageAndFile);
     }
     if !message.is_empty() {
         return Ok(Some(

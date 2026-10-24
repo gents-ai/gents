@@ -1,6 +1,7 @@
-use anyhow::{Context, Result};
-use gents::defra_query::{unknown_collection_message, CollectionScope};
+use anyhow::Result;
+use gents::defra_query::{unknown_collection_message, CollectionScope, DefraQueryFailure};
 use gents::graphql::validate_collection_identifier;
+use gents_protocol::graphql::GraphqlError;
 use gents_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
 use serde_json::{json, Value};
 
@@ -23,6 +24,14 @@ pub(crate) enum DocumentCommandError {
     IntegerOutOfRange,
     #[error("collection {collection:?} has no field {key:?}; check the field name")]
     UnknownField { collection: String, key: String },
+    #[error(transparent)]
+    Graphql(#[from] GraphqlError),
+    #[error(transparent)]
+    DefraQuery(#[from] DefraQueryFailure),
+    #[error("{}", unknown_collection_message(.collection))]
+    UnknownCollection { collection: String },
+    #[error("invalid mutation input field in schema introspection")]
+    InvalidInputField,
 }
 
 pub(crate) async fn dispatch(command: DocumentCommand) -> Result<()> {
@@ -31,7 +40,7 @@ pub(crate) async fn dispatch(command: DocumentCommand) -> Result<()> {
     }
 }
 
-fn parse_fields(collection: &str, fields: &str) -> Result<Value> {
+fn parse_fields(collection: &str, fields: &str) -> Result<Value, DocumentCommandError> {
     validate_collection_identifier(collection)?;
     CollectionScope::all().ensure_allowed(collection)?;
     if gents::Collection::ALL
@@ -40,18 +49,17 @@ fn parse_fields(collection: &str, fields: &str) -> Result<Value> {
     {
         return Err(DocumentCommandError::CanonicalConfiguration {
             collection: collection.to_owned(),
-        }
-        .into());
+        });
     }
     let raw: Box<serde_json::value::RawValue> =
         serde_json::from_str(fields).map_err(DocumentCommandError::ParseJson)?;
     ensure_exact_integers(&raw)?;
     let fields: Value = serde_json::from_str(raw.get()).map_err(DocumentCommandError::ParseJson)?;
     if !fields.as_object().is_some_and(|object| !object.is_empty()) {
-        return Err(DocumentCommandError::NotAnObject.into());
+        return Err(DocumentCommandError::NotAnObject);
     }
     if contains_empty_array(&fields) {
-        return Err(DocumentCommandError::EmptyArray.into());
+        return Err(DocumentCommandError::EmptyArray);
     }
     Ok(fields)
 }
@@ -103,7 +111,7 @@ fn ensure_known_fields(
     }
 }
 
-fn create_mutation(collection: &str, fields: &Value) -> Result<String> {
+fn create_mutation(collection: &str, fields: &Value) -> Result<String, DocumentCommandError> {
     let input = graphql_input_literal(fields)?;
     Ok(format!(
         "mutation {{ create_{collection}(input: {input}) {{ _docID }} }}"
@@ -129,16 +137,18 @@ async fn create(args: DocumentCreateArgs) -> Result<()> {
     let input_fields = schema
         .pointer("/data/__type/inputFields")
         .and_then(Value::as_array)
-        .with_context(|| unknown_collection_message(&args.collection))?
+        .ok_or_else(|| DocumentCommandError::UnknownCollection {
+            collection: args.collection.clone(),
+        })?
         .iter()
         .map(|field| {
             field
                 .get("name")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .context("invalid mutation input field in schema introspection")
+                .ok_or(DocumentCommandError::InvalidInputField)
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, DocumentCommandError>>()?;
     ensure_known_fields(&args.collection, &fields, &input_fields)?;
     let response = access.write("cli.document.create", &mutation).await?;
     let doc_id = extract_mutation_doc_id(&response, &args.collection)?;

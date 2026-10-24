@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use afterburner::cli::compile::dispatch_compile;
@@ -15,6 +15,28 @@ enum AfterburnerBuildError {
     Save,
     #[error("could not send compiler output to standard error")]
     Redirect,
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "{owner} declares language {declared:?}; Afterburner can compile it, but gents plugin run cannot run it under its declared bounds yet, so it is refused rather than built unusable; supported languages: {supported}"
+    )]
+    UnsupportedLanguage {
+        owner: String,
+        declared: String,
+        supported: String,
+    },
+    #[error(
+        "{owner} declares source {dir:?}, {state}; its source must be its own Afterburner package (a directory with its own afb.toml)"
+    )]
+    NotAPackage {
+        owner: String,
+        dir: PathBuf,
+        state: String,
+    },
 }
 
 pub(crate) fn describe_source(path: &Path) -> String {
@@ -35,23 +57,26 @@ fn validate_source_language(owner: &str, declared: &str) -> Result<SourceLang> {
         )
     })?;
     let normalized = declared.trim().to_ascii_lowercase();
-    anyhow::ensure!(
-        gents::pack::SUPPORTED_PLUGIN_LANGUAGES.contains(&normalized.as_str()),
-        "{owner} declares language {declared:?}; Afterburner can compile it, but gents plugin \
-         run cannot run it under its declared bounds yet, so it is refused rather than built \
-         unusable; supported languages: {}",
-        gents::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
-    );
+    if !gents::pack::SUPPORTED_PLUGIN_LANGUAGES.contains(&normalized.as_str()) {
+        return Err(AfterburnerBuildError::UnsupportedLanguage {
+            owner: owner.to_owned(),
+            declared: declared.to_owned(),
+            supported: gents::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", "),
+        }
+        .into());
+    }
     Ok(lang)
 }
 
 pub(crate) fn load_and_validate(owner: &str, dir: &Path) -> Result<pkg::LocalPackage> {
-    anyhow::ensure!(
-        dir.join("afb.toml").is_file(),
-        "{owner} declares source {dir:?}, {}; its source must be its own Afterburner package \
-         (a directory with its own afb.toml)",
-        describe_source(dir),
-    );
+    if !dir.join("afb.toml").is_file() {
+        return Err(AfterburnerBuildError::NotAPackage {
+            owner: owner.to_owned(),
+            dir: dir.to_path_buf(),
+            state: describe_source(dir),
+        }
+        .into());
+    }
     let local = pkg::LocalPackage::load(dir).with_context(|| {
         format!(
             "loading the Afterburner package for {owner} at {}",
@@ -69,8 +94,10 @@ pub(crate) fn compile(
     out_path: &Path,
 ) -> Result<()> {
     if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| AfterburnerBuildError::CreateDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     let _progress_to_stderr = StdoutToStderr::start()?;
     dispatch_compile(dir, local, out_path, false)

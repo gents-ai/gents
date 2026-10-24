@@ -30,7 +30,7 @@ fn terminal_lines() -> mpsc::Receiver<InputLine> {
     receiver
 }
 
-fn prompt(label: &str) -> Result<()> {
+fn prompt(label: &str) -> Result<(), ChatError> {
     write!(io::stdout(), "{label}> ")?;
     io::stdout().flush()?;
     Ok(())

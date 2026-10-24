@@ -8,7 +8,11 @@ use gents::document_config::{AgentTargetDocument, Tools};
 use gents::Collection;
 use serde_json::json;
 
-pub(super) fn agent_target_entry_command(args: AgentTargetEntryArgs) -> Result<()> {
+use super::ConfigCommandError;
+
+pub(super) fn agent_target_entry_command(
+    args: AgentTargetEntryArgs,
+) -> Result<(), ConfigCommandError> {
     Ok(crate::print_json(&serde_json::to_value(
         AgentTargetDocument {
             target_id: args.target_id,
@@ -22,9 +26,8 @@ pub(super) fn agent_target_entry_command(args: AgentTargetEntryArgs) -> Result<(
     )?)?)
 }
 
-fn tools_plan(contents: &[u8]) -> Result<(Tools, DesiredStateApplyPlan)> {
-    let tools: Tools =
-        serde_json::from_slice(contents).context("decoding canonical Tools document")?;
+fn tools_plan(contents: &[u8]) -> Result<(Tools, DesiredStateApplyPlan), ConfigCommandError> {
+    let tools: Tools = serde_json::from_slice(contents).map_err(ConfigCommandError::DecodeTools)?;
     tools.validate()?;
     let value = serde_json::to_value(&tools)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {

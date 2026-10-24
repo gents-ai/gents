@@ -1,7 +1,7 @@
-use rapidhash::{HashMapExt, RapidHashMap};
 use std::fs;
+use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
@@ -10,14 +10,18 @@ use gents::adapter_projection::{
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
 };
+use gents::config_client::ConfigClientError;
+use gents::document_config::DocumentConfigError;
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
 use gents::tool_call_lifecycle::ToolCallState;
+use gents::trace_export::TraceExportError;
 use gents::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,16 +31,163 @@ use crate::cli::args::{
     TraceProjectionArg, TraceProjectionFormatArg, TraceProjectionRedactionArg, TraceTimelineArgs,
 };
 use crate::config_writes::ConfigAccess;
+use crate::request_helpers::RequestHelpersError;
 use crate::{graphql_rows_or_empty_if_collection_missing, print_json, write_json_output_file};
 
 mod projection_acp;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TraceError {
+    #[error("pass --capture-key or --request-id")]
+    MissingCaptureSelector,
+    #[error("decoding RenderedRequest row")]
+    DecodeRenderedRequest(#[source] serde_json::Error),
+    #[error("capture has no supported numeric capture_version")]
+    UnsupportedCaptureVersion,
+    #[error("capture has no stored request_json")]
+    MissingStoredRequestJson,
+    #[error("legacy capture has no provenance")]
+    LegacyCaptureWithoutProvenance,
+    #[error("missing decoded capture pair")]
+    MissingDecodedCapturePair,
+    #[error("no capture rows matched")]
+    NoCaptureRows,
+    #[error(
+        "{count} capture rows matched; narrow with --scope/--turn/--attempt or pass --list:\n{keys}"
+    )]
+    AmbiguousCaptures { count: usize, keys: String },
+    #[error("--session-id does not match the selected request")]
+    SessionMismatch,
+    #[error("selected request has no physical document ID")]
+    RequestWithoutDocId,
+    #[error("selected tool {tool_doc_id} conflicts with the physical request identity")]
+    ToolRequestConflict { tool_doc_id: String },
+    #[error("selected tool is absent from canonical timeline")]
+    ToolAbsent,
+    #[error("duplicate physical tool in canonical timeline")]
+    DuplicateTool,
+    #[error("tool call {tool_call_id} does not belong to the selected physical request")]
+    ToolNotInRequest { tool_call_id: String },
+    #[error("tool call is missing lifecycle_state")]
+    MissingLifecycleState,
+    #[error("invalid tool call lifecycle_state {text:?}")]
+    InvalidLifecycleState { text: String },
+    #[error("decoding {collection} rows")]
+    DecodeRows {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("creating output directory {}", path.display())]
+    CreateOutputDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing JSONL {}", path.display())]
+    WriteJsonl {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Output(#[from] RequestHelpersError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    TraceExport(#[from] TraceExportError),
+    #[error("projection ACP enforcement requires --actor-did")]
+    ProjectionActorRequired,
+    #[error("projection ACP enforcement requires --graphql so DefraDB ACP can decide documents")]
+    ProjectionAcpNeedsGraphql,
+    #[error(transparent)]
+    ProjectionResourceMap(Box<DocumentConfigError>),
+    #[error(
+        "ambiguous ProjectionAcpBinding rows for projection {projection_id} request {request_id}: {first} and {second}"
+    )]
+    AmbiguousProjectionBinding {
+        projection_id: String,
+        request_id: String,
+        first: String,
+        second: String,
+    },
+    #[error("enabled ProjectionAcpBinding {binding} is published but still has staged_policy_id")]
+    BindingPublishedWithStaged { binding: String },
+    #[error("enabled ProjectionAcpBinding {binding} is rotating but has no staged_policy_id")]
+    BindingRotatingWithoutStaged { binding: String },
+    #[error("enabled ProjectionAcpBinding {binding} staged_policy_id must differ from policy_id")]
+    BindingStagedEqualsActive { binding: String },
+    #[error(
+        "enabled ProjectionAcpBinding {binding} has non-operational publication_status {status}; disable it or publish it before projection enforcement"
+    )]
+    BindingNonOperational { binding: String, status: String },
+    #[error("enabled ProjectionAcpBinding {binding} has invalid publication_status {status}")]
+    BindingInvalidStatus { binding: String, status: String },
+    #[error(
+        "enabled ProjectionAcpBinding {binding} previous_policy_id must differ from policy_id"
+    )]
+    BindingPreviousEqualsActive { binding: String },
+    #[error(
+        "enabled ProjectionAcpBinding {binding} previous_policy_id must differ from staged_policy_id"
+    )]
+    BindingPreviousEqualsStaged { binding: String },
+    #[error("DefraDB ACP projection decisions require _docID for {resource} {label}")]
+    MissingAcpDocId { resource: String, label: String },
+    #[error("DefraDB ACP denied read access to root request {request_id}")]
+    RootRequestDenied { request_id: String },
+    #[error("DefraDB ACP projection decisions require _docID for Goal history")]
+    GoalDocIdMissing,
+    #[error(
+        "DefraDB ACP projection decisions require _docID for ProviderContextReduction {reduction_key}"
+    )]
+    ReductionDocIdMissing { reduction_key: String },
+    #[error(
+        "DefraDB ACP projection decisions require _docID for RenderedRequest {request_commit_cid}"
+    )]
+    RenderedRequestDocIdMissing { request_commit_cid: String },
+    #[error("building ACP decision client")]
+    DecisionClient(#[source] reqwest::Error),
+    #[error("requesting DefraDB ACP read decision for {resource}/{doc_id}")]
+    DecisionRequest {
+        resource: String,
+        doc_id: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("reading DefraDB ACP decision response")]
+    DecisionResponse(#[source] reqwest::Error),
+    #[error("DefraDB ACP decision endpoint returned {status} for {resource}/{doc_id}: {body}")]
+    DecisionEndpoint {
+        status: reqwest::StatusCode,
+        resource: String,
+        doc_id: String,
+        body: String,
+    },
+    #[error("parsing DefraDB ACP decision response for {resource}/{doc_id}")]
+    DecisionParse {
+        resource: String,
+        doc_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("projection scope denied request {request_id} for {scope}")]
+    ScopeDenied { request_id: String, scope: String },
+}
+
+impl From<DocumentConfigError> for TraceError {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::ProjectionResourceMap(Box::new(error))
+    }
+}
 
 pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
     match command {
         TraceCommand::Export(args) => trace_export(args).await,
         TraceCommand::Timeline(args) => trace_timeline(args).await,
         TraceCommand::Project(args) => trace_project(args).await,
-        TraceCommand::ProjectSchema(args) => trace_project_schema(args),
+        TraceCommand::ProjectSchema(args) => Ok(trace_project_schema(args)?),
         TraceCommand::Capture(args) => trace_capture(args).await,
     }
 }
@@ -59,7 +210,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
         ));
     }
     if clauses.is_empty() {
-        anyhow::bail!("pass --capture-key or --request-id");
+        return Err(TraceError::MissingCaptureSelector.into());
     }
     if let Some(scope) = args.scope.as_deref() {
         clauses.push(format!(
@@ -107,22 +258,22 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
 
     let mut entries = raw_rows
         .into_iter()
-        .map(|raw| {
+        .map(|raw| -> Result<_, TraceError> {
             let row: gents::run_timeline::TimelineRenderedRequestRow =
-                serde_json::from_value(raw.clone()).context("decoding RenderedRequest row")?;
+                serde_json::from_value(raw.clone()).map_err(TraceError::DecodeRenderedRequest)?;
             Ok((row, raw))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, TraceError>>()?;
     if args.include_body {
         for (row, raw) in &mut entries {
             let version = row
                 .capture_version
                 .and_then(|value| u32::try_from(value).ok())
-                .context("capture has no supported numeric capture_version")?;
+                .ok_or(TraceError::UnsupportedCaptureVersion)?;
             let stored = raw
                 .get("request_json")
                 .and_then(Value::as_str)
-                .context("capture has no stored request_json")?
+                .ok_or(TraceError::MissingStoredRequestJson)?
                 .to_owned();
             let decoded_pair = if version == 1 {
                 None
@@ -146,7 +297,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
                 let provenance: Value = serde_json::from_str(
                     row.provenance_json
                         .as_deref()
-                        .context("legacy capture has no provenance")?,
+                        .ok_or(TraceError::LegacyCaptureWithoutProvenance)?,
                 )?;
                 raw["provenance_payload_json"] = json!(
                     gents::rendered_request::canonical_json_string(&provenance["assembly_trace"],)?
@@ -154,7 +305,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
             } else {
                 let payload = &decoded_pair
                     .as_ref()
-                    .context("missing decoded capture pair")?
+                    .ok_or(TraceError::MissingDecodedCapturePair)?
                     .1;
                 raw["provenance_payload_json"] =
                     json!(gents::rendered_request::canonical_json_string(payload)?);
@@ -162,7 +313,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
         }
     }
     if entries.is_empty() {
-        anyhow::bail!("no capture rows matched");
+        return Err(TraceError::NoCaptureRows.into());
     }
     entries.sort_by(|(left, _), (right, _)| {
         let left_key = capture_order_padded(left);
@@ -177,7 +328,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
             .map(|(row, raw)| capture_metadata_value(row, raw, args.include_body))
             .collect::<Vec<_>>();
         let value = json!({ "captures": captures });
-        return write_or_print(args.output_file.as_deref(), &value);
+        return Ok(write_or_print(args.output_file.as_deref(), &value)?);
     }
 
     if entries.len() > 1 {
@@ -194,10 +345,11 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        anyhow::bail!(
-            "{count} capture rows matched; narrow with --scope/--turn/--attempt or pass --list:\n{keys}",
-            count = entries.len(),
-        );
+        return Err(TraceError::AmbiguousCaptures {
+            count: entries.len(),
+            keys,
+        }
+        .into());
     }
 
     let (row, raw) = &entries[0];
@@ -219,7 +371,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
         None => None,
     };
     value["request_json_commit"] = commit.unwrap_or_else(|| json!("unavailable"));
-    write_or_print(args.output_file.as_deref(), &value)
+    Ok(write_or_print(args.output_file.as_deref(), &value)?)
 }
 
 fn capture_metadata_value(
@@ -259,7 +411,7 @@ fn capture_order_padded(row: &gents::run_timeline::TimelineRenderedRequestRow) -
     }
 }
 
-fn write_or_print(output_file: Option<&std::path::Path>, value: &Value) -> Result<()> {
+fn write_or_print(output_file: Option<&std::path::Path>, value: &Value) -> Result<(), TraceError> {
     if let Some(path) = output_file {
         write_json_output_file(path, value)?;
     } else {
@@ -343,7 +495,7 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     Ok(())
 }
 
-fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
+fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<(), TraceError> {
     let kind = adapter_projection_kind(args.projection);
     let schema = match args.format {
         TraceProjectionFormatArg::Json => adapter_projection_json_schema(kind),
@@ -398,16 +550,15 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
     let requested = if let Some(request_id) = args.request_id.as_deref() {
         let rows = load_run_timeline_rows(&access, request_id).await?;
         if let Some(session_id) = args.session_id.as_deref() {
-            anyhow::ensure!(
-                rows.request.session_id.as_deref() == Some(session_id),
-                "--session-id does not match the selected request"
-            );
+            if rows.request.session_id.as_deref() != Some(session_id) {
+                return Err(TraceError::SessionMismatch.into());
+            }
         }
         let physical = rows
             .request
             .doc_id
             .clone()
-            .context("selected request has no physical document ID")?;
+            .ok_or(TraceError::RequestWithoutDocId)?;
         timelines.insert(request_id.to_owned(), rows);
         Some(physical)
     } else {
@@ -440,42 +591,41 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
             );
         }
         let rows = &timelines[&call.request_id];
-        anyhow::ensure!(
-            rows.request.doc_id.as_deref() == Some(call.request_doc_id.as_str()),
-            "selected tool {} conflicts with the physical request identity",
-            call.doc_id
-        );
+        if rows.request.doc_id.as_deref() != Some(call.request_doc_id.as_str()) {
+            return Err(TraceError::ToolRequestConflict {
+                tool_doc_id: call.doc_id.clone(),
+            }
+            .into());
+        }
         let mut matching = rows
             .tool_calls
             .iter()
             .filter(|tool| tool.doc_id.as_deref() == Some(call.doc_id.as_str()));
-        let tool = matching
-            .next()
-            .context("selected tool is absent from canonical timeline")?;
-        anyhow::ensure!(
-            matching.next().is_none(),
-            "duplicate physical tool in canonical timeline"
-        );
+        let tool = matching.next().ok_or(TraceError::ToolAbsent)?;
+        if matching.next().is_some() {
+            return Err(TraceError::DuplicateTool.into());
+        }
         records.push(build_record(tool, Some(rows), &args)?);
     }
-    write_jsonl(args.output_file.as_deref(), &records)
+    Ok(write_jsonl(args.output_file.as_deref(), &records)?)
 }
 
 fn build_record(
     tool_call: &TimelineToolCallRow,
     rows: Option<&RunTimelineRows>,
     args: &TraceExportArgs,
-) -> Result<AmyToolCallTraceRecord> {
+) -> Result<AmyToolCallTraceRecord, TraceError> {
     let request = rows.map(|rows| &rows.request);
     if let Some(request) = request {
-        anyhow::ensure!(
-            tool_call.request_id.as_deref() == Some(request.request_id.as_str())
-                && tool_call.request_doc_id.is_some()
-                && tool_call.request_doc_id == request.doc_id
-                && request.session_id.as_deref() == Some(tool_call.session_id.as_str()),
-            "tool call {} does not belong to the selected physical request",
-            tool_call.tool_call_id
-        );
+        if !(tool_call.request_id.as_deref() == Some(request.request_id.as_str())
+            && tool_call.request_doc_id.is_some()
+            && tool_call.request_doc_id == request.doc_id
+            && request.session_id.as_deref() == Some(tool_call.session_id.as_str()))
+        {
+            return Err(TraceError::ToolNotInRequest {
+                tool_call_id: tool_call.tool_call_id.clone(),
+            });
+        }
     }
     let mut failure_parts = Vec::new();
     if let Some(request) = request {
@@ -490,9 +640,12 @@ fn build_record(
     let lifecycle_state_text = tool_call
         .lifecycle_state
         .as_deref()
-        .context("tool call is missing lifecycle_state")?;
-    let lifecycle_state = ToolCallState::from_persisted(lifecycle_state_text)
-        .with_context(|| format!("invalid tool call lifecycle_state {lifecycle_state_text:?}"))?;
+        .ok_or(TraceError::MissingLifecycleState)?;
+    let lifecycle_state = ToolCallState::from_persisted(lifecycle_state_text).ok_or_else(|| {
+        TraceError::InvalidLifecycleState {
+            text: lifecycle_state_text.to_owned(),
+        }
+    })?;
     let analysis = analyze_tool_call_with_persisted_outcome(
         &tool_call.tool_name,
         &tool_call.args,
@@ -588,7 +741,11 @@ fn build_record(
     })
 }
 
-async fn load_rows<T>(access: &ConfigAccess, collection: &str, query: &str) -> Result<Vec<T>>
+async fn load_rows<T>(
+    access: &ConfigAccess,
+    collection: &str,
+    query: &str,
+) -> Result<Vec<T>, TraceError>
 where
     T: DeserializeOwned,
 {
@@ -596,8 +753,11 @@ where
         .await?
         .into_iter()
         .map(serde_json::from_value)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("decoding {collection} rows"))
+        .collect::<std::result::Result<Vec<_>, serde_json::Error>>()
+        .map_err(|source| TraceError::DecodeRows {
+            collection: collection.to_owned(),
+            source,
+        })
 }
 
 fn push_nonempty(parts: &mut Vec<String>, value: Option<&str>) {
@@ -606,7 +766,7 @@ fn push_nonempty(parts: &mut Vec<String>, value: Option<&str>) {
     }
 }
 
-fn write_jsonl<T>(path: Option<&std::path::Path>, records: &[T]) -> Result<()>
+fn write_jsonl<T>(path: Option<&std::path::Path>, records: &[T]) -> Result<(), TraceError>
 where
     T: Serialize,
 {
@@ -618,10 +778,15 @@ where
 
     if let Some(path) = path {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating output directory {}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|source| TraceError::CreateOutputDir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
-        fs::write(path, output).with_context(|| format!("writing JSONL {}", path.display()))?;
+        fs::write(path, output).map_err(|source| TraceError::WriteJsonl {
+            path: path.to_path_buf(),
+            source,
+        })?;
     } else {
         print!("{output}");
     }

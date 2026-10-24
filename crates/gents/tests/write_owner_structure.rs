@@ -1719,7 +1719,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents-cli/src/commands/task.rs",
     "crates/gents-cli/src/commands/tools.rs",
     "crates/gents-cli/src/commands/trace.rs",
-    "crates/gents-cli/src/commands/trace/projection_acp.rs",
     "crates/gents-cli/src/commands/ux.rs",
     "crates/gents-cli/src/commands/write.rs",
     "crates/gents-cli/src/config_import.rs",

@@ -13,9 +13,11 @@ use serde_json::json;
 
 use super::ConfigCommandError;
 
-fn backend_plan(contents: &[u8]) -> Result<(InferenceBackend, DesiredStateApplyPlan)> {
+fn backend_plan(
+    contents: &[u8],
+) -> Result<(InferenceBackend, DesiredStateApplyPlan), ConfigCommandError> {
     let backend: InferenceBackend =
-        serde_json::from_slice(contents).context("decoding canonical InferenceBackend document")?;
+        serde_json::from_slice(contents).map_err(ConfigCommandError::DecodeInferenceBackend)?;
     backend.validate()?;
     let value = serde_json::to_value(&backend)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {

@@ -1,7 +1,7 @@
 use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -19,6 +19,48 @@ use crate::{
     build_config_export_bundle, format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg,
     print_json, read_init_config, resolve_config_access, resolve_node_did,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolsCommandError {
+    #[error("home {} is not UTF-8", path.display())]
+    HomeNotUtf8 { path: PathBuf },
+    #[error("home {text} cannot be shell-quoted")]
+    NotShellQuotable {
+        text: String,
+        #[source]
+        source: shlex::QuoteError,
+    },
+    #[error("referenced AgentContext {id} is missing")]
+    ContextMissing { id: String },
+    #[error("referenced Tools {id} is missing")]
+    ToolsMissing { id: String },
+    #[error(
+        "home {} belongs to node {expected}, but the runtime its runtime.json names serves node {live}; restart `gents server --home {home_arg}` to serve this home, or pass --graphql to explain that node",
+        .home.display()
+    )]
+    HomeNodeMismatch {
+        home: PathBuf,
+        expected: String,
+        live: String,
+        home_arg: String,
+    },
+    #[error(
+        "the runtime at this endpoint serves node {live}, so its tool ceiling does not apply to --node-did {explicit}; omit --node-did or point --graphql at that node"
+    )]
+    NodeDidMismatch { live: String, explicit: String },
+    #[error("agent {agent_id} was not found for node {node_did}")]
+    AgentNotFound { agent_id: String, node_did: String },
+    #[error("runtime status has no tool_ceiling")]
+    StatusMissingToolCeiling,
+    #[error("runtime status has no node_did")]
+    StatusMissingNodeDid,
+    #[error("runtime tool_ceiling {mode}: {error}")]
+    RuntimeToolCeiling { mode: String, error: String },
+    #[error(
+        "the runtime's {mode} ceiling has no usable root ({error}), so it builds no host tools to explain; fix --tool-root (or tool_root in init.json) and restart the server"
+    )]
+    UnusableRuntimeRoot { mode: String, error: String },
+}
 
 pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
     match command {
@@ -39,21 +81,25 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         host.live_node_did.as_deref(),
     ) {
         if let Some(expected) = read_init_config(&home_dir)?.map(|config| config.node_did) {
-            anyhow::ensure!(
-                expected == live,
-                "home {} belongs to node {expected}, but the runtime its runtime.json names \
-                 serves node {live}; restart `gents server --home {}` to serve this home, or \
-                 pass --graphql to explain that node",
-                home_dir.display(),
-                shell_quoted_path(&home_dir)?
-            );
+            if expected != live {
+                return Err(ToolsCommandError::HomeNodeMismatch {
+                    home: home_dir.clone(),
+                    expected,
+                    live: live.to_owned(),
+                    home_arg: shell_quoted_path(&home_dir)?,
+                }
+                .into());
+            }
         }
     }
     let node_did = match (args.node_did.as_deref(), host.live_node_did.as_deref()) {
-        (Some(explicit), Some(live)) if explicit != live => anyhow::bail!(
-            "the runtime at this endpoint serves node {live}, so its tool ceiling does not \
-             apply to --node-did {explicit}; omit --node-did or point --graphql at that node"
-        ),
+        (Some(explicit), Some(live)) if explicit != live => {
+            return Err(ToolsCommandError::NodeDidMismatch {
+                live: live.to_owned(),
+                explicit: explicit.to_owned(),
+            }
+            .into());
+        }
         (None, Some(live)) => live.to_owned(),
         (explicit, _) => resolve_node_did(args.home.as_deref(), explicit)?,
     };
@@ -150,7 +196,11 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                 .is_some_and(|value| value == only_agent_id)
         }) || configuration_issues.contains_key(only_agent_id);
         if !found {
-            anyhow::bail!("agent {only_agent_id} was not found for node {node_did}");
+            return Err(ToolsCommandError::AgentNotFound {
+                agent_id: only_agent_id.to_owned(),
+                node_did: node_did.clone(),
+            }
+            .into());
         }
     }
 
@@ -218,10 +268,13 @@ pub(crate) fn agent_tools_document<'a>(
     bundle: &'a crate::shared::ConfigExportBundle,
     node_did: &str,
     agent: &gents::document_config::Agent,
-) -> Result<(
-    Option<&'a gents::document_config::AgentContext>,
-    Option<&'a gents::document_config::Tools>,
-)> {
+) -> Result<
+    (
+        Option<&'a gents::document_config::AgentContext>,
+        Option<&'a gents::document_config::Tools>,
+    ),
+    ToolsCommandError,
+> {
     let context = agent
         .context_id
         .as_deref()
@@ -231,7 +284,7 @@ pub(crate) fn agent_tools_document<'a>(
                 .contexts
                 .iter()
                 .find(|context| context.node_did == node_did && context.context_id == id)
-                .with_context(|| format!("referenced AgentContext {id} is missing"))
+                .ok_or_else(|| ToolsCommandError::ContextMissing { id: id.to_owned() })
         })
         .transpose()?;
     let tools = context
@@ -242,7 +295,7 @@ pub(crate) fn agent_tools_document<'a>(
                 .tools
                 .iter()
                 .find(|tools| tools.node_did == node_did && tools.tools_id == id)
-                .with_context(|| format!("referenced Tools {id} is missing"))
+                .ok_or_else(|| ToolsCommandError::ToolsMissing { id: id.to_owned() })
         })
         .transpose()?;
     Ok((context, tools))
@@ -275,13 +328,18 @@ struct HostCeilingReport<'a> {
     live: bool,
 }
 
-fn shell_quoted_path(path: &Path) -> Result<String> {
+fn shell_quoted_path(path: &Path) -> Result<String, ToolsCommandError> {
     let text = path
         .to_str()
-        .with_context(|| format!("home {} is not UTF-8", path.display()))?;
-    Ok(shlex::try_quote(text)
-        .with_context(|| format!("home {text} cannot be shell-quoted"))?
-        .into_owned())
+        .ok_or_else(|| ToolsCommandError::HomeNotUtf8 {
+            path: path.to_path_buf(),
+        })?;
+    shlex::try_quote(text)
+        .map(|quoted| quoted.into_owned())
+        .map_err(|source| ToolsCommandError::NotShellQuotable {
+            text: text.to_owned(),
+            source,
+        })
 }
 
 struct HostCeiling {
@@ -299,16 +357,20 @@ impl HostCeiling {
             .await
             .context("the GraphQL endpoint has no gents runtime status to read its tool ceiling")?;
         let field = |name: &str| status.get(name).and_then(Value::as_str).map(str::to_owned);
-        let mode_text = field("tool_ceiling").context("runtime status has no tool_ceiling")?;
-        let mode = ToolCeilingArg::from_str(&mode_text, false)
-            .map_err(|error| anyhow::anyhow!("runtime tool_ceiling {mode_text}: {error}"))?;
+        let mode_text = field("tool_ceiling").ok_or(ToolsCommandError::StatusMissingToolCeiling)?;
+        let mode = ToolCeilingArg::from_str(&mode_text, false).map_err(|error| {
+            ToolsCommandError::RuntimeToolCeiling {
+                mode: mode_text.clone(),
+                error,
+            }
+        })?;
         let root = field("tool_root");
         if let (Some(error), false) = (field("tool_root_error"), mode == ToolCeilingArg::MetaOnly) {
-            anyhow::bail!(
-                "the runtime's {mode_text} ceiling has no usable root ({error}), so it builds no \
-                 host tools to explain; fix --tool-root (or tool_root in init.json) and restart \
-                 the server"
-            );
+            return Err(ToolsCommandError::UnusableRuntimeRoot {
+                mode: mode_text,
+                error,
+            }
+            .into());
         }
         let mut ceiling = host_tool_ceiling(mode, root.as_deref().map(Path::new))?;
         for registration in status
@@ -325,7 +387,7 @@ impl HostCeiling {
             mode,
             root,
             source: "runtime_status",
-            live_node_did: Some(field("node_did").context("runtime status has no node_did")?),
+            live_node_did: Some(field("node_did").ok_or(ToolsCommandError::StatusMissingNodeDid)?),
             home: field("home"),
         })
     }

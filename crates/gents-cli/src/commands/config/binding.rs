@@ -58,13 +58,13 @@ impl ManifestBindMode {
 }
 
 impl BoundManifestLoad {
-    pub(crate) fn require_valid(self) -> Result<BoundDesiredManifest> {
+    pub(crate) fn require_valid(self) -> Result<BoundDesiredManifest, super::ConfigCommandError> {
         if !self.report.is_ok() {
             print_json(&serde_json::to_value(&self.report)?)?;
-            anyhow::bail!("desired-state manifest validation failed");
+            return Err(super::ConfigCommandError::ManifestValidationFailed);
         }
         self.bound
-            .ok_or_else(|| anyhow::anyhow!("validated manifest root produced no manifest"))
+            .ok_or(super::ConfigCommandError::ValidatedManifestMissing)
     }
 }
 

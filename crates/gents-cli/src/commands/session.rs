@@ -44,6 +44,12 @@ pub(crate) enum SessionCommandError {
     },
     #[error(transparent)]
     Home(#[from] HomeError),
+    #[error(transparent)]
+    Config(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    Output(#[from] crate::request_helpers::RequestHelpersError),
+    #[error(transparent)]
+    ForkRejected(ForkError),
 }
 
 pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
@@ -183,7 +189,10 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigA
     Ok(ConfigAccess::claimed_local(node, claim)?)
 }
 
-async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {
+async fn query_sessions(
+    access: &ConfigAccess,
+    session_id: Option<&str>,
+) -> Result<Vec<Value>, SessionCommandError> {
     let args = session_id
         .map(|id| {
             format!(
@@ -202,7 +211,10 @@ async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Resu
     Ok(graphql_rows(access, "AgentSession", &query).await?)
 }
 
-async fn add_request_count(access: &ConfigAccess, row: &mut Value) -> Result<()> {
+async fn add_request_count(
+    access: &ConfigAccess,
+    row: &mut Value,
+) -> Result<(), SessionCommandError> {
     let Some(session_id) = row.get("session_id").and_then(Value::as_str) else {
         return Ok(());
     };
@@ -211,7 +223,10 @@ async fn add_request_count(access: &ConfigAccess, row: &mut Value) -> Result<()>
     Ok(())
 }
 
-async fn add_request_counts(access: &ConfigAccess, rows: &mut [Value]) -> Result<()> {
+async fn add_request_counts(
+    access: &ConfigAccess,
+    rows: &mut [Value],
+) -> Result<(), SessionCommandError> {
     let session_ids = rows
         .iter()
         .filter_map(|row| row.get("session_id").and_then(Value::as_str))
@@ -232,7 +247,7 @@ async fn add_request_counts(access: &ConfigAccess, rows: &mut [Value]) -> Result
 async fn request_counts_by_session(
     access: &ConfigAccess,
     session_ids: &[String],
-) -> Result<BTreeMap<String, u64>> {
+) -> Result<BTreeMap<String, u64>, SessionCommandError> {
     if session_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -347,7 +362,10 @@ fn print_table_row<const N: usize>(cells: &[&str; N], widths: &[usize; N]) {
     println!();
 }
 
-fn print_fork_outcome(args: &SessionForkArgs, outcome: ForkOutcome) -> Result<()> {
+fn print_fork_outcome(
+    args: &SessionForkArgs,
+    outcome: ForkOutcome,
+) -> Result<(), SessionCommandError> {
     print_json(&json!({
         "session_id": outcome.session_id,
         "source_session_id": args.from,
@@ -367,7 +385,7 @@ fn map_fork_error(error: ForkError) -> anyhow::Error {
         | ForkError::ForkAgentNotFound(_)
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy
-        | ForkError::ForkMessageNotEditable(_) => anyhow::anyhow!("{error}"),
+        | ForkError::ForkMessageNotEditable(_) => SessionCommandError::ForkRejected(error).into(),
         ForkError::ForkCopyFailed(inner) => {
             anyhow::Error::new(inner).context("fork copy step failed")
         }

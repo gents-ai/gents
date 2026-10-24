@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -65,14 +65,14 @@ pub(crate) async fn run_cloud_login(
     access: &ConfigAccess,
     node_did: &str,
     opts: &CloudLoginOptions,
-) -> Result<CloudLoginOutcome> {
+) -> Result<CloudLoginOutcome, CloudError> {
     let base = cloud_base_url(&opts.cloud)?;
     let provider = cloud_provider(&opts.provider)?;
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(REQUEST_TIMEOUT)
         .build()
-        .context("building HTTP client")?;
+        .map_err(CloudError::HttpClient)?;
 
     let start = request_device_code(&http, &base).await?;
     eprintln!(
@@ -170,7 +170,7 @@ enum PollStep {
 }
 
 trait DevicePolls {
-    async fn poll_once(&self, device_code: &str) -> Result<PollStep>;
+    async fn poll_once(&self, device_code: &str) -> Result<PollStep, CloudError>;
 }
 
 struct CloudDevicePolls {
@@ -179,7 +179,7 @@ struct CloudDevicePolls {
 }
 
 impl DevicePolls for CloudDevicePolls {
-    async fn poll_once(&self, device_code: &str) -> Result<PollStep> {
+    async fn poll_once(&self, device_code: &str) -> Result<PollStep, CloudError> {
         let response = self
             .http
             .post(&self.poll_url)
@@ -192,11 +192,14 @@ impl DevicePolls for CloudDevicePolls {
             .text()
             .await
             .map_err(|error| unreachable_cloud(&self.poll_url, &error))?;
-        Ok(classify_poll(status, &body)?)
+        classify_poll(status, &body)
     }
 }
 
-async fn request_device_code(http: &reqwest::Client, base: &reqwest::Url) -> Result<DeviceStart> {
+async fn request_device_code(
+    http: &reqwest::Client,
+    base: &reqwest::Url,
+) -> Result<DeviceStart, CloudError> {
     let url = cloud_endpoint(base, "/auth/device/start");
     let response = http
         .post(&url)
@@ -209,7 +212,7 @@ async fn request_device_code(http: &reqwest::Client, base: &reqwest::Url) -> Res
         .text()
         .await
         .map_err(|error| unreachable_cloud(&url, &error))?;
-    Ok(classify_start(status, &body)?)
+    classify_start(status, &body)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -245,6 +248,14 @@ pub(crate) enum CloudError {
         "this sign-in was not approved within {wait_secs} seconds; run `gents cloud login` again"
     )]
     NotApproved { wait_secs: u64 },
+    #[error("{message}")]
+    SignInRefused { message: String },
+    #[error("building HTTP client")]
+    HttpClient(#[source] reqwest::Error),
+    #[error(transparent)]
+    Config(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
 }
 
 fn classify_start(status: StatusCode, body: &str) -> Result<DeviceStart, CloudError> {
@@ -268,19 +279,22 @@ fn classify_poll(status: StatusCode, body: &str) -> Result<PollStep, CloudError>
 }
 
 /// Bounds server supplied polling values to prevent hot loops and indefinite waits.
-async fn wait_for_approval(polls: &impl DevicePolls, start: &DeviceStart) -> Result<SignedIn> {
+async fn wait_for_approval(
+    polls: &impl DevicePolls,
+    start: &DeviceStart,
+) -> Result<SignedIn, CloudError> {
     let interval = Duration::from_secs(start.interval_secs.max(MIN_POLL_INTERVAL_SECS));
     let wait_secs = start.expires_in_secs.min(MAX_LOGIN_WAIT_SECS);
     let deadline = Instant::now() + Duration::from_secs(wait_secs);
     loop {
         match polls.poll_once(&start.device_code).await? {
             PollStep::SignedIn(session) => return Ok(session),
-            PollStep::Refused(reason) => anyhow::bail!("{reason}"),
+            PollStep::Refused(message) => return Err(CloudError::SignInRefused { message }),
             PollStep::Pending => {}
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(CloudError::NotApproved { wait_secs }.into());
+            return Err(CloudError::NotApproved { wait_secs });
         }
         tokio::time::sleep(interval.min(remaining)).await;
     }
@@ -480,7 +494,7 @@ mod tests {
     }
 
     impl DevicePolls for ScriptedPolls {
-        async fn poll_once(&self, _device_code: &str) -> Result<PollStep> {
+        async fn poll_once(&self, _device_code: &str) -> Result<PollStep, CloudError> {
             self.asked_at
                 .lock()
                 .expect("poll times")
@@ -653,7 +667,10 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains('\n'), "one line, not a stack: {message}");
-        assert_eq!(error.chain().count(), 1, "no cause chain to print");
+        assert!(
+            std::error::Error::source(&error).is_none(),
+            "no cause chain to print"
+        );
         assert!(!message.contains("SECRET"), "{message}");
     }
 

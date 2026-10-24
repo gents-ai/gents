@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents::graphql::escape_graphql_string;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -14,6 +14,22 @@ use crate::{
     graphql_rows_or_empty_if_collection_missing, normalize_optional_string, print_json,
     resolve_config_access,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BackgroundError {
+    #[error(transparent)]
+    Duration(#[from] crate::request_helpers::RequestHelpersError),
+    #[error("duration too large")]
+    DurationTooLarge(#[source] std::num::TryFromIntError),
+    #[error(transparent)]
+    Config(#[from] gents::config_client::ConfigClientError),
+    #[error("decoding {collection} rows")]
+    DecodeRows {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+}
 
 pub(crate) async fn dispatch(command: BackgroundCommand) -> Result<()> {
     match command {
@@ -64,7 +80,7 @@ async fn load_background_tool_calls(
     access: &ConfigAccess,
     args: &BackgroundListArgs,
     age_cutoff: Option<DateTime<Utc>>,
-) -> Result<Vec<BackgroundToolCallRow>> {
+) -> Result<Vec<BackgroundToolCallRow>, BackgroundError> {
     let mut filters = vec![r#"{ await_mode: { _eq: "background" } }"#.to_string()];
     if let Some(request_id) = normalize_optional_string(args.request_id.as_deref()) {
         filters.push(format!(
@@ -165,12 +181,15 @@ fn row_state(row: &BackgroundToolCallRow) -> Option<String> {
         .or_else(|| normalize_optional_string(row.status.as_deref()))
 }
 
-fn age_cutoff(raw: Option<&str>, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+fn age_cutoff(
+    raw: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, BackgroundError> {
     let Some(raw) = normalize_optional_string(raw) else {
         return Ok(None);
     };
     let duration = parse_duration_suffix(&raw)?;
-    let secs = i64::try_from(duration.as_secs()).context("duration too large")?;
+    let secs = i64::try_from(duration.as_secs()).map_err(BackgroundError::DurationTooLarge)?;
     Ok(Some(now - chrono::Duration::seconds(secs)))
 }
 
@@ -262,7 +281,11 @@ fn print_table_row<const N: usize>(cells: &[String; N], widths: &[usize; N]) {
     println!("{line}");
 }
 
-async fn load_rows<T>(access: &ConfigAccess, collection: &str, query: &str) -> Result<Vec<T>>
+async fn load_rows<T>(
+    access: &ConfigAccess,
+    collection: &str,
+    query: &str,
+) -> Result<Vec<T>, BackgroundError>
 where
     T: DeserializeOwned,
 {
@@ -270,8 +293,11 @@ where
         .await?
         .into_iter()
         .map(serde_json::from_value)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("decoding {collection} rows"))
+        .collect::<std::result::Result<Vec<_>, serde_json::Error>>()
+        .map_err(|source| BackgroundError::DecodeRows {
+            collection: collection.to_owned(),
+            source,
+        })
 }
 
 #[derive(Debug, Deserialize)]

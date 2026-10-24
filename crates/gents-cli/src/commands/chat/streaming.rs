@@ -62,6 +62,8 @@ struct ChatToolProgressMarker {
 /// filter, so later rows in the collection would hide this request.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StreamError {
+    #[error(transparent)]
+    PluginApproval(#[from] gents::plugin::approval::PluginApprovalError),
     #[error("chat request query omitted rows")]
     QueryOmittedRows,
     #[error("committed chat physical request missing or ambiguous")]
@@ -263,7 +265,7 @@ pub(crate) enum ApprovalHandling<'a> {
 fn pending_approvals_home<'a>(
     mode: ApprovalHandling<'a>,
     session: &str,
-) -> Result<Option<&'a std::path::Path>> {
+) -> Result<Option<&'a std::path::Path>, StreamError> {
     let home = match mode {
         ApprovalHandling::None => return Ok(None),
         ApprovalHandling::Answer(home) | ApprovalHandling::Observe(home) => home,
