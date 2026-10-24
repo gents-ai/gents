@@ -22,6 +22,20 @@ pub enum ProviderInputError {
     #[error(transparent)]
     RequestInput(#[from] RequestInputError),
     #[error(transparent)]
+    Attachment(#[from] gents_protocol::request_input::AttachmentError),
+    #[error("Invalid attachment representation in the transcript")]
+    AttachmentRepresentation,
+    #[error("Text attachment is not base64 encoded")]
+    TextAttachmentNotBase64,
+    #[error("Text attachment has no name")]
+    TextAttachmentUnnamed,
+    #[error(transparent)]
+    TextAttachmentDecode(#[from] base64::DecodeError),
+    #[error(transparent)]
+    TextAttachmentUtf8(#[from] std::string::FromUtf8Error),
+    #[error("PDF attachments are not supported by the OpenAI Chat Completions transport; use a provider with document support")]
+    ChatCompletionsPdfUnsupported,
+    #[error(transparent)]
     Codec(#[from] AssistantCodecError),
     #[error(transparent)]
     Message(#[from] MessageError),
@@ -94,10 +108,9 @@ pub fn captured_context_for_provider(
             .count(),
         _ => 0,
     };
-    anyhow::ensure!(
-        tagged == attached.len(),
-        "Invalid attachment representation in the transcript"
-    );
+    if tagged != attached.len() {
+        return Err(ProviderInputError::AttachmentRepresentation);
+    }
     gents_protocol::request_input::RequestInput {
         attachments: attached,
         ..Default::default()
@@ -115,14 +128,14 @@ pub fn captured_context_for_provider(
                     use base64::Engine;
                     let gents_protocol::message::DocumentSourceKind::Base64(data) = &document.data
                     else {
-                        anyhow::bail!("Text attachment is not base64 encoded");
+                        return Err(ProviderInputError::TextAttachmentNotBase64);
                     };
                     let name = document
                         .additional_params
                         .as_ref()
                         .and_then(|p| p.get("gents_attachment"))
                         .and_then(serde_json::Value::as_str)
-                        .context("Text attachment has no name")?;
+                        .ok_or(ProviderInputError::TextAttachmentUnnamed)?;
                     let text =
                         String::from_utf8(base64::engine::general_purpose::STANDARD.decode(data)?)?;
                     *part = UserContent::text(format!(
@@ -329,7 +342,11 @@ impl ProviderInputCounter {
                     if let rig::completion::Message::User { content } = message {
                         for part in content.iter() {
                             if let rig::message::UserContent::Document(document) = part {
-                                anyhow::ensure!(document.media_type.as_ref().is_none_or(|media| chat_completions_attachment_supported(media.to_mime_type())), "PDF attachments are not supported by the OpenAI Chat Completions transport; use a provider with document support");
+                                if !document.media_type.as_ref().is_none_or(|media| {
+                                    chat_completions_attachment_supported(media.to_mime_type())
+                                }) {
+                                    return Err(ProviderInputError::ChatCompletionsPdfUnsupported);
+                                }
                             }
                         }
                     }

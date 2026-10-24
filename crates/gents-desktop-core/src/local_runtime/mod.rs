@@ -236,7 +236,9 @@ pub enum LocalRuntimeError {
     RequestInputUnverifiable,
     #[error("The attached context is invalid. Remove it and capture it again.")]
     InvalidAttachedContext,
-    #[error("This runtime does not support this attachment input. Update the runtime and reconnect.")]
+    #[error(
+        "This runtime does not support this attachment input. Update the runtime and reconnect."
+    )]
     InputContractUnsupported,
     #[error(transparent)]
     Attachment(#[from] gents_protocol::request_input::AttachmentError),
