@@ -191,7 +191,7 @@ impl AgentToolSurfaceConfig {
         )?;
         if selection.enable_lsp {
             crate::toolset::lsp::LspConfigDocument::parse_operator(selection.lsp_config.as_deref())
-                .map_err(|err| anyhow::anyhow!("invalid lsp_config: {err}"))?;
+                .map_err(|error| super::ToolSurfaceError::InvalidLspConfig { error })?;
         }
         let agent_policy = ToolPolicySurface::from_selection(&selection, &agent_tools);
         let ceiling_policy = ceiling.policy().clone();
@@ -275,20 +275,25 @@ impl AgentToolSurfaceConfig {
             effective_string_allowlist(allowed_mcp_service_ids, &static_policy.mcp_services);
         let required_mcp_service_ids = dedupe_strings(required_mcp_service_ids);
         if !required_mcp_service_ids.is_empty() && !static_policy.meta {
-            anyhow::bail!(
-                "agent {agent_name} requires MCP services but meta tools are disabled by policy"
-            );
+            return Err(super::ToolSurfaceError::McpServicesRequireMeta {
+                agent_name: agent_name.to_owned(),
+            }
+            .into());
         }
         for service_id in &required_mcp_service_ids {
             if !static_policy.mcp_services.permits(service_id) {
-                anyhow::bail!(
-                    "agent {agent_name} requires MCP service {service_id:?}, but the effective tool policy denies it"
-                );
+                return Err(super::ToolSurfaceError::McpServiceDenied {
+                    agent_name: agent_name.to_owned(),
+                    service_id: service_id.clone(),
+                }
+                .into());
             }
             if !effective_allowed_mcp_service_ids.contains(service_id) {
-                anyhow::bail!(
-                    "agent {agent_name} requires MCP service {service_id:?}, but its MCP allowlist does not permit it"
-                );
+                return Err(super::ToolSurfaceError::McpServiceNotAllowlisted {
+                    agent_name: agent_name.to_owned(),
+                    service_id: service_id.clone(),
+                }
+                .into());
             }
         }
 
@@ -325,9 +330,11 @@ impl AgentToolSurfaceConfig {
                     })
                 });
             if !allowed_mcp_wrapper && !host_tools.is_backgroundable_tool_name(name) {
-                anyhow::bail!(
-                    "agent {agent_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool"
-                );
+                return Err(super::ToolSurfaceError::BackgroundableToolUnregistered {
+                    agent_name: agent_name.to_owned(),
+                    name: name.to_owned(),
+                }
+                .into());
             }
         }
 
@@ -488,10 +495,10 @@ impl AgentToolSurfaceConfig {
                 .cloned()
                 .collect::<Vec<_>>();
             if !missing.is_empty() {
-                anyhow::bail!(
-                    "required MCP services are not measured available: {}",
-                    missing.join(", ")
-                );
+                return Err(super::ToolSurfaceError::McpServicesUnmeasured {
+                    services: missing.join(", "),
+                }
+                .into());
             }
         }
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);

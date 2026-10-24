@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{bail, Result};
+use super::error::{EthError, Result};
 
 pub const BUILTIN_QUERY_METHODS: &[&str] = &[
     "eth_chainId",
@@ -48,7 +48,7 @@ pub fn validate_query_methods(configured: &[String]) -> Result<Vec<String>> {
         }
         reject_forbidden(&method)?;
         if !ceiling.contains(method.as_str()) {
-            bail!("query method {method} is not in the builtin read-only ceiling");
+            return Err(EthError::QueryMethodNotCeiling { method });
         }
         if seen.insert(method.clone()) {
             out.push(method);
@@ -75,7 +75,7 @@ pub fn reject_forbidden(method: &str) -> Result<()> {
         || method.starts_with("eth_send")
         || method.starts_with("eth_sign")
     {
-        bail!("query method {method} is not a read-only JSON-RPC method");
+        return Err(EthError::QueryMethodForbidden { method });
     }
     Ok(())
 }

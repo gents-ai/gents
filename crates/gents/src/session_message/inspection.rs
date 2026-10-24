@@ -2,6 +2,8 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+
+use super::SessionMessageError;
 use defra_node::EmbeddedNode;
 use gents_protocol::message::{AssistantContent, Message, UserContent};
 use gents_protocol::row::AgentRequestRow;
@@ -38,26 +40,22 @@ pub(crate) enum ReadView {
 }
 
 impl AgentSessionReadArgs {
-    pub(crate) fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.session_id.trim().is_empty(),
-            "session_id is required; discover it with agent_session_list"
-        );
-        anyhow::ensure!(
-            self.limit.is_none_or(|limit| (1..=6).contains(&limit)),
-            "limit must be between 1 and 6"
-        );
-        anyhow::ensure!(
-            self.view == ReadView::Recent || self.cursor.is_none(),
-            "cursor is supported only for recent messages"
-        );
+    pub(crate) fn validate(&self) -> Result<(), SessionMessageError> {
+        if self.session_id.trim().is_empty() {
+            return Err(SessionMessageError::SessionIdRequired);
+        }
+        if !(self.limit.is_none_or(|limit| (1..=6).contains(&limit))) {
+            return Err(SessionMessageError::InvalidReadLimit);
+        }
+        if !(self.view == ReadView::Recent || self.cursor.is_none()) {
+            return Err(SessionMessageError::CursorRequiresRecentView);
+        }
         if let Some(cursor) = &self.cursor {
-            let cursor: Cursor = serde_json::from_str(cursor)
-                .context("invalid recent cursor; restart agent_session_read with view=recent")?;
-            anyhow::ensure!(
-                cursor.session_id == self.session_id.trim(),
-                "cursor belongs to another session; restart agent_session_read with view=recent"
-            );
+            let cursor: Cursor =
+                serde_json::from_str(cursor).map_err(SessionMessageError::InvalidRecentCursor)?;
+            if cursor.session_id != self.session_id.trim() {
+                return Err(SessionMessageError::CursorOtherSession);
+            }
         }
         Ok(())
     }
@@ -66,7 +64,10 @@ impl AgentSessionReadArgs {
         self.validate()?;
         if let Some(cursor) = &self.cursor {
             let cursor: Cursor = serde_json::from_str(cursor)?;
-            anyhow::ensure!(cursor.node_did == target.node_did && cursor.requester_did == target.requester_did, "cursor belongs to another session scope; restart agent_session_read with view=recent");
+            if !(cursor.node_did == target.node_did && cursor.requester_did == target.requester_did)
+            {
+                return Err(SessionMessageError::CursorOtherSessionScope.into());
+            }
         }
         Ok(())
     }
@@ -85,11 +86,13 @@ fn quoted(value: &str) -> String {
     format!("\"{}\"", escape_graphql_string(value))
 }
 
-fn rows(response: &Value, collection: &str) -> Result<Vec<Value>> {
+fn rows(response: &Value, collection: &str) -> Result<Vec<Value>, SessionMessageError> {
     response["data"][collection]
         .as_array()
         .cloned()
-        .with_context(|| format!("session inspection omitted {collection}"))
+        .ok_or_else(|| SessionMessageError::InspectionOmitted {
+            collection: collection.to_owned(),
+        })
 }
 
 fn bounded(text: &str, limit: usize) -> (String, bool) {
@@ -128,12 +131,12 @@ async fn request_row(
     doc_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
     let response = txn.execute(&format!("{{AgentRequest(filter: {{{scope}, _docID: {{_eq: {}}}}}, limit: 1) {{_docID request_id lifecycle_state failure_reason created_at claimed_at terminalized_at request_hop}}}}", quoted(doc_id))).await?;
-    rows(&response, "AgentRequest")?
+    Ok(rows(&response, "AgentRequest")?
         .into_iter()
         .next()
         .map(serde_json::from_value)
         .transpose()
-        .context("decoding inspected request")
+        .map_err(SessionMessageError::DecodeInspectedRequest)?)
 }
 
 fn request_summary(row: &AgentRequestRow) -> Value {
@@ -169,10 +172,9 @@ async fn tools_in_flight(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value>
 fn decode_queued_input(row: &Value) -> Result<gents_protocol::request_input::RequestInput> {
     let input: Option<gents_protocol::request_input::RequestInput> =
         serde_json::from_value(row["input"].clone()).map_err(|_| {
-            anyhow::anyhow!(
-                "decoding queued session input for request {}",
-                row["request_id"]
-            )
+            SessionMessageError::DecodeQueuedInput {
+                request_id: row["request_id"].clone(),
+            }
         })?;
     Ok(input.unwrap_or_default())
 }
@@ -208,14 +210,14 @@ async fn messages(
         .as_deref()
         .map(serde_json::from_str::<Cursor>)
         .transpose()
-        .context("invalid cursor; next call: agent_session_read with session_id and view=recent")?;
+        .map_err(SessionMessageError::InvalidCursor)?;
     if let Some(cursor) = &cursor {
-        anyhow::ensure!(
-            cursor.node_did == target.node_did
-                && cursor.requester_did == target.requester_did
-                && cursor.session_id == target.session_id,
-            "cursor belongs to another session; restart agent_session_read with view=recent"
-        );
+        if !(cursor.node_did == target.node_did
+            && cursor.requester_did == target.requester_did
+            && cursor.session_id == target.session_id)
+        {
+            return Err(SessionMessageError::CursorOtherSession.into());
+        }
     }
     let bounds = cursor
         .map(|cursor| format!(", sequence: {{_lt: {}}}", cursor.before_sequence))
@@ -328,7 +330,7 @@ async fn load_tool_call_summaries(
         .map(|row| {
             let doc_id = row["_docID"]
                 .as_str()
-                .context("tool-call summary row omitted _docID")?
+                .ok_or(SessionMessageError::ToolSummaryDocIdMissing)?
                 .to_owned();
             Ok((doc_id, row))
         })
@@ -356,7 +358,7 @@ fn tool_summaries(
         }
         let row = tool_calls
             .get(doc_id)
-            .context("canonical tool summary references an unavailable call")?;
+            .ok_or(SessionMessageError::ToolSummaryUnavailable)?;
         let preview = match message {
             Message::User { content } => content
                 .get(index)
@@ -393,12 +395,12 @@ pub(crate) async fn agent_session_read(
     args: &AgentSessionReadArgs,
 ) -> Result<Value> {
     args.validate()?;
-    anyhow::ensure!(args.session_id.trim() != caller.session_id, "agent_session_read cannot address the calling session; use sessions to inspect this conversation");
+    if !(args.session_id.trim() != caller.session_id) {
+        return Err(SessionMessageError::CallingSessionRead.into());
+    }
     let target = super::resolve_send_target(node, &caller.node_did, tools, args.session_id.trim())
         .await?
-        .context(
-            "session is not messageable; discover available sessions with agent_session_list",
-        )?;
+        .ok_or(SessionMessageError::SessionNotMessageable)?;
     let target = super::target_scope(&caller.node_did, &target);
     args.validate_target(&target)?;
     // Captured before the first contributing lookup (active_session_request).
@@ -424,9 +426,13 @@ pub(crate) async fn agent_session_read(
             let scope = crate::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
             let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", crate::session::AGENT_SESSION_FIELDS)).await?;
             let sessions = rows(&response, "AgentSession")?;
-            anyhow::ensure!(sessions.len() == 1, "inspected session is unavailable or ambiguous");
+            if sessions.len() != 1 {
+    return Err(SessionMessageError::InspectedSessionAmbiguous.into());
+}
             let session = crate::session::decode_session_row(&sessions[0])?.session;
-            anyhow::ensure!(super::session_target_allowed(&session, &caller.node_did, tools), "inspected session is no longer messageable");
+            if !(super::session_target_allowed(&session, &caller.node_did, tools)) {
+    return Err(SessionMessageError::InspectedSessionNotMessageable.into());
+}
             let unobserved = if active.is_none() {
                 match session.observation.as_ref().and_then(|view| view.latest_request.as_ref()) {
                     Some(observed) if request_row(txn, &scope, &observed.request_doc_id).await?.is_none() => Some(observed),

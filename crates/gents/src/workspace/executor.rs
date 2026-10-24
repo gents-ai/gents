@@ -542,8 +542,18 @@ fn freeze_workspace_base_action(
     journal: &mut Vec<ActionJournalEntry>,
     ctx: &mut HostExecutorContext<'_>,
 ) -> Result<CreateWorkspaceOutcome, HostExecuteError> {
-    let failed = |error: anyhow::Error| HostExecuteError::failed(error.to_string(), false, None);
-    let denied = |error: anyhow::Error| HostExecuteError::denied(error.to_string());
+    fn failed<E>(error: E) -> HostExecuteError
+    where
+        E: std::fmt::Display,
+    {
+        HostExecuteError::failed(error.to_string(), false, None)
+    }
+    fn denied<E>(error: E) -> HostExecuteError
+    where
+        E: std::fmt::Display,
+    {
+        HostExecuteError::denied(error.to_string())
+    }
     let mut workspace = ctx
         .documents
         .load_isolated_workspace(&action.workspace_id)
@@ -992,7 +1002,7 @@ fn instruction_manifest_for_persist(
             return Ok(existing.instruction_manifest);
         }
     }
-    capture_instruction_manifest(source, base_sha)
+    Ok(capture_instruction_manifest(source, base_sha)?)
 }
 
 fn changed_files_json(files: &[String]) -> Option<String> {
@@ -1486,7 +1496,7 @@ pub fn finalize_integrate_trunk(trunk: &Path, pending_head_sha: Option<&str>) ->
     else {
         return Ok(());
     };
-    advance_trunk_to_integrate_commit(trunk, sha)
+    Ok(advance_trunk_to_integrate_commit(trunk, sha)?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

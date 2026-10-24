@@ -3,9 +3,10 @@ use super::*;
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use anyhow::{bail, ensure, Result};
 use serde::Deserialize;
 use tokio::task::JoinHandle;
+
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Deserialize)]
 struct Snapshot {
@@ -56,7 +57,7 @@ fn backend_document(
     capacity: usize,
     queue_depth: usize,
     name: &str,
-) -> Result<crate::document_config::InferenceBackend> {
+) -> TestResult<crate::document_config::InferenceBackend> {
     Ok(serde_json::from_value(serde_json::json!({
         "node_did":"did:test:registry", "backend_id":backend_id, "name":name,
         "provider_kind":"OpenAiCompatible",
@@ -66,14 +67,14 @@ fn backend_document(
     }))?)
 }
 
-fn slot_connection(backend_id: &str, connection: u64) -> Result<String> {
+fn slot_connection(backend_id: &str, connection: u64) -> TestResult<String> {
     let backend = backend_document(backend_id, connection, 1, 0, "slot")?;
     Ok(super::super::config::backend_connection_fingerprint(
         &backend.backend_fields(),
     ))
 }
 
-fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmissionConfig> {
+fn config_from_case(backend_id: &str, desired: &Desired) -> TestResult<BackendAdmissionConfig> {
     let backend = backend_document(
         backend_id,
         desired.connection,
@@ -125,7 +126,7 @@ impl Harness {
         }));
     }
 
-    async fn settle(&mut self) -> Result<()> {
+    async fn settle(&mut self) -> TestResult {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
             let mut pending = Vec::new();
@@ -138,7 +139,7 @@ impl Harness {
                     Ok(permit) => {
                         self.outcomes.admitted += 1;
                         let Some(slot) = self.slots.get(permit.attribution_for_test()) else {
-                            bail!("admitted call is not attributed to a caller's slot");
+                            return Err("admitted call is not attributed to a caller's slot".into());
                         };
                         self.outcomes.attributed.push(*slot);
                         self.outcomes.attributed.sort_unstable();
@@ -151,7 +152,7 @@ impl Harness {
                         } else if message.contains("BackendGone") {
                             self.outcomes.gone += 1;
                         } else {
-                            bail!("unexpected admission error: {message}");
+                            return Err(format!("unexpected admission error: {message}").into());
                         }
                     }
                 }
@@ -170,11 +171,13 @@ impl Harness {
             if self.calls.len() == waiters && transit == 0 && parked_only {
                 return Ok(());
             }
-            ensure!(
-                tokio::time::Instant::now() < deadline,
-                "admission never settled: {} calls, {waiters} waiters, {transit} in transit",
-                self.calls.len()
-            );
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "admission never settled: {} calls, {waiters} waiters, {transit} in transit",
+                    self.calls.len()
+                )
+                .into());
+            }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
@@ -197,11 +200,10 @@ impl Harness {
     }
 }
 
-async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
-    ensure!(
-        case.actions.len() == case.expected.len(),
-        "missing step expectations"
-    );
+async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> TestResult {
+    if case.actions.len() != case.expected.len() {
+        return Err("missing step expectations".into());
+    }
     let backend_id = format!("registry-{}", case.name);
     let mut harness = Harness {
         registry: AdmissionRegistry::new(node),
@@ -218,7 +220,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
                 let configs = desired
                     .as_ref()
                     .map(|d| {
-                        Ok::<_, anyhow::Error>((
+                        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
                             backend_id.clone(),
                             config_from_case(&backend_id, d)?,
                         ))
@@ -235,7 +237,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
             }
             Action::Release => {
                 let Some(mut permit) = harness.held.pop_front() else {
-                    bail!("trace released without an admitted call");
+                    return Err("trace released without an admitted call".into());
                 };
                 permit.finish_success(None).await?;
                 drop(permit);
@@ -243,10 +245,9 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
         }
         harness.settle().await?;
         let actual = harness.observe();
-        ensure!(
-            actual == *expected,
-            "step {index}: expected {expected:?}, got {actual:?}"
-        );
+        if actual != *expected {
+            return Err(format!("step {index}: expected {expected:?}, got {actual:?}").into());
+        }
     }
     for mut permit in harness.held.drain(..) {
         permit.finish_success(None).await?;
@@ -268,7 +269,11 @@ async fn generated_inference_registry_cases_drive_real_permits() {
     let mut failures = Vec::new();
     for case in &snapshot.inference_registry_cases {
         if let Err(error) = run_case(node.clone(), case).await {
-            failures.push(format!("{}: {error:#}", case.name));
+            failures.push(format!(
+                "{}: {}",
+                case.name,
+                gents_protocol::error_chain::ErrorChain(&*error)
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

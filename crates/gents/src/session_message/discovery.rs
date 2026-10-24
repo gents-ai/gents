@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+
+use super::SessionMessageError;
 use defra_node::EmbeddedNode;
 use gents_protocol::session::AgentSession;
 use serde::{Deserialize, Serialize};
@@ -36,40 +38,37 @@ pub(crate) struct SessionFilter {
 }
 
 impl AgentSessionListArgs {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<(), SessionMessageError> {
         if let Some(limit) = self.limit {
-            anyhow::ensure!(
-                (1..=100).contains(&limit),
-                "limit must be between 1 and 100"
-            );
+            if !(1..=100).contains(&limit) {
+                return Err(SessionMessageError::InvalidListLimit);
+            }
         }
         if let Some(filter) = &self.filter {
             if let Some(status) = &filter.status {
-                anyhow::ensure!(
-                    matches!(status.as_str(), "busy" | "idle"),
-                    "status must be busy or idle"
-                );
+                if !(matches!(status.as_str(), "busy" | "idle")) {
+                    return Err(SessionMessageError::InvalidStatusFilter);
+                }
             }
             if let Some(relationship) = &filter.relationship {
-                anyhow::ensure!(
-                    matches!(
-                        relationship.as_str(),
-                        "started_by_you"
-                            | "started_you"
-                            | "messaged"
-                            | "messaged_you"
-                            | "same_node"
-                            | "allowed_target"
-                    ),
-                    "invalid relationship"
-                );
+                if !(matches!(
+                    relationship.as_str(),
+                    "started_by_you"
+                        | "started_you"
+                        | "messaged"
+                        | "messaged_you"
+                        | "same_node"
+                        | "allowed_target"
+                )) {
+                    return Err(SessionMessageError::InvalidRelationshipFilter);
+                }
             }
             for time in [&filter.created_after, &filter.updated_after]
                 .into_iter()
                 .flatten()
             {
                 chrono::DateTime::parse_from_rfc3339(time)
-                    .context("time filters require RFC 3339 timestamps")?;
+                    .map_err(SessionMessageError::InvalidTimeFilter)?;
             }
         }
         Ok(())
@@ -165,7 +164,7 @@ async fn matches_trigger(
         .await?;
     Ok(!response["data"]["AgentRequest"]
         .as_array()
-        .context("trigger query omitted request rows")?
+        .ok_or(SessionMessageError::TriggerRowsOmitted)?
         .is_empty())
 }
 
@@ -205,7 +204,7 @@ pub(crate) async fn agent_session_list(
         let response = access.execute(&format!("{{AgentSession(filter: {{_docID: {{_eq: {}}}, requester_did: {{_eq: {}}}}}, limit: 1) {{_docID created_at session_id node_did}}}}", quoted(&anchor.doc_id), quoted(&caller.node_did))).await?;
         let rows = response["data"]["AgentSession"]
             .as_array()
-            .context("cursor query omitted session rows")?;
+            .ok_or(SessionMessageError::CursorRowsOmitted)?;
         if !rows.iter().any(|row| {
             row["created_at"].as_str() == Some(anchor.created_at.as_str())
                 && row["session_id"].as_str() == Some(anchor.session_id.as_str())
@@ -244,7 +243,7 @@ pub(crate) async fn agent_session_list(
         let response = access.execute(&format!("{{AgentSession(filter: {{_and: [{}]}}, order: [{{created_at: DESC}}, {{session_id: DESC}}, {{node_did: DESC}}], limit: {PAGE_SIZE}) {{{}}}}}", predicates.join(","), crate::session::AGENT_SESSION_FIELDS)).await?;
         let rows = response["data"]["AgentSession"]
             .as_array()
-            .context("session list omitted canonical rows")?;
+            .ok_or(SessionMessageError::ListRowsOmitted)?;
         if rows.is_empty() {
             exhausted = true;
             break;
@@ -257,7 +256,7 @@ pub(crate) async fn agent_session_list(
                 doc_id: row["_docID"]
                     .as_str()
                     .filter(|id| !id.is_empty())
-                    .context("session omitted physical identity")?
+                    .ok_or(SessionMessageError::SessionIdentityMissing)?
                     .to_owned(),
                 created_at: session.created_at.clone(),
                 session_id: session.session_id.clone(),
@@ -270,7 +269,7 @@ pub(crate) async fn agent_session_list(
             }
             super::resolve_send_target(node, &caller.node_did, tools, &session.session_id)
                 .await?
-                .context("listed session is no longer messageable")?;
+                .ok_or(SessionMessageError::ListedSessionNotMessageable)?;
             let scope = SessionScope::from(&session);
             let relation = relationship(&lineage, &scope, &caller.node_did);
             if filter

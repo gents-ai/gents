@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use alloy_json_abi::Function;
 use alloy_primitives::{I256, U256};
-use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::document_config::deserialize_dual_shape;
+
+use super::error::{EthError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -120,7 +121,7 @@ pub fn parse_call_decls(raw: Option<&[String]>) -> Result<Vec<CallDecl>> {
         .map(|item| serde_json::from_str(item).unwrap_or(Value::String(item.clone())))
         .collect();
     deserialize_dual_shape(Some(Value::Array(values)), "EthTool.calls")
-        .map_err(|error| anyhow!("EthTool.calls: {error}"))
+        .map_err(|error| EthError::CallsDecode { error })
 }
 
 pub fn validate_call_decls(decls: &[CallDecl], chain_id: Option<u64>) -> Result<()> {
@@ -130,7 +131,7 @@ pub fn validate_call_decls(decls: &[CallDecl], chain_id: Option<u64>) -> Result<
         match decl {
             CallDecl::AnyRead => {
                 if any_read {
-                    bail!("EthTool.calls contains any_read more than once");
+                    return Err(EthError::AnyReadRepeated);
                 }
                 any_read = true;
             }
@@ -183,25 +184,30 @@ pub fn validate_call_decls(decls: &[CallDecl], chain_id: Option<u64>) -> Result<
             } => {
                 require_tool_name(tool_name, &mut names)?;
                 if primary_type.trim().is_empty() {
-                    bail!("sign_typed_data.primary_type is empty");
+                    return Err(EthError::SignTypedPrimaryEmpty);
                 }
                 if !domain.is_object() {
-                    bail!("sign_typed_data.domain must be an object");
+                    return Err(EthError::SignTypedDomainNotObject);
                 }
                 if !types.is_object() {
-                    bail!("sign_typed_data.types must be an object");
+                    return Err(EthError::SignTypedTypesNotObject);
                 }
                 compile_typed_params(types, primary_type, params, true)?;
                 match typed_domain_chain_id(domain)? {
                     Some(domain_chain_id)
                         if chain_id.is_none_or(|expected| expected == domain_chain_id) => {}
-                    Some(domain_chain_id) => bail!(
-                        "sign_typed_data {tool_name} domain chainId {domain_chain_id} does not match EthTool chain_id {}",
-                        chain_id.unwrap()
-                    ),
-                    None => bail!(
-                        "sign_typed_data {tool_name} domain requires chainId matching EthTool chain_id"
-                    ),
+                    Some(domain_chain_id) => {
+                        return Err(EthError::SignTypedDomainMismatch {
+                            tool_name: tool_name.clone(),
+                            domain_chain_id,
+                            chain_id: chain_id.unwrap(),
+                        })
+                    }
+                    None => {
+                        return Err(EthError::SignTypedDomainMissing {
+                            tool_name: tool_name.clone(),
+                        })
+                    }
                 }
             }
         }
@@ -217,7 +223,7 @@ pub(crate) fn typed_domain_chain_id(domain: &Value) -> Result<Option<u64>> {
         Value::Number(number) => number
             .as_u64()
             .map(Some)
-            .ok_or_else(|| anyhow!("EIP-712 domain chainId is not a positive integer")),
+            .ok_or(EthError::Eip712ChainIdNotPositive),
         Value::String(text) => {
             let parsed = if let Some(hex) = text.strip_prefix("0x") {
                 u64::from_str_radix(hex, 16)
@@ -226,9 +232,12 @@ pub(crate) fn typed_domain_chain_id(domain: &Value) -> Result<Option<u64>> {
             };
             parsed
                 .map(Some)
-                .map_err(|error| anyhow!("invalid EIP-712 domain chainId {text:?}: {error}"))
+                .map_err(|error| EthError::Eip712ChainIdParse {
+                    text: text.clone(),
+                    error,
+                })
         }
-        other => bail!("EIP-712 domain chainId must be a string or integer, got {other}"),
+        other => Err(EthError::Eip712ChainIdType { got: other.clone() }),
     }
 }
 
@@ -238,23 +247,32 @@ fn validate_gas_caps(
     max_fee_per_gas: Option<&str>,
 ) -> Result<()> {
     if max_gas.is_none_or(|value| value == 0) {
-        bail!("write tool {tool_name} requires a positive max_gas");
+        return Err(EthError::WriteRequiresMaxGas {
+            tool_name: tool_name.to_string(),
+        });
     }
     let fee = max_fee_per_gas
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("write tool {tool_name} requires max_fee_per_gas"))?;
-    if parse_u128(fee).with_context(|| format!("write tool {tool_name} max_fee_per_gas"))? == 0 {
-        bail!("write tool {tool_name} max_fee_per_gas must be positive");
+        .ok_or_else(|| EthError::WriteRequiresMaxFee {
+            tool_name: tool_name.to_string(),
+        })?;
+    if parse_u128(fee).map_err(|source| EthError::WriteMaxFeeParse {
+        tool_name: tool_name.to_string(),
+        source,
+    })? == 0
+    {
+        return Err(EthError::WriteMaxFeeZero {
+            tool_name: tool_name.to_string(),
+        });
     }
     Ok(())
 }
 
-pub(crate) fn parse_u128(value: &str) -> Result<u128> {
+pub(crate) fn parse_u128(value: &str) -> std::result::Result<u128, std::num::ParseIntError> {
     value
         .parse::<u128>()
         .or_else(|_| u128::from_str_radix(value.trim_start_matches("0x"), 16))
-        .map_err(Into::into)
 }
 
 pub(crate) fn compile_params(
@@ -263,12 +281,11 @@ pub(crate) fn compile_params(
     require_write_limits: bool,
 ) -> Result<Vec<CompiledParam>> {
     if function.inputs.len() != params.len() {
-        bail!(
-            "ABI {} has {} inputs but {} parameter declarations",
-            function.signature(),
-            function.inputs.len(),
-            params.len()
-        );
+        return Err(EthError::ParamCountMismatch {
+            abi: function.signature(),
+            inputs: function.inputs.len(),
+            params: params.len(),
+        });
     }
 
     let mut seen = BTreeSet::new();
@@ -276,17 +293,20 @@ pub(crate) fn compile_params(
     for input in &function.inputs {
         let name = input.name.trim();
         if name.is_empty() {
-            bail!(
-                "declared call ABI input {} is unnamed; use a named signature such as address recipient",
-                input.ty
-            );
+            return Err(EthError::UnnamedAbiInput {
+                ty: input.ty.clone(),
+            });
         }
         if !seen.insert(name.to_string()) {
-            bail!("declared call ABI has duplicate input name {name:?}");
+            return Err(EthError::DuplicateAbiInput {
+                name: name.to_string(),
+            });
         }
         let decl = params
             .get(name)
-            .ok_or_else(|| anyhow!("ABI input {name:?} has no matching parameter declaration"))?;
+            .ok_or_else(|| EthError::AbiInputUndeclared {
+                name: name.to_string(),
+            })?;
         validate_param(name, &input.ty, decl, require_write_limits)?;
         compiled.push(CompiledParam {
             name: name.to_string(),
@@ -295,7 +315,9 @@ pub(crate) fn compile_params(
         });
     }
     if let Some(extra) = params.keys().find(|name| !seen.contains(name.as_str())) {
-        bail!("parameter declaration {extra:?} is not an ABI input");
+        return Err(EthError::ParamUndeclaredInAbi {
+            extra: extra.to_string(),
+        });
     }
     Ok(compiled)
 }
@@ -308,37 +330,57 @@ fn validate_param(
 ) -> Result<()> {
     let source = param.source.trim();
     if !matches!(source, "model" | "fixed" | "runtime") {
-        bail!("call param {name} has unsupported source {source:?}");
+        return Err(EthError::ParamSourceUnsupported {
+            name: name.to_string(),
+            kind: source.to_string(),
+        });
     }
     if source == "fixed" && param.value.is_none() {
-        bail!("call param {name} source=fixed requires value");
+        return Err(EthError::ParamFixedNeedsValue {
+            name: name.to_string(),
+        });
     }
     if source == "runtime" && param.runtime.as_deref() != Some("self_address") {
-        bail!("call param {name} runtime source must be self_address");
+        return Err(EthError::ParamRuntimeSource {
+            name: name.to_string(),
+        });
     }
     if !supported_primitive_type(solidity_type) {
-        bail!("call param {name} uses unsupported Solidity type {solidity_type}");
+        return Err(EthError::ParamUnsupportedType {
+            name: name.to_string(),
+            solidity_type: solidity_type.to_string(),
+        });
     }
 
     let is_address = solidity_type == "address";
     let is_integer = integer_kind(solidity_type).is_some();
     let is_unbounded_data = solidity_type == "string" || solidity_type.starts_with("bytes");
     if source == "runtime" && !is_address {
-        bail!("call param {name} runtime self_address requires address type");
+        return Err(EthError::ParamRuntimeNeedsAddress {
+            name: name.to_string(),
+        });
     }
     if let Some(allowlist) = &param.address_allowlist {
         if !is_address {
-            bail!("call param {name} has address_allowlist but type is {solidity_type}");
+            return Err(EthError::ParamAllowlistNotAddress {
+                name: name.to_string(),
+                solidity_type: solidity_type.to_string(),
+            });
         }
         if allowlist.is_empty() {
-            bail!("call param {name} address_allowlist is empty");
+            return Err(EthError::ParamAllowlistEmpty {
+                name: name.to_string(),
+            });
         }
         for address in allowlist {
             require_address(address, &format!("param {name} address_allowlist"))?;
         }
     }
     if (param.min.is_some() || param.max.is_some()) && !is_integer {
-        bail!("call param {name} has min/max but type is {solidity_type}");
+        return Err(EthError::ParamMinMaxNotInteger {
+            name: name.to_string(),
+            solidity_type: solidity_type.to_string(),
+        });
     }
     validate_numeric_bounds(
         name,
@@ -347,7 +389,9 @@ fn validate_param(
         param.max.as_deref(),
     )?;
     if param.enum_values.as_ref().is_some_and(Vec::is_empty) {
-        bail!("call param {name} enum is empty");
+        return Err(EthError::ParamEnumEmpty {
+            name: name.to_string(),
+        });
     }
 
     if require_write_limits && source == "model" {
@@ -357,10 +401,14 @@ fn validate_param(
                 .as_ref()
                 .is_none_or(|values| values.is_empty())
         {
-            bail!("write param {name} address has no allowlist (deny-by-default)");
+            return Err(EthError::WriteAddressNoAllowlist {
+                name: name.to_string(),
+            });
         }
         if is_integer && param.max.is_none() {
-            bail!("write param {name} integer has no max (deny-by-default)");
+            return Err(EthError::WriteIntegerNoMax {
+                name: name.to_string(),
+            });
         }
         if is_unbounded_data
             && param
@@ -368,7 +416,10 @@ fn validate_param(
                 .as_ref()
                 .is_none_or(|values| values.is_empty())
         {
-            bail!("write param {name} {solidity_type} has no enum (deny-by-default)");
+            return Err(EthError::WriteDataNoEnum {
+                name: name.to_string(),
+                solidity_type: solidity_type.to_string(),
+            });
         }
     }
     Ok(())
@@ -385,14 +436,18 @@ fn validate_numeric_bounds(
             let min = min.map(parse_u256).transpose()?;
             let max = max.map(parse_u256).transpose()?;
             if min.zip(max).is_some_and(|(min, max)| min > max) {
-                bail!("call param {name} min exceeds max");
+                return Err(EthError::ParamMinExceedsMax {
+                    name: name.to_string(),
+                });
             }
         }
         Some(IntegerKind::Signed) => {
             let min = min.map(parse_i256).transpose()?;
             let max = max.map(parse_i256).transpose()?;
             if min.zip(max).is_some_and(|(min, max)| min > max) {
-                bail!("call param {name} min exceeds max");
+                return Err(EthError::ParamMinExceedsMax {
+                    name: name.to_string(),
+                });
             }
         }
         None => {}
@@ -435,22 +490,28 @@ fn parse_u256(value: &str) -> Result<U256> {
     value
         .parse::<U256>()
         .or_else(|_| U256::from_str_radix(value.trim_start_matches("0x"), 16))
-        .with_context(|| format!("invalid unsigned integer bound {value:?}"))
+        .map_err(|source| EthError::UintBound {
+            value: value.to_string(),
+            source: Box::new(source),
+        })
 }
 
 fn parse_i256(value: &str) -> Result<I256> {
-    value
-        .parse::<I256>()
-        .with_context(|| format!("invalid signed integer bound {value:?}"))
+    value.parse::<I256>().map_err(|source| EthError::IntBound {
+        value: value.to_string(),
+        source: Box::new(source),
+    })
 }
 
 fn require_tool_name(tool_name: &str, names: &mut BTreeSet<String>) -> Result<()> {
     let name = tool_name.trim();
     if name.is_empty() {
-        bail!("call tool_name is empty");
+        return Err(EthError::ToolNameEmpty);
     }
     if !names.insert(name.to_string()) {
-        bail!("duplicate call tool_name {name}");
+        return Err(EthError::DuplicateToolName {
+            name: name.to_string(),
+        });
     }
     Ok(())
 }
@@ -458,7 +519,10 @@ fn require_tool_name(tool_name: &str, names: &mut BTreeSet<String>) -> Result<()
 pub(crate) fn require_address(value: &str, field: &str) -> Result<()> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
     if hex.len() != 40 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        bail!("{field} must be a 20-byte 0x-address, got {value:?}");
+        return Err(EthError::AddressFormat {
+            field: field.to_string(),
+            value: value.to_string(),
+        });
     }
     Ok(())
 }
@@ -466,15 +530,17 @@ pub(crate) fn require_address(value: &str, field: &str) -> Result<()> {
 pub(crate) fn parse_abi_function(signature: &str) -> Result<Function> {
     let trimmed = signature.trim();
     if trimmed.is_empty() {
-        bail!("call signature is empty");
+        return Err(EthError::SignatureEmpty);
     }
     let with_fn = if trimmed.starts_with("function ") {
         trimmed.to_string()
     } else {
         format!("function {trimmed}")
     };
-    Function::parse(&with_fn)
-        .map_err(|error| anyhow!("invalid ABI signature {signature:?}: {error}"))
+    Function::parse(&with_fn).map_err(|error| EthError::AbiSignatureInvalid {
+        signature: signature.to_string(),
+        error,
+    })
 }
 
 pub(crate) fn native_transfer_function() -> Result<Function> {
@@ -490,13 +556,15 @@ pub(crate) fn compile_typed_params(
     let fields = types
         .get(primary_type)
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("sign_typed_data.types has no {primary_type:?} field list"))?;
+        .ok_or_else(|| EthError::TypedTypesNoFieldList {
+            primary_type: primary_type.to_string(),
+        })?;
     if fields.len() != params.len() {
-        bail!(
-            "EIP-712 {primary_type} has {} fields but {} parameter declarations",
-            fields.len(),
-            params.len()
-        );
+        return Err(EthError::TypedFieldCount {
+            primary_type: primary_type.to_string(),
+            fields: fields.len(),
+            params: params.len(),
+        });
     }
     let mut seen = BTreeSet::new();
     let mut compiled = Vec::with_capacity(fields.len());
@@ -506,19 +574,29 @@ pub(crate) fn compile_typed_params(
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("EIP-712 {primary_type} field has no name"))?;
+            .ok_or_else(|| EthError::TypedFieldNoName {
+                primary_type: primary_type.to_string(),
+            })?;
         let solidity_type = field
             .get("type")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("EIP-712 {primary_type}.{name} has no type"))?;
+            .ok_or_else(|| EthError::TypedFieldNoType {
+                primary_type: primary_type.to_string(),
+                name: name.to_string(),
+            })?;
         if !seen.insert(name.to_string()) {
-            bail!("EIP-712 {primary_type} has duplicate field {name:?}");
+            return Err(EthError::TypedFieldDuplicate {
+                primary_type: primary_type.to_string(),
+                name: name.to_string(),
+            });
         }
         let decl = params
             .get(name)
-            .ok_or_else(|| anyhow!("EIP-712 field {name:?} has no parameter declaration"))?;
+            .ok_or_else(|| EthError::TypedFieldUndeclared {
+                name: name.to_string(),
+            })?;
         validate_param(name, solidity_type, decl, require_write_limits)?;
         compiled.push(CompiledParam {
             name: name.to_string(),

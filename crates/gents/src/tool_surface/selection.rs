@@ -39,16 +39,18 @@ impl AgentToolConfig {
         let mut resolved = Self::from_document(tools)?;
         let mut by_id = rapidhash::RapidHashMap::default();
         for target in targets {
-            anyhow::ensure!(
-                by_id
-                    .insert(
-                        (target.node_did.as_str(), target.target_id.as_str()),
-                        target
-                    )
-                    .is_none(),
-                "duplicate scoped AgentTarget {}",
-                target.target_id
-            );
+            if !(by_id
+                .insert(
+                    (target.node_did.as_str(), target.target_id.as_str()),
+                    target,
+                )
+                .is_none())
+            {
+                return Err(super::ToolSurfaceError::DuplicateScopedAgentTarget {
+                    target_id: target.target_id.clone(),
+                }
+                .into());
+            }
         }
         let mut names = rapidhash::RapidHashSet::default();
         for id in tools
@@ -59,18 +61,21 @@ impl AgentToolConfig {
         {
             let target = by_id
                 .get(&(tools.node_did.as_str(), id.as_str()))
-                .ok_or_else(|| anyhow::anyhow!("missing same-owner AgentTarget {id}"))?;
-            anyhow::ensure!(
-                !target.name.trim().is_empty()
-                    && !target.target_node_did.trim().is_empty()
-                    && !target.agent_id.trim().is_empty(),
-                "invalid AgentTarget {id}"
-            );
-            anyhow::ensure!(
-                names.insert(target.name.as_str()),
-                "duplicate agent target name {}",
-                target.name
-            );
+                .ok_or_else(|| super::ToolSurfaceError::MissingSameOwnerAgentTarget {
+                    id: id.clone(),
+                })?;
+            if !(!target.name.trim().is_empty()
+                && !target.target_node_did.trim().is_empty()
+                && !target.agent_id.trim().is_empty())
+            {
+                return Err(super::ToolSurfaceError::InvalidAgentTarget { id: id.clone() }.into());
+            }
+            if !names.insert(target.name.as_str()) {
+                return Err(super::ToolSurfaceError::DuplicateAgentTargetName {
+                    name: target.name.clone(),
+                }
+                .into());
+            }
             resolved.targets.push((*target).clone());
         }
         Ok(resolved)

@@ -40,7 +40,117 @@ use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::{Context, Result};
+use anyhow::Result;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ToolSurfaceError {
+    #[error("unknown file tool mode {mode}")]
+    UnknownFileToolMode { mode: String },
+    #[error("unknown bash mode {mode}")]
+    UnknownBashMode { mode: String },
+    #[error("tool_policy_version is required")]
+    ToolPolicyVersionRequired,
+    #[error("unknown tool policy version {version:?}")]
+    UnknownToolPolicyVersion { version: String },
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("invalid lsp_config: {error}")]
+    InvalidLspConfig { error: String },
+    #[error("agent {agent_name} requires MCP services but meta tools are disabled by policy")]
+    McpServicesRequireMeta { agent_name: String },
+    #[error("agent {agent_name} requires MCP service {service_id:?}, but the effective tool policy denies it")]
+    McpServiceDenied {
+        agent_name: String,
+        service_id: String,
+    },
+    #[error("agent {agent_name} requires MCP service {service_id:?}, but its MCP allowlist does not permit it")]
+    McpServiceNotAllowlisted {
+        agent_name: String,
+        service_id: String,
+    },
+    #[error("agent {agent_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool")]
+    BackgroundableToolUnregistered { agent_name: String, name: String },
+    #[error("required MCP services are not measured available: {services}")]
+    McpServicesUnmeasured { services: String },
+    #[error("duplicate scoped AgentTarget {target_id}")]
+    DuplicateScopedAgentTarget { target_id: String },
+    #[error("missing same-owner AgentTarget {id}")]
+    MissingSameOwnerAgentTarget { id: String },
+    #[error("invalid AgentTarget {id}")]
+    InvalidAgentTarget { id: String },
+    #[error("duplicate agent target name {name}")]
+    DuplicateAgentTargetName { name: String },
+    #[error("agent {agent_id} has active host tools but no explicit root under current WorkspaceRoot policy")]
+    ActiveHostToolsWithoutRoot { agent_id: String },
+    #[error("agent {agent_id} persisted root {} re-resolved to {} at the execution boundary", selected_root.display(), resolved_root.display())]
+    RootReresolved {
+        agent_id: String,
+        selected_root: std::path::PathBuf,
+        resolved_root: std::path::PathBuf,
+    },
+    #[error("agent {agent_id} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {reason}", selected_root.display())]
+    RootNotAdmittedAtBoundary {
+        agent_id: String,
+        selected_root: std::path::PathBuf,
+        reason: String,
+    },
+    #[error("configured tool root must be absolute, got {}", root.display())]
+    ConfiguredRootNotAbsolute { root: std::path::PathBuf },
+    #[error("configured WorkspaceRoot policy requires an explicit root")]
+    WorkspaceRootRequiresExplicitRoot,
+    #[error(
+        "Tools.host.root {root:?} is not admitted by published WorkspaceRoot policy: {reason}"
+    )]
+    RootNotAdmitted { root: String, reason: String },
+    #[error("active host tools require an explicit root in Tools.host.root while WorkspaceRoot policy is configured. Set host.root to an admitted absolute workspace path (a sibling of host.files and host.bash). In config, read tools get first, then tools update with set.host preserving its other fields; do not put root inside host.files")]
+    ActiveHostToolsRequireRoot,
+    #[error("readwrite file tools require a configured tool root")]
+    ReadWriteFileToolsRequireRoot,
+    #[error("unrestricted bash requires a configured tool root")]
+    UnrestrictedBashRequiresRoot,
+    #[error("agent {agent_name} file tool root {} escapes operator tool root {}: {reason}", selection_root.display(), ceiling_root.display())]
+    FileToolRootEscapes {
+        agent_name: String,
+        selection_root: std::path::PathBuf,
+        ceiling_root: std::path::PathBuf,
+        reason: String,
+    },
+    #[error("MCP availability requires node scope")]
+    McpAvailabilityRequiresNodeScope,
+    #[error("MCP availability received foreign service")]
+    ForeignMcpService,
+    #[error("duplicate scoped MCP service")]
+    DuplicateScopedMcpService,
+    #[error("MCP health query returned no rows array")]
+    McpHealthRowsMissing,
+    #[error("datastore tools require the node identity")]
+    DatastoreRequiresIdentity,
+    #[error("datastore identity differs from node DID")]
+    DatastoreIdentityMismatch,
+    #[error("write tool `{tool_name}` reached registration with an invalid declaration")]
+    WriteToolInvalid { tool_name: String },
+    #[error("write tool `{tool_name}` reached registration with a duplicate tool name")]
+    WriteToolDuplicate { tool_name: String },
+    #[error("missing notification policy")]
+    MissingNotificationPolicy,
+    #[error("write tool `{tool_name}` on collection `{collection}`: {error}. Declared by datastore surface `{surface}`; inspect with config datastore get, then use datastore update to correct its fields or schema collection update to correct the existing collection")]
+    WriteToolNotWellFormed {
+        tool_name: String,
+        collection: String,
+        error: String,
+        surface: String,
+    },
+    #[error("query tool `{tool_name}` reached registration with an invalid declaration")]
+    QueryToolInvalid { tool_name: String },
+    #[error("query tool `{tool_name}` reached registration with a duplicate tool name")]
+    QueryToolDuplicate { tool_name: String },
+    #[error("eth query tool `{name}` reached registration with a duplicate tool name")]
+    EthQueryToolDuplicate { name: String },
+    #[error("eth call tool `{name}` reached registration with a duplicate tool name")]
+    EthCallToolDuplicate { name: String },
+    #[error("plugin tool `{name}` has the same name as another tool; rename one of them")]
+    PluginToolDuplicate { name: String },
+}
 
 use crate::defra_query::{
     build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
@@ -387,11 +497,10 @@ impl ToolSurface {
             let identity = runtime
                 .identity
                 .as_ref()
-                .context("datastore tools require the node identity")?;
-            anyhow::ensure!(
-                identity.did() == runtime.node_did,
-                "datastore identity differs from node DID"
-            );
+                .ok_or(ToolSurfaceError::DatastoreRequiresIdentity)?;
+            if !(identity.did() == runtime.node_did) {
+                return Err(ToolSurfaceError::DatastoreIdentityMismatch.into());
+            }
             Some(identity::Did::new(identity.did().to_owned())?)
         } else {
             None
@@ -431,23 +540,23 @@ impl ToolSurface {
         for decl in &self.write_tools {
             crate::mailbox::validate_mailbox_write_decl(decl)?;
             if !decl.is_well_formed() || !decl.output_obligation_is_well_formed() {
-                anyhow::bail!(
-                    "write tool `{}` reached registration with an invalid declaration",
-                    decl.tool_name
-                );
+                return Err(ToolSurfaceError::WriteToolInvalid {
+                    tool_name: decl.tool_name.clone(),
+                }
+                .into());
             }
             if !registered_names.insert(decl.tool_name.clone()) {
-                anyhow::bail!(
-                    "write tool `{}` reached registration with a duplicate tool name",
-                    decl.tool_name
-                );
+                return Err(ToolSurfaceError::WriteToolDuplicate {
+                    tool_name: decl.tool_name.clone(),
+                }
+                .into());
             }
             if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
                 tools.push(Box::new(crate::mailbox::MailboxCreateTool::new(
                     runtime.node.clone(),
                     decl.notification
                         .clone()
-                        .context("missing notification policy")?,
+                        .ok_or(ToolSurfaceError::MissingNotificationPolicy)?,
                 )) as Box<dyn ToolDyn>);
             } else {
                 let tool = BoundedWriteTool::new(
@@ -456,10 +565,17 @@ impl ToolSurface {
                 )
                 .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
                 tool.ensure_well_formed().map_err(|error| {
-                    anyhow::anyhow!(
-                        "write tool `{}` on collection `{}`: {error:#}. Declared by datastore surface `{}`; inspect with config datastore get, then use datastore update to correct its fields or schema collection update to correct the existing collection",
-                        decl.tool_name, decl.collection, self.surface_of_tool.get(&decl.tool_name).map(String::as_str).unwrap_or("unresolved")
-                    )
+                    ToolSurfaceError::WriteToolNotWellFormed {
+                        tool_name: decl.tool_name.clone(),
+                        collection: decl.collection.clone(),
+                        error: format!("{error:#}"),
+                        surface: self
+                            .surface_of_tool
+                            .get(&decl.tool_name)
+                            .map(String::as_str)
+                            .unwrap_or("unresolved")
+                            .to_owned(),
+                    }
                 })?;
                 tools.push(Box::new(tool) as Box<dyn ToolDyn>);
             }
@@ -472,36 +588,30 @@ impl ToolSurface {
             .with_actor(datastore_actor.clone().expect("query actor was validated"))
             .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
             if !tool.is_well_formed() {
-                anyhow::bail!(
-                    "query tool `{}` reached registration with an invalid declaration",
-                    decl.tool_name
-                );
+                return Err(ToolSurfaceError::QueryToolInvalid {
+                    tool_name: decl.tool_name.clone(),
+                }
+                .into());
             }
             if !registered_names.insert(tool.name()) {
-                anyhow::bail!(
-                    "query tool `{}` reached registration with a duplicate tool name",
-                    decl.tool_name
-                );
+                return Err(ToolSurfaceError::QueryToolDuplicate {
+                    tool_name: decl.tool_name.clone(),
+                }
+                .into());
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for query in &self.eth_queries {
             let tool = crate::eth::EthQueryTool::new(query.clone());
             if !registered_names.insert(tool.name()) {
-                anyhow::bail!(
-                    "eth query tool `{}` reached registration with a duplicate tool name",
-                    tool.name()
-                );
+                return Err(ToolSurfaceError::EthQueryToolDuplicate { name: tool.name() }.into());
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for call in &self.eth_calls {
             let tool = crate::eth::EthCallTool::new(call.clone(), runtime.node.clone());
             if !registered_names.insert(tool.name()) {
-                anyhow::bail!(
-                    "eth call tool `{}` reached registration with a duplicate tool name",
-                    tool.name()
-                );
+                return Err(ToolSurfaceError::EthCallToolDuplicate { name: tool.name() }.into());
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
@@ -515,10 +625,7 @@ impl ToolSurface {
             )?
             .with_data_node(runtime.node.clone());
             if !registered_names.insert(tool.name()) {
-                anyhow::bail!(
-                    "plugin tool `{}` has the same name as another tool; rename one of them",
-                    tool.name()
-                );
+                return Err(ToolSurfaceError::PluginToolDuplicate { name: tool.name() }.into());
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }

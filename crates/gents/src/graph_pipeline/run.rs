@@ -17,6 +17,7 @@ use crate::graphql::{
     document_composite_version, escape_graphql_string, validate_collection_identifier,
 };
 
+use super::runtime::GraphPipelineError;
 use super::{
     graph_run_terminal_decision, verify_graph_plan_digest, GraphPlan, PlannedResult,
     ResultCardinality,
@@ -228,10 +229,12 @@ fn rows<'a>(response: &'a Value, name: &str) -> &'a [Value] {
         .unwrap_or_default()
 }
 
-fn required_string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
+fn required_string<'a>(row: &'a Value, field: &str) -> Result<&'a str, GraphPipelineError> {
     row.get(field)
         .and_then(Value::as_str)
-        .with_context(|| format!("GraphRun is missing {field}"))
+        .ok_or_else(|| GraphPipelineError::GraphRunFieldMissing {
+            field: field.to_owned(),
+        })
 }
 
 #[async_trait::async_trait]
@@ -326,13 +329,13 @@ async fn load_plan(
     Ok(plan)
 }
 
-fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
+fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>, GraphPipelineError> {
     let nodes_by_trigger: BTreeMap<String, String> = super::routes::planned_routes(plan)?
         .into_iter()
         .map(|route| (route.id, route.node_id.to_owned()))
         .collect();
     if nodes_by_trigger.is_empty() {
-        anyhow::bail!("pinned graph plan has no materialized trigger routes");
+        return Err(GraphPipelineError::PlanHasNoTriggerRoutes);
     }
     Ok(nodes_by_trigger)
 }
@@ -408,16 +411,16 @@ fn current_commit_cid(row: &Value) -> Option<String> {
 fn graph_run_deadline(
     started_at: Option<&str>,
     max_runtime_secs: u64,
-) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>> {
+) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, GraphPipelineError> {
     started_at
         .map(|started_at| {
             let started_at = chrono::DateTime::parse_from_rfc3339(started_at)
-                .context("GraphRun started_at is not RFC3339")?;
+                .map_err(GraphPipelineError::StartedAtNotRfc3339)?;
             let seconds = i64::try_from(max_runtime_secs)
-                .context("graph max_runtime_secs exceeds the supported clock range")?;
+                .map_err(GraphPipelineError::MaxRuntimeOutOfRange)?;
             started_at
                 .checked_add_signed(chrono::TimeDelta::seconds(seconds))
-                .context("graph run deadline exceeds the supported clock range")
+                .ok_or(GraphPipelineError::DeadlineOutOfRange)
         })
         .transpose()
 }

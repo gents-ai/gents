@@ -10,6 +10,92 @@ use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
 use crate::session_origin::SessionScope;
 use crate::tool_surface::AgentToolConfig;
 
+#[derive(Debug, thiserror::Error)]
+pub enum SessionMessageError {
+    #[error("time filters require RFC 3339 timestamps")]
+    InvalidTimeFilter(#[source] chrono::ParseError),
+    #[error("limit must be between 1 and 100")]
+    InvalidListLimit,
+    #[error("status must be busy or idle")]
+    InvalidStatusFilter,
+    #[error("invalid relationship")]
+    InvalidRelationshipFilter,
+    #[error("trigger query omitted request rows")]
+    TriggerRowsOmitted,
+    #[error("cursor query omitted session rows")]
+    CursorRowsOmitted,
+    #[error("session list omitted canonical rows")]
+    ListRowsOmitted,
+    #[error("session omitted physical identity")]
+    SessionIdentityMissing,
+    #[error("listed session is no longer messageable")]
+    ListedSessionNotMessageable,
+    #[error("session_id is required; discover it with agent_session_list")]
+    SessionIdRequired,
+    #[error("limit must be between 1 and 6")]
+    InvalidReadLimit,
+    #[error("cursor is supported only for recent messages")]
+    CursorRequiresRecentView,
+    #[error("invalid recent cursor; restart agent_session_read with view=recent")]
+    InvalidRecentCursor(#[source] serde_json::Error),
+    #[error("cursor belongs to another session; restart agent_session_read with view=recent")]
+    CursorOtherSession,
+    #[error("invalid cursor; next call: agent_session_read with session_id and view=recent")]
+    InvalidCursor(#[source] serde_json::Error),
+    #[error("session inspection omitted {collection}")]
+    InspectionOmitted { collection: String },
+    #[error("decoding queued session input for request {request_id}")]
+    DecodeQueuedInput { request_id: serde_json::Value },
+    #[error("decoding inspected request")]
+    DecodeInspectedRequest(#[source] serde_json::Error),
+    #[error("canonical tool summary references an unavailable call")]
+    ToolSummaryUnavailable,
+    #[error("session is not messageable; discover available sessions with agent_session_list")]
+    SessionNotMessageable,
+    #[error("agent_session_read cannot address the calling session; use sessions to inspect this conversation")]
+    CallingSessionRead,
+    #[error("inspected session is unavailable or ambiguous")]
+    InspectedSessionAmbiguous,
+    #[error("inspected session is no longer messageable")]
+    InspectedSessionNotMessageable,
+    #[error("The target chat's Goal state is still syncing. Read the chat and retry the message.")]
+    GoalStateSyncing,
+    #[error("session-message target Agent differs from its canonical session")]
+    TargetAgentMismatch,
+    #[error("the target session moved to hop {current} while this message was planned")]
+    TargetSessionMoved { current: u32 },
+    #[error("decode configured Task")]
+    TaskDecode(#[source] serde_json::Error),
+    #[error("session-message row lacks physical identity")]
+    RowIdentityMissing,
+    #[error("session-message row disappeared after its commit failed")]
+    RowDisappeared,
+    #[error("session-message row was altered or is no longer pending")]
+    RowNotPending,
+    #[error("active session request lacks physical identity")]
+    ActiveRequestIdentityMissing,
+    #[error("active session request disappeared")]
+    ActiveRequestDisappeared,
+    #[error("active request lacks physical identity")]
+    ActiveRequestLacksIdentity,
+    #[error("caused request lacks physical identity")]
+    CausedRequestIdentityMissing,
+    #[error("caused request lacks node_did")]
+    CausedRequestNodeDidMissing,
+    #[error("session-message row lacks its calling request document")]
+    RowCallingRequestMissing,
+    #[error("session-message calling request disappeared")]
+    CallingRequestDisappeared,
+    #[error("tool-call summary row omitted _docID")]
+    ToolSummaryDocIdMissing,
+    #[error(
+        "cursor belongs to another session scope; restart agent_session_read with view=recent"
+    )]
+    CursorOtherSessionScope,
+    #[error("session inspection requires a valid caller DID")]
+    InvalidCallerDid,
+}
+
 #[cfg(test)]
 mod goal_input_tests;
 
@@ -184,9 +270,9 @@ pub(crate) async fn load_configured_task(
         },
     )
     .await?;
-    loaded
-        .map(|value| serde_json::from_value(value).context("decode configured Task"))
-        .transpose()
+    Ok(loaded
+        .map(|value| serde_json::from_value(value).map_err(SessionMessageError::TaskDecode))
+        .transpose()?)
 }
 
 pub(crate) fn render_task_body(
@@ -337,10 +423,9 @@ async fn target_goal_assignment(
                     else {
                         return Ok(None);
                     };
-                    anyhow::ensure!(
-                        session.session.agent_id == target.agent_id,
-                        "session-message target Agent differs from its canonical session"
-                    );
+                    if session.session.agent_id != target.agent_id {
+                        return Err(SessionMessageError::TargetAgentMismatch.into());
+                    }
                     let goal = crate::goal::load_canonical_goal_in_txn(
                         txn,
                         &target.node_did,
@@ -374,7 +459,7 @@ async fn target_goal_assignment(
     match state {
         crate::goal::SessionGoalObservationState::NoReadableSession => Ok(None),
         crate::goal::SessionGoalObservationState::Unknown => {
-            anyhow::bail!("The target chat's Goal state is still syncing. Read the chat and retry the message.")
+            Err(SessionMessageError::GoalStateSyncing.into())
         }
         crate::goal::SessionGoalObservationState::Observed(observation) => {
             Ok(observation.goal.and_then(|goal| {
@@ -423,11 +508,11 @@ pub(crate) async fn plan(
                 let active_doc_id = active
                     .doc_id
                     .as_deref()
-                    .context("active session request lacks physical identity")?;
+                    .ok_or(SessionMessageError::ActiveRequestIdentityMissing)?;
                 Some(
                     crate::request_binding::load_agent_request_by_doc_id(node, active_doc_id)
                         .await?
-                        .context("active session request disappeared")?,
+                        .ok_or(SessionMessageError::ActiveRequestDisappeared)?,
                 )
             }
             None => None,
@@ -550,7 +635,7 @@ pub(crate) async fn commit(
     };
     let doc_id = lifecycle
         .doc_id()
-        .context("session-message row lacks physical identity")?
+        .ok_or(SessionMessageError::RowIdentityMissing)?
         .to_owned();
     let durable = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
         node.clone(),
@@ -560,7 +645,7 @@ pub(crate) async fn commit(
         lifecycle.requester_did(),
     )
     .await?
-    .context("session-message row disappeared after its commit failed")?;
+    .ok_or(SessionMessageError::RowDisappeared)?;
     if durable.state() == crate::tool_call_lifecycle::ToolCallState::Pending {
         return Err(error);
     }
@@ -676,10 +761,9 @@ async fn ensure_planned_hop_current(
     let current =
         crate::session::load_session_current_hop_in_txn(txn, &create.node_did, &create.session_id)
             .await?;
-    anyhow::ensure!(
-        create.request_hop >= current,
-        "the target session moved to hop {current} while this message was planned"
-    );
+    if !(create.request_hop >= current) {
+        return Err(SessionMessageError::TargetSessionMoved { current }.into());
+    }
     Ok(())
 }
 
@@ -687,9 +771,11 @@ async fn start_dispatch(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     start: &crate::tool_call_lifecycle::delivery::DispatchStart,
 ) -> Result<chrono::DateTime<chrono::Utc>> {
-    crate::tool_call_lifecycle::delivery::start_running_in_txn(txn, start, None)
-        .await?
-        .context("session-message row was altered or is no longer pending")
+    Ok(
+        crate::tool_call_lifecycle::delivery::start_running_in_txn(txn, start, None)
+            .await?
+            .ok_or(SessionMessageError::RowNotPending)?,
+    )
 }
 
 pub(crate) async fn load_receipt(
@@ -728,7 +814,7 @@ pub(crate) async fn observe_caused_request(
 ) -> Result<CausedObservation> {
     let tool_call_doc_id = lifecycle
         .doc_id()
-        .context("session-message row lacks physical identity")?;
+        .ok_or(SessionMessageError::RowIdentityMissing)?;
     let Some(receipt) = load_receipt(
         node,
         tool_call_doc_id,
@@ -858,7 +944,7 @@ pub async fn interrupt_session(
         active
             .doc_id
             .as_deref()
-            .context("active request lacks physical identity")?,
+            .ok_or(SessionMessageError::ActiveRequestLacksIdentity)?,
         &target.node_did,
         active.requester_did.as_deref(),
     )
@@ -913,11 +999,11 @@ pub(crate) async fn kill_caused_request(
     let doc_id = caused
         .doc_id
         .as_deref()
-        .context("caused request lacks physical identity")?;
+        .ok_or(SessionMessageError::CausedRequestIdentityMissing)?;
     let node_did = caused
         .node_did
         .as_deref()
-        .context("caused request lacks node_did")?;
+        .ok_or(SessionMessageError::CausedRequestNodeDidMissing)?;
     let local = node_did == lifecycle.node_did();
     if !terminal {
         let interrupted = crate::interrupt::interrupt_request_by_doc_id(
@@ -972,7 +1058,7 @@ pub(crate) async fn kill(
             &calling_request_id,
             lifecycle
                 .doc_id()
-                .context("session-message row lacks physical identity")?,
+                .ok_or(SessionMessageError::RowIdentityMissing)?,
             lifecycle.tool_name(),
             "cancelled",
             "",
@@ -993,11 +1079,11 @@ pub(crate) async fn calling_request_id(
     }
     let doc_id = lifecycle
         .request_doc_id()
-        .context("session-message row lacks its calling request document")?;
+        .ok_or(SessionMessageError::RowCallingRequestMissing)?;
     Ok(
         crate::request_binding::load_agent_request_by_doc_id(node, doc_id)
             .await?
-            .context("session-message calling request disappeared")?
+            .ok_or(SessionMessageError::CallingRequestDisappeared)?
             .request_id,
     )
 }

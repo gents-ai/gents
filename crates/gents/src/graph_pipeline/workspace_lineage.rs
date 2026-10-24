@@ -1,3 +1,4 @@
+use super::super::runtime::GraphPipelineError;
 use super::super::StageTarget;
 use super::*;
 use crate::lifecycle::WorkspaceLineage;
@@ -21,11 +22,10 @@ fn matches_hint(hint: &Option<String>, expected: &Option<String>) -> bool {
     present(hint.as_deref()).is_none_or(|value| Some(value) == present(expected.as_deref()))
 }
 
-fn validate_tuple(lineage: &WorkspaceLineage) -> Result<()> {
-    anyhow::ensure!(
-        lineage.workspace_id.is_some() || lineage.workspace_seal_hash.is_none(),
-        "unbound graph workspace cannot carry a seal"
-    );
+fn validate_tuple(lineage: &WorkspaceLineage) -> Result<(), GraphPipelineError> {
+    if lineage.workspace_id.is_none() && lineage.workspace_seal_hash.is_some() {
+        return Err(GraphPipelineError::UnboundWorkspaceSeal);
+    }
     Ok(())
 }
 
@@ -53,12 +53,14 @@ fn from_row(row: &AgentRequestRow) -> WorkspaceLineage {
     }
 }
 
-fn from_input(input: &Value) -> Result<WorkspaceLineage> {
-    let field = |name: &str| -> Result<Option<String>> {
+fn from_input(input: &Value) -> Result<WorkspaceLineage, GraphPipelineError> {
+    let field = |name: &str| -> Result<Option<String>, GraphPipelineError> {
         match input.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(value)) => Ok(present(Some(value)).map(str::to_owned)),
-            _ => anyhow::bail!("graph input workspace field {name} must be a string"),
+            _ => Err(GraphPipelineError::WorkspaceFieldNotString {
+                name: name.to_owned(),
+            }),
         }
     };
     Ok(WorkspaceLineage {

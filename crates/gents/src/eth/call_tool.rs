@@ -6,7 +6,7 @@ use std::sync::Arc;
 use alloy_dyn_abi::{DynSolValue, FunctionExt, JsonAbiExt};
 use alloy_json_abi::Function;
 use alloy_primitives::{keccak256, Address, I256, U256};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail};
 use k256::elliptic_curve::zeroize::Zeroizing;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -20,6 +20,7 @@ use super::calls::{
     compile_params, compile_typed_params, native_transfer_function, parse_abi_function, parse_u128,
     require_address, typed_domain_chain_id, CallDecl, CompiledParam,
 };
+use super::error::{EthError, Result};
 use super::keys::{
     address_from_secret, attestation_payload, binding_storage_key, decode_attestation,
     ChainKeyMaterialStore, KeyringChainKeyStore, KEY_BACKEND_KEYRING,
@@ -75,7 +76,7 @@ impl ResolvedEthCall {
         rpc_timeout: std::time::Duration,
     ) -> Result<Vec<Self>> {
         if rpc_timeout.is_zero() {
-            bail!("eth rpc_timeout_secs must be positive");
+            return Err(EthError::ZeroTimeout);
         }
         let mut out = Vec::new();
         let binding_id = binding_id
@@ -135,7 +136,9 @@ impl ResolvedEthCall {
                     max_fee_per_gas,
                 } => {
                     let Some(binding_id) = binding_id.clone() else {
-                        bail!("write tool {tool_name} requires a chain key binding");
+                        return Err(EthError::WriteRequiresBinding {
+                            tool_name: tool_name.clone(),
+                        });
                     };
                     let function = parse_abi_function(signature)?;
                     let params = compile_params(&function, params, true)?;
@@ -166,7 +169,9 @@ impl ResolvedEthCall {
                     max_fee_per_gas,
                 } => {
                     let Some(binding_id) = binding_id.clone() else {
-                        bail!("native_transfer {tool_name} requires a chain key binding");
+                        return Err(EthError::NativeTransferRequiresBinding {
+                            tool_name: tool_name.clone(),
+                        });
                     };
                     let params = compile_params(&native_transfer_function()?, params, true)?;
                     out.push(Self {
@@ -197,16 +202,24 @@ impl ResolvedEthCall {
                     description,
                 } => {
                     let Some(binding_id) = binding_id.clone() else {
-                        bail!("sign_typed_data {tool_name} requires a chain key binding");
+                        return Err(EthError::SignTypedRequiresBinding {
+                            tool_name: tool_name.clone(),
+                        });
                     };
                     match typed_domain_chain_id(domain)? {
                         Some(domain_chain_id) if domain_chain_id == chain_id => {}
-                        Some(_) => bail!(
-                            "sign_typed_data {tool_name} domain chainId does not match EthTool chain_id {chain_id}"
-                        ),
-                        None => bail!(
-                            "sign_typed_data {tool_name} domain requires chainId matching EthTool chain_id {chain_id}"
-                        ),
+                        Some(_) => {
+                            return Err(EthError::SignTypedChainMismatch {
+                                tool_name: tool_name.clone(),
+                                chain_id,
+                            })
+                        }
+                        None => {
+                            return Err(EthError::SignTypedChainMissing {
+                                tool_name: tool_name.clone(),
+                                chain_id,
+                            })
+                        }
                     }
                     let params = compile_typed_params(types, primary_type, params, true)?;
                     out.push(Self {
@@ -622,7 +635,7 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
 async fn load_signing_key(
     node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
-) -> Result<[u8; 32]> {
+) -> anyhow::Result<[u8; 32]> {
     load_signing_key_with_store(node, resolved, &KeyringChainKeyStore).await
 }
 
@@ -630,7 +643,7 @@ async fn load_signing_key_with_store(
     node: &std::sync::Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     store: &dyn ChainKeyMaterialStore,
-) -> Result<[u8; 32]> {
+) -> anyhow::Result<[u8; 32]> {
     let binding_id = resolved
         .binding_id
         .as_deref()
@@ -743,21 +756,31 @@ fn bind_params(
         .keys()
         .find(|name| !model_names.contains(name.as_str()))
     {
-        bail!("undeclared model param {extra}");
+        return Err(EthError::UndeclaredModelParam {
+            extra: extra.to_string(),
+        });
     }
 
     let mut out = Vec::with_capacity(params.len());
     for param in params {
         let value = match param.decl.source.trim() {
-            "model" => model
-                .get(&param.name)
-                .cloned()
-                .ok_or_else(|| anyhow!("missing model param {}", param.name))?,
+            "model" => {
+                model
+                    .get(&param.name)
+                    .cloned()
+                    .ok_or_else(|| EthError::MissingModelParam {
+                        name: param.name.clone(),
+                    })?
+            }
             "fixed" => param.decl.value.clone().unwrap_or(Value::Null),
             "runtime" => {
-                json!(self_address.ok_or_else(|| anyhow!("runtime self_address is unavailable"))?)
+                json!(self_address.ok_or(EthError::SelfAddressUnavailable)?)
             }
-            other => bail!("unsupported param source {other}"),
+            other => {
+                return Err(EthError::UnsupportedParamSource {
+                    kind: other.to_string(),
+                })
+            }
         };
         enforce_constraints(param, &value)?;
         out.push(value);
@@ -769,16 +792,17 @@ fn enforce_constraints(param: &CompiledParam, value: &Value) -> Result<()> {
     if let Some(allowlist) = &param.decl.address_allowlist {
         let address = value
             .as_str()
-            .ok_or_else(|| anyhow!("param {} address must be a string", param.name))?;
+            .ok_or_else(|| EthError::ParamAddressNotString {
+                name: param.name.clone(),
+            })?;
         if !allowlist
             .iter()
             .any(|allowed| allowed.eq_ignore_ascii_case(address))
         {
-            bail!(
-                "param {} address {} is not on the allowlist",
-                param.name,
-                address
-            );
+            return Err(EthError::ParamAddressNotAllowed {
+                name: param.name.clone(),
+                address: address.to_string(),
+            });
         }
     }
     if let Some(values) = &param.decl.enum_values {
@@ -790,31 +814,46 @@ fn enforce_constraints(param: &CompiledParam, value: &Value) -> Result<()> {
                 allowed == &actual
             }
         }) {
-            bail!("param {} value {} is not in the enum", param.name, actual);
+            return Err(EthError::ParamNotInEnum {
+                name: param.name.clone(),
+                value: actual,
+            });
         }
     }
     if param.solidity_type.starts_with("uint") {
         let actual = parse_uint(value)?;
         if let Some(min) = &param.decl.min {
             if actual < parse_uint(&json!(min))? {
-                bail!("param {} is below min {}", param.name, min);
+                return Err(EthError::ParamBelowMin {
+                    name: param.name.clone(),
+                    min: min.clone(),
+                });
             }
         }
         if let Some(max) = &param.decl.max {
             if actual > parse_uint(&json!(max))? {
-                bail!("param {} exceeds max {}", param.name, max);
+                return Err(EthError::ParamExceedsMax {
+                    name: param.name.clone(),
+                    max: max.clone(),
+                });
             }
         }
     } else if param.solidity_type.starts_with("int") {
         let actual = parse_int(value)?;
         if let Some(min) = &param.decl.min {
             if actual < parse_int(&json!(min))? {
-                bail!("param {} is below min {}", param.name, min);
+                return Err(EthError::ParamBelowMin {
+                    name: param.name.clone(),
+                    min: min.clone(),
+                });
             }
         }
         if let Some(max) = &param.decl.max {
             if actual > parse_int(&json!(max))? {
-                bail!("param {} exceeds max {}", param.name, max);
+                return Err(EthError::ParamExceedsMax {
+                    name: param.name.clone(),
+                    max: max.clone(),
+                });
             }
         }
     }
@@ -826,7 +865,9 @@ fn constraint_text(value: &Value) -> Result<String> {
         Value::String(value) => Ok(value.clone()),
         Value::Number(value) => Ok(value.to_string()),
         Value::Bool(value) => Ok(value.to_string()),
-        other => bail!("enum constraint does not support value {other}"),
+        other => Err(EthError::EnumConstraintValue {
+            value: other.clone(),
+        }),
     }
 }
 
@@ -835,9 +876,10 @@ fn gas_caps(max_gas: Option<u64>, max_fee_per_gas: Option<&str>) -> Result<GasCa
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Some(text) => {
-            Some(parse_u128(text).map_err(|error| anyhow!("max_fee_per_gas {text}: {error}"))?)
-        }
+        Some(text) => Some(parse_u128(text).map_err(|error| EthError::MaxFeeParse {
+            text: text.to_string(),
+            error,
+        })?),
         None => None,
     };
     Ok(GasCaps {
@@ -848,23 +890,28 @@ fn gas_caps(max_gas: Option<u64>, max_fee_per_gas: Option<&str>) -> Result<GasCa
 
 fn encode_function(function: &Function, args: &[Value]) -> Result<String> {
     if function.inputs.len() != args.len() {
-        bail!(
-            "signature {} expects {} args, got {}",
-            function.signature(),
-            function.inputs.len(),
-            args.len()
-        );
+        return Err(EthError::SignatureArgCount {
+            signature: function.signature(),
+            expected: function.inputs.len(),
+            got: args.len(),
+        });
     }
     let mut values = Vec::with_capacity(args.len());
     for (param, value) in function.inputs.iter().zip(args) {
         values.push(
-            json_to_dyn(&param.ty, value)
-                .with_context(|| format!("encoding argument {} as {}", param.name, param.ty))?,
+            json_to_dyn(&param.ty, value).map_err(|source| EthError::EncodeArgument {
+                name: param.name.clone(),
+                ty: param.ty.clone(),
+                source: Box::new(source),
+            })?,
         );
     }
     let encoded = function
         .abi_encode_input(&values)
-        .map_err(|error| anyhow!("ABI encode {}: {error}", function.signature()))?;
+        .map_err(|error| EthError::AbiEncode {
+            signature: function.signature(),
+            error,
+        })?;
     Ok(format!("0x{}", hex_encode(&encoded)))
 }
 
@@ -890,53 +937,61 @@ fn decode_or_hex(function: &Function, result: &Value) -> Result<String, ToolErro
 fn json_to_dyn(ty: &str, value: &Value) -> Result<DynSolValue> {
     let ty = ty.trim();
     if ty == "address" {
-        let text = value
-            .as_str()
-            .ok_or_else(|| anyhow!("address must be a string"))?;
+        let text = value.as_str().ok_or(EthError::AddressNotString)?;
         let address: Address = text
-            .parse()
-            .map_err(|error| anyhow!("address {text}: {error}"))?;
+            .parse::<Address>()
+            .map_err(|error| EthError::AddressParse {
+                text: text.to_string(),
+                error,
+            })?;
         return Ok(DynSolValue::Address(address));
     }
     if ty == "bool" {
         let flag = value
             .as_bool()
             .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-            .ok_or_else(|| anyhow!("bool expected"))?;
+            .ok_or(EthError::BoolExpected)?;
         return Ok(DynSolValue::Bool(flag));
     }
     if ty == "string" {
-        let text = value.as_str().ok_or_else(|| anyhow!("string expected"))?;
+        let text = value.as_str().ok_or(EthError::StringExpected)?;
         return Ok(DynSolValue::String(text.to_string()));
     }
     if let Some(size) = ty.strip_prefix("bytes").filter(|size| !size.is_empty()) {
-        let size: usize = size
-            .parse()
-            .with_context(|| format!("invalid fixed bytes type {ty}"))?;
+        let size: usize = size.parse().map_err(|source| EthError::FixedBytesType {
+            ty: ty.to_string(),
+            source,
+        })?;
         if !(1..=32).contains(&size) {
-            bail!("fixed bytes size must be between 1 and 32, got {size}");
+            return Err(EthError::FixedBytesSize { size });
         }
         let text = value
             .as_str()
-            .ok_or_else(|| anyhow!("{ty} must be a hex string"))?;
+            .ok_or_else(|| EthError::HexStringExpected { ty: ty.to_string() })?;
         let bytes = decode_hex(text)?;
         if bytes.len() != size {
-            bail!("{ty} requires exactly {size} bytes, got {}", bytes.len());
+            return Err(EthError::FixedBytesLength {
+                ty: ty.to_string(),
+                size,
+                got: bytes.len(),
+            });
         }
         let mut padded = [0u8; 32];
         padded[..size].copy_from_slice(&bytes);
         return Ok(DynSolValue::FixedBytes(padded.into(), size));
     }
     if ty == "bytes" {
-        let text = value
-            .as_str()
-            .ok_or_else(|| anyhow!("bytes must be a hex string"))?;
+        let text = value.as_str().ok_or(EthError::BytesHexExpected)?;
         return Ok(DynSolValue::Bytes(decode_hex(text)?));
     }
     if let Some(bits) = integer_bit_width(ty, false) {
         let n = parse_uint(value)?;
         if bits < 256 && n >= (U256::from(1u8) << bits) {
-            bail!("{ty} value {n} exceeds {bits} bits");
+            return Err(EthError::IntegerOutOfRange {
+                ty: ty.to_string(),
+                value: n.to_string(),
+                bits,
+            });
         }
         return Ok(DynSolValue::Uint(n, bits));
     }
@@ -945,12 +1000,16 @@ fn json_to_dyn(ty: &str, value: &Value) -> Result<DynSolValue> {
         if bits < 256 {
             let limit = I256::try_from(1u8).expect("one") << (bits - 1);
             if n >= limit || n < -limit {
-                bail!("{ty} value {n} exceeds {bits} bits");
+                return Err(EthError::IntegerOutOfRange {
+                    ty: ty.to_string(),
+                    value: n.to_string(),
+                    bits,
+                });
             }
         }
         return Ok(DynSolValue::Int(n, bits));
     }
-    bail!("unsupported Solidity type {ty}");
+    Err(EthError::UnsupportedSolidityType { ty: ty.to_string() })
 }
 
 fn dyn_to_json(value: &DynSolValue) -> Value {
@@ -990,41 +1049,47 @@ fn parse_uint(value: &Value) -> Result<U256> {
         Value::String(text) => text
             .parse::<U256>()
             .or_else(|_| U256::from_str_radix(text.trim_start_matches("0x"), 16))
-            .map_err(|error| anyhow!("uint {text}: {error}")),
+            .map_err(|error| EthError::UintParse {
+                text: text.to_string(),
+                error,
+            }),
         Value::Number(n) => {
             if n.as_f64().is_some_and(|f| f.fract() != 0.0) {
-                bail!("uint must not be a float: {n}");
+                return Err(EthError::UintFloat { n: n.clone() });
             }
             n.as_u64()
                 .map(U256::from)
-                .ok_or_else(|| anyhow!("uint {n} is not an integer"))
+                .ok_or_else(|| EthError::UintNotInteger { n: n.clone() })
         }
-        other => bail!("uint expected string or integer, got {other}"),
+        other => Err(EthError::UintExpected { got: other.clone() }),
     }
 }
 
 fn parse_int(value: &Value) -> Result<I256> {
     match value {
-        Value::String(text) => text
-            .parse::<I256>()
-            .map_err(|error| anyhow!("int {text}: {error}")),
+        Value::String(text) => text.parse::<I256>().map_err(|error| EthError::IntParse {
+            text: text.to_string(),
+            error,
+        }),
         Value::Number(n) => n
             .as_i64()
             .map(I256::try_from)
             .and_then(Result::ok)
-            .ok_or_else(|| anyhow!("int {n} is not an integer")),
-        other => bail!("int expected string or integer, got {other}"),
+            .ok_or_else(|| EthError::IntNotInteger { n: n.clone() }),
+        other => Err(EthError::IntExpected { got: other.clone() }),
     }
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
     if !hex.len().is_multiple_of(2) {
-        bail!("odd-length hex {value}");
+        return Err(EthError::OddHex {
+            value: value.to_string(),
+        });
     }
     (0..hex.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|error| anyhow!("{error}")))
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(EthError::HexByte))
         .collect()
 }
 

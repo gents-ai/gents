@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Context, Result};
+use gents_protocol::request_lifecycle::InvalidRequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -138,24 +138,74 @@ struct ImportedMessage {
     request_id: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AdapterCaptureError {
+    #[error("external adapter capture {system} is missing mapping metadata")]
+    MissingMapping { system: String },
+    #[error("external adapter import for projection {projection} is not implemented")]
+    NotImplemented { projection: &'static str },
+    #[error("external adapter capture envelope is invalid: {error}")]
+    InvalidEnvelope {
+        error: crate::adapter_projection::AdapterProjectionContractError,
+    },
+    #[error("external adapter capture envelope projection {envelope} does not match mapping projection {mapping}")]
+    EnvelopeProjectionMismatch {
+        envelope: &'static str,
+        mapping: &'static str,
+    },
+    #[error("external adapter capture source.system {system:?} is not supported for mapped import; expected one of {expected}")]
+    UnsupportedSourceSystem { system: String, expected: String },
+    #[error("multi-agent external adapter mapping must include at least one participant")]
+    MultiAgentNoParticipants,
+    #[error("multi-agent external adapter mapping must include a root participant for request_id {request_id:?}")]
+    MultiAgentNoRoot { request_id: String },
+    #[error("multi-agent delegation parent_request_id {request_id:?} does not reference a declared participant/root request")]
+    DelegationParentUnknown { request_id: String },
+    #[error("multi-agent delegation child_request_id {request_id:?} does not reference a declared child participant")]
+    DelegationChildUnknown { request_id: String },
+    #[error("multi-agent tool event {event:?} request_id {request_id:?} does not reference a declared participant/root request")]
+    ToolEventRequestUnknown { event: String, request_id: String },
+    #[error("multi-agent tool event {event:?} child_request_id {request_id:?} does not reference a declared child participant")]
+    ToolEventChildUnknown { event: String, request_id: String },
+    #[error("LangGraph external adapter mapping requires non-empty native.history")]
+    LangGraphHistoryMissing,
+    #[error("{path} must not be empty")]
+    EmptyField { path: &'static str },
+    #[error("invalid mapped request lifecycle state {status:?}")]
+    InvalidLifecycle {
+        status: String,
+        #[source]
+        source: InvalidRequestLifecycleState,
+    },
+    #[error("imported LangGraph rows missing root request")]
+    LangGraphRootMissing,
+    #[error("imported rows missing root request")]
+    RootMissing,
+    #[error("LangGraph capture missing native.history[0]")]
+    LangGraphSnapshotMissing,
+    #[error("decoding captured LangGraph projection")]
+    LangGraphProjection(#[source] serde_json::Error),
+}
+
+type Result<T, E = AdapterCaptureError> = std::result::Result<T, E>;
+
 pub fn import_external_adapter_capture_to_derived_view(
     capture: &ExternalAdapterCapture,
 ) -> Result<ExternalAdapterImport> {
-    let mapping = capture.mapping.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "external adapter capture {} is missing mapping metadata",
-            capture.source.system
-        )
-    })?;
+    let mapping = capture
+        .mapping
+        .as_ref()
+        .ok_or_else(|| AdapterCaptureError::MissingMapping {
+            system: capture.source.system.clone(),
+        })?;
     validate_external_adapter_capture_mapping(capture, mapping)?;
     match mapping.projection {
         AdapterProjectionKind::MultiAgentTask => import_multi_agent_capture(capture, mapping),
         AdapterProjectionKind::LangGraphStateHistory => import_langgraph_capture(capture, mapping),
         AdapterProjectionKind::AtifTrajectory | AdapterProjectionKind::OpenAiCodexRunTrace => {
-            bail!(
-                "external adapter import for projection {} is not implemented",
-                mapping.projection.id()
-            )
+            Err(AdapterCaptureError::NotImplemented {
+                projection: mapping.projection.id(),
+            })
         }
     }
 }
@@ -167,15 +217,13 @@ fn validate_external_adapter_capture_mapping(
     require_nonempty_field("source.system", &capture.source.system)?;
     require_nonempty_field("mapping.request_id", &mapping.request_id)?;
     if let Some(envelope) = capture.envelope.as_ref() {
-        validate_adapter_projection_contract(envelope).map_err(|error| {
-            anyhow::anyhow!("external adapter capture envelope is invalid: {error}")
-        })?;
+        validate_adapter_projection_contract(envelope)
+            .map_err(|error| AdapterCaptureError::InvalidEnvelope { error })?;
         if envelope.output.kind() != mapping.projection {
-            bail!(
-                "external adapter capture envelope projection {} does not match mapping projection {}",
-                envelope.output.kind().id(),
-                mapping.projection.id()
-            );
+            return Err(AdapterCaptureError::EnvelopeProjectionMismatch {
+                envelope: envelope.output.kind().id(),
+                mapping: mapping.projection.id(),
+            });
         }
     }
     match mapping.projection {
@@ -203,16 +251,15 @@ fn validate_supported_source_system(
     if allowed.contains(&capture.source.system.as_str()) {
         return Ok(());
     }
-    bail!(
-        "external adapter capture source.system {:?} is not supported for mapped import; expected one of {}",
-        capture.source.system,
-        allowed.join(", ")
-    );
+    Err(AdapterCaptureError::UnsupportedSourceSystem {
+        system: capture.source.system.clone(),
+        expected: allowed.join(", "),
+    })
 }
 
 fn validate_multi_agent_mapping(mapping: &ExternalAdapterMapping) -> Result<()> {
     if mapping.participants.is_empty() {
-        bail!("multi-agent external adapter mapping must include at least one participant");
+        return Err(AdapterCaptureError::MultiAgentNoParticipants);
     }
 
     let mut request_ids = BTreeSet::from([mapping.request_id.as_str()]);
@@ -231,10 +278,9 @@ fn validate_multi_agent_mapping(mapping: &ExternalAdapterMapping) -> Result<()> 
         }
     }
     if !has_root_participant {
-        bail!(
-            "multi-agent external adapter mapping must include a root participant for request_id {:?}",
-            mapping.request_id
-        );
+        return Err(AdapterCaptureError::MultiAgentNoRoot {
+            request_id: mapping.request_id.clone(),
+        });
     }
 
     for delegation in &mapping.delegations {
@@ -247,16 +293,14 @@ fn validate_multi_agent_mapping(mapping: &ExternalAdapterMapping) -> Result<()> 
             &delegation.child_request_id,
         )?;
         if !request_ids.contains(delegation.parent_request_id.as_str()) {
-            bail!(
-                "multi-agent delegation parent_request_id {:?} does not reference a declared participant/root request",
-                delegation.parent_request_id
-            );
+            return Err(AdapterCaptureError::DelegationParentUnknown {
+                request_id: delegation.parent_request_id.clone(),
+            });
         }
         if !request_ids.contains(delegation.child_request_id.as_str()) {
-            bail!(
-                "multi-agent delegation child_request_id {:?} does not reference a declared child participant",
-                delegation.child_request_id
-            );
+            return Err(AdapterCaptureError::DelegationChildUnknown {
+                request_id: delegation.child_request_id.clone(),
+            });
         }
     }
 
@@ -265,20 +309,18 @@ fn validate_multi_agent_mapping(mapping: &ExternalAdapterMapping) -> Result<()> 
         require_nonempty_field("mapping.tool_events[].request_id", &event.request_id)?;
         require_nonempty_field("mapping.tool_events[].tool_name", &event.tool_name)?;
         if !request_ids.contains(event.request_id.as_str()) {
-            bail!(
-                "multi-agent tool event {:?} request_id {:?} does not reference a declared participant/root request",
-                event.id,
-                event.request_id
-            );
+            return Err(AdapterCaptureError::ToolEventRequestUnknown {
+                event: event.id.clone(),
+                request_id: event.request_id.clone(),
+            });
         }
         if let Some(child_request_id) = event.child_request_id.as_deref() {
             require_nonempty_field("mapping.tool_events[].child_request_id", child_request_id)?;
             if !request_ids.contains(child_request_id) {
-                bail!(
-                    "multi-agent tool event {:?} child_request_id {:?} does not reference a declared child participant",
-                    event.id,
-                    child_request_id
-                );
+                return Err(AdapterCaptureError::ToolEventChildUnknown {
+                    event: event.id.clone(),
+                    request_id: child_request_id.to_owned(),
+                });
             }
         }
     }
@@ -288,13 +330,13 @@ fn validate_multi_agent_mapping(mapping: &ExternalAdapterMapping) -> Result<()> 
 fn validate_langgraph_mapping(capture: &ExternalAdapterCapture) -> Result<()> {
     match capture.native.get("history").and_then(Value::as_array) {
         Some(history) if !history.is_empty() => Ok(()),
-        _ => bail!("LangGraph external adapter mapping requires non-empty native.history"),
+        _ => Err(AdapterCaptureError::LangGraphHistoryMissing),
     }
 }
 
-fn require_nonempty_field(path: &str, value: &str) -> Result<()> {
+fn require_nonempty_field(path: &'static str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
-        bail!("{path} must not be empty");
+        return Err(AdapterCaptureError::EmptyField { path });
     }
     Ok(())
 }
@@ -325,7 +367,10 @@ fn import_langgraph_capture(
         })
         .unwrap_or_else(|| "completed".to_string());
     let lifecycle_state = gents_protocol::request_lifecycle::RequestLifecycleState::parse(&status)
-        .with_context(|| format!("invalid mapped request lifecycle state {status:?}"))?;
+        .map_err(|source| AdapterCaptureError::InvalidLifecycle {
+            status: status.clone(),
+            source,
+        })?;
     let started_at = "2026-06-05T00:00:00Z";
     langgraph_state_history_projection(capture, mapping, &session_id)?;
     let latest_values = latest_langgraph_values(&capture.native);
@@ -420,7 +465,7 @@ fn import_langgraph_capture(
         .iter()
         .find(|request| request.request_id == mapping.request_id)
         .cloned()
-        .context("imported LangGraph rows missing root request")?;
+        .ok_or(AdapterCaptureError::LangGraphRootMissing)?;
     let scenario_id = mapping
         .scenario_id
         .clone()
@@ -459,7 +504,7 @@ pub(crate) fn langgraph_state_history_projection(
         .get("history")
         .and_then(Value::as_array)
         .and_then(|history| history.first())
-        .context("LangGraph capture missing native.history[0]")?;
+        .ok_or(AdapterCaptureError::LangGraphSnapshotMissing)?;
     let mut values = latest_snapshot
         .get("values")
         .and_then(Value::as_object)
@@ -505,7 +550,7 @@ pub(crate) fn langgraph_state_history_projection(
             .unwrap_or_else(|| json!([])),
         "tasks": langgraph_projection_tasks(&capture.native, mapping),
     }))
-    .context("decoding captured LangGraph projection")
+    .map_err(AdapterCaptureError::LangGraphProjection)
 }
 
 fn latest_langgraph_values(native: &Value) -> Option<&serde_json::Map<String, Value>> {
@@ -797,7 +842,10 @@ fn import_multi_agent_capture(
         .clone()
         .unwrap_or_else(|| "completed".to_string());
     let lifecycle_state = gents_protocol::request_lifecycle::RequestLifecycleState::parse(&status)
-        .with_context(|| format!("invalid mapped request lifecycle state {status:?}"))?;
+        .map_err(|source| AdapterCaptureError::InvalidLifecycle {
+            status: status.clone(),
+            source,
+        })?;
     let started_at = "2026-06-05T00:00:00Z";
     let root_participant = mapping.participants.iter().find(|participant| {
         participant
@@ -954,7 +1002,7 @@ fn import_multi_agent_capture(
         .iter()
         .find(|request| request.request_id == mapping.request_id)
         .cloned()
-        .context("imported rows missing root request")?;
+        .ok_or(AdapterCaptureError::RootMissing)?;
     let scenario_id = mapping
         .scenario_id
         .clone()

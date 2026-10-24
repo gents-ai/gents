@@ -10,6 +10,16 @@ use anyhow::{Context, Result};
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CommitsError {
+    #[error("batched _commits response carried no data object")]
+    NoBatchData,
+    #[error("batched _commits response carried no array for {doc_id}")]
+    BatchMissingArray { doc_id: String },
+    #[error("_commits response carried no data._commits array")]
+    NoCommitArray,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestJsonCommit {
     pub cid: String,
@@ -36,7 +46,7 @@ pub async fn field_commit(
         .execute(&query)
         .await
         .with_context(|| format!("reading _commits for rendered request {doc_id}"))?;
-    select_field_commit(&response, field_name)
+    Ok(select_field_commit(&response, field_name)?)
 }
 
 /// Maximum `_commits` aliases in one statement of [`field_commits_in_txn`],
@@ -109,20 +119,20 @@ fn select_batched_field_commits(
     response: &serde_json::Value,
     batch: &[String],
     field_name: &str,
-) -> Result<Vec<Option<RequestJsonCommit>>> {
+) -> std::result::Result<Vec<Option<RequestJsonCommit>>, CommitsError> {
     let data = response
         .get("data")
         .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("batched _commits response carried no data object"))?;
+        .ok_or(CommitsError::NoBatchData)?;
     batch
         .iter()
         .enumerate()
-        .map(|(index, doc_id)| {
+        .map(|(index, doc_id)| -> std::result::Result<_, CommitsError> {
             let commits = data
                 .get(&format!("w{index}"))
                 .and_then(serde_json::Value::as_array)
-                .with_context(|| {
-                    format!("batched _commits response carried no array for {doc_id}")
+                .ok_or_else(|| CommitsError::BatchMissingArray {
+                    doc_id: doc_id.clone(),
                 })?;
             Ok(highest_field_commit(commits, field_name))
         })
@@ -130,19 +140,21 @@ fn select_batched_field_commits(
 }
 
 #[cfg(test)]
-fn select_request_json_commit(response: &serde_json::Value) -> Result<Option<RequestJsonCommit>> {
+fn select_request_json_commit(
+    response: &serde_json::Value,
+) -> std::result::Result<Option<RequestJsonCommit>, CommitsError> {
     select_field_commit(response, "request_json")
 }
 
 pub(super) fn select_field_commit(
     response: &serde_json::Value,
     field_name: &str,
-) -> Result<Option<RequestJsonCommit>> {
+) -> std::result::Result<Option<RequestJsonCommit>, CommitsError> {
     let commits = response
         .get("data")
         .and_then(|data| data.get("_commits"))
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("_commits response carried no data._commits array"))?;
+        .ok_or(CommitsError::NoCommitArray)?;
     Ok(highest_field_commit(commits, field_name))
 }
 
@@ -166,6 +178,7 @@ fn highest_field_commit(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     use super::*;
@@ -262,7 +275,11 @@ mod tests {
             "payload",
         )
         .unwrap_err();
-        assert!(error.to_string().contains("doc-b"), "{error:#}");
+        assert!(
+            error.to_string().contains("doc-b"),
+            "{}",
+            ErrorChain(&error)
+        );
 
         let null_alias = json!({ "data": { "w0": null } });
         assert!(select_batched_field_commits(&null_alias, &batch(&["doc-a"]), "payload").is_err());

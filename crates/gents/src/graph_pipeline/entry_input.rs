@@ -1,29 +1,36 @@
-use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
+use super::runtime::GraphPipelineError;
 use super::types::PlannedEntry;
 
 const MAX_INPUT_SCHEMA_BYTES: usize = 64 * 1024;
 
-pub fn validate_input_schema(schema: &Value) -> Result<()> {
-    anyhow::ensure!(
-        schema.get("type").and_then(Value::as_str) == Some("object"),
-        "entry input_schema must declare \"type\": \"object\""
-    );
-    let encoded = serde_json::to_vec(schema).context("encoding entry input_schema")?;
-    anyhow::ensure!(
-        encoded.len() <= MAX_INPUT_SCHEMA_BYTES,
-        "entry input_schema is {} bytes, over the {MAX_INPUT_SCHEMA_BYTES}-byte ceiling",
-        encoded.len()
-    );
-    jsonschema::validator_for(schema).context("entry input_schema does not compile")?;
+pub fn validate_input_schema(schema: &Value) -> Result<(), GraphPipelineError> {
+    if schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err(GraphPipelineError::InputSchemaNotObject);
+    }
+    let encoded = serde_json::to_vec(schema).map_err(GraphPipelineError::EncodeInputSchema)?;
+    if encoded.len() > MAX_INPUT_SCHEMA_BYTES {
+        return Err(GraphPipelineError::InputSchemaTooLarge {
+            bytes: encoded.len(),
+            ceiling: MAX_INPUT_SCHEMA_BYTES,
+        });
+    }
+    jsonschema::validator_for(schema).map_err(GraphPipelineError::InputSchemaCompile)?;
     Ok(())
 }
 
-pub fn admit_operator_input(entry: &PlannedEntry, input: Value) -> Result<Map<String, Value>> {
+pub fn admit_operator_input(
+    entry: &PlannedEntry,
+    input: Value,
+) -> Result<Map<String, Value>, GraphPipelineError> {
     let mut input = match input {
         Value::Object(input) => input,
-        _ => anyhow::bail!("entry {:?} input must be a JSON object", entry.name),
+        _ => {
+            return Err(GraphPipelineError::EntryInputNotObject {
+                entry: entry.name.clone(),
+            })
+        }
     };
     let Some(schema) = entry.input_schema.as_ref() else {
         return Ok(input);
@@ -38,8 +45,12 @@ pub fn admit_operator_input(entry: &PlannedEntry, input: Value) -> Result<Map<St
             }
         }
     }
-    let validator = jsonschema::validator_for(schema)
-        .with_context(|| format!("entry {:?} input_schema does not compile", entry.name))?;
+    let validator = jsonschema::validator_for(schema).map_err(|source| {
+        GraphPipelineError::EntryInputSchemaCompile {
+            entry: entry.name.clone(),
+            source,
+        }
+    })?;
     let instance = Value::Object(input.clone());
     let mut violations: Vec<String> = validator
         .iter_errors(&instance)
@@ -47,11 +58,10 @@ pub fn admit_operator_input(entry: &PlannedEntry, input: Value) -> Result<Map<St
         .collect();
     if !violations.is_empty() {
         violations.sort();
-        anyhow::bail!(
-            "entry {:?} input does not satisfy its schema: {}",
-            entry.name,
-            violations.join("; ")
-        );
+        return Err(GraphPipelineError::EntryInputViolations {
+            entry: entry.name.clone(),
+            violations: violations.join("; "),
+        });
     }
     Ok(input)
 }

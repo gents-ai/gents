@@ -12,36 +12,39 @@ use crate::graph_pipeline::{
 };
 use crate::plugin::executor::PluginExecutor;
 
+use super::catalog::GraphPackageError;
+
 const PREPARE_DOCUMENTS_BATCH_LIMIT: usize = 32;
 const PREPARE_DOCUMENTS_BATCH_BYTES: usize = 1024 * 1024;
 
-fn git_output_bytes(repo: &Path, arguments: &[&str]) -> Result<Vec<u8>> {
+fn git_output_bytes(repo: &Path, arguments: &[&str]) -> Result<Vec<u8>, GraphPackageError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(arguments)
         .output()
-        .with_context(|| format!("running git in {}", repo.display()))?;
+        .map_err(|source| GraphPackageError::GitSpawn {
+            repo: repo.to_path_buf(),
+            source,
+        })?;
     if !output.status.success() {
-        anyhow::bail!(
-            "git {} failed in {}: {}",
-            arguments.join(" "),
-            repo.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        return Err(GraphPackageError::GitFailed {
+            arguments: arguments.join(" "),
+            repo: repo.display().to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
     }
     Ok(output.stdout)
 }
 
-fn git_output(repo: &Path, arguments: &[&str]) -> Result<String> {
+fn git_output(repo: &Path, arguments: &[&str]) -> Result<String, GraphPackageError> {
     Ok(String::from_utf8(git_output_bytes(repo, arguments)?)?
         .trim()
         .to_owned())
 }
 
-fn git_output_exact(repo: &Path, arguments: &[&str]) -> Result<String> {
-    String::from_utf8(git_output_bytes(repo, arguments)?)
-        .context("Git emitted non-UTF-8 diff output")
+fn git_output_exact(repo: &Path, arguments: &[&str]) -> Result<String, GraphPackageError> {
+    String::from_utf8(git_output_bytes(repo, arguments)?).map_err(GraphPackageError::GitDiffNotUtf8)
 }
 
 fn resolve_repository(

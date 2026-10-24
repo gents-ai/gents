@@ -2044,7 +2044,8 @@ impl Tool for RunGraphTool {
                 .pointer("/runtime_effective/effective/file_mode")
                 .and_then(Value::as_str)
                 .map(crate::tool_surface::FileToolMode::parse)
-                .transpose()?
+                .transpose()
+                .map_err(anyhow::Error::from)?
                 .unwrap_or_default();
             if effective_file_mode == crate::tool_surface::FileToolMode::Off {
                 return Err(anyhow!(

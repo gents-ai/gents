@@ -1,5 +1,6 @@
 pub(crate) mod call_tool;
 pub(crate) mod calls;
+mod error;
 pub mod keys;
 pub mod methods;
 pub(crate) mod query;
@@ -8,6 +9,7 @@ pub(crate) mod submit;
 
 pub(crate) use call_tool::{EthCallTool, ResolvedEthCall};
 pub(crate) use calls::{parse_call_decls, validate_call_decls};
+pub use error::EthError;
 pub use keys::{
     address_from_secret, address_from_uncompressed_pubkey, attestation_payload,
     binding_storage_key, encode_attestation, generate_secp256k1_secret, sign_prehash_recoverable,
@@ -22,13 +24,13 @@ pub fn validate_eth_call_declarations(
     calls: &[String],
     key_binding_id: Option<&str>,
     chain_id: Option<u64>,
-) -> anyhow::Result<()> {
+) -> Result<(), EthError> {
     let declarations = parse_call_decls(Some(calls))?;
     validate_call_decls(&declarations, chain_id)?;
     if declarations.iter().any(|decl| decl.requires_key_binding())
         && key_binding_id.is_none_or(|binding_id| binding_id.trim().is_empty())
     {
-        anyhow::bail!("signing call declarations require key_binding_id");
+        return Err(EthError::SigningRequiresKeyBinding);
     }
     Ok(())
 }

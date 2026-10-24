@@ -8,13 +8,12 @@ use rapidhash::RapidHashMap;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 
-#[cfg(test)]
-use anyhow::anyhow;
-use anyhow::{bail, Context, Result};
 use k256::ecdsa::SigningKey;
 use k256::elliptic_curve::rand_core::OsRng;
 use k256::elliptic_curve::zeroize::Zeroizing;
 use sha3::{Digest, Keccak256};
+
+use super::error::{EthError, Result};
 
 pub const KEYRING_SERVICE: &str = "gents-chain-key";
 pub const KEY_BACKEND_KEYRING: &str = "keyring";
@@ -22,9 +21,9 @@ const UNCOMPRESSED_PREFIX: u8 = 0x04;
 
 /// Store for 32-byte secp256k1 secrets, keyed by an opaque custody key.
 pub trait ChainKeyMaterialStore: Send + Sync {
-    fn store_new(&self, storage_key: &str, secret: &[u8; 32]) -> Result<()>;
-    fn load(&self, binding_id: &str) -> Result<[u8; 32]>;
-    fn delete(&self, binding_id: &str) -> Result<()>;
+    fn store_new(&self, storage_key: &str, secret: &[u8; 32]) -> Result<(), EthError>;
+    fn load(&self, binding_id: &str) -> Result<[u8; 32], EthError>;
+    fn delete(&self, binding_id: &str) -> Result<(), EthError>;
 }
 
 /// Namespace OS-keyring accounts by principal so separate gents homes cannot
@@ -41,25 +40,29 @@ pub(crate) struct MemoryChainKeyStore {
 
 #[cfg(test)]
 impl ChainKeyMaterialStore for MemoryChainKeyStore {
-    fn store_new(&self, storage_key: &str, secret: &[u8; 32]) -> Result<()> {
+    fn store_new(&self, storage_key: &str, secret: &[u8; 32]) -> Result<(), EthError> {
         let mut entries = self.inner.lock().expect("chain key store lock poisoned");
         if entries.contains_key(storage_key) {
-            bail!("chain key material already exists for {storage_key}");
+            return Err(EthError::KeyMaterialExists {
+                storage_key: storage_key.to_string(),
+            });
         }
         entries.insert(storage_key.to_string(), *secret);
         Ok(())
     }
 
-    fn load(&self, binding_id: &str) -> Result<[u8; 32]> {
+    fn load(&self, binding_id: &str) -> Result<[u8; 32], EthError> {
         self.inner
             .lock()
             .expect("chain key store lock poisoned")
             .get(binding_id)
             .copied()
-            .ok_or_else(|| anyhow!("no chain key material for binding {binding_id}"))
+            .ok_or_else(|| EthError::NoKeyMaterial {
+                binding_id: binding_id.to_string(),
+            })
     }
 
-    fn delete(&self, binding_id: &str) -> Result<()> {
+    fn delete(&self, binding_id: &str) -> Result<(), EthError> {
         self.inner
             .lock()
             .expect("chain key store lock poisoned")
@@ -72,40 +75,42 @@ impl ChainKeyMaterialStore for MemoryChainKeyStore {
 pub struct KeyringChainKeyStore;
 
 impl ChainKeyMaterialStore for KeyringChainKeyStore {
-    fn store_new(&self, storage_key: &str, secret: &[u8; 32]) -> Result<()> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, storage_key)
-            .context("opening OS keyring entry")?;
+    fn store_new(&self, storage_key: &str, secret: &[u8; 32]) -> Result<(), EthError> {
+        let entry =
+            keyring::Entry::new(KEYRING_SERVICE, storage_key).map_err(EthError::KeyringOpen)?;
         match entry.get_password() {
-            Ok(_) => bail!("chain key material already exists for {storage_key}"),
+            Ok(_) => {
+                return Err(EthError::KeyMaterialExists {
+                    storage_key: storage_key.to_string(),
+                })
+            }
             Err(keyring::Error::NoEntry) => {}
-            Err(error) => return Err(error).context("checking OS keyring for an existing key"),
+            Err(error) => return Err(EthError::KeyringCheck(error)),
         }
         let encoded = Zeroizing::new(lowercase_hex(secret));
         entry
             .set_password(&encoded)
-            .context("storing chain key in OS keyring")?;
+            .map_err(EthError::KeyringStore)?;
         Ok(())
     }
 
-    fn load(&self, binding_id: &str) -> Result<[u8; 32]> {
+    fn load(&self, binding_id: &str) -> Result<[u8; 32], EthError> {
         let entry =
-            keyring::Entry::new(KEYRING_SERVICE, binding_id).context("opening OS keyring entry")?;
-        let hex = Zeroizing::new(
-            entry
-                .get_password()
-                .context("loading chain key from OS keyring")?,
-        );
-        parse_secret_hex(&hex)
-            .with_context(|| format!("decoding chain key for binding {binding_id}"))
+            keyring::Entry::new(KEYRING_SERVICE, binding_id).map_err(EthError::KeyringOpen)?;
+        let hex = Zeroizing::new(entry.get_password().map_err(EthError::KeyringLoad)?);
+        parse_secret_hex(&hex).map_err(|source| EthError::KeyDecode {
+            binding_id: binding_id.to_string(),
+            source: Box::new(source),
+        })
     }
 
-    fn delete(&self, binding_id: &str) -> Result<()> {
+    fn delete(&self, binding_id: &str) -> Result<(), EthError> {
         let entry =
-            keyring::Entry::new(KEYRING_SERVICE, binding_id).context("opening OS keyring entry")?;
+            keyring::Entry::new(KEYRING_SERVICE, binding_id).map_err(EthError::KeyringOpen)?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error).context("deleting chain key from OS keyring"),
+            Err(error) => Err(EthError::KeyringDelete(error)),
         }
     }
 }
@@ -115,35 +120,29 @@ pub fn generate_secp256k1_secret() -> [u8; 32] {
     signing_key.to_bytes().into()
 }
 
-pub fn uncompressed_pubkey(secret: &[u8; 32]) -> Result<[u8; 65]> {
-    let signing_key = SigningKey::from_bytes(secret.into()).context("loading secp256k1 secret")?;
+pub fn uncompressed_pubkey(secret: &[u8; 32]) -> Result<[u8; 65], EthError> {
+    let signing_key = SigningKey::from_bytes(secret.into()).map_err(EthError::Secp256k1Secret)?;
     let point = signing_key.verifying_key().to_encoded_point(false);
     let bytes = point.as_bytes();
     if bytes.len() != 65 {
-        bail!(
-            "uncompressed secp256k1 public key must be 65 bytes, got {}",
-            bytes.len()
-        );
+        return Err(EthError::UncompressedPubkeyLength { len: bytes.len() });
     }
     let mut out = [0u8; 65];
     out.copy_from_slice(bytes);
     Ok(out)
 }
 
-pub fn address_from_uncompressed_pubkey(uncompressed: &[u8]) -> Result<String> {
+pub fn address_from_uncompressed_pubkey(uncompressed: &[u8]) -> Result<String, EthError> {
     let body = match uncompressed {
         [UNCOMPRESSED_PREFIX, rest @ ..] if rest.len() == 64 => rest,
         rest if rest.len() == 64 => rest,
-        other => bail!(
-            "expected 64-byte uncompressed secp256k1 public key, got {} bytes",
-            other.len()
-        ),
+        other => return Err(EthError::PubkeyLength { len: other.len() }),
     };
     let hash = Keccak256::digest(body);
     Ok(format!("0x{}", lowercase_hex(&hash[12..])))
 }
 
-pub fn address_from_secret(secret: &[u8; 32]) -> Result<String> {
+pub fn address_from_secret(secret: &[u8; 32]) -> Result<String, EthError> {
     address_from_uncompressed_pubkey(&uncompressed_pubkey(secret)?)
 }
 
@@ -165,16 +164,15 @@ pub fn encode_attestation(signature: &[u8]) -> String {
     format!("0x{}", lowercase_hex(signature))
 }
 
-pub(crate) fn decode_attestation(value: &str) -> Result<Vec<u8>> {
+pub(crate) fn decode_attestation(value: &str) -> Result<Vec<u8>, EthError> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
     if !hex.len().is_multiple_of(2) {
-        bail!("chain key attestation has odd-length hex");
+        return Err(EthError::AttestationOddHex);
     }
     (0..hex.len())
         .step_by(2)
         .map(|index| {
-            u8::from_str_radix(&hex[index..index + 2], 16)
-                .context("chain key attestation is invalid hex")
+            u8::from_str_radix(&hex[index..index + 2], 16).map_err(EthError::AttestationHex)
         })
         .collect()
 }
@@ -183,11 +181,11 @@ pub(crate) fn decode_attestation(value: &str) -> Result<Vec<u8>> {
 pub fn sign_prehash_recoverable(
     secret: &[u8; 32],
     hash: &[u8; 32],
-) -> Result<([u8; 32], [u8; 32], bool)> {
-    let signing_key = SigningKey::from_bytes(secret.into()).context("loading secp256k1 secret")?;
+) -> Result<([u8; 32], [u8; 32], bool), EthError> {
+    let signing_key = SigningKey::from_bytes(secret.into()).map_err(EthError::Secp256k1Secret)?;
     let (signature, recid) = signing_key
         .sign_prehash_recoverable(hash)
-        .context("signing ethereum digest")?;
+        .map_err(EthError::SigningDigest)?;
     let bytes = signature.to_bytes();
     let mut r = [0u8; 32];
     let mut s = [0u8; 32];
@@ -196,18 +194,15 @@ pub fn sign_prehash_recoverable(
     Ok((r, s, recid.to_byte() & 1 == 1))
 }
 
-fn parse_secret_hex(value: &str) -> Result<[u8; 32]> {
+fn parse_secret_hex(value: &str) -> Result<[u8; 32], EthError> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
     if hex.len() != 64 {
-        bail!(
-            "chain key secret must be 32 bytes hex, got {} chars",
-            hex.len()
-        );
+        return Err(EthError::SecretHexLength { chars: hex.len() });
     }
     let mut secret = [0u8; 32];
     for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
-        let text = std::str::from_utf8(chunk).context("chain key hex is not utf8")?;
-        secret[i] = u8::from_str_radix(text, 16).context("chain key hex is invalid")?;
+        let text = std::str::from_utf8(chunk).map_err(EthError::SecretHexUtf8)?;
+        secret[i] = u8::from_str_radix(text, 16).map_err(EthError::SecretHex)?;
     }
     Ok(secret)
 }
@@ -224,6 +219,8 @@ fn lowercase_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
+
     use super::*;
 
     /// Anvil / Foundry default account #0.
@@ -252,14 +249,15 @@ mod tests {
             // keyring (headless CI without keyutils, locked keychain).
             // The mock backend is still caught: it "stores" successfully
             // and then load fails below.
-            eprintln!("skipping OS keyring round-trip: {error:#}");
+            eprintln!("skipping OS keyring round-trip: {}", ErrorChain(&error));
             drop(cleanup);
             return;
         }
         let loaded = store.load(&storage_key).unwrap_or_else(|error| {
             panic!(
-                "keyring store succeeded but load failed for {storage_key}: {error:#} \
-                 (native keyring feature is probably not enabled)"
+                "keyring store succeeded but load failed for {storage_key}: {} \
+                 (native keyring feature is probably not enabled)",
+                ErrorChain(&error)
             )
         });
         assert_eq!(loaded, ANVIL0_SECRET);

@@ -530,9 +530,19 @@ fn list_projection_matches(filter: ListStatusFilter, projection: &WaitStatusProj
 pub use final_output::load_caused_request_terminal;
 pub(crate) use final_output::{caused_request_terminals_in_txn, load_caused_request_terminals};
 
-fn render_assistant_message_text(message: &Message) -> Result<String> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BackgroundToolsError {
+    #[error("{collection} field missing from query response")]
+    RowsMissing { collection: String },
+    #[error("parse {collection}: expected an array")]
+    RowsNotArray { collection: String },
+    #[error("materialized child response is not an assistant message")]
+    NotAssistantMessage,
+}
+
+fn render_assistant_message_text(message: &Message) -> Result<String, BackgroundToolsError> {
     let Message::Assistant { content, .. } = message else {
-        anyhow::bail!("materialized child response is not an assistant message");
+        return Err(BackgroundToolsError::NotAssistantMessage);
     };
 
     // Render only `Text` content so no provider reasoning trace can leak into
@@ -556,15 +566,22 @@ where
         .and_then(|mut rows| rows.pop())
 }
 
-fn rows_skipping_malformed<T>(data: Option<&serde_json::Value>, collection: &str) -> Result<Vec<T>>
+fn rows_skipping_malformed<T>(
+    data: Option<&serde_json::Value>,
+    collection: &str,
+) -> Result<Vec<T>, BackgroundToolsError>
 where
     T: for<'de> Deserialize<'de>,
 {
     let Some(value) = data.and_then(|data| data.get(collection)) else {
-        anyhow::bail!("{collection} field missing from query response");
+        return Err(BackgroundToolsError::RowsMissing {
+            collection: collection.to_owned(),
+        });
     };
     let Some(values) = value.as_array() else {
-        anyhow::bail!("parse {collection}: expected an array");
+        return Err(BackgroundToolsError::RowsNotArray {
+            collection: collection.to_owned(),
+        });
     };
 
     let mut parsed = Vec::with_capacity(values.len());

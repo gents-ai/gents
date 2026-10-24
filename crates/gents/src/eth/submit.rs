@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use alloy_primitives::{keccak256, Address, U256};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Context};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,6 +14,7 @@ use sha3::{Digest, Keccak256};
 
 use crate::graphql::escape_graphql_string;
 
+use super::error::{EthError, Result};
 use super::keys::{address_from_secret, sign_prehash_recoverable};
 use super::rpc::{decode_revert_data, parse_hex_u64, EthRpcClient, JsonRpcTransport};
 
@@ -138,7 +139,7 @@ pub(crate) async fn submit_transaction<T>(
     request: SubmitRequest,
     nonces: &NonceGate,
     options: SubmitOptions,
-) -> Result<SubmitReceipt>
+) -> anyhow::Result<SubmitReceipt>
 where
     T: JsonRpcTransport,
 {
@@ -211,23 +212,27 @@ where
 
 fn validate_request(request: &SubmitRequest) -> Result<()> {
     if request.idempotency_key.trim().is_empty() {
-        bail!("eth submit requires an idempotency key");
+        return Err(EthError::SubmitIdempotencyKeyMissing);
     }
     if request.principal_did.trim().is_empty() {
-        bail!("eth submit requires principal_did");
+        return Err(EthError::SubmitPrincipalMissing);
     }
     if request.chain_id == 0 {
-        bail!("eth submit chain_id must be positive");
+        return Err(EthError::SubmitChainIdZero);
     }
     let from: Address = request
         .from
         .parse()
-        .context("invalid submit from address")?;
+        .map_err(|source| EthError::SubmitFromInvalid {
+            source: Box::new(source),
+        })?;
     if from == Address::ZERO {
-        bail!("eth submit from address must not be zero");
+        return Err(EthError::SubmitFromZero);
     }
     if let Some(to) = request.to.as_deref() {
-        let _: Address = to.parse().context("invalid submit to address")?;
+        let _: Address = to.parse().map_err(|source| EthError::SubmitToInvalid {
+            source: Box::new(source),
+        })?;
     }
     Ok(())
 }
@@ -261,25 +266,24 @@ fn verify_existing(
     expected_request_hash: &str,
 ) -> Result<()> {
     if existing.request_hash != expected_request_hash {
-        bail!(
-            "idempotency key {:?} was already used for a different Ethereum request",
-            request.idempotency_key
-        );
+        return Err(EthError::IdempotencyKeyReused {
+            idempotency_key: request.idempotency_key.clone(),
+        });
     }
     let request_chain_id =
-        i64::try_from(request.chain_id).context("chain_id exceeds DefraDB Int")?;
+        i64::try_from(request.chain_id).map_err(|source| EthError::ChainIdExceedsInt { source })?;
     if existing.principal_did != request.principal_did.trim()
         || existing.chain_id != request_chain_id
         || !existing.from_address.eq_ignore_ascii_case(&request.from)
     {
-        bail!("persisted Ethereum submission identity does not match the request");
+        return Err(EthError::PersistedIdentityMismatch);
     }
     let expected_hash = raw_transaction_hash(&existing.raw_transaction)?;
     if !expected_hash.eq_ignore_ascii_case(&existing.tx_hash) {
-        bail!("persisted Ethereum submission raw transaction hash is inconsistent");
+        return Err(EthError::PersistedHashInconsistent);
     }
     if existing.nonce < 0 {
-        bail!("persisted Ethereum submission has a negative nonce");
+        return Err(EthError::PersistedNegativeNonce);
     }
     Ok(())
 }
@@ -289,7 +293,7 @@ async fn resume_submission<T>(
     client: &EthRpcClient<T>,
     record: SubmissionRecord,
     options: SubmitOptions,
-) -> Result<SubmitReceipt>
+) -> anyhow::Result<SubmitReceipt>
 where
     T: JsonRpcTransport,
 {
@@ -352,7 +356,7 @@ fn terminal_receipt(record: &SubmissionRecord) -> Result<Option<SubmitReceipt>> 
         .as_deref()
         .map(serde_json::from_str)
         .transpose()
-        .context("decoding persisted Ethereum receipt")?;
+        .map_err(|source| EthError::DecodePersistedReceipt { source })?;
     Ok(Some(SubmitReceipt {
         tx_hash: record.tx_hash.clone(),
         status,
@@ -367,7 +371,9 @@ where
     let value = client
         .transaction_receipt(tx_hash)
         .await
-        .context("eth_getTransactionReceipt")?;
+        .map_err(|source| EthError::ReceiptFetch {
+            source: Box::new(source),
+        })?;
     Ok((!value.is_null()).then_some(value))
 }
 
@@ -375,7 +381,7 @@ async fn persist_receipt(
     node: &Arc<EmbeddedNode>,
     record: &SubmissionRecord,
     receipt: Value,
-) -> Result<SubmitReceipt> {
+) -> anyhow::Result<SubmitReceipt> {
     let success = receipt
         .get("status")
         .and_then(Value::as_str)
@@ -429,13 +435,16 @@ where
         );
         map.insert("type".to_string(), json!("0x2"));
     }
-    let result = client
-        .simulate_transaction(tx)
-        .await
-        .context("simulating eth transaction")?;
+    let result =
+        client
+            .simulate_transaction(tx)
+            .await
+            .map_err(|source| EthError::SimulateTransaction {
+                source: Box::new(source),
+            })?;
     if let Some(hex) = result.as_str() {
         if let Some(reason) = decode_revert_data(hex) {
-            bail!("simulation reverted: {reason}");
+            return Err(EthError::SimulationReverted { reason });
         }
     }
     Ok(())
@@ -446,7 +455,7 @@ async fn next_nonce<T>(
     client: &EthRpcClient<T>,
     from: &str,
     chain_id: u64,
-) -> Result<u64>
+) -> anyhow::Result<u64>
 where
     T: JsonRpcTransport,
 {
@@ -462,7 +471,7 @@ async fn max_in_flight_nonce(
     node: &EmbeddedNode,
     from: &str,
     chain_id: u64,
-) -> Result<Option<u64>> {
+) -> anyhow::Result<Option<u64>> {
     let from = escape_graphql_string(&from.to_ascii_lowercase());
     let query = format!(
         r#"{{
@@ -500,14 +509,21 @@ async fn transaction_count<T>(client: &EthRpcClient<T>, address: &str) -> Result
 where
     T: JsonRpcTransport,
 {
-    let result = client
-        .pending_nonce(address)
-        .await
-        .context("eth_getTransactionCount")?;
+    let result =
+        client
+            .pending_nonce(address)
+            .await
+            .map_err(|source| EthError::TransactionCountFetch {
+                source: Box::new(source),
+            })?;
     let value = result
         .as_str()
-        .ok_or_else(|| anyhow!("eth_getTransactionCount returned non-string {result}"))?;
-    parse_hex_u64(value).context("decoding nonce")
+        .ok_or_else(|| EthError::TransactionCountNotString {
+            result: result.clone(),
+        })?;
+    parse_hex_u64(value).map_err(|source| EthError::DecodeNonce {
+        source: Box::new(source),
+    })
 }
 
 async fn gas_fees<T>(client: &EthRpcClient<T>, request: &SubmitRequest) -> Result<(u64, u128, u128)>
@@ -517,14 +533,20 @@ where
     let estimate = client
         .estimate_gas(transaction_object(request))
         .await
-        .context("eth_estimateGas")?;
+        .map_err(|source| EthError::EstimateGasFetch {
+            source: Box::new(source),
+        })?;
     let estimate = estimate
         .as_str()
-        .ok_or_else(|| anyhow!("eth_estimateGas returned non-string {estimate}"))?;
-    let gas_limit = parse_hex_u64(estimate).context("decoding gas estimate")?;
+        .ok_or_else(|| EthError::EstimateGasNotString {
+            estimate: estimate.clone(),
+        })?;
+    let gas_limit = parse_hex_u64(estimate).map_err(|source| EthError::DecodeGasEstimate {
+        source: Box::new(source),
+    })?;
     if let Some(cap) = request.caps.max_gas {
         if gas_limit > cap {
-            bail!("estimated gas {gas_limit} exceeds max_gas {cap}");
+            return Err(EthError::GasLimitExceedsCap { gas_limit, cap });
         }
     }
 
@@ -532,34 +554,46 @@ where
         client
             .max_priority_fee_per_gas()
             .await
-            .context("eth_maxPriorityFeePerGas")?,
+            .map_err(|source| EthError::PriorityFeeFetch {
+                source: Box::new(source),
+            })?,
         "eth_maxPriorityFeePerGas",
     )?;
     let base = client
         .latest_base_fee()
         .await
-        .context("eth_getBlockByNumber latest baseFeePerGas")?;
+        .map_err(|source| EthError::BaseFeeFetch {
+            source: Box::new(source),
+        })?;
     let max_fee = base
         .checked_mul(2)
         .and_then(|buffered| buffered.checked_add(tip))
-        .ok_or_else(|| anyhow!("max fee per gas overflow"))?;
+        .ok_or(EthError::MaxFeeOverflow)?;
     if let Some(cap) = request.caps.max_fee_per_gas {
         if max_fee > cap {
-            bail!("max fee per gas {max_fee} exceeds cap {cap}");
+            return Err(EthError::MaxFeeExceedsCap { max_fee, cap });
         }
     }
     Ok((gas_limit, max_fee, tip.min(max_fee)))
 }
 
 fn rpc_u128(value: Value, method: &str) -> Result<u128> {
-    let text = value
-        .as_str()
-        .ok_or_else(|| anyhow!("{method} returned non-string {value}"))?;
+    let text = value.as_str().ok_or_else(|| EthError::RpcU128NotString {
+        method: method.to_string(),
+        value: value.clone(),
+    })?;
     let hex = text
         .strip_prefix("0x")
         .or_else(|| text.strip_prefix("0X"))
-        .ok_or_else(|| anyhow!("{method} returned non-hex quantity {text:?}"))?;
-    u128::from_str_radix(hex, 16).with_context(|| format!("decoding {method} result {text}"))
+        .ok_or_else(|| EthError::RpcU128NotHex {
+            method: method.to_string(),
+            text: text.to_string(),
+        })?;
+    u128::from_str_radix(hex, 16).map_err(|source| EthError::RpcU128Decode {
+        method: method.to_string(),
+        text: text.to_string(),
+        source,
+    })
 }
 
 fn transaction_object(request: &SubmitRequest) -> Value {
@@ -588,7 +622,7 @@ fn raw_transaction_hash(raw_transaction: &str) -> Result<String> {
 async fn load_submission(
     node: &EmbeddedNode,
     submission_key: &str,
-) -> Result<Option<SubmissionRecord>> {
+) -> anyhow::Result<Option<SubmissionRecord>> {
     let key = escape_graphql_string(submission_key);
     let query = format!(
         r#"{{
@@ -616,7 +650,7 @@ async fn load_submission(
 async fn create_submission(
     node: &std::sync::Arc<EmbeddedNode>,
     record: &SubmissionRecord,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let submission_key = escape_graphql_string(&record.submission_key);
     let principal_did = escape_graphql_string(&record.principal_did);
     let request_hash = escape_graphql_string(&record.request_hash);
@@ -657,7 +691,7 @@ async fn update_submission(
     doc_id: &str,
     status: &str,
     receipt: Option<&Value>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let doc_id = escape_graphql_string(doc_id);
     let status = escape_graphql_string(status);
     let receipt = match receipt {
@@ -700,7 +734,13 @@ pub(crate) fn sign_eip1559(
     let to = to
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| value.parse::<Address>().context("parsing tx to"))
+        .map(|value| {
+            value
+                .parse::<Address>()
+                .map_err(|source| EthError::ParseTo {
+                    source: Box::new(source),
+                })
+        })
         .transpose()?;
     let unsigned_fields = vec![
         rlp_u64(chain_id),
@@ -799,13 +839,15 @@ fn rlp_length_prefix(length: usize, short_offset: u8, long_offset: u8) -> Vec<u8
 fn decode_hex(value: &str) -> Result<Vec<u8>> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
     if !hex.len().is_multiple_of(2) {
-        bail!("odd-length hex {value}");
+        return Err(EthError::OddHex {
+            value: value.to_string(),
+        });
     }
     (0..hex.len())
         .step_by(2)
         .map(|index| {
             u8::from_str_radix(&hex[index..index + 2], 16)
-                .map_err(|error| anyhow!("invalid hex: {error}"))
+                .map_err(|error| EthError::InvalidHex { error })
         })
         .collect()
 }
@@ -831,6 +873,7 @@ mod tests {
     use crate::eth::keys::address_from_secret;
     use crate::eth::rpc::decode_revert_data;
     use async_trait::async_trait;
+    use gents_protocol::error_chain::ErrorChain;
     use std::collections::BTreeSet;
     use std::collections::VecDeque;
 
@@ -864,11 +907,11 @@ mod tests {
                 .lock()
                 .expect("responses")
                 .pop_front()
-                .ok_or_else(|| anyhow!("scripted eth RPC has no remaining responses"))?;
+                .ok_or(EthError::ScriptExhausted)?;
             if body["method"] == "eth_sendRawTransaction" {
                 let raw = body["params"][0]
                     .as_str()
-                    .ok_or_else(|| anyhow!("send has no raw transaction"))?;
+                    .ok_or(EthError::ScriptedSendMissingRaw)?;
                 response["result"] = json!(raw_transaction_hash(raw)?);
             }
             Ok(response)
@@ -1147,7 +1190,7 @@ mod tests {
         let message = error.to_string();
         assert!(
             message.contains("already used for a different Ethereum request"),
-            "{message:#}"
+            "{message}"
         );
 
         let sends = calls
@@ -1323,6 +1366,10 @@ mod tests {
         let mut capped = request("capped");
         capped.caps.max_fee_per_gas = Some(100);
         let error = gas_fees(&client, &capped).await.expect_err("cap");
-        assert!(error.to_string().contains("exceeds cap"), "{error:#}");
+        assert!(
+            error.to_string().contains("exceeds cap"),
+            "{}",
+            ErrorChain(&error)
+        );
     }
 }

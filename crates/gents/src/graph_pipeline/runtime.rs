@@ -22,6 +22,44 @@ use super::{
 
 const TRIGGER_PREFIX: &str = "graph-trigger-";
 
+#[derive(Debug, thiserror::Error)]
+pub enum GraphPipelineError {
+    #[error("graph plan digest must use sha256:<64 lowercase hex>")]
+    PlanDigestFormat,
+    #[error("entry input_schema must declare \"type\": \"object\"")]
+    InputSchemaNotObject,
+    #[error("encoding entry input_schema")]
+    EncodeInputSchema(#[source] serde_json::Error),
+    #[error("entry input_schema is {bytes} bytes, over the {ceiling}-byte ceiling")]
+    InputSchemaTooLarge { bytes: usize, ceiling: usize },
+    #[error("entry input_schema does not compile")]
+    InputSchemaCompile(#[source] jsonschema::ValidationError<'static>),
+    #[error("entry {entry:?} input must be a JSON object")]
+    EntryInputNotObject { entry: String },
+    #[error("entry {entry:?} input_schema does not compile")]
+    EntryInputSchemaCompile {
+        entry: String,
+        #[source]
+        source: jsonschema::ValidationError<'static>,
+    },
+    #[error("entry {entry:?} input does not satisfy its schema: {violations}")]
+    EntryInputViolations { entry: String, violations: String },
+    #[error("pinned graph plan has no materialized trigger routes")]
+    PlanHasNoTriggerRoutes,
+    #[error("GraphRun is missing {field}")]
+    GraphRunFieldMissing { field: String },
+    #[error("GraphRun started_at is not RFC3339")]
+    StartedAtNotRfc3339(#[source] chrono::ParseError),
+    #[error("graph max_runtime_secs exceeds the supported clock range")]
+    MaxRuntimeOutOfRange(#[source] std::num::TryFromIntError),
+    #[error("graph run deadline exceeds the supported clock range")]
+    DeadlineOutOfRange,
+    #[error("unbound graph workspace cannot carry a seal")]
+    UnboundWorkspaceSeal,
+    #[error("graph input workspace field {name} must be a string")]
+    WorkspaceFieldNotString { name: String },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct MaterializedRevision {
     pub graph_id: String,
@@ -159,16 +197,16 @@ pub fn revision_gate_decision(
     }
 }
 
-fn digest_hex(digest: &str) -> Result<&str> {
+fn digest_hex(digest: &str) -> Result<&str, GraphPipelineError> {
     let Some(hex) = digest.strip_prefix("sha256:") else {
-        anyhow::bail!("graph plan digest must use sha256:<64 lowercase hex>");
+        return Err(GraphPipelineError::PlanDigestFormat);
     };
     if hex.len() != 64
         || !hex
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
-        anyhow::bail!("graph plan digest must use sha256:<64 lowercase hex>");
+        return Err(GraphPipelineError::PlanDigestFormat);
     }
     Ok(hex)
 }
@@ -178,7 +216,7 @@ fn component_hash(value: &str) -> String {
     hex[..16].to_owned()
 }
 
-pub(crate) fn graph_trigger_id(digest: &str, route: &str) -> Result<String> {
+pub(crate) fn graph_trigger_id(digest: &str, route: &str) -> Result<String, GraphPipelineError> {
     Ok(format!(
         "{TRIGGER_PREFIX}{}-{}",
         digest_hex(digest)?,

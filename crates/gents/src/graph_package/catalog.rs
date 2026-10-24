@@ -9,6 +9,34 @@ pub use crate::pack::PackageExternalDependency;
 pub type GraphPackageManifest = crate::pack::PackManifest;
 pub type PackageCapabilityTemplate = crate::graph_pipeline::StageCapability;
 
+#[derive(Debug, thiserror::Error)]
+pub enum GraphPackageError {
+    #[error("asset {path:?} is not declared by package {package}")]
+    AssetNotDeclared { path: String, package: String },
+    #[error("pack asset {path:?} is not UTF-8")]
+    AssetNotUtf8 {
+        path: String,
+        #[source]
+        source: std::str::Utf8Error,
+    },
+    #[error("running git in {}", repo.display())]
+    GitSpawn {
+        repo: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("git {arguments} failed in {repo}: {stderr}")]
+    GitFailed {
+        arguments: String,
+        repo: String,
+        stderr: String,
+    },
+    #[error(transparent)]
+    GitOutputNotUtf8(#[from] std::string::FromUtf8Error),
+    #[error("Git emitted non-UTF-8 diff output")]
+    GitDiffNotUtf8(#[source] std::string::FromUtf8Error),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GraphPackageCatalogEntry {
     pub name: String,
@@ -31,18 +59,20 @@ pub struct LoadedGraphPackage {
 }
 
 impl LoadedGraphPackage {
-    pub fn asset(&self, path: &str) -> Result<&[u8]> {
-        self.assets.get(path).map(Vec::as_slice).with_context(|| {
-            format!(
-                "asset {path:?} is not declared by package {}",
-                self.manifest.name
-            )
+    pub fn asset(&self, path: &str) -> Result<&[u8], GraphPackageError> {
+        self.assets.get(path).map(Vec::as_slice).ok_or_else(|| {
+            GraphPackageError::AssetNotDeclared {
+                path: path.to_owned(),
+                package: self.manifest.name.clone(),
+            }
         })
     }
 
-    pub fn asset_text(&self, path: &str) -> Result<&str> {
-        std::str::from_utf8(self.asset(path)?)
-            .with_context(|| format!("pack asset {path:?} is not UTF-8"))
+    pub fn asset_text(&self, path: &str) -> Result<&str, GraphPackageError> {
+        std::str::from_utf8(self.asset(path)?).map_err(|source| GraphPackageError::AssetNotUtf8 {
+            path: path.to_owned(),
+            source,
+        })
     }
 
     pub fn catalog_entry(&self) -> GraphPackageCatalogEntry {

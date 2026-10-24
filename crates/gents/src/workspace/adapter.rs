@@ -3,13 +3,241 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::action_plan::CreateWorkspaceAction;
 use super::documents::ProvisioningObservation;
 use super::instructions::{InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS};
+use super::path_capability::PathCapabilityError;
 use super::LogicalWorkspaceIdentity;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AdapterError {
+    #[error(transparent)]
+    PathCapability(#[from] PathCapabilityError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("fresh workspace provisioning requires an exact path capability")]
+    ProvisionRequiresExactCapability,
+    #[error("serializing workspace identity")]
+    SerializeIdentity(#[source] serde_json::Error),
+    #[error("workspace identity has no parent")]
+    IdentityHasNoParent,
+    #[error("writing workspace identity {}", path.display())]
+    WriteIdentity {
+        path: PathBuf,
+        #[source]
+        source: tempfile::PersistError,
+    },
+    #[error("reading workspace identity {}", path.display())]
+    ReadIdentity {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing workspace identity {}", path.display())]
+    ParseIdentity {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("creating temporary git index for {purpose}")]
+    TempIndex {
+        purpose: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("temporary git index path is not UTF-8")]
+    IndexPathNotUtf8,
+    #[error("git {command} output capture was incomplete (capture limit {MANAGED_GIT_OUTPUT_BYTE_CAP} bytes or post-exit drain cutoff)")]
+    GitOutputIncomplete { command: String },
+    #[error("git {command} failed: {stderr}")]
+    GitFailed { command: String, stderr: String },
+    #[error("running git {command} in {}", cwd.display())]
+    GitSpawn {
+        command: String,
+        cwd: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("running git {command} in {}: {error}", cwd.display())]
+    GitManagedSpawn {
+        command: String,
+        cwd: PathBuf,
+        error: String,
+    },
+    #[error("git {command} in {} stopped before completing", cwd.display())]
+    GitStopped { command: String, cwd: PathBuf },
+    #[error("unterminated Git path output")]
+    UnterminatedGitPaths,
+    #[error("non-UTF-8 Git path")]
+    NonUtf8GitPath(#[source] std::str::Utf8Error),
+    #[error("malformed Git raw delta")]
+    MalformedRawDelta,
+    #[error("malformed Git raw delta header")]
+    MalformedRawHeader,
+    #[error("workspace path capability denies changed path {path:?}")]
+    PathDenied { path: String },
+    #[error("missing Git raw mode prefix")]
+    MissingModePrefix,
+    #[error("workspace path capability denies changed symlink/gitlink or unsupported mode {mode} at {path:?}")]
+    UnsupportedMode { mode: String, path: String },
+    #[error("malformed Git tree path list")]
+    MalformedTreePathList,
+    #[error("git show {spec} in {}", repo.display())]
+    GitShowSpawn {
+        spec: String,
+        repo: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("git show {spec} failed: {stderr}")]
+    GitShowFailed { spec: String, stderr: String },
+    #[error("canonicalizing {label} {}", path.display())]
+    Canonicalize {
+        label: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("refusing to integrate: trunk/source checkout is the worker workspace")]
+    IntegrateIntoSource,
+    #[error("refusing to integrate: {} is not a worktree of the source checkout", path.display())]
+    NotWorktreeOfSource { path: PathBuf },
+    #[error("live tree hash {tree_hash} does not match workspace seal_hash {seal_hash}")]
+    TreeHashMismatch {
+        tree_hash: String,
+        seal_hash: String,
+    },
+    #[error("empty sealed diff but trunk tree {trunk_tree} does not match seal_hash {seal_hash} and worktree HEAD {worktree_head} is not base_sha {base_sha}")]
+    EmptyDiffMismatch {
+        trunk_tree: String,
+        seal_hash: String,
+        worktree_head: String,
+        base_sha: String,
+    },
+    #[error("empty integration receipt does not name an existing trunk commit")]
+    EmptyReceiptNotInTrunk,
+    #[error("integration commit differs from the immutable sealed delta")]
+    CommitDiffersFromSealedDelta,
+    #[error("refusing to move trunk HEAD at {} to integrate commit {commit}: HEAD {head} is not the commit's parent {parent}", trunk.display())]
+    MoveTrunkRefused {
+        trunk: PathBuf,
+        commit: String,
+        head: String,
+        parent: String,
+    },
+    #[error("moving trunk HEAD at {} to integrate commit {commit}", trunk.display())]
+    MoveTrunkHead {
+        trunk: PathBuf,
+        commit: String,
+        #[source]
+        source: Box<AdapterError>,
+    },
+    #[error("checking out sealed path {path} onto trunk {}", trunk.display())]
+    CheckoutSealedPath {
+        trunk: PathBuf,
+        path: String,
+        #[source]
+        source: Box<AdapterError>,
+    },
+    #[error("removing sealed path {path} from trunk {}", trunk.display())]
+    RemoveSealedPath {
+        trunk: PathBuf,
+        path: String,
+        #[source]
+        source: Box<AdapterError>,
+    },
+    #[error("malformed Git name-status output")]
+    MalformedNameStatus,
+    #[error("unsupported Git name-status {status}")]
+    UnsupportedNameStatus { status: String },
+    #[error("malformed Git porcelain status")]
+    MalformedPorcelain,
+    #[error("missing Git rename source")]
+    MissingRenameSource,
+    #[error("refusing to integrate: trunk has uncommitted changes overlapping sealed path {path}")]
+    OverlappingDirtyTrunk { path: String },
+    #[error("git apply --cached on isolated index in {}", trunk.display())]
+    ApplyCachedOnIndex {
+        trunk: PathBuf,
+        #[source]
+        source: Box<AdapterError>,
+    },
+    #[error("cleanup dest {} escapes operator ceiling {}", dest.display(), ceiling.display())]
+    CleanupEscapesCeiling { dest: PathBuf, ceiling: PathBuf },
+    #[error("refusing to cleanup: dest {} is an ancestor of the source checkout", dest.display())]
+    CleanupAncestorOfSource { dest: PathBuf },
+    #[error("refusing to cleanup: destination is the source checkout")]
+    CleanupIsSource,
+    #[error("cleanup dest {} does not match host-chosen path {}", dest.display(), expected.display())]
+    CleanupDestMismatch { dest: PathBuf, expected: PathBuf },
+    #[error("git worktree remove left {} in place", path.display())]
+    WorktreeRemoveLeft { path: PathBuf },
+    #[error("removing leftover workspace {}", path.display())]
+    RemoveLeftover {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("spawning git apply --cached in {}", cwd.display())]
+    SpawnGitApply {
+        cwd: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("git apply stdin closed")]
+    GitApplyStdinClosed,
+    #[error("waiting for git apply in {}", cwd.display())]
+    WaitGitApply {
+        cwd: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("git apply failed: {stderr}")]
+    GitApplyFailed { stderr: String },
+    #[error("serializing workspace seal")]
+    SerializeSeal(#[source] serde_json::Error),
+    #[error("writing workspace seal {}", path.display())]
+    WriteSeal {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{reason}")]
+    ExistingTargetMismatch { reason: String },
+    #[error("creating {label} {}", path.display())]
+    CreateParent {
+        label: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("opening {}", path.display())]
+    OpenFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("refusing to create worktree: destination {} already exists", dest.display())]
+    DestinationExists { dest: PathBuf },
+    #[error("branch {branch} exists at {branch_sha}, not requested base {base_sha}; not moving the branch")]
+    BranchMismatch {
+        branch: String,
+        branch_sha: String,
+        base_sha: String,
+    },
+    #[error("copying {label}")]
+    CopyArtifact {
+        label: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("plain copy of {label} failed")]
+    PlainCopyFailed { label: String },
+}
+
+type Result<T, E = AdapterError> = std::result::Result<T, E>;
 
 const IDENTITY_FILE_NAME: &str = "gents-workspace-identity.json";
 pub(crate) const DIRTY_BASE_SUMMARY_LIMIT: usize = 2048;
@@ -131,7 +359,7 @@ pub(crate) fn provision(
     resolved_base: &str,
 ) -> Result<ProvisioningObservation> {
     if !action.path_capability.is_exact() {
-        bail!("fresh workspace provisioning requires an exact path capability");
+        return Err(AdapterError::ProvisionRequiresExactCapability);
     }
     action.path_capability.validate_paths_at(source)?;
     exclude_nested_workspace_dir(source)?;
@@ -156,14 +384,17 @@ pub(crate) fn provision(
 pub(crate) fn write_identity(dest: &Path, identity: &LogicalWorkspaceIdentity) -> Result<()> {
     let path = identity_path(dest)?;
     let recorded = RecordedIdentity::from(identity);
-    let json = serde_json::to_vec_pretty(&recorded).context("serializing workspace identity")?;
-    let parent = path.parent().context("workspace identity has no parent")?;
+    let json = serde_json::to_vec_pretty(&recorded).map_err(AdapterError::SerializeIdentity)?;
+    let parent = path.parent().ok_or(AdapterError::IdentityHasNoParent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     temporary.write_all(&json)?;
     temporary.as_file().sync_all()?;
     temporary
         .persist(&path)
-        .with_context(|| format!("writing workspace identity {}", path.display()))?;
+        .map_err(|source| AdapterError::WriteIdentity {
+            path: path.clone(),
+            source,
+        })?;
     Ok(())
 }
 
@@ -177,7 +408,10 @@ pub(crate) async fn working_tree_hash(dest: &Path) -> Result<String> {
     let tmp = tempfile::Builder::new()
         .prefix("gents-ws-index")
         .tempdir()
-        .context("creating temporary git index for seal")?;
+        .map_err(|source| AdapterError::TempIndex {
+            purpose: "seal",
+            source,
+        })?;
     let index = tmp.path().join("index");
     managed_git_with_index(dest, &index, &["read-tree", "HEAD"]).await?;
     managed_git_with_index(dest, &index, &["add", "-A", "--"]).await?;
@@ -189,9 +423,7 @@ const MANAGED_GIT_OUTPUT_BYTE_CAP: usize = 64 * 1024;
 async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
     use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
-    let index = index
-        .to_str()
-        .context("temporary git index path is not UTF-8")?;
+    let index = index.to_str().ok_or(AdapterError::IndexPathNotUtf8)?;
     let mut environment = std::env::vars_os()
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(key, _)| !GIT_ENV_REMOVED.contains(&key.as_str()))
@@ -228,25 +460,24 @@ async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Resu
             code: Some(0),
             stdout_truncated: true,
             ..
-        } => bail!(
-            "git {} output capture was incomplete (capture limit {MANAGED_GIT_OUTPUT_BYTE_CAP} bytes or post-exit drain cutoff)",
-            args.join(" ")
-        ),
-        ManagedExecOutcome::Exited { stderr, .. } => bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&stderr).trim()
-        ),
-        ManagedExecOutcome::SpawnFailed { error } => bail!(
-            "running git {} in {}: {error}",
-            args.join(" "),
-            cwd.display()
-        ),
-        ManagedExecOutcome::TimedOut { .. } | ManagedExecOutcome::Cancelled { .. } => bail!(
-            "git {} in {} stopped before completing",
-            args.join(" "),
-            cwd.display()
-        ),
+        } => Err(AdapterError::GitOutputIncomplete {
+            command: args.join(" "),
+        }),
+        ManagedExecOutcome::Exited { stderr, .. } => Err(AdapterError::GitFailed {
+            command: args.join(" "),
+            stderr: String::from_utf8_lossy(&stderr).trim().to_owned(),
+        }),
+        ManagedExecOutcome::SpawnFailed { error } => Err(AdapterError::GitManagedSpawn {
+            command: args.join(" "),
+            cwd: cwd.to_path_buf(),
+            error,
+        }),
+        ManagedExecOutcome::TimedOut { .. } | ManagedExecOutcome::Cancelled { .. } => {
+            Err(AdapterError::GitStopped {
+                command: args.join(" "),
+                cwd: cwd.to_path_buf(),
+            })
+        }
     }
 }
 
@@ -254,7 +485,10 @@ fn capture_working_tree(dest: &Path) -> Result<String> {
     let tmp = tempfile::Builder::new()
         .prefix("gents-ws-index")
         .tempdir()
-        .context("creating temporary git index for seal")?;
+        .map_err(|source| AdapterError::TempIndex {
+            purpose: "seal",
+            source,
+        })?;
     let index = tmp.path().join("index");
     git_run_with_index(dest, &index, &["read-tree", "HEAD"])?;
     git_run_with_index(dest, &index, &["add", "-A", "--"])?;
@@ -314,7 +548,7 @@ pub(crate) fn capture_seal_snapshot(
 
 fn nul_paths(bytes: &[u8]) -> Result<Vec<String>> {
     if !bytes.is_empty() && bytes.last() != Some(&0) {
-        bail!("unterminated Git path output");
+        return Err(AdapterError::UnterminatedGitPaths);
     }
     if bytes.is_empty() {
         return Ok(Vec::new());
@@ -322,9 +556,9 @@ fn nul_paths(bytes: &[u8]) -> Result<Vec<String>> {
     bytes[..bytes.len() - 1]
         .split(|byte| *byte == 0)
         .map(|path| {
-            Ok(std::str::from_utf8(path)
-                .context("non-UTF-8 Git path")?
-                .to_owned())
+            std::str::from_utf8(path)
+                .map(str::to_owned)
+                .map_err(AdapterError::NonUtf8GitPath)
         })
         .collect()
 }
@@ -352,28 +586,29 @@ pub(crate) fn validate_tree_delta(
     let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
     let fields = nul_paths(&bytes)?;
     if fields.len() % 2 != 0 {
-        bail!("malformed Git raw delta");
+        return Err(AdapterError::MalformedRawDelta);
     }
     let mut changed_paths = Vec::new();
     for pair in fields.as_chunks::<2>().0 {
         let header: Vec<_> = pair[0].split_ascii_whitespace().collect();
         if header.len() != 5 {
-            bail!("malformed Git raw delta header");
+            return Err(AdapterError::MalformedRawHeader);
         }
         let path = &pair[1];
         changed_paths.push(path.as_str());
         super::path_capability::validate_relative_path(path)?;
         if !capability.authorizes(path) {
-            bail!("workspace path capability denies changed path {path:?}");
+            return Err(AdapterError::PathDenied { path: path.clone() });
         }
         let old_mode = header[0]
             .strip_prefix(':')
-            .context("missing Git raw mode prefix")?;
+            .ok_or(AdapterError::MissingModePrefix)?;
         for mode in [old_mode, header[1]] {
             if !matches!(mode, "000000" | "100644" | "100755") {
-                bail!(
-                    "workspace path capability denies changed symlink/gitlink or unsupported mode {mode} at {path:?}"
-                );
+                return Err(AdapterError::UnsupportedMode {
+                    mode: mode.to_owned(),
+                    path: path.clone(),
+                });
             }
         }
     }
@@ -383,7 +618,7 @@ pub(crate) fn validate_tree_delta(
         let args = ["ls-tree", "-r", "-z", "--name-only", revision];
         let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
         if !bytes.is_empty() && bytes.last() != Some(&0) {
-            bail!("malformed Git tree path list");
+            return Err(AdapterError::MalformedTreePathList);
         }
         let paths = bytes
             .split(|byte| *byte == 0)
@@ -417,7 +652,11 @@ fn git_show_blob(repo: &Path, base_sha: &str, path: &str) -> Result<Option<Vec<u
     let spec = format!("{base_sha}:{path}");
     let output = git_command(repo, &["show", &spec])
         .output()
-        .with_context(|| format!("git show {spec} in {}", repo.display()))?;
+        .map_err(|source| AdapterError::GitShowSpawn {
+            spec: spec.clone(),
+            repo: repo.to_path_buf(),
+            source,
+        })?;
     if output.status.success() {
         return Ok(Some(output.stdout));
     }
@@ -425,7 +664,10 @@ fn git_show_blob(repo: &Path, base_sha: &str, path: &str) -> Result<Option<Vec<u
     if git_blob_missing(&stderr) {
         return Ok(None);
     }
-    bail!("git show {spec} failed: {}", stderr.trim())
+    Err(AdapterError::GitShowFailed {
+        spec,
+        stderr: stderr.trim().to_owned(),
+    })
 }
 
 fn git_blob_missing(stderr: &str) -> bool {
@@ -460,25 +702,20 @@ pub(crate) fn prepare_integrate_commit(
     base_sha: &str,
     snapshot: SealSnapshot,
 ) -> Result<IntegrateEffect> {
-    let trunk = fs::canonicalize(trunk)
-        .with_context(|| format!("canonicalizing trunk {}", trunk.display()))?;
-    let worktree = fs::canonicalize(worktree)
-        .with_context(|| format!("canonicalizing worktree {}", worktree.display()))?;
+    let trunk = canonicalize_labeled("trunk", trunk)?;
+    let worktree = canonicalize_labeled("worktree", worktree)?;
     if trunk == worktree {
-        bail!("refusing to integrate: trunk/source checkout is the worker workspace");
+        return Err(AdapterError::IntegrateIntoSource);
     }
     if !is_worktree_of(&trunk, &worktree)? {
-        bail!(
-            "refusing to integrate: {} is not a worktree of the source checkout",
-            worktree.display()
-        );
+        return Err(AdapterError::NotWorktreeOfSource { path: worktree });
     }
     if let Some(existing) = observe_integrate_commit(&trunk, seal_hash)? {
         if snapshot.tree_hash != seal_hash {
-            bail!(
-                "live tree hash {} does not match workspace seal_hash {seal_hash}",
-                snapshot.tree_hash
-            );
+            return Err(AdapterError::TreeHashMismatch {
+                tree_hash: snapshot.tree_hash,
+                seal_hash: seal_hash.to_owned(),
+            });
         }
         let head = git_output(&trunk, &["rev-parse", "HEAD"])?;
         return Ok(IntegrateEffect {
@@ -489,10 +726,10 @@ pub(crate) fn prepare_integrate_commit(
         });
     }
     if snapshot.tree_hash != seal_hash {
-        bail!(
-            "live tree hash {} does not match workspace seal_hash {seal_hash}",
-            snapshot.tree_hash
-        );
+        return Err(AdapterError::TreeHashMismatch {
+            tree_hash: snapshot.tree_hash,
+            seal_hash: seal_hash.to_owned(),
+        });
     }
     if diff_is_empty(&snapshot.diff) {
         return empty_diff_effect(&trunk, &worktree, seal_hash, base_sha, snapshot);
@@ -533,7 +770,7 @@ pub(crate) fn verify_integrate_commit(
     let diff = git_output_bytes_inner(git_command(trunk, &args), trunk, &args)?;
     if diff.is_empty() {
         if !commit_is_in_trunk(trunk, commit) {
-            bail!("empty integration receipt does not name an existing trunk commit");
+            return Err(AdapterError::EmptyReceiptNotInTrunk);
         }
         return Ok(false);
     }
@@ -545,7 +782,7 @@ pub(crate) fn verify_integrate_commit(
     let expected = git_output_with_index(trunk, &index, &["write-tree"])?;
     let actual = git_output(trunk, &["rev-parse", &format!("{commit}^{{tree}}")])?;
     if actual != expected {
-        bail!("integration commit differs from the immutable sealed delta");
+        return Err(AdapterError::CommitDiffersFromSealedDelta);
     }
     validate_tree_delta(trunk, &parent, commit, &identity.path_capability)?;
     Ok(true)
@@ -573,9 +810,12 @@ fn empty_diff_effect(
             pending_head: false,
         });
     }
-    bail!(
-        "empty sealed diff but trunk tree {trunk_tree} does not match seal_hash {seal_hash} and worktree HEAD {worktree_head} is not base_sha {base_sha}"
-    )
+    Err(AdapterError::EmptyDiffMismatch {
+        trunk_tree,
+        seal_hash: seal_hash.to_owned(),
+        worktree_head,
+        base_sha: base_sha.to_owned(),
+    })
 }
 
 fn diff_is_empty(diff: &[u8]) -> bool {
@@ -589,8 +829,7 @@ fn diff_is_empty(diff: &[u8]) -> bool {
 /// commits are not rewound. `HEAD == commit` still applies path updates
 /// so a crash between `update-ref` and the last path converges.
 pub(crate) fn advance_trunk_to_integrate_commit(trunk: &Path, commit: &str) -> Result<()> {
-    let trunk = fs::canonicalize(trunk)
-        .with_context(|| format!("canonicalizing trunk {}", trunk.display()))?;
+    let trunk = canonicalize_labeled("trunk", trunk)?;
     let head = git_output(&trunk, &["rev-parse", "HEAD"])?;
     if head == commit {
         let subject = git_output(&trunk, &["log", "-1", "--format=%s", commit])?;
@@ -604,16 +843,19 @@ pub(crate) fn advance_trunk_to_integrate_commit(trunk: &Path, commit: &str) -> R
     }
     let parent = git_output(&trunk, &["rev-parse", &format!("{commit}^")])?;
     if head != parent {
-        bail!(
-            "refusing to move trunk HEAD at {} to integrate commit {commit}: HEAD {head} is not the commit's parent {parent}",
-            trunk.display()
-        );
+        return Err(AdapterError::MoveTrunkRefused {
+            trunk,
+            commit: commit.to_owned(),
+            head,
+            parent,
+        });
     }
-    git_run(&trunk, &["update-ref", "HEAD", commit, &parent]).with_context(|| {
-        format!(
-            "moving trunk HEAD at {} to integrate commit {commit}",
-            trunk.display()
-        )
+    git_run(&trunk, &["update-ref", "HEAD", commit, &parent]).map_err(|source| {
+        AdapterError::MoveTrunkHead {
+            trunk: trunk.clone(),
+            commit: commit.to_owned(),
+            source: Box::new(source),
+        }
     })?;
     apply_integrate_commit_paths(&trunk, commit)
 }
@@ -632,30 +874,48 @@ fn apply_integrate_commit_paths(trunk: &Path, commit: &str) -> Result<()> {
     let bytes = git_output_bytes_inner(git_command(trunk, &args), trunk, &args)?;
     let fields = nul_paths(&bytes)?;
     if fields.len() % 2 != 0 {
-        bail!("malformed Git name-status output");
+        return Err(AdapterError::MalformedNameStatus);
     }
     for pair in fields.as_chunks::<2>().0 {
         match pair[0].as_str() {
             "A" | "M" | "T" => checkout_from_commit(trunk, commit, &pair[1])?,
             "D" => remove_from_trunk(trunk, &pair[1])?,
-            other => bail!("unsupported Git name-status {other}"),
+            other => {
+                return Err(AdapterError::UnsupportedNameStatus {
+                    status: other.to_owned(),
+                })
+            }
         }
     }
     Ok(())
 }
 
 fn checkout_from_commit(trunk: &Path, commit: &str, path: &str) -> Result<()> {
-    git_run(trunk, &["checkout", commit, "--", path]).with_context(|| {
-        format!(
-            "checking out sealed path {path} onto trunk {}",
-            trunk.display()
-        )
+    git_run(trunk, &["checkout", commit, "--", path]).map_err(|source| {
+        AdapterError::CheckoutSealedPath {
+            trunk: trunk.to_path_buf(),
+            path: path.to_owned(),
+            source: Box::new(source),
+        }
     })
 }
 
 fn remove_from_trunk(trunk: &Path, path: &str) -> Result<()> {
-    git_run(trunk, &["rm", "-f", "--ignore-unmatch", "--", path])
-        .with_context(|| format!("removing sealed path {path} from trunk {}", trunk.display()))
+    git_run(trunk, &["rm", "-f", "--ignore-unmatch", "--", path]).map_err(|source| {
+        AdapterError::RemoveSealedPath {
+            trunk: trunk.to_path_buf(),
+            path: path.to_owned(),
+            source: Box::new(source),
+        }
+    })
+}
+
+fn canonicalize_labeled(label: &'static str, path: &Path) -> Result<PathBuf> {
+    fs::canonicalize(path).map_err(|source| AdapterError::Canonicalize {
+        label,
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 pub(crate) fn observe_integrate_commit(trunk: &Path, seal_hash: &str) -> Result<Option<String>> {
@@ -684,18 +944,23 @@ fn refuse_overlapping_dirty_trunk(trunk: &Path, changed_files: &[String]) -> Res
     while let Some(record) = fields.next() {
         let raw = record.as_bytes();
         if raw.len() < 4 || raw[2] != b' ' {
-            bail!("malformed Git porcelain status");
+            return Err(AdapterError::MalformedPorcelain);
         }
         let path = &record[3..];
         let mut paths = vec![path];
         if raw[..2].iter().any(|status| matches!(status, b'R' | b'C')) {
-            paths.push(fields.next().context("missing Git rename source")?.as_str());
+            paths.push(
+                fields
+                    .next()
+                    .ok_or(AdapterError::MissingRenameSource)?
+                    .as_str(),
+            );
         }
         for path in paths {
             if changed_files.iter().any(|changed| changed == path) {
-                bail!(
-                    "refusing to integrate: trunk has uncommitted changes overlapping sealed path {path}"
-                );
+                return Err(AdapterError::OverlappingDirtyTrunk {
+                    path: path.to_owned(),
+                });
             }
         }
     }
@@ -706,15 +971,16 @@ fn commit_tree_from_isolated_index(trunk: &Path, diff: &[u8], seal_hash: &str) -
     let tmp = tempfile::Builder::new()
         .prefix("gents-integrate-index")
         .tempdir()
-        .context("creating temporary git index for integrate")?;
+        .map_err(|source| AdapterError::TempIndex {
+            purpose: "integrate",
+            source,
+        })?;
     let index = tmp.path().join("index");
     let parent = git_output(trunk, &["rev-parse", "HEAD"])?;
     git_run_with_index(trunk, &index, &["read-tree", &parent])?;
-    git_apply_cached(trunk, &index, diff).with_context(|| {
-        format!(
-            "git apply --cached on isolated index in {}",
-            trunk.display()
-        )
+    git_apply_cached(trunk, &index, diff).map_err(|source| AdapterError::ApplyCachedOnIndex {
+        trunk: trunk.to_path_buf(),
+        source: Box::new(source),
     })?;
     let tree = git_output_with_index(trunk, &index, &["write-tree"])?;
     let message = integrate_commit_message(seal_hash);
@@ -737,8 +1003,7 @@ pub(crate) fn cleanup_workspace_tree(
     ceiling: Option<&Path>,
 ) -> Result<()> {
     let source = if source.exists() {
-        fs::canonicalize(source)
-            .with_context(|| format!("canonicalizing source {}", source.display()))?
+        canonicalize_labeled("source", source)?
     } else {
         source.to_path_buf()
     };
@@ -749,62 +1014,55 @@ pub(crate) fn cleanup_workspace_tree(
     };
     if let Some(ceiling) = ceiling {
         let ceiling = if ceiling.exists() {
-            fs::canonicalize(ceiling)
-                .with_context(|| format!("canonicalizing ceiling {}", ceiling.display()))?
+            canonicalize_labeled("ceiling", ceiling)?
         } else {
             ceiling.to_path_buf()
         };
         if !expected.starts_with(&ceiling) {
-            bail!(
-                "cleanup dest {} escapes operator ceiling {}",
-                expected.display(),
-                ceiling.display()
-            );
+            return Err(AdapterError::CleanupEscapesCeiling {
+                dest: expected,
+                ceiling,
+            });
         }
     }
     if source.starts_with(&expected) {
-        bail!(
-            "refusing to cleanup: dest {} is an ancestor of the source checkout",
-            expected.display()
-        );
+        return Err(AdapterError::CleanupAncestorOfSource { dest: expected });
     }
     if expected == source {
-        bail!("refusing to cleanup: destination is the source checkout");
+        return Err(AdapterError::CleanupIsSource);
     }
     if dest.exists() {
-        let dest = fs::canonicalize(dest)
-            .with_context(|| format!("canonicalizing workspace dest {}", dest.display()))?;
+        let dest = canonicalize_labeled("workspace dest", dest)?;
         if dest != expected {
-            bail!(
-                "cleanup dest {} does not match host-chosen path {}",
-                dest.display(),
-                expected.display()
-            );
+            return Err(AdapterError::CleanupDestMismatch { dest, expected });
         }
     } else if dest != expected {
-        bail!(
-            "cleanup dest {} does not match host-chosen path {}",
-            dest.display(),
-            expected.display()
-        );
+        return Err(AdapterError::CleanupDestMismatch {
+            dest: dest.to_path_buf(),
+            expected,
+        });
     }
     if !expected.exists() {
         let _ = git_run(&source, &["worktree", "prune"]);
         return Ok(());
     }
     if expected == source {
-        bail!("refusing to cleanup: destination is the source checkout");
+        return Err(AdapterError::CleanupIsSource);
     }
     let dest_str = expected.display().to_string();
     let remove = git_run(&source, &["worktree", "remove", "--force", &dest_str]);
     if expected.exists() {
         if is_worktree_of(&source, &expected)? {
-            return Err(remove.err().unwrap_or_else(|| {
-                anyhow!("git worktree remove left {} in place", expected.display())
-            }));
+            return Err(remove
+                .err()
+                .unwrap_or_else(|| AdapterError::WorktreeRemoveLeft {
+                    path: expected.clone(),
+                }));
         }
-        fs::remove_dir_all(&expected)
-            .with_context(|| format!("removing leftover workspace {}", expected.display()))?;
+        fs::remove_dir_all(&expected).map_err(|source| AdapterError::RemoveLeftover {
+            path: expected.clone(),
+            source,
+        })?;
         let _ = git_run(&source, &["worktree", "prune"]);
     }
     Ok(())
@@ -819,14 +1077,15 @@ fn git_apply_cached(cwd: &Path, index: &Path, diff: &[u8]) -> Result<()> {
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("spawning git apply --cached in {}", cwd.display()))?;
+    let mut child = cmd.spawn().map_err(|source| AdapterError::SpawnGitApply {
+        cwd: cwd.to_path_buf(),
+        source,
+    })?;
     {
         let mut stdin = child
             .stdin
             .take()
-            .ok_or_else(|| anyhow!("git apply stdin closed"))?;
+            .ok_or(AdapterError::GitApplyStdinClosed)?;
         stdin.write_all(diff)?;
         if !diff.ends_with(b"\n") {
             stdin.write_all(b"\n")?;
@@ -834,14 +1093,16 @@ fn git_apply_cached(cwd: &Path, index: &Path, diff: &[u8]) -> Result<()> {
     }
     let output = child
         .wait_with_output()
-        .with_context(|| format!("waiting for git apply in {}", cwd.display()))?;
+        .map_err(|source| AdapterError::WaitGitApply {
+            cwd: cwd.to_path_buf(),
+            source,
+        })?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(anyhow!(
-            "git apply failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
+        Err(AdapterError::GitApplyFailed {
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        })
     }
 }
 
@@ -851,8 +1112,11 @@ pub(crate) fn write_seal_marker(dest: &Path, seal_hash: &str, base_sha: &str) ->
         seal_hash: seal_hash.to_string(),
         base_sha: base_sha.to_string(),
     };
-    let json = serde_json::to_vec_pretty(&recorded).context("serializing workspace seal")?;
-    fs::write(&path, json).with_context(|| format!("writing workspace seal {}", path.display()))?;
+    let json = serde_json::to_vec_pretty(&recorded).map_err(AdapterError::SerializeSeal)?;
+    fs::write(&path, json).map_err(|source| AdapterError::WriteSeal {
+        path: path.clone(),
+        source,
+    })?;
     Ok(())
 }
 
@@ -939,7 +1203,7 @@ pub(crate) fn verify_workspace_identity(
         !identity.path_capability.is_exact(),
         false,
     )
-    .map_err(anyhow::Error::msg)?;
+    .map_err(|reason| AdapterError::ExistingTargetMismatch { reason })?;
     Ok(())
 }
 
@@ -951,10 +1215,15 @@ fn read_identity(dest: &Path) -> Result<Option<RecordedIdentity>> {
     if !path.is_file() {
         return Ok(None);
     }
-    let bytes = fs::read(&path)
-        .with_context(|| format!("reading workspace identity {}", path.display()))?;
-    let recorded = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing workspace identity {}", path.display()))?;
+    let bytes = fs::read(&path).map_err(|source| AdapterError::ReadIdentity {
+        path: path.clone(),
+        source,
+    })?;
+    let recorded =
+        serde_json::from_slice(&bytes).map_err(|source| AdapterError::ParseIdentity {
+            path: path.clone(),
+            source,
+        })?;
     Ok(Some(recorded))
 }
 
@@ -998,8 +1267,11 @@ fn exclude_nested_workspace_dir(source: &Path) -> Result<()> {
         source.join(path)
     };
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating exclude parent {}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|source| AdapterError::CreateParent {
+            label: "exclude parent",
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     let existing = fs::read_to_string(&path).unwrap_or_default();
     if existing
@@ -1012,7 +1284,10 @@ fn exclude_nested_workspace_dir(source: &Path) -> Result<()> {
         .create(true)
         .append(true)
         .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .map_err(|source| AdapterError::OpenFile {
+            path: path.clone(),
+            source,
+        })?;
     if !existing.is_empty() && !existing.ends_with('\n') {
         writeln!(file)?;
     }
@@ -1022,22 +1297,26 @@ fn exclude_nested_workspace_dir(source: &Path) -> Result<()> {
 
 fn add_worktree(source: &Path, dest: &Path, branch: &str, base_sha: &str) -> Result<()> {
     if dest.exists() {
-        bail!(
-            "refusing to create worktree: destination {} already exists",
-            dest.display()
-        );
+        return Err(AdapterError::DestinationExists {
+            dest: dest.to_path_buf(),
+        });
     }
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating workspace dest parent {}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|source| AdapterError::CreateParent {
+            label: "workspace dest parent",
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     let branch_ref = format!("refs/heads/{branch}");
     if git_ok(source, &["show-ref", "--verify", "--quiet", &branch_ref]) {
         let branch_sha = git_output(source, &["rev-parse", &branch_ref])?;
         if branch_sha != base_sha {
-            bail!(
-                "branch {branch} exists at {branch_sha}, not requested base {base_sha}; not moving the branch"
-            );
+            return Err(AdapterError::BranchMismatch {
+                branch: branch.to_owned(),
+                branch_sha,
+                base_sha: base_sha.to_owned(),
+            });
         }
         git_run(
             source,
@@ -1076,8 +1355,11 @@ pub(crate) fn clone_artifacts(source: &Path, dest: &Path, artifacts: &[String]) 
             continue;
         }
         if let Some(parent) = dst_dir.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating artifact parent {}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|source| AdapterError::CreateParent {
+                label: "artifact parent",
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
         clone_dir(&src_dir, &dst_dir, rel)?;
         if rel == "target" {
@@ -1109,12 +1391,17 @@ fn clone_dir(src: &Path, dst: &Path, label: &str) -> Result<()> {
         .arg(src)
         .arg(dst)
         .status()
-        .with_context(|| format!("copying {label}"))?;
+        .map_err(|source| AdapterError::CopyArtifact {
+            label: label.to_owned(),
+            source,
+        })?;
     if copied.success() {
         Ok(())
     } else {
         let _ = fs::remove_dir_all(dst);
-        Err(anyhow!("plain copy of {label} failed"))
+        Err(AdapterError::PlainCopyFailed {
+            label: label.to_owned(),
+        })
     }
 }
 
@@ -1127,17 +1414,18 @@ fn git_run_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn git_run_inner(mut cmd: Command, cwd: &Path, args: &[&str]) -> Result<()> {
-    let output = cmd
-        .output()
-        .with_context(|| format!("running git {} in {}", args.join(" "), cwd.display()))?;
+    let output = cmd.output().map_err(|source| AdapterError::GitSpawn {
+        command: args.join(" "),
+        cwd: cwd.to_path_buf(),
+        source,
+    })?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(anyhow!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
+        Err(AdapterError::GitFailed {
+            command: args.join(" "),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        })
     }
 }
 
@@ -1169,15 +1457,16 @@ fn git_output_inner(cmd: Command, cwd: &Path, args: &[&str]) -> Result<String> {
 }
 
 fn git_output_bytes_inner(mut cmd: Command, cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = cmd
-        .output()
-        .with_context(|| format!("running git {} in {}", args.join(" "), cwd.display()))?;
+    let output = cmd.output().map_err(|source| AdapterError::GitSpawn {
+        command: args.join(" "),
+        cwd: cwd.to_path_buf(),
+        source,
+    })?;
     if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        return Err(AdapterError::GitFailed {
+            command: args.join(" "),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
     }
     Ok(output.stdout)
 }

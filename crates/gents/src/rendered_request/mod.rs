@@ -751,16 +751,19 @@ mod tests {
 }
 
 use anyhow::{Context, Result};
-pub use encoding::CapturePayloadKind;
+pub use encoding::{CapturePayloadKind, EncodingError};
 use serde_json::Value;
 
-pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<Value> {
+pub fn decode_inline_capture_json(
+    capture_version: u32,
+    stored: &str,
+) -> std::result::Result<Value, EncodingError> {
     encoding::resolve_capture_with(
         capture_version,
         stored,
         CapturePayloadKind::RequestBody,
-        |_| anyhow::bail!("capture delta requires base resolution"),
-        |_| anyhow::bail!("capture manifest requires block resolution"),
+        |_| Err(EncodingError::DeltaRequiresBase),
+        |_| Err(EncodingError::ManifestRequiresBlocks),
     )
 }
 
@@ -824,11 +827,10 @@ pub(crate) async fn load_shared_json(
         let block = cache
             .blocks
             .get(&entry.doc_id)
-            .context("shared JSON block was not read")?;
-        anyhow::ensure!(
-            block.content_key == entry.content_key,
-            "shared JSON block content key mismatch"
-        );
+            .ok_or(EncodingError::SharedBlockNotRead)?;
+        if block.content_key != entry.content_key {
+            return Err(EncodingError::SharedBlockKeyMismatch);
+        }
         Ok((block.bytes.clone(), block.field_commit_cid.clone()))
     })?;
     Ok(canonical_json_string(&value)?)
@@ -883,7 +885,9 @@ where
                         anyhow::bail!("rendered-request delta base did not resolve uniquely");
                     };
                     let actual = commits::select_field_commit(&response, "request_json")
-                        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
+                        .map_err(|error| {
+                            anyhow::Error::new(CaptureStoreReadError(anyhow::Error::new(error)))
+                        })?
                         .context("rendered-request delta base lacks field commit")?
                         .cid;
                     cache
@@ -929,28 +933,28 @@ where
             }
         }
     }
-    encoding::resolve_capture_with(
+    Ok(encoding::resolve_capture_with(
         capture_version,
         stored,
         kind,
         |base| {
             bases
                 .remove(&(base.doc_id.clone(), base.field_commit_cid.clone()))
-                .context("capture delta chain exceeds maximum depth or contains a cycle")
+                .ok_or(EncodingError::DeltaBaseNotPreloaded)
         },
         |entry| {
             let block = cache
                 .blocks
                 .get(&entry.doc_id)
-                .context("capture manifest block was not read")?;
-            anyhow::ensure!(
-                block.content_key == entry.content_key,
-                "capture manifest block {} was read under another content key",
-                entry.doc_id
-            );
+                .ok_or(EncodingError::ManifestBlockNotRead)?;
+            if block.content_key != entry.content_key {
+                return Err(EncodingError::BlockReadUnderOtherKey {
+                    doc_id: entry.doc_id.clone(),
+                });
+            }
             Ok((block.bytes.clone(), block.field_commit_cid.clone()))
         },
-    )
+    )?)
 }
 
 async fn read_manifest_tree<R>(
@@ -995,18 +999,17 @@ where
 fn manifest_children_cached(
     entries: &[encoding::ManifestEntry],
     cache: &std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<Vec<encoding::ManifestEntry>> {
+) -> std::result::Result<Vec<encoding::ManifestEntry>, EncodingError> {
     let mut children = Vec::new();
     for entry in entries {
         let block = cache
             .get(&entry.doc_id)
-            .context("capture manifest node is missing")?;
+            .ok_or(EncodingError::ManifestNodeMissing)?;
         encoding::verify_manifest_block(entry, &block.bytes, &block.field_commit_cid)?;
         children.extend(encoding::manifest_children(&block.bytes)?);
-        anyhow::ensure!(
-            children.len() <= encoding::MAX_MANIFEST_BLOCKS,
-            "capture manifest exceeds leaf bound"
-        );
+        if children.len() > encoding::MAX_MANIFEST_BLOCKS {
+            return Err(EncodingError::ManifestLeafBound);
+        }
     }
     Ok(children)
 }

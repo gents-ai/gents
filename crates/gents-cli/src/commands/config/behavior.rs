@@ -202,7 +202,7 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
         surfaces.push(serde_json::from_value(row)?);
     }
     let merged = merge_datastore_tool_surfaces(&tools, &surfaces)?;
-    presets::classify_tools(&tools, &merged)
+    Ok(presets::classify_tools(&tools, &merged)?)
 }
 
 const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";

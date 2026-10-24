@@ -1,7 +1,8 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use super::ToolSurfaceError;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 
@@ -84,7 +85,7 @@ pub(super) fn build_host_tools(
     if matches!(file_tools, FileToolMode::ReadWrite) {
         let root = effective_root
             .clone()
-            .ok_or_else(|| anyhow!("readwrite file tools require a configured tool root"))?;
+            .ok_or(ToolSurfaceError::ReadWriteFileToolsRequireRoot)?;
         builder = builder.write_file(root.clone()).edit_file(root);
     }
 
@@ -119,7 +120,7 @@ pub(super) fn build_host_tools(
         BashMode::Unrestricted => {
             let root = effective_root
                 .clone()
-                .ok_or_else(|| anyhow!("unrestricted bash requires a configured tool root"))?;
+                .ok_or(ToolSurfaceError::UnrestrictedBashRequiresRoot)?;
             builder = match command_policy.clone() {
                 Some(policy) => builder.bash_unrestricted_with_policy_and_limits(
                     root,
@@ -309,12 +310,16 @@ pub fn resolve_effective_tool_root(
                             super::root_admission::resolve_configured_tool_root(ceiling_root)
                                 .map(Some)
                         }
-                        None => Err(anyhow!(
-                            "agent {agent_name} file tool root {} escapes operator tool root {}: {}",
-                            selection_root.display(),
-                            ceiling_root.display(),
-                            denied.denial_reason().expect("denied outcome has a reason")
-                        )),
+                        None => Err(ToolSurfaceError::FileToolRootEscapes {
+                            agent_name: agent_name.to_owned(),
+                            selection_root: selection_root.to_path_buf(),
+                            ceiling_root: ceiling_root.to_path_buf(),
+                            reason: denied
+                                .denial_reason()
+                                .expect("denied outcome has a reason")
+                                .to_string(),
+                        }
+                        .into()),
                     }
                 }
             }
@@ -441,21 +446,18 @@ fn project_measured_mcp_services(
     response: &serde_json::Value,
     local_hostname: Option<&str>,
 ) -> Result<Vec<String>> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "MCP availability requires node scope"
-    );
+    if node_did.trim().is_empty() {
+        return Err(ToolSurfaceError::McpAvailabilityRequiresNodeScope.into());
+    }
     let mut expected_endpoints = RapidHashMap::<String, RapidHashSet<String>>::new();
     let mut seen = RapidHashSet::new();
     for service in services {
-        anyhow::ensure!(
-            service.node_did == node_did,
-            "MCP availability received foreign service"
-        );
-        anyhow::ensure!(
-            seen.insert(&service.service_id),
-            "duplicate scoped MCP service"
-        );
+        if service.node_did != node_did {
+            return Err(ToolSurfaceError::ForeignMcpService.into());
+        }
+        if !seen.insert(&service.service_id) {
+            return Err(ToolSurfaceError::DuplicateScopedMcpService.into());
+        }
         if !service.enabled {
             continue;
         }
@@ -490,7 +492,7 @@ fn project_measured_mcp_services(
         .get("data")
         .and_then(|data| data.get("ToolServiceHealthState"))
         .and_then(serde_json::Value::as_array)
-        .context("MCP health query returned no rows array")?;
+        .ok_or(ToolSurfaceError::McpHealthRowsMissing)?;
     let mut available = rows
         .iter()
         .filter_map(|row| {

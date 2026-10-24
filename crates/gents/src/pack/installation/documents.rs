@@ -445,7 +445,7 @@ pub async fn install_prepared_document_pack(
                     &package.manifest,
                     &package.package_digest,
                     &bindings.inference_slots,
-                    &|path| package.asset(path),
+                    &|path| package.asset(path).map_err(anyhow::Error::from),
                     grant_authority,
                 )?;
                 let identity =

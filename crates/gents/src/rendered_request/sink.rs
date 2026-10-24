@@ -693,11 +693,11 @@ async fn encode_payload_tree(
         entries = payload_entries(&nodes, pins)?;
         height += 1;
     }
-    encoding::encode_tree(ManifestTree {
+    Ok(encoding::encode_tree(ManifestTree {
         root: entries.remove(0),
         height,
         leaves,
-    })
+    })?)
 }
 
 pub(crate) async fn store_shared_json_in_txn(
