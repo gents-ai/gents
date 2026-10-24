@@ -15,9 +15,14 @@ export type UnresolvedChatSubmission = {
   contentKey: string;
 };
 
-export function contentKey(content: string): string {
+export function contentKey(
+  content: string,
+  attachments: readonly { name: string; mediaType: string; data: string }[] = [],
+): string {
   let hash = 0x811c9dc5;
-  for (const char of content.trim()) {
+  for (const char of attachments.length
+    ? JSON.stringify([content.trim(), attachments])
+    : content.trim()) {
     hash ^= char.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
@@ -73,8 +78,9 @@ export function unresolvedSubmissionFor(
   nodeDid: string,
   selectedSessionId: string | null,
   content: string,
+  attachments: readonly { name: string; mediaType: string; data: string }[] = [],
 ): UnresolvedChatSubmission | undefined {
-  const key = contentKey(content);
+  const key = contentKey(content, attachments);
   return loadUnresolvedSubmissions().find(
     (entry) =>
       entry.nodeDid === nodeDid &&

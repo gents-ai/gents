@@ -156,6 +156,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
+        source_root.join("tauri_commands/attachments.rs"),
         source_root.join("tauri_commands/inference_setup.rs"),
         source_root.join("tauri_commands/lifecycle.rs"),
         source_root.join("tauri_commands/workspace.rs"),

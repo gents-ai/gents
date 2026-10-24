@@ -5,8 +5,9 @@ import type { ShellView } from "@/../hooks/shellView";
 export function presentedComposerSendStatus(
   draft: string,
   canonicalNonEmptyStatus: SendStatus,
+  hasAttachments = false,
 ): SendStatus {
-  return draft.trim()
+  return draft.trim() || hasAttachments
     ? canonicalNonEmptyStatus
     : {
         kind: "disabled",

@@ -4870,6 +4870,7 @@ version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "blake3",
  "bytes",
  "chrono",
@@ -4894,6 +4895,7 @@ dependencies = [
  "syn 2.0.117",
  "tauri",
  "tauri-plugin",
+ "tauri-plugin-fs",
  "tempfile",
  "tokio",
  "tokio-util",
