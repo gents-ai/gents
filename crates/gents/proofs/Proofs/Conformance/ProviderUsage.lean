@@ -37,6 +37,8 @@ def cases : List Case := componentCases ++
    ⟨"empty_final_response", [{ finalResponse := true }]⟩,
    ⟨"reported_zero", [{ input := some 0, output := some 0, finalResponse := true }]⟩,
    ⟨"nonfinal_counters", [{ base with finalResponse := false }]⟩,
+   ⟨"messages_cumulative", [{ input := some 100, output := some 20, cacheRead := some 64, cacheWrite := some 36, finalResponse := true }]⟩,
+   ⟨"messages_eof", [{ input := some 100, output := some 20, cacheRead := some 64, cacheWrite := some 36 }]⟩,
    ⟨"output_not_reported", [{ input := some 100, finalResponse := true }]⟩,
    ⟨"optional_breakdowns_absent", [{ input := some 100, output := some 20, finalResponse := true }]⟩,
    ⟨"provider_total_is_not_a_second_charge", [{ base with providerTotal := some 999 }]⟩,
@@ -88,6 +90,8 @@ def casesJson : String := jsonArray (cases.map fun c =>
   "{\"name\":" ++ jsonString c.name ++
   ",\"observations\":" ++ jsonArray (c.observations.map observationJson) ++
   ",\"expected\":" ++ jsonArray (c.observations.map expectedJson) ++
+  ",\"charged_total\":" ++ optionalNat ((summarize c.observations).bind Summary.chargedTotal) ++
+  ",\"fresh_input\":" ++ optionalNat ((summarize c.observations).bind Summary.freshInput) ++
   ",\"summary\":" ++ ((summarize c.observations).map summaryJson).getD "null" ++ "}")
 
 theorem witnesses_keep_zero_distinct_from_missing :

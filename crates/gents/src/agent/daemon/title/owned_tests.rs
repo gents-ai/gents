@@ -1198,6 +1198,7 @@ impl TitleFixture {
             enabled: true,
         });
         let agent_config = Arc::new(ResolvedAgent {
+            profile_id: None,
             agent_id: "general".into(),
             node: principal,
             backend_id: Some("general:backend".into()),

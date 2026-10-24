@@ -221,6 +221,11 @@ pub struct InferenceCallSummaryView {
     pub queue_depth_at_enqueue: Option<i64>,
     pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
+    pub reasoning_output_tokens: Option<i64>,
+    pub provider_total_tokens: Option<i64>,
+    pub usage_completeness: Option<String>,
 }
 
 /// Panel and table classify against `display_state` only, never `status`;

@@ -140,6 +140,9 @@ pub struct SessionTokenUsage {
     pub calls_missing_usage: i64,
     pub input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
+    pub provider_total_tokens: Option<u64>,
     pub fresh_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub charged_tokens: Option<u64>,
@@ -256,7 +259,7 @@ pub async fn load_pinned_request_context_observation(
                 completion_tokens: calls
                     .inference_calls
                     .first()
-                    .and_then(|row| row.completion_tokens)
+                    .and_then(|row| row.usage.completion_tokens)
                     .and_then(|tokens| u64::try_from(tokens).ok()),
             }
         }),
@@ -297,7 +300,7 @@ pub async fn load_session_inference_observation(
     let latest_completion_tokens = latest_context.as_ref().and_then(|context| {
         rows.iter()
             .find(|row| row.call_id == context.call_id)
-            .and_then(|row| row.completion_tokens)
+            .and_then(|row| row.usage.completion_tokens)
             .and_then(|tokens| u64::try_from(tokens).ok())
     });
     Ok(SessionInferenceObservation {
@@ -531,12 +534,8 @@ struct InferenceDetailRow {
     call_seq: i64,
     #[serde(default)]
     queued_at: Option<String>,
-    #[serde(default)]
-    prompt_tokens: Option<i64>,
-    #[serde(default)]
-    completion_tokens: Option<i64>,
-    #[serde(default)]
-    cached_input_tokens: Option<i64>,
+    #[serde(flatten)]
+    usage: gents_protocol::usage::TokenUsageColumns,
     #[serde(default)]
     context_accounting_json: Option<String>,
 }
@@ -948,7 +947,7 @@ fn session_investigation_scoped_query(
     )
 }
 
-const INFERENCE_DETAIL_FIELDS: &str = "request_doc_id request_id call_id call_seq queued_at started_at ended_at prompt_tokens call_kind completion_tokens cached_input_tokens context_accounting_json";
+const INFERENCE_DETAIL_FIELDS: &str = "request_doc_id request_id call_id call_seq queued_at started_at ended_at prompt_tokens call_kind completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness context_accounting_json";
 
 fn session_investigation_calls_query(node_did: &str, request_doc_ids: &[String]) -> String {
     session_investigation_calls_scoped_query(node_did, request_doc_ids, None)
@@ -1165,48 +1164,36 @@ fn aggregate_inference_usage(rows: &[InferenceDetailRow]) -> Result<SessionToken
             u64::try_from(ended.signed_duration_since(started).num_milliseconds()).ok()?;
         total.checked_add(duration)
     });
-    let model_calls = rows.len() as i64;
-    let valid_usage_rows = rows
+    let observations = rows
         .iter()
-        .filter(|call| match (call.prompt_tokens, call.completion_tokens) {
-            (Some(prompt), Some(completion)) if prompt >= 0 && completion >= 0 => call
-                .cached_input_tokens
-                .is_some_and(|cached| cached >= 0 && cached <= prompt),
-            _ => false,
+        .map(|row| row.usage.observation())
+        .collect::<Result<Vec<_>>>();
+    let calls_with_usage = rows
+        .iter()
+        .filter(|row| {
+            row.usage.observation().ok().is_some_and(|usage| {
+                usage.completeness() == gents_protocol::usage::UsageCompleteness::Complete
+            })
         })
-        .collect::<Vec<_>>();
-    let calls_with_usage = valid_usage_rows.len() as i64;
-    let calls_missing_usage = model_calls.saturating_sub(calls_with_usage);
-    let (input_tokens, output_tokens, cached_input_tokens) =
-        crate::provider_usage::sum_persisted_usage_columns(valid_usage_rows.iter().map(|call| {
-            (
-                call.prompt_tokens,
-                call.completion_tokens,
-                call.cached_input_tokens,
-            )
-        }));
-    let fresh_input_tokens =
-        input_tokens.map(|input| input.saturating_sub(cached_input_tokens.unwrap_or_default()));
-    let charged_tokens = if calls_missing_usage == 0 {
-        Some(crate::provider_usage::sum_charged_from_persisted_parts(
-            valid_usage_rows
-                .iter()
-                .map(|call| (call.prompt_tokens, call.completion_tokens)),
-        )?)
-    } else {
-        None
-    };
+        .count() as i64;
+    let summary = observations
+        .and_then(gents_protocol::usage::TokenUsageSummary::from_observations)
+        .ok();
+    let calls = i64::try_from(rows.len()).context("too many inference calls")?;
     Ok(SessionTokenUsage {
-        model_calls,
+        model_calls: calls,
         calls_with_usage,
-        calls_missing_usage,
-        input_tokens,
-        cached_input_tokens,
-        fresh_input_tokens,
-        output_tokens,
-        charged_tokens,
+        calls_missing_usage: calls - calls_with_usage,
+        input_tokens: summary.and_then(|value| value.input.observed()),
+        cached_input_tokens: summary.and_then(|value| value.cache_read.observed()),
+        cache_creation_input_tokens: summary.and_then(|value| value.cache_write.observed()),
+        reasoning_output_tokens: summary.and_then(|value| value.reasoning.observed()),
+        provider_total_tokens: summary.and_then(|value| value.provider_total.observed()),
+        fresh_input_tokens: summary.and_then(|value| value.fresh_input()),
+        output_tokens: summary.and_then(|value| value.output.observed()),
+        charged_tokens: summary.and_then(|value| value.charged_total()),
         api_duration_ms,
-        incomplete: calls_missing_usage > 0,
+        incomplete: summary.is_none() || calls_with_usage != calls,
     })
 }
 
@@ -2027,6 +2014,7 @@ mod tests {
                 queued_at: "2026-06-03T10:05:30Z"
                 prompt_tokens: 100
                 completion_tokens: 20
+                usage_completeness: "complete"
                 cached_input_tokens: 40
                 context_accounting_json: "{accounting}"
             }}) {{ _docID }}
@@ -2440,7 +2428,7 @@ mod tests {
             let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
                 call_id: "{id}", call_kind: "{kind}", backend_id: "backend-a", call_state: "completed", call_seq: {sequence}, request_id: "request-a-new",
                 request_doc_id: "{}", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", queued_at: "2026-06-04T12:00:00Z",
-                prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, context_accounting_json: "{encoded}"
+                prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, usage_completeness: "complete", context_accounting_json: "{encoded}"
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
             crate::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
             let observed = load_session_inference_observation(
@@ -2568,7 +2556,7 @@ mod tests {
             .unwrap();
         let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
             call_id: "foreign-usage", call_seq: 1, call_kind: "inference", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
-            request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0,
+            request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0, usage_completeness: "complete",
             queued_at: "2026-06-04T12:00:00Z"
         }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
         crate::graphql::ensure_no_errors(&response, "foreign usage fixture").unwrap();
@@ -2726,8 +2714,8 @@ mod tests {
         .unwrap();
         assert_eq!(snapshot.token_usage.model_calls, 3);
         assert_eq!(snapshot.token_usage.calls_with_usage, 1);
-        assert_eq!(snapshot.token_usage.input_tokens, Some(100));
-        assert_eq!(snapshot.token_usage.output_tokens, Some(20));
+        assert_eq!(snapshot.token_usage.input_tokens, None);
+        assert_eq!(snapshot.token_usage.output_tokens, None);
         assert_eq!(snapshot.token_usage.charged_tokens, None);
         assert!(snapshot.token_usage.incomplete);
         assert!(snapshot
@@ -2737,7 +2725,7 @@ mod tests {
                 matches!(observation, super::super::ParentAuditUsageObservation::Unavailable {
                 parent_request_id, error, ..
             } if parent_request_id == "request-a-new"
-                && error.contains("only one persisted token component"))
+                && error.contains("cache read exceeds"))
             }));
     }
 
@@ -2808,6 +2796,7 @@ mod tests {
                 queued_at: "2026-06-03T11:05:01Z"
                 prompt_tokens: 900
                 completion_tokens: 90
+                usage_completeness: "complete"
             }}) {{ _docID }} }}"#,
             escape_graphql_string(outsider_doc_id)
         );

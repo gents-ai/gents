@@ -268,7 +268,7 @@ pub async fn load_run_activity_rows(
                 ) {{
                     call_id request_id call_seq attempt call_state failure_reason
                     queued_at started_at ended_at backend_id agent_id node_did call_kind
-                    prompt_tokens completion_tokens cached_input_tokens context_accounting_json
+                    prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness context_accounting_json
                 }}
                 AgentToolCall(
                     filter: {{ request_id: {{ _in: [{request_list}] }} }},
