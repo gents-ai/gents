@@ -190,6 +190,8 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     print_json(&output)
 }
 
+/// Normal completion drains the embedded node before releasing its store claim;
+/// aborting background tasks without awaiting them can retain the database.
 async fn init_home(mut args: InitArgs) -> Result<Value> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
@@ -301,79 +303,84 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             .context("building embedded DefraDB node for init")?,
     );
     let access = ConfigAccess::claimed_local(node_arc, store_lock)?;
-    let migration_node = access
+    let init_node = access
         .local_node()
         .context("init requires claimed local DefraDB access")?
         .clone();
-    gents::migration::ensure_all_runtime_migrations(migration_node).await?;
-    gents::store_key::upgrade::finish(&data_dir)?;
-    let summary = initialize_runtime_home(
-        &access,
-        &args,
-        initialized_identity.identity.did(),
-        tool_package,
-    )
-    .await?;
-    write_init_config(&home_dir, &stored)?;
-    let runtime_state_reset = if args.reset {
-        clear_runtime_state(&home_dir)?
-    } else {
-        false
-    };
+    let result = async {
+        gents::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
+        gents::store_key::upgrade::finish(&data_dir)?;
+        let summary = initialize_runtime_home(
+            &access,
+            &args,
+            initialized_identity.identity.did(),
+            tool_package,
+        )
+        .await?;
+        write_init_config(&home_dir, &stored)?;
+        let runtime_state_reset = if args.reset {
+            clear_runtime_state(&home_dir)?
+        } else {
+            false
+        };
 
-    let codex_login =
-        maybe_inline_codex_login(&access, initialized_identity.identity.did(), &summary).await;
-    let grok_login =
-        maybe_inline_grok_login(&access, initialized_identity.identity.did(), &summary).await;
-    let claude_login =
-        maybe_inline_claude_login(&access, initialized_identity.identity.did(), &summary).await;
+        let codex_login =
+            maybe_inline_codex_login(&access, initialized_identity.identity.did(), &summary).await;
+        let grok_login =
+            maybe_inline_grok_login(&access, initialized_identity.identity.did(), &summary).await;
+        let claude_login =
+            maybe_inline_claude_login(&access, initialized_identity.identity.did(), &summary).await;
 
-    let output = json!({
-        "status": "initialized",
-        "home": home_dir,
-        "node_name": args.node_name,
-        "node_did": initialized_identity.identity.did(),
-        "key_path": initialized_identity.key_path,
-        "identity_backend": initialized_identity.identity_backend,
-        "keychain_label": initialized_identity.keychain_label,
-        "secure_enclave_label": initialized_identity.secure_enclave_label,
-        "default_agent_id": summary.default_agent_id,
-        "tools_id": summary.tools_id,
-        "wide_open_preset_id": summary.wide_open_preset_id,
-        "inference_profile_id": summary.inference_profile_id,
-        "tool_package": format_tool_package(summary.tool_package),
-        "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
-        "tool_root": summary.tool_root,
-        "enable_memory": summary.enable_memory,
-        "enable_defra_query": summary.enable_defra_query,
-        "defra_query_collections": summary.defra_query_collections,
-        "runtime_state_reset": runtime_state_reset,
-        "identity": {
+        let output = json!({
+            "status": "initialized",
+            "home": home_dir,
+            "node_name": args.node_name,
             "node_did": initialized_identity.identity.did(),
-            "key_path": stored.key_path,
-            "identity_backend": stored.identity_backend,
-            "keychain_label": stored.keychain_label,
-            "secure_enclave_label": stored.secure_enclave_label,
-            "permission_boundary": "This DID and key identify the permission boundary for every action the node runtime performs."
-        },
-        "codex_login": codex_login
-            .outcome()
-            .map(crate::commands::codex_login::codex_login_result_json),
-        "grok_login": grok_login
-            .outcome()
-            .map(crate::commands::grok_login::grok_login_result_json),
-        "claude_login": claude_login
-            .outcome()
-            .map(crate::commands::claude_login::claude_login_result_json),
-        "next_steps": init_next_steps(
-            &summary,
-            codex_login.is_authenticated(),
-            grok_login.is_authenticated(),
-            claude_login.is_authenticated(),
-        ),
-        "init": summary,
-    });
-    Ok(output)
+            "key_path": initialized_identity.key_path,
+            "identity_backend": initialized_identity.identity_backend,
+            "keychain_label": initialized_identity.keychain_label,
+            "secure_enclave_label": initialized_identity.secure_enclave_label,
+            "default_agent_id": summary.default_agent_id,
+            "tools_id": summary.tools_id,
+            "wide_open_preset_id": summary.wide_open_preset_id,
+            "inference_profile_id": summary.inference_profile_id,
+            "tool_package": format_tool_package(summary.tool_package),
+            "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
+            "tool_root": summary.tool_root,
+            "enable_memory": summary.enable_memory,
+            "enable_defra_query": summary.enable_defra_query,
+            "defra_query_collections": summary.defra_query_collections,
+            "runtime_state_reset": runtime_state_reset,
+            "identity": {
+                "node_did": initialized_identity.identity.did(),
+                "key_path": stored.key_path,
+                "identity_backend": stored.identity_backend,
+                "keychain_label": stored.keychain_label,
+                "secure_enclave_label": stored.secure_enclave_label,
+                "permission_boundary": "This DID and key identify the permission boundary for every action the node runtime performs."
+            },
+            "codex_login": codex_login
+                .outcome()
+                .map(crate::commands::codex_login::codex_login_result_json),
+            "grok_login": grok_login
+                .outcome()
+                .map(crate::commands::grok_login::grok_login_result_json),
+            "claude_login": claude_login
+                .outcome()
+                .map(crate::commands::claude_login::claude_login_result_json),
+            "next_steps": init_next_steps(
+                &summary,
+                codex_login.is_authenticated(),
+                grok_login.is_authenticated(),
+                claude_login.is_authenticated(),
+            ),
+            "init": summary,
+        });
+        Ok(output)
+    }
+    .await;
+    init_node.shutdown().await;
+    result
 }
 
 fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
@@ -2013,6 +2020,46 @@ mod tests {
         assert!(!args.workflows);
         init(args).await.expect("an offline init succeeds");
         assert!(gents::pack::list_home_installs(&home).unwrap().is_empty());
+    }
+
+    async fn initialize_disposable_home(home: &Path, empty_model: bool) -> Result<Value> {
+        let mut args = init_args();
+        args.home = Some(home.to_path_buf());
+        args.inference_endpoint = Some("http://127.0.0.1:9/v1".into());
+        args.provider_kind = Some("OpenAiCompatible".into());
+        args.api_key = Some("unused-init-test-key".into());
+        if empty_model {
+            args.model_name = Some(String::new());
+        }
+        init_home(args).await
+    }
+
+    #[tokio::test]
+    async fn an_initialized_home_reopens_without_ending_the_callers_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("retained"), "keep").unwrap();
+        let first = initialize_disposable_home(&home, false).await.unwrap();
+        let second = initialize_disposable_home(&home, false).await.unwrap();
+        assert_eq!(first["status"], "initialized");
+        assert_eq!(second["status"], "initialized");
+        assert_eq!(second["node_did"], first["node_did"]);
+        assert_eq!(second["default_agent_id"], first["default_agent_id"]);
+        assert_eq!(fs::read_to_string(home.join("retained")).unwrap(), "keep");
+    }
+
+    #[tokio::test]
+    async fn a_failed_initialization_releases_the_store_for_a_valid_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("retained"), "keep").unwrap();
+        let error = initialize_disposable_home(&home, true).await.unwrap_err();
+        assert!(error.to_string().contains("--model-name must not be empty"));
+        let retried = initialize_disposable_home(&home, false).await.unwrap();
+        assert_eq!(retried["status"], "initialized");
+        assert_eq!(fs::read_to_string(home.join("retained")).unwrap(), "keep");
     }
 
     fn init_args() -> InitArgs {
