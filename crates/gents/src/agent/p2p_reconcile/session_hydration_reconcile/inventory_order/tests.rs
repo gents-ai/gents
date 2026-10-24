@@ -460,6 +460,6 @@ fn generated_orders_use_canonical_publication_observations() {
             .as_array()
             .unwrap()
             .len(),
-        6
+        9
     );
 }
