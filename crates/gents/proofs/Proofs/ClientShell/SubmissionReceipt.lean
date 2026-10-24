@@ -53,7 +53,9 @@ def result (record : Record) : Result :=
 /-- `durable` is the existing journal owner's successful durable preparation,
 not an RPC reply or database admission receipt. A failed or ambiguous local
 write cannot authorize an owner effect. Retrying an existing caller operation
-returns its original signed preparation even if a new proposal was allocated. -/
+returns its original signed preparation even if a new proposal was allocated.
+The lookup and reservation are one atomic journal decision; an independently
+racing read followed by insertion does not implement this transition. -/
 def prepare (journal : Journal) (intent : Intent) (proposal : Prepared)
     (durable : Bool) : Journal × Result :=
   if (journal.filter fun record => record.intent.caller == intent.caller).length > 1 then
