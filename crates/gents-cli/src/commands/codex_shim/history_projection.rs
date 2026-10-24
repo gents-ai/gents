@@ -209,7 +209,7 @@ pub(super) async fn load_thread_turns(
 async fn load_completed_compactions(
     state: &ShimState,
     requests: &[AgentRequestRow],
-) -> Result<Vec<CompactionRow>> {
+) -> Result<Vec<CompactionRow>, super::thread_projection::CodexShimProjectionError> {
     let request_ids = requests
         .iter()
         .map(|request| {
@@ -246,7 +246,7 @@ async fn load_completed_compactions(
     );
     let response = query_node_json(&state.node, &query).await?;
     decode_rows::<CompactionRow>(&response, "InferenceCall")
-        .context("decoding completed InferenceCall compaction history rows")
+        .map_err(|error| CodexShimProjectionError::DecodeCompactionRows(Box::new(error)))
 }
 
 fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {

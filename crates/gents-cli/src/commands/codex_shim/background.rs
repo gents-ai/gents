@@ -318,7 +318,7 @@ pub(super) async fn cancel_projected_background_tool_key(
 async fn background_tool_address(
     state: &ShimState,
     tool_call_key: &str,
-) -> Result<(String, String)> {
+) -> Result<(String, String), BackgroundError> {
     let escaped_key = escape_graphql_string(tool_call_key);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{escaped_key}" }} }}, limit: 1) {{ session_id tool_call_id }} }}"#
@@ -335,8 +335,7 @@ async fn background_tool_address(
     let Some((session_id, tool_call_id)) = tool_call_key.split_once(':') else {
         return Err(BackgroundError::UnrecognizedKey {
             tool_call_key: tool_call_key.to_owned(),
-        }
-        .into());
+        });
     };
     Ok((session_id.to_owned(), tool_call_id.to_owned()))
 }
@@ -344,7 +343,7 @@ async fn background_tool_address(
 async fn load_running_background_terminal_rows(
     node: &EmbeddedNode,
     thread_id: &str,
-) -> Result<Vec<BackgroundTerminalRow>> {
+) -> Result<Vec<BackgroundTerminalRow>, BackgroundError> {
     let escaped_thread_id = escape_graphql_string(thread_id);
     let query = format!(
         r#"{{

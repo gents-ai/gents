@@ -124,7 +124,9 @@ async fn load_head_in_txn(
     }))
 }
 
-pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentSession>> {
+pub(super) async fn list_scoped_sessions(
+    state: &ShimState,
+) -> Result<Vec<AgentSession>, CodexShimProjectionError> {
     let owner = escape_graphql_string(&state.node_did);
     let agent = escape_graphql_string(&state.agent_id);
     ConfigAccess::transact_local_write(&state.node,None,"codex.thread.list",|txn| {
@@ -135,10 +137,10 @@ pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentS
             rows(&response,"AgentSession")?.iter().map(|row| {
                 let session = decode_session_row(row)?.session;
                 if session.node_did != state.node_did.as_ref() || session.requester_did.as_deref() != Some(state.local_requester_did()) || session.agent_id != state.agent_id.as_ref() {
-                    return Err(CodexShimProjectionError::ThreadListScopeCrossed.into());
+                    return Err(CodexShimProjectionError::ThreadListScopeCrossed);
                 }
                 if !identities.insert(session.session_id.clone()) {
-                    return Err(CodexShimProjectionError::ThreadListDuplicateIdentity.into());
+                    return Err(CodexShimProjectionError::ThreadListDuplicateIdentity);
                 }
                 Ok(session)
             }).filter(|session| !matches!(session, Ok(session) if is_started(session))).collect()

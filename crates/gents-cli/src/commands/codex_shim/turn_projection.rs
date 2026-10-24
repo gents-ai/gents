@@ -1,7 +1,6 @@
 use rapidhash::RapidHashSet;
 use std::path::PathBuf;
 
-use anyhow::Result;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
 
@@ -23,6 +22,8 @@ use super::protocol::{
     turn_value_with_timing,
 };
 use super::{Outbound, ShimState};
+
+type Result<T, E = super::protocol::ProtocolError> = std::result::Result<T, E>;
 
 #[derive(Default)]
 struct ReasoningCompletionTracker {

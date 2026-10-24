@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::ValueEnum;
 use gents::config_client::GraphqlEndpoint;
 use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
@@ -60,6 +60,14 @@ pub(crate) enum ToolsCommandError {
         "the runtime's {mode} ceiling has no usable root ({error}), so it builds no host tools to explain; fix --tool-root (or tool_root in init.json) and restart the server"
     )]
     UnusableRuntimeRoot { mode: String, error: String },
+    #[error("the GraphQL endpoint has no gents runtime status to read its tool ceiling")]
+    RuntimeStatusUnavailable(#[source] crate::commands::status::StatusError),
+    #[error("init.json tool ceiling")]
+    InitToolCeiling(#[source] crate::resolve_helpers::ResolveHelpersError),
+    #[error(transparent)]
+    HomeState(#[from] crate::home_state::HomeStateError),
+    #[error(transparent)]
+    ResolveHelpers(#[from] crate::resolve_helpers::ResolveHelpersError),
 }
 
 pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
@@ -352,10 +360,10 @@ struct HostCeiling {
 }
 
 impl HostCeiling {
-    async fn live(endpoint: &GraphqlEndpoint) -> Result<Self> {
+    async fn live(endpoint: &GraphqlEndpoint) -> Result<Self, ToolsCommandError> {
         let status = fetch_runtime_status(endpoint, Duration::from_secs(10))
             .await
-            .context("the GraphQL endpoint has no gents runtime status to read its tool ceiling")?;
+            .map_err(ToolsCommandError::RuntimeStatusUnavailable)?;
         let field = |name: &str| status.get(name).and_then(Value::as_str).map(str::to_owned);
         let mode_text = field("tool_ceiling").ok_or(ToolsCommandError::StatusMissingToolCeiling)?;
         let mode = ToolCeilingArg::from_str(&mode_text, false).map_err(|error| {
@@ -369,8 +377,7 @@ impl HostCeiling {
             return Err(ToolsCommandError::UnusableRuntimeRoot {
                 mode: mode_text,
                 error,
-            }
-            .into());
+            });
         }
         let mut ceiling = host_tool_ceiling(mode, root.as_deref().map(Path::new))?;
         for registration in status
@@ -392,7 +399,7 @@ impl HostCeiling {
         })
     }
 
-    fn configured(home_dir: &Path) -> Result<Self> {
+    fn configured(home_dir: &Path) -> Result<Self, ToolsCommandError> {
         let Some(config) = read_init_config(home_dir)? else {
             return Ok(Self {
                 mode: ToolCeilingArg::MetaOnly,
@@ -408,7 +415,7 @@ impl HostCeiling {
                 config.tool_ceiling,
                 config.tool_root.as_deref().map(Path::new),
             )
-            .context("init.json tool ceiling")?,
+            .map_err(ToolsCommandError::InitToolCeiling)?,
             mode: config.tool_ceiling,
             root: config.tool_root,
             source: "init_json",

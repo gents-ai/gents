@@ -36,7 +36,7 @@ fn prompt(label: &str) -> Result<(), ChatError> {
     Ok(())
 }
 
-fn pending_approval(home: &Path, session: &str) -> Result<Option<Request>> {
+fn pending_approval(home: &Path, session: &str) -> Result<Option<Request>, super::ChatError> {
     Ok(approval::pending(home)?
         .into_iter()
         .find(|request| approvals::mine(request, session)))
@@ -90,8 +90,8 @@ pub(super) async fn run(
                     Ok(false) => {}
                     outcome => {
                         if let Err(error) = outcome {
-                            eprintln!("Could not record plugin approval: {}", ErrorChain(error.as_ref()));
-                            failure = Some(error);
+                            eprintln!("Could not record plugin approval: {}", ErrorChain(&error));
+                            failure = Some(error.into());
                         }
                         prompt(label)?;
                         continue;
@@ -178,28 +178,31 @@ pub(super) async fn run(
     }
 }
 
-fn handle_approval_command(home: &Path, shown: &mut Option<Request>, line: &str) -> Result<bool> {
+fn handle_approval_command(
+    home: &Path,
+    shown: &mut Option<Request>,
+    line: &str,
+) -> Result<bool, super::ChatError> {
     let line = line.trim();
     if !line.starts_with("/approve") {
         return Ok(false);
     }
     let words = line.split_whitespace().collect::<Vec<_>>();
     if words.len() != 3 || words[0] != "/approve" {
-        return Err(ChatError::ApprovalCommandShape.into());
+        return Err(ChatError::ApprovalCommandShape);
     }
     let answer = match words[2] {
         "once" => Answer::Once,
         "file" => Answer::AlwaysPath,
         "folder" => Answer::AlwaysFolder,
         "deny" => Answer::Deny,
-        _ => return Err(ChatError::ApprovalAction.into()),
+        _ => return Err(ChatError::ApprovalAction),
     };
     let request = shown.as_ref().ok_or(ChatError::NoDisplayedApproval)?;
     if request.id != words[1] {
         return Err(ChatError::ApprovalIdMismatch {
             displayed: request.id.clone(),
-        }
-        .into());
+        });
     }
     if !approval::pending(home)?
         .iter()
@@ -207,15 +210,14 @@ fn handle_approval_command(home: &Path, shown: &mut Option<Request>, line: &str)
     {
         return Err(ChatError::ApprovalNotPending {
             id: request.id.clone(),
-        }
-        .into());
+        });
     }
     approval::decide(home, &request.id, answer)?;
     *shown = None;
     Ok(true)
 }
 
-fn deny_shown_approval(home: &Path, shown: &mut Option<Request>) -> Result<()> {
+fn deny_shown_approval(home: &Path, shown: &mut Option<Request>) -> Result<(), super::ChatError> {
     if let Some(request) = shown.as_ref() {
         if approval::pending(home)?
             .iter()

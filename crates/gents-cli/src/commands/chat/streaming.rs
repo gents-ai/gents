@@ -140,7 +140,7 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
 pub(crate) async fn load_existing_tool_call_keys(
     graphql: &GraphqlEndpoint,
     session_id: &str,
-) -> Result<std::collections::BTreeMap<String, String>> {
+) -> Result<std::collections::BTreeMap<String, String>, StreamError> {
     let query = format!(
         r#"{{
             AgentToolCall(
@@ -273,7 +273,7 @@ fn pending_approvals_home<'a>(
     Ok(super::approvals::has_pending(home, session)?.then_some(home))
 }
 
-async fn approval_progress(mode: ApprovalHandling<'_>, session: &str) -> Result<bool> {
+async fn approval_progress(mode: ApprovalHandling<'_>, session: &str) -> Result<bool, StreamError> {
     let Some(home) = pending_approvals_home(mode, session)? else {
         return Ok(false);
     };
@@ -285,7 +285,7 @@ async fn answer_pending_approvals(
     mode: ApprovalHandling<'_>,
     home: &std::path::Path,
     session: &str,
-) -> Result<()> {
+) -> Result<(), StreamError> {
     if matches!(mode, ApprovalHandling::Answer(_)) {
         let home = home.to_path_buf();
         let session = session.to_owned();
@@ -370,7 +370,7 @@ pub(crate) async fn stream_turn_progress(
                 &submitted.request_id,
                 timeout_secs,
                 poll_secs,
-                || approval_progress(approval_handling, &submitted.session_id),
+                || async { Ok(approval_progress(approval_handling, &submitted.session_id).await?) },
             )
             .await?;
             if render_folded_output {

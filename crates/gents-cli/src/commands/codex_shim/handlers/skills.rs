@@ -15,7 +15,9 @@ fn skill_doc_path(skill_id: &str) -> gents_codex_protocol::AbsolutePathBuf {
         .expect("synthetic skill path is absolute")
 }
 
-pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetadata>> {
+pub(super) async fn load_skill_metadata(
+    state: &ShimState,
+) -> Result<Vec<codex::SkillMetadata>, super::super::CodexShimError> {
     let query = format!(
         r#"{{ Skill(filter: {{ node_did: {{ _eq: "{did}" }} }}) {{
             skill_id name description enabled
@@ -71,7 +73,7 @@ pub(super) async fn handle_skills_config_write(
     state: &ShimState,
     request_id: codex::RequestId,
     params: codex::SkillsConfigWriteParams,
-) -> Result<()> {
+) -> Result<(), super::super::CodexShimError> {
     let skill_id = match resolve_skill_id(state, &params).await {
         Ok(skill_id) => skill_id,
         Err(error) => {
@@ -133,7 +135,7 @@ pub(super) async fn handle_skills_config_write(
 async fn resolve_skill_id(
     state: &ShimState,
     params: &codex::SkillsConfigWriteParams,
-) -> Result<String> {
+) -> Result<String, super::super::CodexShimError> {
     if let Some(path) = params.path.as_ref() {
         if let Some(skill_id) = std::path::Path::new(path.as_path())
             .file_name()
@@ -164,8 +166,7 @@ async fn resolve_skill_id(
         }
         return Err(CodexShimError::SkillNotFound {
             name: name.to_owned(),
-        }
-        .into());
+        });
     }
-    Err(CodexShimError::SkillSelectorRequired.into())
+    Err(CodexShimError::SkillSelectorRequired)
 }

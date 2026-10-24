@@ -98,12 +98,12 @@ pub(super) async fn handle_request(
         | codex::ClientRequest::FuzzyFileSearchSessionStart { .. }
         | codex::ClientRequest::FuzzyFileSearchSessionUpdate { .. }
         | codex::ClientRequest::FuzzyFileSearchSessionStop { .. } => {
-            host::handle_host_request(connection, state, outbound, codex_request).await
+            Ok(host::handle_host_request(connection, state, outbound, codex_request).await?)
         }
 
         codex::ClientRequest::SkillsConfigWrite {
             request_id, params, ..
-        } => skills::handle_skills_config_write(outbound, state, request_id, params).await,
+        } => Ok(skills::handle_skills_config_write(outbound, state, request_id, params).await?),
 
         unsupported => Ok(send_planned_stub(outbound, state, unsupported).await?),
     };

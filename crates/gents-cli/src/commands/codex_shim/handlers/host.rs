@@ -10,7 +10,7 @@ pub(super) async fn handle_host_request(
     state: &ShimState,
     outbound: &Outbound,
     request: codex::ClientRequest,
-) -> Result<()> {
+) -> Result<(), super::super::protocol::ProtocolError> {
     match request {
         codex::ClientRequest::GitDiffToRemote {
             request_id, params, ..

@@ -220,6 +220,10 @@ pub(crate) enum GraphCommandError {
     WriteProgressLine(std::io::Error),
     #[error("writing graph progress to stdout")]
     FlushProgress(#[source] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 fn parse_input_arg(raw: Option<&str>) -> Result<Value, GraphCommandError> {
@@ -466,7 +470,7 @@ fn print_progress_text(
     view: &GraphRunView,
     activity: &RunActivityRows,
     redraw: bool,
-) -> Result<()> {
+) -> Result<(), GraphCommandError> {
     let usage = run_usage_summary(&activity.inference_calls);
     let active_models = activity
         .inference_calls
@@ -615,7 +619,10 @@ fn display_value(value: &Value) -> String {
     }
 }
 
-fn write_result_text(out: &mut impl io::Write, view: &GraphRunView) -> Result<()> {
+fn write_result_text(
+    out: &mut impl io::Write,
+    view: &GraphRunView,
+) -> Result<(), GraphCommandError> {
     writeln!(out, "Run: {}", view.run_id)?;
     writeln!(out, "Status: {}", view.status)?;
     if let Some(error) = effective_error(view) {
@@ -663,7 +670,7 @@ fn write_result_text(out: &mut impl io::Write, view: &GraphRunView) -> Result<()
     Ok(())
 }
 
-fn print_result_text(view: &GraphRunView) -> Result<()> {
+fn print_result_text(view: &GraphRunView) -> Result<(), GraphCommandError> {
     write_result_text(&mut io::stdout().lock(), view)
 }
 
@@ -761,7 +768,7 @@ async fn result(args: GraphResultArgs) -> Result<()> {
             "result_refs": view.persisted_result_refs,
             "error": effective_error(&view),
         }))?),
-        OutputFormat::Text => print_result_text(&view),
+        OutputFormat::Text => Ok(print_result_text(&view)?),
         _ => unreachable!("validated output format"),
     }
 }

@@ -197,14 +197,14 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
 
     loop {
         if *cancel_rx.borrow() {
-            return finish_interrupted_turn(
+            return Ok(finish_interrupted_turn(
                 connection,
                 state,
                 &current,
                 projection,
                 running_background_tools,
             )
-            .await;
+            .await?);
         }
 
         let progress_query =
@@ -213,14 +213,14 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             response = query_node_json(state.node.as_ref(), &progress_query) => response?,
             changed = cancel_rx.changed() => {
                 if changed.is_ok() && *cancel_rx.borrow() {
-                    return finish_interrupted_turn(
+                    return Ok(finish_interrupted_turn(
                         connection,
                         state,
                         &current,
                         projection,
                         running_background_tools,
                     )
-                    .await;
+                    .await?);
                 }
                 continue;
             }
@@ -576,14 +576,14 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                             _ = tokio::time::sleep(state.poll_interval) => {}
                             changed = cancel_rx.changed() => {
                                 if changed.is_ok() && *cancel_rx.borrow() {
-                                    return finish_interrupted_turn(
+                                    return Ok(finish_interrupted_turn(
                                         connection,
                                         state,
                                         &current,
                                         projection,
                                         running_background_tools,
                                     )
-                                    .await;
+                                    .await?);
                                 }
                             }
                         }
@@ -686,14 +686,14 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             }
             changed = cancel_rx.changed() => {
                 if changed.is_ok() && *cancel_rx.borrow() {
-                    return finish_interrupted_turn(
+                    return Ok(finish_interrupted_turn(
                         connection,
                         state,
                         &current,
                         projection,
                         running_background_tools,
                     )
-                    .await;
+                    .await?);
                 }
             }
         }
@@ -710,7 +710,7 @@ fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> 
 async fn canonical_output_started_at_ms(
     state: &ShimState,
     output: &gents::session::CanonicalRequestOutput,
-) -> Result<Option<i64>> {
+) -> Result<Option<i64>, crate::commands::codex_shim::CodexShimError> {
     use gents::session::CanonicalRequestOutput;
     let (presentation, header) = match output {
         CanonicalRequestOutput::Live(presentation)
@@ -741,7 +741,7 @@ async fn canonical_output_started_at_ms(
         ),
     )
     .await
-    .context("loading selected Codex output segments")?;
+    .map_err(crate::commands::codex_shim::CodexShimError::LoadSelectedOutputSegments)?;
     let is_selected = |row: &Value| {
         let source = row
             .get("source")
@@ -1174,7 +1174,7 @@ async fn finish_interrupted_turn(
     submitted: &SubmittedRequest,
     projection: &mut TurnProjection<'_>,
     running_background_tools: BTreeSet<String>,
-) -> Result<()> {
+) -> Result<(), crate::commands::codex_shim::CodexShimError> {
     projection
         .finish_turn(&connection.outbound, codex::TurnStatus::Interrupted, None)
         .await?;
@@ -1310,7 +1310,7 @@ async fn steering_input_for_request(
     state: &ShimState,
     request_id: &str,
     request_doc_id: &str,
-) -> Result<Vec<codex::UserInput>> {
+) -> Result<Vec<codex::UserInput>, crate::commands::codex_shim::CodexShimError> {
     if let Some(input) = connection.take_steering_input(request_id).await {
         return Ok(input);
     }

@@ -29,6 +29,46 @@ use crate::{
     write_json_output_file, RequestSubmitOptions,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RequestCommandError {
+    #[error("--session-id must not be empty")]
+    SessionIdBlank,
+    #[error("An initialized --home is required to identify the message author")]
+    AuthorHomeRequired,
+    #[error("request summary was not a JSON object")]
+    SummaryNotObject,
+    #[error("serializing canonical request output observation")]
+    SerializeOutput(#[source] serde_json::Error),
+    #[error("request show missing physical identity")]
+    ShowMissingPhysicalIdentity,
+    #[error("request show missing node")]
+    ShowMissingNode,
+    #[error("request show missing session")]
+    ShowMissingSession,
+    #[error("decoding request input")]
+    DecodeInput(#[source] serde_json::Error),
+    #[error("interrupt request query omitted rows")]
+    InterruptRowsOmitted,
+    #[error("request {request_id} must resolve to exactly one accessible physical request")]
+    InterruptRequestNotUnique { request_id: String },
+    #[error("decoding AgentRequest {request_id}")]
+    DecodeRequest {
+        request_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("timed out waiting for request {request_id} to reach a terminal state after {seconds}s (last lifecycle_state={state})")]
+    TerminalTimeout {
+        request_id: String,
+        seconds: u64,
+        state: &'static str,
+    },
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    HomeState(#[from] crate::home_state::HomeStateError),
+}
+
 pub(crate) async fn dispatch(command: RequestCommand) -> Result<()> {
     match command {
         RequestCommand::Submit(args) => request_submit(args).await,
@@ -44,20 +84,21 @@ pub(crate) async fn dispatch(command: RequestCommand) -> Result<()> {
 
 async fn pending_scope(
     args: &RequestPendingArgs,
-) -> Result<(
-    ConfigAccess,
-    String,
-    std::sync::Arc<dyn gents::NodeIdentity>,
-)> {
-    anyhow::ensure!(
-        !args.session_id.trim().is_empty(),
-        "--session-id must not be empty"
-    );
+) -> Result<
+    (
+        ConfigAccess,
+        String,
+        std::sync::Arc<dyn gents::NodeIdentity>,
+    ),
+    RequestCommandError,
+> {
+    if args.session_id.trim().is_empty() {
+        return Err(RequestCommandError::SessionIdBlank);
+    }
     let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let node = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let home = crate::resolve_home_dir(args.home.as_deref());
-    let config = crate::read_init_config(&home)?
-        .context("An initialized --home is required to identify the message author")?;
+    let config = crate::read_init_config(&home)?.ok_or(RequestCommandError::AuthorHomeRequired)?;
     let signer = crate::load_initialized_home_identity(&home, &config)?;
     Ok((ConfigAccess::Graphql(endpoint), node, signer))
 }
@@ -190,15 +231,14 @@ async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> 
 fn wait_result(
     request_summary: serde_json::Value,
     envelope: &RequestOutputEnvelope,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, RequestCommandError> {
     let mut object = request_summary
         .as_object()
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("request summary was not a JSON object"))?;
+        .ok_or(RequestCommandError::SummaryNotObject)?;
     object.insert(
         "output".to_string(),
-        serde_json::to_value(&envelope.output)
-            .context("serializing canonical request output observation")?,
+        serde_json::to_value(&envelope.output).map_err(RequestCommandError::SerializeOutput)?,
     );
     Ok(serde_json::Value::Object(object))
 }
@@ -639,20 +679,20 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
 fn request_show_tool_calls_query(
     request: &AgentRequestRow,
     schema: &RequestShowSchema,
-) -> Result<String> {
+) -> Result<String, RequestCommandError> {
     let request_doc_id = request
         .doc_id
         .as_deref()
-        .context("request show missing physical identity")?;
+        .ok_or(RequestCommandError::ShowMissingPhysicalIdentity)?;
     let scope = gents::session::session_scope_filter(
         request
             .node_did
             .as_deref()
-            .context("request show missing node")?,
+            .ok_or(RequestCommandError::ShowMissingNode)?,
         request
             .session_id
             .as_deref()
-            .context("request show missing session")?,
+            .ok_or(RequestCommandError::ShowMissingSession)?,
         request.requester_did.as_deref(),
     );
     let mut fields = vec![
@@ -700,7 +740,7 @@ fn request_header_view(
     row: &Value,
     terminal_cause: Option<String>,
     transition_history: Vec<RequestTransitionView>,
-) -> Result<RequestShowHeader> {
+) -> Result<RequestShowHeader, RequestCommandError> {
     Ok(RequestShowHeader {
         request_id: string_field_or_unknown(row, "request_id"),
         node_did: string_field_or_unknown(row, "node_did"),
@@ -725,7 +765,7 @@ fn request_header_view(
             .cloned()
             .map(serde_json::from_value)
             .transpose()
-            .context("decoding request input")?,
+            .map_err(RequestCommandError::DecodeInput)?,
         max_total_tokens: integer_field(row, "max_total_tokens"),
         caused_by_parent_request_id: string_field(row, "caused_by_parent_request_id"),
         caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
@@ -1387,7 +1427,7 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
 async fn fetch_interrupt_request_row(
     graphql: &GraphqlEndpoint,
     request_id: &str,
-) -> Result<AgentRequestRow> {
+) -> Result<AgentRequestRow, RequestCommandError> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -1415,13 +1455,16 @@ async fn fetch_interrupt_request_row(
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("interrupt request query omitted rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "request {request_id} must resolve to exactly one accessible physical request"
-    );
-    serde_json::from_value(rows[0].clone())
-        .with_context(|| format!("decoding AgentRequest {request_id}"))
+        .ok_or(RequestCommandError::InterruptRowsOmitted)?;
+    if rows.len() != 1 {
+        return Err(RequestCommandError::InterruptRequestNotUnique {
+            request_id: request_id.to_owned(),
+        });
+    }
+    serde_json::from_value(rows[0].clone()).map_err(|source| RequestCommandError::DecodeRequest {
+        request_id: request_id.to_owned(),
+        source,
+    })
 }
 
 async fn wait_for_terminal_request_state(
@@ -1429,7 +1472,7 @@ async fn wait_for_terminal_request_state(
     request_id: &str,
     timeout: Duration,
     mut last_row: AgentRequestRow,
-) -> Result<AgentRequestRow> {
+) -> Result<AgentRequestRow, RequestCommandError> {
     let deadline = Instant::now() + timeout;
     loop {
         if last_row.is_terminal() {
@@ -1440,10 +1483,11 @@ async fn wait_for_terminal_request_state(
                 .lifecycle_state
                 .map(RequestLifecycleState::as_str)
                 .unwrap_or("<missing>");
-            anyhow::bail!(
-                "timed out waiting for request {request_id} to reach a terminal state after {}s (last lifecycle_state={state})",
-                timeout.as_secs()
-            );
+            return Err(RequestCommandError::TerminalTimeout {
+                request_id: request_id.to_owned(),
+                seconds: timeout.as_secs(),
+                state,
+            });
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
         last_row = fetch_interrupt_request_row(graphql, request_id).await?;
@@ -1488,7 +1532,7 @@ fn request_interrupt_summary(
     })
 }
 
-fn print_interrupt_text(summary: &Value) -> Result<()> {
+fn print_interrupt_text(summary: &Value) -> Result<(), RequestCommandError> {
     let text = |key: &str| {
         summary
             .get(key)

@@ -176,6 +176,23 @@ enum CodexShimError {
     SkillSelectorRequired,
     #[error("validating forked thread notification")]
     ForkedThreadNotification(#[source] serde_json::Error),
+    #[error(transparent)]
+    Protocol(#[from] protocol::ProtocolError),
+    #[error(transparent)]
+    Store(#[from] crate::commands::codex_shim::store::StoreError),
+    #[error("loading selected Codex output segments")]
+    LoadSelectedOutputSegments(#[source] crate::commands::codex_shim::store::StoreError),
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+}
+
+impl gents::config_client::TransactionFailure for CodexShimError {
+    fn config_client_error(&self) -> Option<&gents::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 mod server;

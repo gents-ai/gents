@@ -92,17 +92,21 @@ pub(in crate::commands::codex_shim) enum CodexShimProjectionError {
     TerminalToolCallUndelivered,
     #[error("cycle in Codex steering history ancestry at request {request_id}")]
     SteeringCycle { request_id: String },
+    #[error("decoding completed InferenceCall compaction history rows")]
+    DecodeCompactionRows(#[source] Box<CodexShimProjectionError>),
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
     #[error(transparent)]
     Session(#[from] gents::session::SessionError),
     #[error(transparent)]
-    Access(#[from] gents::config_client::ConfigClientError),
+    Store(#[from] crate::commands::codex_shim::store::StoreError),
 }
 
 impl gents::config_client::TransactionFailure for CodexShimProjectionError {
     fn config_client_error(&self) -> Option<&gents::config_client::ConfigClientError> {
         match self {
+            Self::ConfigClient(error) => Some(error),
             Self::Session(error) => error.config_client_error(),
-            Self::Access(error) => Some(error),
             _ => None,
         }
     }
@@ -182,7 +186,7 @@ pub(super) async fn resume_loaded_codex_thread(
     thread_id: &str,
     cwd_override: Option<&str>,
     record: Option<CodexThreadRecord>,
-) -> Result<Option<CodexThreadRecord>> {
+) -> Result<Option<CodexThreadRecord>, CodexShimProjectionError> {
     let Some(mut record) = record else {
         return Ok(None);
     };
@@ -223,7 +227,9 @@ pub(super) async fn load_codex_thread(
     Ok(Some(assemble_caused_record(state, link).await?))
 }
 
-pub(super) async fn root_thread_ids(state: &ShimState) -> Result<RapidHashSet<String>> {
+pub(super) async fn root_thread_ids(
+    state: &ShimState,
+) -> Result<RapidHashSet<String>, CodexShimProjectionError> {
     let mut ids = list_scoped_sessions(state)
         .await?
         .into_iter()
@@ -416,14 +422,14 @@ async fn assemble_caused_record(
 ) -> Result<CodexThreadRecord> {
     let cwd = storage::derive_thread_cwd(state, &link.root_session_id).await?;
     let git_info = thread_git_info(&cwd).await;
-    assemble_caused_record_parts(state, link, cwd, git_info).await
+    Ok(assemble_caused_record_parts(state, link, cwd, git_info).await?)
 }
 
 async fn assemble_caused_record_with_workspace(
     state: &ShimState,
     link: CausedThread,
     workspace: &RootThreadWorkspace,
-) -> Result<CodexThreadRecord> {
+) -> Result<CodexThreadRecord, CodexShimProjectionError> {
     assemble_caused_record_parts(
         state,
         link,
@@ -438,7 +444,7 @@ async fn assemble_caused_record_parts(
     link: CausedThread,
     cwd: PathBuf,
     git_info: Option<Value>,
-) -> Result<CodexThreadRecord> {
+) -> Result<CodexThreadRecord, CodexShimProjectionError> {
     let session = gents::config_client::ConfigAccess::transact_local_write(
         &state.node,
         None,
@@ -448,7 +454,7 @@ async fn assemble_caused_record_parts(
             let id = &link.session_id;
             let requester = link.requester_did.as_deref();
             Box::pin(async move {
-                Ok::<_, anyhow::Error>(
+                Ok::<_, CodexShimProjectionError>(
                     gents::session::load_agent_session_row_in_txn(txn, owner, id, requester)
                         .await?
                         .map(|row| row.session),
@@ -459,7 +465,7 @@ async fn assemble_caused_record_parts(
     .await?;
     if let Some(session) = &session {
         if session.agent_id != link.agent_id {
-            return Err(CodexShimProjectionError::ChildBindingMismatch.into());
+            return Err(CodexShimProjectionError::ChildBindingMismatch);
         }
     } else {
         chrono::DateTime::parse_from_rfc3339(

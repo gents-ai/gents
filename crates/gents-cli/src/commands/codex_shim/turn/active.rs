@@ -149,7 +149,7 @@ pub(super) fn cancel_abandoned_steering_request(
 pub(super) async fn load_active_codex_turn(
     state: &ShimState,
     thread_id: &str,
-) -> Result<Option<ActiveCodexTurn>> {
+) -> Result<Option<ActiveCodexTurn>, crate::commands::codex_shim::CodexShimError> {
     let rows = load_thread_request_rows(
         state,
         &state.node_did,
@@ -251,7 +251,7 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
     thread_id: &str,
     turn_id: &str,
     interrupt_request_id: &str,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, crate::commands::codex_shim::CodexShimError> {
     let rows = load_thread_request_rows(
         state,
         &state.node_did,
@@ -287,7 +287,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     state: &ShimState,
     thread_id: &str,
     turn_id: &str,
-) -> Result<()> {
+) -> Result<(), crate::commands::codex_shim::CodexShimError> {
     let Some(active) = load_active_codex_turn(state, thread_id).await? else {
         let stream_control_cancelled = cancel_stream_control(connection, thread_id, turn_id).await;
         trace::shim_event_fields(
@@ -469,7 +469,7 @@ async fn load_thread_request_rows(
     node_did: &str,
     requester_did: Option<&str>,
     thread_id: &str,
-) -> Result<Vec<AgentRequestRow>> {
+) -> Result<Vec<AgentRequestRow>, crate::commands::codex_shim::CodexShimError> {
     let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
         node_did,
         thread_id,
@@ -515,7 +515,7 @@ fn decode_request_row(row: Value) -> std::result::Result<AgentRequestRow, CodexS
 fn active_codex_turn_from_rows(
     rows: &[AgentRequestRow],
     expected_turn_id: Option<&str>,
-) -> Result<Option<ActiveCodexTurn>> {
+) -> Result<Option<ActiveCodexTurn>, crate::commands::codex_shim::CodexShimError> {
     let by_id = rows
         .iter()
         .map(|row| (row.request_id.as_str(), row))
@@ -575,7 +575,7 @@ fn active_codex_turn_from_rows(
 fn steering_lineage_has_superseded_request<'a>(
     row: &'a AgentRequestRow,
     by_id: &BTreeMap<&'a str, &'a AgentRequestRow>,
-) -> Result<bool> {
+) -> Result<bool, crate::commands::codex_shim::CodexShimError> {
     let mut current = row;
     let mut seen = BTreeSet::<String>::new();
     loop {
@@ -605,7 +605,7 @@ fn steering_lineage_has_superseded_request<'a>(
 fn codex_turn_root_and_depth<'a>(
     row: &'a AgentRequestRow,
     by_id: &BTreeMap<&'a str, &'a AgentRequestRow>,
-) -> Result<(String, usize)> {
+) -> Result<(String, usize), crate::commands::codex_shim::CodexShimError> {
     let mut current = row;
     let mut seen = BTreeSet::<String>::new();
     let mut depth = 0usize;

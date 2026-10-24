@@ -160,6 +160,8 @@ enum ContinuationError {
         #[source]
         source: serde_json::Error,
     },
+    #[error(transparent)]
+    Store(#[from] crate::commands::codex_shim::store::StoreError),
 }
 
 async fn project_background_continuation(
@@ -276,7 +278,7 @@ async fn project_background_continuation(
 async fn load_background_continuation_requests(
     state: &ShimState,
     thread_id: &str,
-) -> Result<Vec<AgentRequestRow>> {
+) -> Result<Vec<AgentRequestRow>, ContinuationError> {
     let request_scope = gents::session::public_request_filter(&format!(
         r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, agent_id: {{ _eq: "{}" }}"#,
         escape_graphql_string(thread_id),
@@ -320,7 +322,7 @@ async fn load_background_continuation_requests(
                 .ok_or(ContinuationError::MissingNodeDid)?;
             Ok(row)
         })
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, ContinuationError>>()
         .map(|rows| {
             rows.into_iter()
                 .filter(|row| is_background_completion_input(row.input.as_ref()))

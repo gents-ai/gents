@@ -52,6 +52,8 @@ pub(crate) enum AccountsError {
     AccountNotStored,
     #[error("{report}\n\nprobe failed for: {labels}")]
     ProbesFailed { report: String, labels: String },
+    #[error(transparent)]
+    UsageObservation(#[from] gents::usage_observation::UsageObservationError),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -121,18 +123,21 @@ impl UsageReadCommand {
         )
     }
 
-    pub(crate) fn validate_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
+    pub(crate) fn validate_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), AccountsError> {
         if self.sig.len() != 64 {
-            return Err(AccountsError::SignatureLength.into());
+            return Err(AccountsError::SignatureLength);
         }
         let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)
             .map_err(AccountsError::IssuedAt)?
             .with_timezone(&chrono::Utc);
         if issued > now + chrono::Duration::seconds(5) {
-            return Err(AccountsError::IssuedInFuture.into());
+            return Err(AccountsError::IssuedInFuture);
         }
         if now - issued > chrono::Duration::seconds(60) {
-            return Err(AccountsError::Expired.into());
+            return Err(AccountsError::Expired);
         }
         Ok(())
     }
@@ -341,7 +346,7 @@ async fn stored_view(
     account: &UsageAccount,
     kind: BackendProviderKind,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<UsageView> {
+) -> Result<UsageView, AccountsError> {
     Ok(usage_view(
         load_usage(access, account).await?.as_ref(),
         kind,

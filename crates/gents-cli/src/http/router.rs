@@ -305,7 +305,7 @@ async fn account_usage_read_handler(
                 )
                 .await
         }
-        Err(invalid) => Err(invalid),
+        Err(invalid) => Err(invalid.into()),
     };
     if let Err(refused) = authenticated {
         return error(

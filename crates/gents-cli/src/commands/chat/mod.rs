@@ -64,6 +64,8 @@ pub(crate) enum ChatError {
     Cli(#[from] crate::CliError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    PluginApproval(#[from] gents::plugin::approval::PluginApprovalError),
 }
 
 pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
