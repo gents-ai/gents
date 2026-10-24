@@ -27,8 +27,21 @@ mod editor_store;
 #[cfg(any(unix, windows))]
 mod native;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| !argument.to_string_lossy().starts_with('-'))
+    {
+        return gents_server::run_cli_without_keychain_prompts();
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()?
+        .block_on(client_main())
+}
+
+async fn client_main() -> Result<()> {
     let args = Args::parse();
     if args.describe {
         use gents_desktop_bridge::host::protocol;
@@ -44,6 +57,7 @@ async fn main() -> Result<()> {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
+                "localRuntimeCli": true,
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
             }),
         )?;

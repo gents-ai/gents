@@ -149,16 +149,16 @@ where
     }
 }
 
-#[async_trait::async_trait]
-impl<S> ClientStoreKeyProvider for Provider<S>
+impl<S> Provider<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    async fn load(
+    async fn load_key(
         &self,
         record: &StoreEncryption,
         key_file: &Path,
         data_path: &Path,
+        fresh: bool,
     ) -> Result<StoreKey> {
         anyhow::ensure!(
             record.version == gents::store_key::STORE_ENCRYPTION_VERSION,
@@ -167,6 +167,11 @@ where
         if matches!(record.custody, StoreKeyCustody::File) {
             return record.initialize(key_file, data_path);
         }
+        let created = if fresh {
+            Some(native_key(record, key_file, data_path, true).await?)
+        } else {
+            None
+        };
         let mut channel = self.channel.lock().await;
         send(
             &mut channel,
@@ -180,21 +185,28 @@ where
         let reply: Reply = serde_json::from_slice(&receive(&mut channel).await?)
             .context("invalid editor secret storage response")?;
         match reply {
-            Reply::Use { bytes: Some(bytes) } => return StoreKey::from_host(&bytes),
+            Reply::Use { bytes: Some(bytes) } => {
+                if let Some(key) = created {
+                    anyhow::ensure!(
+                        key.with_secret(|native| native == bytes.as_slice()),
+                        "cached credentials do not match the new history's durable custody"
+                    );
+                    return Ok(key);
+                }
+                return StoreKey::from_host(&bytes);
+            }
             Reply::Use { bytes: None } => {}
             Reply::Stored => bail!("editor acknowledged a key before receiving it"),
         }
-        // Background startup must never call Keychain: an updated ad hoc signed
-        // helper can trigger system consent even when the login keychain is open.
-        if !self.interactive {
+        // Retained custody requires an explicit unlock after a cache miss. Only
+        // the bootstrap owner may create fresh custody, with system UI disabled.
+        if !self.interactive && !fresh {
             return Err(HistoryUnlockRequired.into());
         }
-        let record = record.clone();
-        let key_file = key_file.to_owned();
-        let data_path = data_path.to_owned();
-        let key = tokio::task::spawn_blocking(move || record.initialize(&key_file, &data_path))
-            .await
-            .context("loading the editor store key")??;
+        let key = match created {
+            Some(key) => key,
+            None => native_key(record, key_file, data_path, false).await?,
+        };
         let message = key.with_secret(|bytes| Message::Key {
             bytes: bytes.to_vec(),
         });
@@ -206,6 +218,50 @@ where
             "editor did not retain the store key"
         );
         Ok(key)
+    }
+}
+
+async fn native_key(
+    record: &StoreEncryption,
+    key_file: &Path,
+    data_path: &Path,
+    prevent_prompts: bool,
+) -> Result<StoreKey> {
+    let record = record.clone();
+    let key_file = key_file.to_owned();
+    let data_path = data_path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        if prevent_prompts {
+            gents_server::without_keychain_prompts(|| record.initialize(&key_file, &data_path))
+        } else {
+            record.initialize(&key_file, &data_path)
+        }
+    })
+    .await
+    .context("loading the editor store key")?
+}
+
+#[async_trait::async_trait]
+impl<S> ClientStoreKeyProvider for Provider<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    async fn create(
+        &self,
+        record: &StoreEncryption,
+        key_file: &Path,
+        data_path: &Path,
+    ) -> Result<StoreKey> {
+        self.load_key(record, key_file, data_path, true).await
+    }
+
+    async fn load(
+        &self,
+        record: &StoreEncryption,
+        key_file: &Path,
+        data_path: &Path,
+    ) -> Result<StoreKey> {
+        self.load_key(record, key_file, data_path, false).await
     }
 }
 
