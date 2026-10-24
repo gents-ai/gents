@@ -14,6 +14,11 @@ pub const PROMPT: &str = "Update every recorded inventory fixture file.";
 pub const REPLY: &str = "The recorded inventory files are ready for review.";
 pub const NEXT_PROMPT: &str = "Add the next recorded inventory file.";
 pub const NEXT_REPLY: &str = "The additional recorded file is ready for review.";
+pub const REPEAT_PROMPT: &str = "Edit the same recorded file twice in sequence.";
+pub const REPEAT_REPLY: &str = "The sequential recorded changes are ready for review.";
+pub const FOLLOW_PROMPT: &str = "Continue without changing any files.";
+pub const FOLLOW_REPLY: &str = "The follow-up completed without changing files.";
+const REPEAT_CALLS: [&str; 2] = ["inventory-repeat-first", "inventory-repeat-last"];
 
 fn file(index: usize) -> String {
     format!("inventory/file-{index:03}.txt")
@@ -34,7 +39,7 @@ fn call_id(index: usize) -> String {
 pub async fn prepare(root: &Path) -> Result<()> {
     tokio::fs::create_dir_all(root.join("inventory")).await?;
     let mut files = Vec::new();
-    for index in 0..=COUNT {
+    for index in 0..=COUNT + 1 {
         tokio::fs::write(root.join(file(index)), before(index)).await?;
         files.push(json!({
             "file":file(index), "before":before(index), "after":after(index), "later":later(index),
@@ -47,6 +52,8 @@ pub async fn prepare(root: &Path) -> Result<()> {
         serde_json::to_vec(&json!({
             "count":COUNT, "prompt":PROMPT, "reply":REPLY,
             "nextPrompt":NEXT_PROMPT, "nextReply":NEXT_REPLY, "files":files,
+            "repeatPrompt":REPEAT_PROMPT, "repeatReply":REPEAT_REPLY,
+            "followPrompt":FOLLOW_PROMPT, "followReply":FOLLOW_REPLY,
         }))?,
     )
     .await?;
@@ -65,6 +72,31 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
             _ => None,
         }
     })?;
+    if prompt == FOLLOW_PROMPT {
+        return Some(ChatAction::Sse(fake_llm::completion_text_sse(FOLLOW_REPLY)));
+    }
+    if prompt == REPEAT_PROMPT {
+        for (index, call) in REPEAT_CALLS.iter().enumerate() {
+            if !messages
+                .iter()
+                .any(|message| message["role"] == "tool" && message["tool_call_id"] == *call)
+            {
+                let content = if index == 0 {
+                    format!("Intermediate recorded version {}\n", COUNT + 1)
+                } else {
+                    after(COUNT + 1)
+                };
+                return Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
+                    call,
+                    "write_file",
+                    &json!({"path":file(COUNT + 1), "content":content,
+                        "overwrite":true, "raw_json":true})
+                    .to_string(),
+                )));
+            }
+        }
+        return Some(ChatAction::Sse(fake_llm::completion_text_sse(REPEAT_REPLY)));
+    }
     let (indices, response) = match prompt {
         PROMPT => (0..COUNT, REPLY),
         NEXT_PROMPT => (COUNT..COUNT + 1, NEXT_REPLY),
@@ -111,6 +143,9 @@ pub async fn verify(
         "newActivityVisible",
         "restoredAfterNewActivity",
         "workingCopyPreserved",
+        "repeatedNetComparison",
+        "settledCardUnpinned",
+        "repeatedDiffRestored",
     ] {
         ensure!(
             ui[field] == true,
@@ -136,7 +171,12 @@ pub async fn verify(
     let requests: Vec<AgentRequestRow> =
         serde_json::from_value(result["data"]["AgentRequest"].clone())?;
     let mut tools = RapidHashMap::new();
-    for (prompt, expected) in [(PROMPT, COUNT), (NEXT_PROMPT, 1)] {
+    for (prompt, expected) in [
+        (PROMPT, COUNT),
+        (NEXT_PROMPT, 1),
+        (REPEAT_PROMPT, 2),
+        (FOLLOW_PROMPT, 0),
+    ] {
         let matching: Vec<_> = requests
             .iter()
             .filter(|request| request.content.as_deref() == Some(prompt))
@@ -172,10 +212,14 @@ pub async fn verify(
                 "inventory mutation did not complete"
             );
             let logical = field(call, "tool_call_id")?;
-            let index: usize = logical
-                .strip_prefix("inventory-write-")
-                .context("inventory tool call")?
-                .parse()?;
+            let index: usize = if REPEAT_CALLS.contains(&logical) {
+                COUNT + 1
+            } else {
+                logical
+                    .strip_prefix("inventory-write-")
+                    .context("inventory tool call")?
+                    .parse()?
+            };
             ensure!(
                 tools
                     .insert(field(call, "_docID")?.to_owned(), index)
@@ -185,13 +229,15 @@ pub async fn verify(
         }
     }
     ensure!(
-        tools.len() == COUNT + 1,
+        tools.len() == COUNT + 3,
         "new activity lost an earlier mutation"
     );
     let mut received = RapidHashSet::new();
     let mut cursor = None;
     let mut pages = 0;
+    let mut repeated_positions = RapidHashSet::new();
     loop {
+        let requested = cursor.clone();
         let value = client
             .call(
                 *id,
@@ -208,13 +254,22 @@ pub async fn verify(
             observation.refusal.is_none(),
             "inventory metadata was refused"
         );
-        let snapshot = observation.current.context("complete retained inventory")?;
-        ensure!(
-            snapshot.complete
-                && snapshot.known_inventory
-                && snapshot.received_entries == u64::try_from(COUNT + 1)?,
-            "the installed client did not retain the complete updated inventory"
-        );
+        let expected_entries = u64::try_from(COUNT + 3)?;
+        let snapshot = observation
+            .current
+            .into_iter()
+            .chain(observation.previous)
+            .find(|snapshot| {
+                snapshot.complete
+                    && snapshot.known_inventory
+                    && snapshot.received_entries == expected_entries
+                    && requested.as_ref().is_none_or(|cursor| {
+                        snapshot.attempt_id == cursor.attempt_id
+                            && snapshot.binding.digest == cursor.snapshot_digest
+                            && snapshot.offset == cursor.offset
+                    })
+            })
+            .context("the installed client did not retain the complete updated inventory")?;
         for entry in snapshot.entries {
             let index = *tools
                 .get(&entry.tool_call_doc_id)
@@ -235,6 +290,15 @@ pub async fn verify(
                 received.insert(entry.tool_call_doc_id),
                 "inventory page duplicated a physical mutation"
             );
+            if index == COUNT + 1 {
+                let order = entry
+                    .order
+                    .context("repeated edit omitted canonical chronology")?;
+                ensure!(
+                    order.entries == 2 && repeated_positions.insert(order.index),
+                    "repeated edits have inconsistent or duplicate chronology"
+                );
+            }
         }
         pages += 1;
         cursor = snapshot.next;
@@ -243,8 +307,12 @@ pub async fn verify(
         }
     }
     ensure!(
-        pages == 2 && received.len() == COUNT + 1,
+        pages == 2 && received.len() == COUNT + 3,
         "inventory did not cross its native page boundary"
+    );
+    ensure!(
+        repeated_positions.contains(&0) && repeated_positions.contains(&1),
+        "both sequential edit positions must survive paging and reload"
     );
     let receipts = access.execute(&format!(r#"{{ FileImageHydrationRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}}}) {{
         request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail
@@ -254,7 +322,7 @@ pub async fn verify(
         .as_array()
         .context("image demands")?;
     ensure!(
-        receipts.len() == 2,
+        receipts.len() == 4,
         "metadata browsing or reload created extra image demands: {}",
         receipts.len()
     );
@@ -265,7 +333,7 @@ pub async fn verify(
             .get(physical)
             .context("image demand named another tool")?;
         ensure!(
-            [selected, COUNT].contains(&index) && opened.insert(index),
+            [selected, COUNT, COUNT + 1].contains(&index) && opened.insert(physical.to_owned()),
             "an unseen image was requested"
         );
         let demand = FileImageDemand {
@@ -285,8 +353,8 @@ pub async fn verify(
             "the selected image was not delivered"
         );
     }
-    for index in 0..=COUNT {
-        let expected = if index == selected {
+    for index in 0..=COUNT + 1 {
+        let expected = if index == selected || index == COUNT + 1 {
             later(index)
         } else {
             after(index)
@@ -297,9 +365,10 @@ pub async fn verify(
         );
     }
     Ok(
-        json!({"sessionId":session, "initialCaptures":COUNT, "newCaptures":1, "receivedEntries":received.len(),
+        json!({"sessionId":session, "initialCaptures":COUNT, "newCaptures":3, "receivedEntries":received.len(),
         "nativePages":pages, "imageDemands":receipts.len(), "selectedIndex":selected,
-        "onlySelectedImagesRequested":true, "signedImageReceiptsVerified":true, "workingCopiesPreserved":true}),
+        "onlySelectedImagesRequested":true, "signedImageReceiptsVerified":true, "workingCopiesPreserved":true,
+        "canonicalRepeatedPositions":repeated_positions.len(), "exactlyOnceInputs":4}),
     )
 }
 

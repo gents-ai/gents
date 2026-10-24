@@ -680,6 +680,26 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.workspace_path_capability_cases,
         ),
         (
+            "file_inventory_order_window_cases",
+            "FileInventoryOrderWindowCases",
+            &snapshot.file_inventory_order_window_cases,
+        ),
+        (
+            "file_inventory_order_resolution_cases",
+            "FileInventoryOrderResolutionCases",
+            &snapshot.file_inventory_order_resolution_cases,
+        ),
+        (
+            "file_inventory_order_comparison_cases",
+            "FileInventoryOrderComparisonCases",
+            &snapshot.file_inventory_order_comparison_cases,
+        ),
+        (
+            "file_inventory_order_entry_cases",
+            "FileInventoryOrderEntryCases",
+            &snapshot.file_inventory_order_entry_cases,
+        ),
+        (
             "file_inventory_refusal_cases",
             "FileInventoryRefusalCases",
             &snapshot.file_inventory_refusal_cases,

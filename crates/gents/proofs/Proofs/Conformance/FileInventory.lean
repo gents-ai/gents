@@ -1,4 +1,5 @@
 import Proofs.SessionHydration.FileInventoryCases
+import Proofs.SessionHydration.FileInventoryOrderCases
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.NativeExecution
 
@@ -110,11 +111,16 @@ private def captureJson : Capture → String
   | .unknown => tagged "unknown"
   | .observed projection => tagged "observed" [("projection", projectionJson projection)]
 
+private def windowJson (value : Order.Window) : String := object
+  [("tool", toString value.tool), ("admitted", toString value.admitted),
+   ("delivered", toString value.delivered)]
+
 private def snapshotJson (value : Snapshot) : String := object
   [("admission", hydrationRequestJson value.admission),
    ("documents", jsonArray (value.documents.map hydrationDocumentKeyJson)),
    ("tools", jsonArray (value.tools.map fun row => object
-      [("tool", toolJson row.tool), ("capture", captureJson row.capture)]))]
+      [("tool", toolJson row.tool), ("capture", captureJson row.capture)])),
+   ("ordering", jsonArray (value.ordering.map (optional windowJson)))]
 
 private def selectionResultJson (result : Except Error Snapshot) : String :=
   match result with
@@ -157,7 +163,10 @@ private def publicationCaseJson (value : PublicationCase) : String := object
 private def entryJson (value : Entry) : String := object
   [("tool", toString value.tool), ("request", toString value.request), ("scope", scopeJson value.scope),
    ("projection", toString value.projection), ("observation", toString value.observation),
-   ("change", changeJson value.change)]
+   ("change", changeJson value.change),
+   ("order", match value.order with
+     | .unresolved => tagged "unresolved"
+     | .ordered index entries => tagged "ordered" [("index", toString index), ("entries", toString entries)])]
 
 private def cursorJson (value : Cursor) : String := object
   [("snapshot", snapshotJson value.snapshot), ("offset", toString value.offset)]
@@ -574,6 +583,31 @@ private def receiverInputJson (value : Examples.ReceiverInput) : String := objec
    ("expected", optional receiverResultJson (receive value.state value.requestKey value.envelope))]
 
 def receiverCasesJson : String := jsonArray (receiverInputs.map receiverInputJson)
+
+
+def orderingWindowCasesJson : String := jsonArray (Order.Examples.windowCases.map
+  fun (name, selected, closure, tool) => object
+    [("name", jsonString name), ("snapshot", snapshotJson selected),
+     ("closure", closureJson closure), ("tool", toolJson tool),
+     ("expected", optional windowJson (Order.window selected closure tool))])
+
+def orderingResolutionCasesJson : String := jsonArray (Order.Examples.resolutionCases.map
+  fun (name, windows) => object
+    [("name", jsonString name), ("windows", jsonArray (windows.map windowJson)),
+     ("expected", optional (fun ids => jsonArray (ids.map toString)) (Order.resolve windows))])
+
+def orderingComparisonCasesJson : String := jsonArray (Order.Examples.comparisonCases.map
+  fun (name, selected, closure, node, root, path) => object
+    [("name", jsonString name), ("snapshot", snapshotJson selected),
+     ("closure", closureJson closure), ("node", jsonString node),
+     ("root", jsonString root), ("path", jsonString path),
+     ("expected", optional (fun ids => jsonArray (ids.map toString))
+       (Order.comparison selected closure node root path))])
+
+def orderingEntryCasesJson : String := jsonArray (Order.Examples.entryCases.map
+  fun (name, entries) => object
+    [("name", jsonString name), ("entries", jsonArray (entries.map entryJson)),
+     ("expected", boolString (coherentEntries entries))])
 
 /-- IDs, DIDs and image hashes are the existing models' abstract names. Native
 adapters bind them to actual Defra-created physical IDs, authenticated key

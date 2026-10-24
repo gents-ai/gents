@@ -203,7 +203,7 @@ theorem fork_retains_only_authorized_physical_origin :
     summary forkSource forkRequest = .selected 1 0 0 false := by native_decide
 
 def getSnapshot (value : SourceInput) : Snapshot :=
-  (snapshot value.model admission).toOption.getD ⟨admission, [], []⟩
+  (snapshot value.model admission).toOption.getD ⟨admission, [], [], []⟩
 
 def large : SourceInput := source 65
 def largeSnapshot : Snapshot := getSnapshot large
@@ -305,7 +305,7 @@ def receiverInputs : List ReceiverInput :=
   , {name := "incorrect_next_cursor", envelope :=
       {firstEnvelope with page := {firstEnvelope.page with next := none}}}
   , {name := "duplicate_entry_identity", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata⟩}}}
+      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata, .unresolved⟩}}}
   , {name := "contradictory_projection_binding", state := receivedFirst, requestKey := "page-1",
       envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
         (secondEnvelope.page.entries.map fun entry => {entry with projection := (projection 1).id})}}}

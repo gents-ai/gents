@@ -1,6 +1,7 @@
 import Proofs.SessionHydration.FileImages
 import Proofs.SessionHydration.Receiver
 import Proofs.ToolExecution.Executable
+import Proofs.CanonicalOutput.ToolDelivery
 
 namespace SessionHydration.FileInventory
 
@@ -139,8 +140,57 @@ structure ToolFact where
   capture : Capture
   deriving DecidableEq, Repr
 
-/-- Equality names all canonical membership and mutable terminal/capture facts,
-not a sequence watermark or wall-clock ordering. A native encoding must bind
+namespace Order
+
+/-- These are canonical publication positions, not tool IDs, block positions,
+wall-clock observations or a new mutation journal. A completed publication
+before the next admission establishes an edge even when requests differ.
+Overlapping intervals do not establish an order between their mutations. -/
+structure Window where
+  tool : DocId
+  admitted : Nat
+  delivered : Nat
+  deriving DecidableEq, Repr
+
+def separated : List Window → Bool
+  | [] | [_] => true
+  | left :: right :: rest =>
+      decide (left.delivered < right.admitted) && separated (right :: rest)
+
+/-- This selects chronology only. Image continuity and inventory coverage must
+still be established by their existing owners before producing a net diff. -/
+def resolve (windows : List Window) : Option (List DocId) :=
+  let ordered := windows.mergeSort (fun left right => left.admitted ≤ right.admitted)
+  if (windows.map (·.tool)).Nodup &&
+      windows.all (fun window => window.admitted < window.delivered) && separated ordered then
+    some (ordered.map (·.tool))
+  else none
+
+theorem overlapping_adjacent_windows_are_unresolved (left right : Window)
+    (rest : List Window) (h : right.admitted ≤ left.delivered) :
+    separated (left :: right :: rest) = false := by
+  simp [separated, Nat.not_lt.mpr h]
+
+theorem empty_order : resolve [] = some [] := by simp [resolve, separated]
+
+inductive Position where
+  | unresolved
+  | ordered (index entries : Nat)
+  deriving DecidableEq, Repr
+
+def Position.wellFormed : Position → Bool
+  | .unresolved => true
+  | .ordered index entries => index < entries
+
+def Position.within (total : Nat) : Position → Bool
+  | .unresolved => true
+  | .ordered _ entries => entries ≤ total
+
+end Order
+
+/-- Equality names canonical membership, mutable terminal/capture facts and
+their selected ordering observations, not a sequence watermark or wall clock.
+A native encoding must bind
 this value in a new signed metadata purpose; a v1 transcript manifest does not
 bind mutable tool revisions. Digest collision resistance and source signature
 verification remain the existing native cryptographic premises. -/
@@ -148,7 +198,85 @@ structure Snapshot where
   admission : Request
   documents : List CanonicalOutput.Hydration.DocumentKey
   tools : List ToolFact
+  ordering : List (Option Order.Window) := []
   deriving DecidableEq, Repr
+
+theorem different_ordering_changes_snapshot (before after : Snapshot)
+    (h : before.ordering ≠ after.ordering) : before ≠ after := by
+  intro equal
+  exact h (congrArg Snapshot.ordering equal)
+
+namespace Order
+
+open CanonicalOutput
+
+private def origin (input : ClosureInput) : Nat → MessageEnvelope → Option MessageEnvelope
+  | 0, _ => none
+  | fuel + 1, message =>
+      match Hydration.checkedOrigin message.header with
+      | .error _ => none
+      | .ok none => some message
+      | .ok (some id) =>
+          match Hydration.lookupMessage input.messages input.deniedHeaders id with
+          | .error _ => none
+          | .ok original =>
+              if Hydration.forkMetadataMatches message original then origin input fuel original
+              else none
+
+private def calls (tool : Tool) (message : MessageEnvelope) : Bool :=
+  message.header.request == some tool.request && message.header.role == .assistant &&
+    (match message.header.publication with | .requestExecution _ => true | _ => false) &&
+    message.blocks.any (fun block => match block with
+      | .toolCall id _ _ _ _ _ _ => id == tool.id
+      | _ => false)
+
+private def terminalReference (input : ClosureInput) (tool : Tool)
+    (reference : PayloadRef) : Bool :=
+  match resolveClose input.segments input.deniedSegments reference with
+  | .error _ => false
+  | .ok closing => CanonicalOutput.ToolDelivery.closedRecordValid
+      input.segments tool.request tool.id closing
+
+/-- A background acknowledgement uses an authored receipt source, even when its
+ToolResult shape matches a completed result. Only the existing owned tool-output
+closure establishes that the mutation finished before this publication.
+A text notification may name a different wake request; its retained reference
+still binds the original physical tool/request, without interpreting its text. -/
+private def delivers (input : ClosureInput) (tool : Tool) (message : MessageEnvelope) : Bool :=
+  message.header.role == .user && message.header.request.isSome &&
+    message.header.publication == .toolDelivery tool.id &&
+    (match message.blocks with
+      | [.toolResult id _ _ _] => id == tool.id && message.header.request == some tool.request
+      | blocks => !blocks.isEmpty && blocks.all (fun block =>
+          match block with | .text _ => true | _ => false)) &&
+    (message.blocks.flatMap blockRefs).any (terminalReference input tool)
+
+private def uniquePosition (input : ClosureInput) (messages : List MessageEnvelope)
+    (predicate : MessageEnvelope → Bool) : Option Nat :=
+  match messages.filter (fun message =>
+    (origin input (input.messages.length + 1) message).any predicate) with
+  | [message] => some message.sequence
+  | _ => none
+
+/-- The snapshot and closure input are outputs of the existing authorized
+inventory/hydration owners. Only selected target-session headers contribute
+positions. Following a fork's origin validates that selected header; it never
+adds an origin's later publications beyond the inherited cut. A missing or
+ambiguous admission/delivery remains unresolved, including tools whose native
+provenance does not supply a direct invocation-result pair. -/
+def window (snapshot : Snapshot) (input : ClosureInput) (tool : Tool) : Option Window := do
+  if input.request != snapshot.admission || !tool.accepted ||
+      !(snapshot.tools.any (fun fact => fact.tool == tool)) ||
+      !decide (HasTerminal.isTerminal tool.state) then none else pure ()
+  let ids := (snapshot.documents.filter (fun key => key.collection == .agentMessage)).map (·.id)
+  let messages ← ids.mapM fun id => (Hydration.lookupMessage input.messages input.deniedHeaders id).toOption
+  let selected := messages.filter (fun message =>
+    message.header.session == snapshot.admission.nativeSession)
+  let admitted ← uniquePosition input selected (calls tool)
+  let delivered ← uniquePosition input selected (delivers input tool)
+  if admitted < delivered then some ⟨tool.id, admitted, delivered⟩ else none
+
+end Order
 
 inductive ReadBoundary where
   | atomicExhaustive
@@ -243,7 +371,12 @@ private def assembleSnapshot (source : Source) (admission : Request) : Except Er
     | _ => none
   if !(observed.map (·.id)).Nodup || !(observed.map (·.observation)).Nodup then
     .error .rejected
-  else .ok ⟨admission, selected, tools⟩
+  else
+    let input ← match closureInputFor source.catalog.closureInputs admission with
+      | none => .error .unknown
+      | some input => .ok input
+    let initial : Snapshot := ⟨admission, selected, tools, []⟩
+    .ok { initial with ordering := tools.map fun fact => Order.window initial input fact.tool }
 
 def snapshot (source : Source) (admission : Request) : Except Error Snapshot := do
   if !decide (admits source.catalog admission) then .error .rejected else pure ()
@@ -285,14 +418,36 @@ structure Entry where
   projection : DocId
   observation : DocId
   change : Change
+  order : Order.Position := .unresolved
   deriving DecidableEq, Repr
 
-def Snapshot.entries (value : Snapshot) : List Entry :=
+def Snapshot.rawEntries (value : Snapshot) : List Entry :=
   value.tools.flatMap fun fact => match fact.capture with
     | .observed projection => projection.changes.map fun change =>
         ⟨fact.tool.id, fact.tool.request, fact.tool.scope,
-          projection.id, projection.observation, change⟩
+          projection.id, projection.observation, change, .unresolved⟩
     | _ => []
+
+def Snapshot.orderedTools (value : Snapshot) (node root path : String) : Option (List DocId) := do
+  if [node, root, path].any String.isEmpty then none else pure ()
+  let ids := ((value.rawEntries.filter (fun entry =>
+    entry.scope.node == node && entry.change.root == root && entry.change.path == path)).map
+      (·.tool)).dedup
+  if ids.isEmpty then none else pure ()
+  let windows ← ids.mapM fun toolId =>
+    match (value.ordering.filterMap id).filter (fun observation => observation.tool == toolId) with
+    | [observation] => some observation
+    | _ => none
+  Order.resolve windows
+
+def Snapshot.entries (value : Snapshot) : List Entry :=
+  value.rawEntries.map fun entry =>
+    let order := match value.orderedTools entry.scope.node entry.change.root entry.change.path with
+      | none => .unresolved
+      | some ids => match ids.idxOf? entry.tool with
+        | none => .unresolved
+        | some index => .ordered index ids.length
+    { entry with order }
 
 def Snapshot.pending (value : Snapshot) : List DocId :=
   (value.tools.filter (fun fact => fact.capture == .pending)).map (·.tool.id)
@@ -464,12 +619,21 @@ structure Prefix where
 def Entry.key (value : Entry) : DocId × String × String :=
   ⟨value.projection, value.change.root, value.change.path⟩
 
+def Entry.orderCoherent (left right : Entry) : Bool :=
+  if left.scope.node != right.scope.node || left.change.root != right.change.root ||
+      left.change.path != right.change.path then true
+  else match left.order, right.order with
+    | .unresolved, .unresolved => true
+    | .ordered li lc, .ordered ri rc => lc == rc && (left.tool == right.tool || li != ri)
+    | _, _ => false
+
 def coherentEntries (entries : List Entry) : Bool :=
   (entries.map Entry.key).Nodup &&
     entries.Pairwise (fun left right => left.tool ≤ right.tool) &&
     entries.all (fun entry => validScope entry.scope &&
-      !entry.change.root.isEmpty && !entry.change.path.isEmpty) &&
+      !entry.change.root.isEmpty && !entry.change.path.isEmpty && entry.order.wellFormed) &&
     entries.all (fun left => entries.all fun right =>
+      left.orderCoherent right &&
       (left.tool != right.tool || (left.request == right.request && left.scope == right.scope &&
         left.projection == right.projection && left.observation == right.observation)) &&
       (left.projection != right.projection || (left.tool == right.tool &&
@@ -484,6 +648,7 @@ def WirePage.wellFormed (value : WirePage) : Bool :=
     value.entries.length == min pageLimit (value.binding.coverage.entries - value.offset) &&
     value.next == (if following < value.binding.coverage.entries then
       some ⟨value.binding, following⟩ else none) &&
+    value.entries.all (fun entry => entry.order.within value.binding.coverage.entries) &&
     coherentEntries value.entries
 
 /-- Correlation precedes the existing signed receiver checks. The native

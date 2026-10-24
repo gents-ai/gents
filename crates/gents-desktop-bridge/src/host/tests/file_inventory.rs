@@ -191,6 +191,7 @@ async fn inventory_pages_refresh_and_reload_through_the_live_bridge() -> Result<
     let admission: FileInventoryAdmission = initial.admission.clone();
     let entries: Vec<_> = (0..65)
         .map(|index| FileInventoryEntry {
+            order: None,
             tool_call_doc_id: "tool-document".into(),
             request_doc_id: "request-document".into(),
             scope: FileImageScope {
