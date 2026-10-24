@@ -1,3 +1,4 @@
+import Proofs.InferenceCall.LimitObservation
 import Proofs.InferenceCall.Usage
 import Proofs.Conformance.ContractTypes
 
@@ -104,5 +105,14 @@ theorem witnesses_reject_subsets_and_summary_overflow :
     valid { base with cacheRead := some 101 } = false ∧
     summarize [{ input := some counterLimit }, { input := some 1 }] = none := by
   native_decide
+
+
+def limitReadCasesJson : String :=
+  let triggers := [(InferenceCall.LimitObservation.Trigger.cached, "cached"), (.open, "open"), (.refresh, "refresh")]
+  let times : List (Option Int) := [none, some 699, some 700, some 701, some 1000, some 1001]
+  jsonArray (triggers.flatMap fun (trigger, name) => times.map fun previous =>
+    "{\"trigger\":" ++ jsonString name ++ ",\"now\":1000,\"previous\":" ++
+    (match previous with | none => "null" | some time => toString time) ++
+    ",\"should_read\":" ++ toString (InferenceCall.LimitObservation.shouldRead trigger 1000 previous) ++ "}")
 
 end Conformance.ProviderUsage
