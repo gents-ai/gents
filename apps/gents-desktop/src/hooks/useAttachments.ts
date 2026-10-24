@@ -316,12 +316,7 @@ export function useSentAttachmentPreviews(
       if (!entries.some((e) => e.isIntersecting)) return;
       observer.disconnect();
       void api
-        .requestAttachments(
-          nodeDid,
-          sessionId,
-          requestId ?? "",
-          messageKey,
-        )
+        .requestAttachments(nodeDid, sessionId, requestId ?? "", messageKey)
         .then((attachments) => {
           if (disposed) return;
           const next: Record<number, string> = {};
