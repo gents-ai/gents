@@ -1387,6 +1387,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "file_inventory_order_comparison_cases"
       "FileInventoryOrderComparisonCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_request_coverage_uses_only_selected_physical_scope"
+      "Binds per-request source coverage to selected physical scopes. Verified no-change producer observations and installed per-turn totals remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_inventory_order_comparison_cases"
+      "FileInventoryOrderComparisonCases"
       "agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "session-hydration" [Surface.runtimeInternal]

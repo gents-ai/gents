@@ -95,6 +95,39 @@ struct ToolFact {
     order: Option<super::inventory_order::Window>,
 }
 
+fn apply_request_coverage(facts: &[ToolFact], entries: &mut [FileInventoryEntry]) {
+    let mut coverage = rapidhash::RapidHashMap::default();
+    let key = |scope: &FileImageScope, request: &str| {
+        (
+            scope.node_did.clone(),
+            scope.session_id.clone(),
+            scope.requester_did.clone(),
+            request.to_owned(),
+        )
+    };
+    for fact in facts {
+        let value = coverage
+            .entry(key(&fact.scope, &fact.request_doc_id))
+            .or_insert(FileInventoryCoverage {
+                entries: 0,
+                pending: 0,
+                unknown: 0,
+            });
+        match &fact.capture {
+            Capture::Pending => value.pending += 1,
+            Capture::Unknown => value.unknown += 1,
+            Capture::Observed { projection, .. } => {
+                value.entries += projection.changes.len() as u64
+            }
+        }
+    }
+    for entry in entries {
+        entry.request_coverage = coverage
+            .get(&key(&entry.scope, &entry.request_doc_id))
+            .cloned();
+    }
+}
+
 impl FileInventorySnapshot {
     pub fn binding(&self) -> &FileInventoryBinding {
         &self.binding
@@ -266,6 +299,7 @@ impl FileInventorySnapshot {
                     InventoryRejection("file inventory projection is not owned by its source node")
                 );
                 entries.extend(projection.changes.iter().map(|change| FileInventoryEntry {
+                    request_coverage: None,
                     order: None,
                     tool_call_doc_id: document.doc_id.clone(),
                     request_doc_id: request_doc_id.clone(),
@@ -321,6 +355,7 @@ impl FileInventorySnapshot {
             .map(|fact| fact.order.clone())
             .collect::<Vec<_>>();
         super::inventory_order::project(&mut entries, &ordering);
+        apply_request_coverage(&facts, &mut entries);
         anyhow::ensure!(
             coherent_inventory_entries(&entries),
             InventoryRejection("file inventory entries are incoherent")

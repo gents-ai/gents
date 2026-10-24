@@ -115,6 +115,11 @@ pub struct FileInventoryEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional))]
     pub order: Option<FileInventoryOrdinal>,
+    /// Source-derived coverage for this physical request in this origin scope.
+    /// Omitted claims establish no request-specific completeness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    pub request_coverage: Option<FileInventoryCoverage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +233,11 @@ impl FileInventoryPage {
                     .order
                     .as_ref()
                     .is_none_or(|order| order.entries <= self.binding.coverage.entries)
+                    && entry.request_coverage.as_ref().is_none_or(|coverage| {
+                        coverage.entries <= self.binding.coverage.entries
+                            && coverage.pending <= self.binding.coverage.pending
+                            && coverage.unknown <= self.binding.coverage.unknown
+                    })
             })
             && coherent_inventory_entries(&self.entries)
     }
@@ -243,6 +253,7 @@ pub fn coherent_inventory_entries(entries: &[FileInventoryEntry]) -> bool {
     let mut observations = RapidHashMap::new();
     let mut orders = RapidHashMap::new();
     let mut positions = RapidHashMap::new();
+    let mut requests = RapidHashMap::new();
     let mut previous: Option<&str> = None;
     for entry in entries {
         if [
@@ -262,6 +273,10 @@ pub fn coherent_inventory_entries(entries: &[FileInventoryEntry]) -> bool {
                 .order
                 .as_ref()
                 .is_some_and(|order| order.index >= order.entries)
+            || entry
+                .request_coverage
+                .as_ref()
+                .is_some_and(|coverage| coverage.entries == 0)
             || previous.is_some_and(|tool| tool > entry.tool_call_doc_id.as_str())
             || !keys.insert((
                 &entry.projection_doc_id,
@@ -272,6 +287,18 @@ pub fn coherent_inventory_entries(entries: &[FileInventoryEntry]) -> bool {
             return false;
         }
         previous = Some(&entry.tool_call_doc_id);
+        let request = (
+            &entry.scope.node_did,
+            &entry.scope.session_id,
+            &entry.scope.requester_did,
+            &entry.request_doc_id,
+        );
+        if requests
+            .insert(request, entry.request_coverage.as_ref())
+            .is_some_and(|prior| prior != entry.request_coverage.as_ref())
+        {
+            return false;
+        }
         let resource = (
             &entry.scope.node_did,
             &entry.change.root,

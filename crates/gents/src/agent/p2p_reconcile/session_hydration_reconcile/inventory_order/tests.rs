@@ -289,6 +289,7 @@ fn entries(value: &Value) -> Vec<FileInventoryEntry> {
         .unwrap()
         .iter()
         .map(|entry| FileInventoryEntry {
+            request_coverage: serde_json::from_value(entry["request_coverage"].clone()).unwrap(),
             tool_call_doc_id: document(&entry["tool"]),
             request_doc_id: document(&entry["request"]),
             projection_doc_id: document(&entry["projection"]),
@@ -460,6 +461,6 @@ fn generated_orders_use_canonical_publication_observations() {
             .as_array()
             .unwrap()
             .len(),
-        9
+        13
     );
 }
