@@ -33,10 +33,9 @@ pub enum CachedInputTokensObservation {
     Reported(u64),
 }
 
-pub fn observed_token_usage<T>(
-    raw_response: &T,
-    fallback: Option<rig::completion::Usage>,
-) -> gents_protocol::usage::TokenUsage
+/// Only wire counters establish provider usage. Rig's common usage may contain
+/// defaults or derived totals, which cannot establish that a field was reported.
+pub fn observed_token_usage<T>(raw_response: &T) -> gents_protocol::usage::TokenUsage
 where
     T: serde::Serialize,
 {
@@ -51,13 +50,7 @@ where
     let number = |name: &str| usage.get(name).and_then(serde_json::Value::as_u64);
     let input = number("input_tokens").or_else(|| number("prompt_tokens"));
     let reported_total = number("total_tokens");
-    let output = number("output_tokens")
-        .or_else(|| number("completion_tokens"))
-        .or_else(|| {
-            reported_total
-                .zip(input)
-                .and_then(|(total, input)| total.checked_sub(input))
-        });
+    let output = number("output_tokens").or_else(|| number("completion_tokens"));
     let detail = |group: &str, name: &str| {
         usage
             .get(group)
@@ -78,19 +71,7 @@ where
             final_response: true,
         };
     }
-    match fallback.filter(|usage| usage.input_tokens > 0 || usage.output_tokens > 0) {
-        Some(usage) => TokenUsage {
-            input_tokens: Some(usage.input_tokens),
-            output_tokens: Some(usage.output_tokens),
-            cached_input_tokens: (usage.cached_input_tokens > 0)
-                .then_some(usage.cached_input_tokens),
-            cache_creation_input_tokens: (usage.cache_creation_input_tokens > 0)
-                .then_some(usage.cache_creation_input_tokens),
-            final_response: true,
-            ..Default::default()
-        },
-        None => TokenUsage::default(),
-    }
+    TokenUsage::default()
 }
 
 /// Rig maps absent Responses cache details to zero; inspect the raw response
@@ -628,7 +609,47 @@ mod tests {
                 "completion_tokens_details":{"reasoning_tokens":5}
             }}),
         ] {
-            assert_eq!(super::observed_token_usage(&raw, None), expected);
+            assert_eq!(super::observed_token_usage(&raw), expected);
+        }
+    }
+
+    #[test]
+    fn typed_chat_and_missing_final_usage_follow_the_executable_model() {
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+        for (name, wire) in [
+            (
+                "wire_chat",
+                serde_json::json!({"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":64},"completion_tokens_details":{"reasoning_tokens":5}}}),
+            ),
+            (
+                "wire_chat_missing_output",
+                serde_json::json!({"usage":{"prompt_tokens":100,"total_tokens":120}}),
+            ),
+            ("wire_missing_final", serde_json::json!({"usage":null})),
+        ] {
+            let expected = snapshot["provider_usage_cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            let expected: gents_protocol::usage::TokenUsage =
+                serde_json::from_value(expected["observations"][0].clone()).unwrap();
+            let chat: rig::providers::openai::completion::streaming::StreamingCompletionResponse =
+                serde_json::from_value(wire.clone()).unwrap();
+            let router: rig::providers::openrouter::streaming::StreamingCompletionResponse =
+                serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                super::observed_token_usage(&chat),
+                expected,
+                "{name}: OpenAI"
+            );
+            assert_eq!(
+                super::observed_token_usage(&router),
+                expected,
+                "{name}: OpenRouter"
+            );
         }
     }
 

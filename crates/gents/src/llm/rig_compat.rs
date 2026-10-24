@@ -111,7 +111,6 @@ where
             .finish_success_with_cache(
                 Some(ProviderCallUsage(observed_token_usage(
                     &response.raw_response,
-                    Some(response.usage),
                 ))),
                 cached,
             )
@@ -150,7 +149,7 @@ where
                             .take()
                             .expect("stream guard finalization starts exactly once");
                         terminal_guard.mark_stream_success(
-                            Some(ProviderCallUsage(observed_token_usage(response, response.token_usage()))),
+                            Some(ProviderCallUsage(observed_token_usage(response))),
                             cached_input_tokens_observation(response),
                         );
                         // The owned loop charges from the terminal item, while
