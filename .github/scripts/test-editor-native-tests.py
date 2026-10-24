@@ -21,48 +21,69 @@ class ArtifactTests(unittest.TestCase):
         self.target.mkdir()
         self.log = self.root / 'build.jsonl'
 
-    def event(self, package, name, kind='lib'):
-        binary = self.target / name
+    def event(self, package, name, kind='lib', testing=True):
+        binary = self.target / ('tests' if testing else 'bin') / name
+        binary.parent.mkdir(exist_ok=True)
         binary.write_bytes(name.encode())
         return {'reason': 'compiler-artifact', 'target': {'name': name, 'kind': [kind],
                 'src_path': str(self.root / 'crates' / package / 'src/lib.rs')},
-                'profile': {'test': True}, 'executable': str(binary)}
+                'profile': {'test': testing}, 'executable': str(binary)}
 
     def select(self, events):
         self.log.write_text(''.join(json.dumps(event) + '\n' for event in events))
         return e.artifacts(self.log, self.root, self.target)
 
-    def test_exact_bridge_and_host_runtime_are_required(self):
-        bridge = self.event('gents-desktop-bridge', 'gents_desktop_bridge')
-        runtime = self.event('gents-client-host', 'runtime', 'test')
-        main = self.event('gents-client-host', 'gents-client-host', 'bin')
-        dependency = self.event('unrelated', 'other')
-        found = self.select([bridge, runtime, main, dependency])
-        self.assertEqual(len(found), 3)
-        self.assertEqual(e.command(found[0])[1], 'host::local::windows')
-        self.assertNotIn('cargo', e.command(found[1]))
-        for events in ([], [runtime], [bridge], [bridge, runtime, runtime]):
-            with self.assertRaises(ValueError):
-                self.select(events)
+    def required(self):
+        return [self.event('gents-desktop-bridge', 'gents_desktop_bridge'),
+                self.event('gents-client-host', 'runtime', 'test'),
+                self.event('gents-cli', 'port_allocation', 'test'),
+                self.event('gents-cli', 'gents', 'bin', False),
+                self.event('gents-client-host', 'gents-client-host', 'bin', False)]
 
-    def test_non_test_artifacts_are_ignored_and_paths_cannot_escape_target(self):
-        bridge = self.event('gents-desktop-bridge', 'bridge')
-        runtime = self.event('gents-client-host', 'runtime', 'test')
-        normal = self.event('gents-client-host', 'normal')
-        normal['profile']['test'] = False
-        self.assertEqual(len(self.select([bridge, runtime, normal])), 2)
-        runtime['executable'] = str(self.root / 'outside')
+    def test_exact_bridge_runtime_and_production_binaries_are_required(self):
+        events = self.required()
+        main = self.event('gents-client-host', 'gents-client-host', 'bin')
+        found = self.select([*events, main, self.event('unrelated', 'other')])
+        self.assertEqual(len(found), 6)
+        bridge = next(item for item in found if item['role'] == 'bridge')
+        self.assertEqual(e.command(bridge)[1], 'host::local::windows')
+        self.assertNotIn('cargo', e.command(found[-1]))
+        for invalid in ([], events[:-1], events[1:], [*events, events[1]]):
+            with self.assertRaises(ValueError):
+                self.select(invalid)
+
+    def test_non_test_libraries_are_ignored_and_paths_cannot_escape_target(self):
+        events = self.required()
+        normal = self.event('gents-client-host', 'normal', testing=False)
+        self.assertEqual(len(self.select([*events, normal])), 5)
+        events[1]['executable'] = str(self.root / 'outside')
         with self.assertRaises(ValueError):
-            self.select([bridge, runtime])
+            self.select(events)
+
+    def test_target_discovery_includes_new_host_tests_and_respects_features(self):
+        targets = [{'name': 'gents-client-host', 'kind': ['bin']},
+                   {'name': 'metadata', 'kind': ['test']},
+                   {'name': 'runtime_cli', 'kind': ['test']},
+                   {'name': 'runtime', 'kind': ['test'], 'required-features': ['runtime-e2e']},
+                   {'name': 'editor', 'kind': ['test'], 'required-features': ['editor-e2e']}]
+        metadata = {'packages': [{'name': 'gents-client-host', 'targets': targets}]}
+        with patch.object(e.subprocess, 'run') as run:
+            run.return_value.stdout = json.dumps(metadata)
+            self.assertEqual(e.transport_targets(self.root), ['metadata', 'runtime', 'runtime_cli'])
+            self.assertIn('--no-deps', run.call_args.args[0])
 
     def test_compile_uses_one_feature_graph_and_no_test_execution(self):
         manifest = self.root / 'manifest.json'
-        with patch.object(e.subprocess, 'run') as run, patch.object(e, 'artifacts', return_value=[]):
+        with patch.object(e.subprocess, 'run') as run, patch.object(e, 'artifacts', return_value=[]), \
+                patch.object(e, 'transport_targets', return_value=['metadata', 'runtime', 'runtime_cli']):
             e.compile_tests(self.root, manifest)
         command = run.call_args.args[0]
         self.assertIn('--no-run', command)
         self.assertIn('gents-client-host/runtime-e2e', command)
         self.assertIn('gents-desktop-bridge', command)
+        self.assertIn('gents-cli', command)
+        targets = [command[i + 1] for i, value in enumerate(command[:-1]) if value == '--test']
+        self.assertEqual(targets, ['port_allocation', 'metadata', 'runtime', 'runtime_cli'])
         self.assertIn('--no-default-features', command)
         self.assertIn('--message-format=json-render-diagnostics', command)
         self.assertNotIn('--all-features', command)
@@ -81,16 +102,37 @@ class ArtifactTests(unittest.TestCase):
 
     def test_changed_or_missing_artifacts_fail_before_execution(self):
         manifest = self.root / 'manifest.json'
-        item = {'role': 'host', 'name': 'runtime', 'path': str(self.target / 'runtime'), 'sha256': '0' * 64}
-        (self.target / 'runtime').write_bytes(b'changed')
-        manifest.write_text(json.dumps([item]))
+        items = self.select(self.required())
+        runtime = next(item for item in items if item['role'] == 'host')
+        Path(runtime['path']).write_bytes(b'changed')
+        manifest.write_text(json.dumps(items))
         with patch.object(e.subprocess, 'Popen') as run:
             with self.assertRaises(ValueError):
                 e.run_tests(manifest, 'host')
             run.assert_not_called()
+        items = self.select(self.required())
+        binary = next(item for item in items if item['role'] == 'binary')
+        Path(binary['path']).write_bytes(b'changed')
+        manifest.write_text(json.dumps(items))
+        with patch.object(e.subprocess, 'Popen') as run:
+            with self.assertRaises(ValueError):
+                e.run_tests(manifest, 'bridge')
+            run.assert_not_called()
         manifest.write_text('[]')
         with self.assertRaises(ValueError):
             e.run_tests(manifest, 'bridge')
+
+    def test_host_phase_runs_the_cli_port_fixture_with_verified_native_binaries(self):
+        manifest = self.root / 'manifest.json'
+        manifest.write_text(json.dumps(self.select(self.required())))
+        with patch.object(e.subprocess, 'Popen') as run, patch.object(e, 'check_result'):
+            run.return_value.wait.return_value = 0
+            e.run_tests(manifest, 'host')
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual({call.kwargs['cwd'] for call in run.call_args_list},
+                         {str(self.root / 'crates/gents-cli'), str(self.root / 'crates/gents-client-host')})
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs['env']['GENTS_NATIVE_TEST_BIN_DIR'], str((self.target / 'bin').resolve()))
 
 
 if __name__ == '__main__':
