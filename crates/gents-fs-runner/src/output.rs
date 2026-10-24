@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
@@ -13,12 +12,29 @@ const MAX_ECHOED_PATTERN_CHARS: usize = 1024;
 
 const MAX_ERROR_CHARS: usize = 64 * 1024;
 
+#[derive(Debug, thiserror::Error)]
+pub enum OutputError {
+    #[error("measuring runner response")]
+    Measure(#[source] serde_json::Error),
+    #[error("result metadata alone exceeds the {budget}-byte runner response budget")]
+    MetadataExceedsBudget { budget: usize },
+    #[error("serializing tool output")]
+    Serialize(#[source] serde_json::Error),
+}
+
+type Result<T, E = OutputError> = std::result::Result<T, E>;
+
 pub(crate) fn echoed_pattern(pattern: &str) -> String {
     truncate_inline(pattern, MAX_ECHOED_PATTERN_CHARS)
 }
 
-pub fn error_response_line(error: &anyhow::Error) -> String {
-    let message = truncate_inline(&format!("{error:#}"), MAX_ERROR_CHARS);
+/// The error text is the source chain joined by `": "`.
+pub fn error_response_line(error: &dyn std::error::Error) -> String {
+    let chain = std::iter::successors(Some(error), |error| error.source())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ");
+    let message = truncate_inline(&chain, MAX_ERROR_CHARS);
     let mut line = serde_json::to_string(&crate::protocol::NativeFsRunnerResponse {
         ok: false,
         output: None,
@@ -36,7 +52,7 @@ pub(crate) fn encoded_response_len(output: &str) -> Result<usize> {
         error: None,
     };
     Ok(serde_json::to_string(&response)
-        .context("measuring runner response")?
+        .map_err(OutputError::Measure)?
         .len()
         + 1)
 }
@@ -61,10 +77,9 @@ pub(crate) fn render_within_budget<T>(
         }
     }
     let cut = render(&items[..fits], true)?;
-    anyhow::ensure!(
-        encoded_response_len(&cut)? <= budget,
-        "result metadata alone exceeds the {budget}-byte runner response budget"
-    );
+    if encoded_response_len(&cut)? > budget {
+        return Err(OutputError::MetadataExceedsBudget { budget });
+    }
     Ok(cut)
 }
 const OUTPUT_META_PREFIX: &str = "gents_fs: ";
@@ -233,7 +248,7 @@ pub(crate) fn default_ignored_names() -> &'static [&'static str] {
 }
 
 fn render_json(value: &impl Serialize) -> Result<String> {
-    serde_json::to_string(value).context("serializing tool output")
+    serde_json::to_string(value).map_err(OutputError::Serialize)
 }
 
 fn truncate_inline(text: &str, max_chars: usize) -> String {

@@ -6,7 +6,7 @@ pub enum Error {
     BaselineRegister {
         collection: String,
         #[source]
-        source: anyhow::Error,
+        source: Box<defra_node::Error>,
     },
 
     #[error("managed collection {collection} missing after baseline registration")]
@@ -49,14 +49,42 @@ pub enum Error {
         step: String,
         collection: String,
         #[source]
-        source: anyhow::Error,
+        source: Box<defra_node::Error>,
     },
+
+    #[error(
+        "migration step {step} failed on collection {collection}: PatchVersioned steps require expected_version pin"
+    )]
+    MissingVersionPin { step: String, collection: String },
 
     #[error("eager materialization failed: {detail}")]
     MaterializeFailed { detail: String },
 
     #[error("defra node error: {0}")]
-    Node(#[from] anyhow::Error),
+    Node(Box<defra_node::Error>),
+
+    #[error("defra node error: retained file image storage requires the configured node identity")]
+    MissingNodeIdentity,
+
+    #[error("defra node error: retained file image policy does not match its schema binding")]
+    FileImagePolicyMismatch,
+
+    #[error(
+        "defra node error: retained file image collection has an incompatible document policy"
+    )]
+    IncompatibleFileImagePolicy,
+
+    #[error("defra node error: invalid image owner DID: {error}")]
+    InvalidImageOwner { error: identity::Error },
+
+    #[error("defra node error: retained file image collection belongs to a different node")]
+    ForeignFileImageOwner,
+}
+
+impl From<defra_node::Error> for Error {
+    fn from(error: defra_node::Error) -> Self {
+        Self::Node(Box::new(error))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

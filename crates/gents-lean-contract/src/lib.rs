@@ -1,12 +1,11 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
 
 pub const CONTRACT_JSON_BEGIN: &str = "---BEGIN GENTS LEAN CONTRACT JSON---";
@@ -22,14 +21,142 @@ static PROCESS_STDOUT_CACHE: OnceLock<(PathBuf, String)> = OnceLock::new();
 
 static PROCESS_LOAD_MUTEX: Mutex<()> = Mutex::new(());
 
+#[derive(Debug, thiserror::Error)]
+pub enum LeanContractError {
+    #[error("Lean contract cache belongs to another proofs directory")]
+    CacheRootMismatch,
+    #[error("failed to parse Lean conformance contract JSON\nstdout:\n{stdout}")]
+    ParseJson {
+        stdout: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("failed to build Lean conformance contract target in {}", proofs_dir.display())]
+    RunBuild {
+        proofs_dir: PathBuf,
+        #[source]
+        source: Box<LeanContractError>,
+    },
+    #[error("Lean conformance contract build failed\n  cwd: {}\n{failures}", cwd.display())]
+    BuildFailed { cwd: PathBuf, failures: String },
+    #[error("visible command stdout pipe was unavailable")]
+    StdoutPipeUnavailable,
+    #[error("visible command stderr pipe was unavailable")]
+    StderrPipeUnavailable,
+    #[error("failed to spawn command {stream} forwarding thread")]
+    SpawnForwarding {
+        stream: &'static str,
+        #[source]
+        source: io::Error,
+    },
+    #[error("{stream} forwarding thread panicked")]
+    ForwardingPanicked { stream: &'static str },
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("failed to run Lean conformance contract generator in {}", proofs_dir.display())]
+    RunGenerator {
+        proofs_dir: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "Lean conformance contract generator failed\n  cwd: {}\n  status: {status}\n  stdout:\n{stdout}\n  stderr:\n{stderr}",
+        cwd.display()
+    )]
+    GeneratorFailed {
+        cwd: PathBuf,
+        status: ExitStatus,
+        stdout: String,
+        stderr: String,
+    },
+    #[error("Lean conformance contract stdout was not UTF-8")]
+    NonUtf8Stdout(#[source] std::string::FromUtf8Error),
+    #[error(
+        "while holding exclusive Lean contract load lock\n  lock: {}\n  proofs: {}",
+        lock_path.display(),
+        proofs_dir.display()
+    )]
+    LockedOperation {
+        lock_path: PathBuf,
+        proofs_dir: PathBuf,
+        #[source]
+        source: Box<LeanContractError>,
+    },
+    #[error("failed to resolve proofs dir {} (canonicalize: {canonicalize})", proofs_dir.display())]
+    ResolveProofsDir {
+        proofs_dir: PathBuf,
+        canonicalize: io::Error,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to create Lean contract load lock directory {}", dir.display())]
+    CreateLockDir {
+        dir: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to open Lean contract load lock at {}", lock_path.display())]
+    OpenLock {
+        lock_path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "failed waiting for exclusive Lean contract load lock\n  lock: {}\n  hint: another process is running lake build / contract generation for this proofs directory",
+        lock_path.display()
+    )]
+    WaitLock {
+        lock_path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to acquire exclusive Lean contract load lock at {}", lock_path.display())]
+    AcquireLock {
+        lock_path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("missing runtime {var} for Lean contract source")]
+    MissingManifestEnv { var: &'static str },
+    #[error("runtime Cargo manifest paths must be absolute")]
+    RelativeManifestPaths,
+    #[error("invalid runtime {var}")]
+    InvalidManifestPath {
+        var: &'static str,
+        #[source]
+        source: io::Error,
+    },
+    #[error("runtime Cargo manifest paths disagree")]
+    ManifestPathsDisagree,
+    #[error("could not locate crates/gents/proofs from {}", manifest_dir.display())]
+    ProofsDirNotFound { manifest_dir: PathBuf },
+    #[error("Lean contract JSON sentinel order is invalid\n  stdout:\n{stdout}")]
+    SentinelOrder { stdout: String },
+    #[error("Lean contract JSON sentinel block was empty\n  stdout:\n{stdout}")]
+    EmptySentinelBlock { stdout: String },
+    #[error("Lean contract generator stdout did not contain {marker:?}: {stdout}")]
+    MissingSentinel {
+        marker: &'static str,
+        stdout: String,
+    },
+    #[error("Lean contract generator stdout contained duplicate {marker:?} sentinels: {stdout}")]
+    DuplicateSentinel {
+        marker: &'static str,
+        stdout: String,
+    },
+}
+
+pub type Result<T, E = LeanContractError> = std::result::Result<T, E>;
+
 pub fn load_contract_snapshot<T>() -> Result<T>
 where
     T: DeserializeOwned,
 {
     let stdout = load_contract_stdout()?;
     let json = extract_contract_json(&stdout)?;
-    serde_json::from_str(json).with_context(|| {
-        format!("failed to parse Lean conformance contract JSON\nstdout:\n{stdout}")
+    serde_json::from_str(json).map_err(|source| LeanContractError::ParseJson {
+        stdout: stdout.clone(),
+        source,
     })
 }
 
@@ -57,10 +184,9 @@ fn load_contract_stdout_for(
 ) -> Result<String> {
     let proofs_dir = canonicalize_proofs_dir(proofs_dir)?;
     if let Some((root, cached)) = cache.get() {
-        anyhow::ensure!(
-            root == &proofs_dir,
-            "Lean contract cache belongs to another proofs directory"
-        );
+        if root != &proofs_dir {
+            return Err(LeanContractError::CacheRootMismatch);
+        }
         return Ok(cached.clone());
     }
 
@@ -69,10 +195,9 @@ fn load_contract_stdout_for(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     if let Some((root, cached)) = cache.get() {
-        anyhow::ensure!(
-            root == &proofs_dir,
-            "Lean contract cache belongs to another proofs directory"
-        );
+        if root != &proofs_dir {
+            return Err(LeanContractError::CacheRootMismatch);
+        }
         return Ok(cached.clone());
     }
 
@@ -101,13 +226,12 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
             .args(["build", CONTRACT_TARGET])
             .current_dir(proofs_dir)
             .stdin(Stdio::null());
-        let output = run_with_visible_output(&mut command, io::stdout(), io::stderr())
-            .with_context(|| {
-                format!(
-                    "failed to build Lean conformance contract target in {}",
-                    proofs_dir.display()
-                )
-            })?;
+        let output = run_with_visible_output(&mut command, io::stdout(), io::stderr()).map_err(
+            |source| LeanContractError::RunBuild {
+                proofs_dir: proofs_dir.to_path_buf(),
+                source: Box::new(source),
+            },
+        )?;
 
         if output.status.success() {
             return Ok(());
@@ -122,11 +246,10 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
         ));
 
         if !retryable || attempt == LAKE_BUILD_ATTEMPTS {
-            anyhow::bail!(
-                "Lean conformance contract build failed\n  cwd: {}\n{}",
-                proofs_dir.display(),
-                failures.join("\n\n")
-            );
+            return Err(LeanContractError::BuildFailed {
+                cwd: proofs_dir.to_path_buf(),
+                failures: failures.join("\n\n"),
+            });
         }
 
         std::thread::sleep(Duration::from_secs((attempt as u64) * 5));
@@ -150,7 +273,7 @@ fn run_with_visible_output(
         Some(stdout) => stdout,
         None => {
             terminate_and_reap_child(&mut child, Vec::new());
-            return Err(anyhow!("visible command stdout pipe was unavailable"));
+            return Err(LeanContractError::StdoutPipeUnavailable);
         }
     };
     let stderr = match child.stderr.take() {
@@ -158,7 +281,7 @@ fn run_with_visible_output(
         None => {
             drop(stdout);
             terminate_and_reap_child(&mut child, Vec::new());
-            return Err(anyhow!("visible command stderr pipe was unavailable"));
+            return Err(LeanContractError::StderrPipeUnavailable);
         }
     };
 
@@ -167,14 +290,20 @@ fn run_with_visible_output(
         Err(error) => {
             drop(stderr);
             terminate_and_reap_child(&mut child, Vec::new());
-            return Err(error).context("failed to spawn command stdout forwarding thread");
+            return Err(LeanContractError::SpawnForwarding {
+                stream: "stdout",
+                source: error,
+            });
         }
     };
     let stderr_task = match spawn_output_task("stderr", stderr, stderr_destination) {
         Ok(task) => task,
         Err(error) => {
             terminate_and_reap_child(&mut child, vec![stdout_task]);
-            return Err(error).context("failed to spawn command stderr forwarding thread");
+            return Err(LeanContractError::SpawnForwarding {
+                stream: "stderr",
+                source: error,
+            });
         }
     };
     let status = match child.wait() {
@@ -240,11 +369,11 @@ fn forward_and_capture(mut source: impl Read, mut destination: impl Write) -> io
 
 fn join_output_task(
     task: thread::JoinHandle<io::Result<Vec<u8>>>,
-    stream: &str,
+    stream: &'static str,
 ) -> Result<Vec<u8>> {
     match task.join() {
         Ok(result) => result.map_err(Into::into),
-        Err(_) => Err(anyhow!("{stream} forwarding thread panicked")),
+        Err(_) => Err(LeanContractError::ForwardingPanicked { stream }),
     }
 }
 
@@ -264,35 +393,30 @@ fn run_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
         .args(["env", "lean", "--run", CONTRACT_RUN_FILE])
         .current_dir(proofs_dir)
         .output()
-        .with_context(|| {
-            format!(
-                "failed to run Lean conformance contract generator in {}",
-                proofs_dir.display()
-            )
+        .map_err(|source| LeanContractError::RunGenerator {
+            proofs_dir: proofs_dir.to_path_buf(),
+            source,
         })?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "Lean conformance contract generator failed\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
-            proofs_dir.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        return Err(LeanContractError::GeneratorFailed {
+            cwd: proofs_dir.to_path_buf(),
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
     }
 
-    String::from_utf8(output.stdout).context("Lean conformance contract stdout was not UTF-8")
+    String::from_utf8(output.stdout).map_err(LeanContractError::NonUtf8Stdout)
 }
 
 fn with_proofs_dir_lock<T>(proofs_dir: &Path, op: impl FnOnce() -> Result<T>) -> Result<T> {
     let lock_path = lock_path_for(proofs_dir)?;
     let _guard = acquire_exclusive_lock(&lock_path)?;
-    op().with_context(|| {
-        format!(
-            "while holding exclusive Lean contract load lock\n  lock: {}\n  proofs: {}",
-            lock_path.display(),
-            proofs_dir.display()
-        )
+    op().map_err(|source| LeanContractError::LockedOperation {
+        lock_path,
+        proofs_dir: proofs_dir.to_path_buf(),
+        source: Box::new(source),
     })
 }
 
@@ -309,11 +433,10 @@ fn canonicalize_proofs_dir(proofs_dir: &Path) -> Result<PathBuf> {
                 proofs_dir.to_path_buf()
             } else {
                 std::env::current_dir()
-                    .with_context(|| {
-                        format!(
-                            "failed to resolve proofs dir {} (canonicalize: {err})",
-                            proofs_dir.display()
-                        )
+                    .map_err(|source| LeanContractError::ResolveProofsDir {
+                        proofs_dir: proofs_dir.to_path_buf(),
+                        canonicalize: err,
+                        source,
                     })?
                     .join(proofs_dir)
             };
@@ -324,11 +447,9 @@ fn canonicalize_proofs_dir(proofs_dir: &Path) -> Result<PathBuf> {
 
 fn acquire_exclusive_lock(lock_path: &Path) -> Result<File> {
     if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create Lean contract load lock directory {}",
-                parent.display()
-            )
+        std::fs::create_dir_all(parent).map_err(|source| LeanContractError::CreateLockDir {
+            dir: parent.to_path_buf(),
+            source,
         })?;
     }
 
@@ -338,29 +459,23 @@ fn acquire_exclusive_lock(lock_path: &Path) -> Result<File> {
         .read(true)
         .write(true)
         .open(lock_path)
-        .with_context(|| {
-            format!(
-                "failed to open Lean contract load lock at {}",
-                lock_path.display()
-            )
+        .map_err(|source| LeanContractError::OpenLock {
+            lock_path: lock_path.to_path_buf(),
+            source,
         })?;
 
     match file.try_lock() {
         Ok(()) => Ok(file),
         Err(TryLockError::WouldBlock) => {
-            file.lock().with_context(|| {
-                format!(
-                    "failed waiting for exclusive Lean contract load lock\n  lock: {}\n  hint: another process is running lake build / contract generation for this proofs directory",
-                    lock_path.display()
-                )
+            file.lock().map_err(|source| LeanContractError::WaitLock {
+                lock_path: lock_path.to_path_buf(),
+                source,
             })?;
             Ok(file)
         }
-        Err(TryLockError::Error(err)) => Err(err).with_context(|| {
-            format!(
-                "failed to acquire exclusive Lean contract load lock at {}",
-                lock_path.display()
-            )
+        Err(TryLockError::Error(source)) => Err(LeanContractError::AcquireLock {
+            lock_path: lock_path.to_path_buf(),
+            source,
         }),
     }
 }
@@ -371,26 +486,37 @@ fn acquire_exclusive_lock(lock_path: &Path) -> Result<File> {
 pub fn proofs_dir() -> Result<PathBuf> {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .context("missing runtime CARGO_MANIFEST_DIR for Lean contract source")?;
+        .ok_or(LeanContractError::MissingManifestEnv {
+            var: "CARGO_MANIFEST_DIR",
+        })?;
     let manifest_path = std::env::var_os("CARGO_MANIFEST_PATH")
         .map(PathBuf::from)
-        .context("missing runtime CARGO_MANIFEST_PATH for Lean contract source")?;
-    anyhow::ensure!(
-        manifest_dir.is_absolute() && manifest_path.is_absolute(),
-        "runtime Cargo manifest paths must be absolute"
-    );
-    let manifest_dir =
-        std::fs::canonicalize(&manifest_dir).context("invalid runtime CARGO_MANIFEST_DIR")?;
-    let manifest_path =
-        std::fs::canonicalize(&manifest_path).context("invalid runtime CARGO_MANIFEST_PATH")?;
-    anyhow::ensure!(
-        manifest_path.is_file()
-            && manifest_path
-                .file_name()
-                .is_some_and(|name| name == "Cargo.toml")
-            && manifest_path.parent() == Some(manifest_dir.as_path()),
-        "runtime Cargo manifest paths disagree"
-    );
+        .ok_or(LeanContractError::MissingManifestEnv {
+            var: "CARGO_MANIFEST_PATH",
+        })?;
+    if !(manifest_dir.is_absolute() && manifest_path.is_absolute()) {
+        return Err(LeanContractError::RelativeManifestPaths);
+    }
+    let manifest_dir = std::fs::canonicalize(&manifest_dir).map_err(|source| {
+        LeanContractError::InvalidManifestPath {
+            var: "CARGO_MANIFEST_DIR",
+            source,
+        }
+    })?;
+    let manifest_path = std::fs::canonicalize(&manifest_path).map_err(|source| {
+        LeanContractError::InvalidManifestPath {
+            var: "CARGO_MANIFEST_PATH",
+            source,
+        }
+    })?;
+    if !(manifest_path.is_file()
+        && manifest_path
+            .file_name()
+            .is_some_and(|name| name == "Cargo.toml")
+        && manifest_path.parent() == Some(manifest_dir.as_path()))
+    {
+        return Err(LeanContractError::ManifestPathsDisagree);
+    }
 
     let repository_root = manifest_dir.ancestors().find(|ancestor| {
         let metadata = ancestor.join(".git");
@@ -422,43 +548,42 @@ pub fn proofs_dir() -> Result<PathBuf> {
         }
     }
 
-    Err(anyhow!(
-        "could not locate crates/gents/proofs from {}",
-        manifest_dir.display()
-    ))
+    Err(LeanContractError::ProofsDirNotFound { manifest_dir })
 }
 
 pub fn extract_contract_json(stdout: &str) -> Result<&str> {
     let begin = unique_marker_position(stdout, CONTRACT_JSON_BEGIN)?;
     let end = unique_marker_position(stdout, CONTRACT_JSON_END)?;
-    anyhow::ensure!(
-        begin < end,
-        "Lean contract JSON sentinel order is invalid\n  stdout:\n{}",
-        stdout
-    );
+    if begin >= end {
+        return Err(LeanContractError::SentinelOrder {
+            stdout: stdout.to_owned(),
+        });
+    }
 
     let json = stdout[begin + CONTRACT_JSON_BEGIN.len()..end].trim();
-    anyhow::ensure!(
-        !json.is_empty(),
-        "Lean contract JSON sentinel block was empty\n  stdout:\n{}",
-        stdout
-    );
+    if json.is_empty() {
+        return Err(LeanContractError::EmptySentinelBlock {
+            stdout: stdout.to_owned(),
+        });
+    }
     Ok(json)
 }
 
-fn unique_marker_position(stdout: &str, marker: &str) -> Result<usize> {
+fn unique_marker_position(stdout: &str, marker: &'static str) -> Result<usize> {
     let positions = stdout
         .match_indices(marker)
         .map(|(position, _)| position)
         .collect::<Vec<_>>();
     match positions.as_slice() {
         [position] => Ok(*position),
-        [] => Err(anyhow!(
-            "Lean contract generator stdout did not contain {marker:?}: {stdout}"
-        )),
-        _ => Err(anyhow!(
-            "Lean contract generator stdout contained duplicate {marker:?} sentinels: {stdout}"
-        )),
+        [] => Err(LeanContractError::MissingSentinel {
+            marker,
+            stdout: stdout.to_owned(),
+        }),
+        _ => Err(LeanContractError::DuplicateSentinel {
+            marker,
+            stdout: stdout.to_owned(),
+        }),
     }
 }
 
@@ -469,6 +594,13 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn chain(error: &dyn std::error::Error) -> String {
+        std::iter::successors(Some(error), |error| error.source())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ")
+    }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -569,11 +701,11 @@ mod tests {
             &proofs_dir,
             &OnceLock::new(),
             &flight,
-            &|_| anyhow::bail!("intentional protected failure"),
+            &|_| Err(io::Error::other("intentional protected failure").into()),
             &|_| unreachable!("generate must not run after build fails"),
         )
         .unwrap_err();
-        let err = format!("{err:#}");
+        let err = chain(&err);
         assert!(
             err.contains("intentional protected failure"),
             "unexpected error: {err}"
@@ -695,15 +827,15 @@ mod tests {
             &OnceLock::new(),
             &Mutex::new(()),
             &|dir| {
-                anyhow::bail!(
-                    "Lean conformance contract build failed\n  cwd: {}\n  status: exit 1\n  stderr:\nbogus",
-                    dir.display()
-                )
+                Err(LeanContractError::BuildFailed {
+                    cwd: dir.to_path_buf(),
+                    failures: "  status: exit 1\n  stderr:\nbogus".into(),
+                })
             },
             &|_| unreachable!("generate must not run after build fails"),
         )
         .unwrap_err();
-        let err = format!("{err:#}");
+        let err = chain(&err);
 
         assert!(
             err.contains("Lean conformance contract build failed"),
@@ -742,14 +874,20 @@ mod tests {
             let build = |_: &Path| -> Result<()> {
                 if holder_path.exists() {
                     std::fs::write(&overlap_path, b"overlap detected").ok();
-                    anyhow::bail!("overlapping critical section: holder already present");
+                    return Err(io::Error::other(
+                        "overlapping critical section: holder already present",
+                    )
+                    .into());
                 }
                 std::fs::write(&holder_path, std::process::id().to_string())?;
                 thread::sleep(Duration::from_millis(HOLD_MS));
                 let held_by = std::fs::read_to_string(&holder_path)?;
                 if held_by.trim() != std::process::id().to_string() {
                     std::fs::write(&overlap_path, b"holder stolen").ok();
-                    anyhow::bail!("holder rewritten by another process: {held_by}");
+                    return Err(io::Error::other(format!(
+                        "holder rewritten by another process: {held_by}"
+                    ))
+                    .into());
                 }
                 std::fs::remove_file(&holder_path)?;
                 std::fs::write(done_dir.join(std::process::id().to_string()), b"ok")?;

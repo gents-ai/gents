@@ -23,6 +23,7 @@ futures = "0.3"
 gents = { path = "../gents" }
 gents-desktop-core.workspace = true
 gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["rt", "codec"] }
 tracing.workspace = true

@@ -1,8 +1,6 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
-
 pub mod protocol;
 
 mod context;
@@ -11,10 +9,30 @@ mod output;
 mod tools;
 mod traversal;
 
+pub use context::PathError;
+pub use output::OutputError;
 pub use output::{error_response_line, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES};
-pub use tools::{execute_request, execute_request_with_base};
+pub use tools::{execute_request, execute_request_with_base, ToolError};
 
 use protocol::{GlobArgs, NativeFsRunnerRequest, NativeFsRunnerResponse};
+
+#[derive(Debug, thiserror::Error)]
+pub enum RunnerError {
+    #[error("unknown argument {0:?}")]
+    UnknownArgument(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("runner request exceeds {MAX_REQUEST_BYTES} bytes")]
+    RequestTooLarge,
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Tool(#[from] ToolError),
+    #[error("self-test output did not include src/main.rs: {output}")]
+    SelfTestMissingFile { output: String },
+}
+
+type Result<T, E = RunnerError> = std::result::Result<T, E>;
 
 pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()> {
     let mut args = args.into_iter();
@@ -26,7 +44,7 @@ pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()>
             "--self-test" => self_test_requested = true,
             "--root" => root = args.next().map(PathBuf::from),
             "--base" => base = args.next().map(PathBuf::from),
-            other => anyhow::bail!("unknown argument {other:?}"),
+            other => return Err(RunnerError::UnknownArgument(other.to_owned())),
         }
     }
 
@@ -59,14 +77,13 @@ fn read_request(reader: impl Read) -> Result<NativeFsRunnerRequest> {
     reader
         .take(MAX_REQUEST_BYTES as u64 + 1)
         .read_to_string(&mut input)?;
-    anyhow::ensure!(
-        input.len() <= MAX_REQUEST_BYTES,
-        "runner request exceeds {MAX_REQUEST_BYTES} bytes"
-    );
+    if input.len() > MAX_REQUEST_BYTES {
+        return Err(RunnerError::RequestTooLarge);
+    }
     Ok(serde_json::from_str(&input)?)
 }
 
-pub fn write_stdio_error(error: &anyhow::Error) {
+pub fn write_stdio_error(error: &dyn std::error::Error) {
     let _ = std::io::stdout().write_all(error_response_line(error).as_bytes());
 }
 
@@ -91,8 +108,6 @@ pub fn self_test() -> Result<()> {
     if output.contains("src/main.rs") {
         Ok(())
     } else {
-        Err(anyhow!(
-            "self-test output did not include src/main.rs: {output}"
-        ))
+        Err(RunnerError::SelfTestMissingFile { output })
     }
 }

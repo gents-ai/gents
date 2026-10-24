@@ -2,20 +2,78 @@ mod audio;
 mod permission;
 mod wire;
 
+use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
 
 use gents_protocol::client_media::{
     MediaCall as Call, MediaDevices, MediaEvent, MediaInputDevice, MediaMessage,
-    MediaOperation as Operation, MediaReply, VERSION,
+    MediaOperation as Operation, MediaPcmError, MediaReply, VERSION,
 };
+use gents_protocol::error_chain::ErrorChain;
 
-fn main() -> Result<()> {
+use crate::audio::AudioError;
+use crate::wire::FrameError;
+
+#[derive(Debug, thiserror::Error)]
+enum HostError {
+    #[error(transparent)]
+    Describe(serde_json::Error),
+    #[error("Use --stdio to attach an editor, or --describe to inspect this artifact.")]
+    Usage,
+    #[error(transparent)]
+    Frame(#[from] FrameError),
+    #[error("Invalid media command. Install matching extension and helper versions.")]
+    InvalidCommand,
+    #[error("Media output is unavailable or stalled.")]
+    OutputStalled(#[source] mpsc::TrySendError<MediaMessage>),
+    #[error("No recording is active.")]
+    NoRecording,
+    #[error("No playback is active.")]
+    NoPlayback,
+}
+
+/// Errors returned to the editor as a reply's `error` text.
+#[derive(Debug, thiserror::Error)]
+enum OperationError {
+    #[error("Incompatible media protocol. Install matching extension and media host versions.")]
+    IncompatibleProtocol,
+    #[error("Initialize the media protocol before using a device.")]
+    Uninitialized,
+    #[error("The media protocol is already initialized.")]
+    AlreadyInitialized,
+    #[error(transparent)]
+    Audio(#[from] AudioError),
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+    #[error("Invalid media operation identity.")]
+    InvalidToken,
+    #[error("Stop the active recording or playback first.")]
+    Busy,
+    #[error("This recording is no longer active.")]
+    RecordingInactive,
+    #[error(transparent)]
+    Host(#[from] HostError),
+    #[error(transparent)]
+    Pcm(#[from] MediaPcmError),
+}
+
+/// Prints the error with its source chain to stderr and exits non-zero.
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {}", ErrorChain(&error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), HostError> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if arguments == ["--describe"] {
         serde_json::to_writer(
@@ -26,35 +84,35 @@ fn main() -> Result<()> {
                 "maxFrameBytes": wire::MAX_FRAME_BYTES, "maxPcmBytes": audio::MAX_PCM_BYTES,
                 "maxSeconds": audio::MAX_SECONDS,
             }),
-        )?;
+        )
+        .map_err(HostError::Describe)?;
         return Ok(());
     }
-    ensure!(
-        arguments == ["--stdio"],
-        "Use --stdio to attach an editor, or --describe to inspect this artifact."
-    );
+    if arguments != ["--stdio"] {
+        return Err(HostError::Usage);
+    }
     serve()
 }
 
 /// The audio owner never waits on stdout. A bounded writer queue isolates
 /// stalled pipes; EOF, writer failure and backpressure drop every stream.
-fn serve() -> Result<()> {
+fn serve() -> Result<(), HostError> {
     let stopped = Arc::new(AtomicBool::new(false));
-    let (incoming, calls) = mpsc::sync_channel::<Result<Call>>(8);
+    let (incoming, calls) = mpsc::sync_channel::<Result<Call, HostError>>(8);
     let closed = stopped.clone();
     std::thread::spawn(move || {
         let mut input = std::io::stdin().lock();
         loop {
             match wire::read(&mut input) {
                 Ok(Some(value)) => {
-                    let call = serde_json::from_value(value).map_err(|_| anyhow::anyhow!("Invalid media command. Install matching extension and helper versions."));
+                    let call = serde_json::from_value(value).map_err(|_| HostError::InvalidCommand);
                     if incoming.send(call).is_err() {
                         break;
                     }
                 }
                 Ok(None) => break,
                 Err(error) => {
-                    let _ = incoming.try_send(Err(error));
+                    let _ = incoming.try_send(Err(error.into()));
                     break;
                 }
             }
@@ -72,21 +130,17 @@ fn serve() -> Result<()> {
         }
         closed.store(true, Ordering::Release);
     });
-    let emit = |message| {
-        outgoing
-            .try_send(message)
-            .context("Media output is unavailable or stalled.")
-    };
+    let emit = |message| outgoing.try_send(message).map_err(HostError::OutputStalled);
     let mut initialized = false;
     let mut capture: Option<(String, audio::Capture)> = None;
     let mut playback: Option<(String, audio::Playback)> = None;
     while !stopped.load(Ordering::Acquire) {
         if capture.as_ref().is_some_and(|(_, value)| value.ready()) {
-            let (token, active) = capture.take().context("No recording is active.")?;
+            let (token, active) = capture.take().ok_or(HostError::NoRecording)?;
             emit(MediaMessage::Event(captured(token, active.finish())))?;
         }
         if let Some(result) = playback.as_ref().and_then(|(_, value)| value.completion()) {
-            let (token, active) = playback.take().context("No playback is active.")?;
+            let (token, active) = playback.take().ok_or(HostError::NoPlayback)?;
             drop(active);
             emit(MediaMessage::Event(match result {
                 Ok(()) => MediaEvent::Played { token },
@@ -101,22 +155,21 @@ fn serve() -> Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        let result = (|| -> Result<Value> {
+        let result = (|| -> Result<Value, OperationError> {
             if let Operation::Hello { version } = call.operation {
-                ensure!(!initialized && version == VERSION, "Incompatible media protocol. Install matching extension and media host versions.");
+                if initialized || version != VERSION {
+                    return Err(OperationError::IncompatibleProtocol);
+                }
                 initialized = true;
                 return Ok(
                     json!({"version":VERSION, "maxPcmBytes":audio::MAX_PCM_BYTES, "maxSeconds":audio::MAX_SECONDS}),
                 );
             }
-            ensure!(
-                initialized,
-                "Initialize the media protocol before using a device."
-            );
+            if !initialized {
+                return Err(OperationError::Uninitialized);
+            }
             match call.operation {
-                Operation::Hello { .. } => {
-                    anyhow::bail!("The media protocol is already initialized.")
-                }
+                Operation::Hello { .. } => Err(OperationError::AlreadyInitialized),
                 Operation::Devices {} => Ok(serde_json::to_value(MediaDevices {
                     inputs: audio::input_devices()?
                         .into_iter()
@@ -126,21 +179,19 @@ fn serve() -> Result<()> {
                 })?),
                 Operation::Capture { token, device } => {
                     valid_token(&token)?;
-                    ensure!(
-                        capture.is_none() && playback.is_none(),
-                        "Stop the active recording or playback first."
-                    );
+                    if capture.is_some() || playback.is_some() {
+                        return Err(OperationError::Busy);
+                    }
                     let active = audio::Capture::start(device.as_deref(), &stopped)?;
                     let rate = active.sample_rate;
                     capture = Some((token, active));
                     Ok(json!({"sampleRate":rate}))
                 }
                 Operation::Finish { token } => {
-                    ensure!(
-                        capture.as_ref().is_some_and(|(active, _)| active == &token),
-                        "This recording is no longer active."
-                    );
-                    let (_, active) = capture.take().context("No recording is active.")?;
+                    if !capture.as_ref().is_some_and(|(active, _)| active == &token) {
+                        return Err(OperationError::RecordingInactive);
+                    }
+                    let (_, active) = capture.take().ok_or(HostError::NoRecording)?;
                     emit(MediaMessage::Event(captured(token, active.finish())))?;
                     Ok(Value::Null)
                 }
@@ -150,10 +201,9 @@ fn serve() -> Result<()> {
                     pcm,
                 } => {
                     valid_token(&token)?;
-                    ensure!(
-                        capture.is_none() && playback.is_none(),
-                        "Stop the active recording or playback first."
-                    );
+                    if capture.is_some() || playback.is_some() {
+                        return Err(OperationError::Busy);
+                    }
                     let samples = gents_protocol::client_media::MediaPcmClip { pcm, sample_rate }
                         .samples()?;
                     playback = Some((
@@ -187,19 +237,19 @@ fn serve() -> Result<()> {
     Ok(())
 }
 
-fn valid_token(token: &str) -> Result<()> {
-    ensure!(
-        !token.is_empty()
-            && token.len() <= 128
-            && token
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
-        "Invalid media operation identity."
-    );
+fn valid_token(token: &str) -> Result<(), OperationError> {
+    if !(!token.is_empty()
+        && token.len() <= 128
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+    {
+        return Err(OperationError::InvalidToken);
+    }
     Ok(())
 }
 
-fn captured(token: String, result: Result<(u32, Vec<i16>)>) -> MediaEvent {
+fn captured(token: String, result: Result<(u32, Vec<i16>), AudioError>) -> MediaEvent {
     match result {
         Ok((sample_rate, samples)) => {
             let bytes: Vec<u8> = samples

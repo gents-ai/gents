@@ -8,9 +8,9 @@ description = "Lens-first schema migration engine for Gents (DefraDB version DAG
 build = "build.rs"
 
 [dependencies]
-anyhow.workspace = true
 defra-node = { workspace = true, features = ["native", "wasmtime-runtime"] }
 gents-protocol.workspace = true
+identity.workspace = true
 schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,7 +25,6 @@ rapidhash = { workspace = true }
 crypto.workspace = true
 defra-core.workspace = true
 defra-node.workspace = true
-identity.workspace = true
 gents-lens-fixture-add-label = { path = "../gents-lenses/fixture_add_label", default-features = false }
 tempfile = "3"
 tokio = { workspace = true, features = ["full", "test-util"] }

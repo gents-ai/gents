@@ -34,6 +34,7 @@ required-features = ["live-e2e"]
 
 [dependencies]
 rapidhash = { workspace = true }
+thiserror.workspace = true
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat"] }
 anyhow.workspace = true
 async-trait = "0.1"

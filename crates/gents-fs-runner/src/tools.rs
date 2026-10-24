@@ -2,15 +2,14 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use globset::GlobBuilder;
 
-use crate::context::RunnerContext;
+use crate::context::{PathError, RunnerContext};
 use crate::output::{
     default_ignored_names, echoed_pattern, format_entries, format_grep_matches, render_tool_output,
     render_within_budget, summarize_entries, total_count, truncate_grep_preview, GlobMetadata,
     GlobOutput, GrepMetadata, GrepOutput, GrepOutputMatch, ListFilesMetadata, ListFilesOutput,
-    MAX_RESPONSE_BYTES,
+    OutputError, MAX_RESPONSE_BYTES,
 };
 use crate::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 use crate::traversal::{
@@ -24,12 +23,30 @@ const DEFAULT_MAX_BYTES_READ: u64 = 128 * 1024 * 1024;
 const DEFAULT_MAX_WALL_MS: u64 = 15_000;
 const MAX_PATTERN_BYTES: usize = 4096;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ToolError {
+    #[error("pattern is {len} bytes; at most {MAX_PATTERN_BYTES} are accepted")]
+    PatternTooLarge { len: usize },
+    #[error("invalid glob pattern {pattern}")]
+    InvalidGlob {
+        pattern: String,
+        #[source]
+        source: globset::Error,
+    },
+    #[error(transparent)]
+    Path(#[from] PathError),
+    #[error(transparent)]
+    Walk(#[from] std::io::Error),
+    #[error(transparent)]
+    Output(#[from] OutputError),
+}
+
+type Result<T, E = ToolError> = std::result::Result<T, E>;
+
 fn check_pattern_size(pattern: &str) -> Result<()> {
-    anyhow::ensure!(
-        pattern.len() <= MAX_PATTERN_BYTES,
-        "pattern is {} bytes; at most {MAX_PATTERN_BYTES} are accepted",
-        pattern.len()
-    );
+    if pattern.len() > MAX_PATTERN_BYTES {
+        return Err(ToolError::PatternTooLarge { len: pattern.len() });
+    }
     Ok(())
 }
 
@@ -88,7 +105,7 @@ fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
     let entries = collect_entries(context, &dir, args.recursive, args.max_entries.max(1), walk)?;
     let path = context.display_path(&dir);
-    render_within_budget(
+    Ok(render_within_budget(
         &entries.items,
         entries.truncated || entries.walk.budget_exhausted,
         MAX_RESPONSE_BYTES,
@@ -116,7 +133,7 @@ fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
                 args.raw_json,
             )
         },
-    )
+    )?)
 }
 
 fn glob_literal_prefix(pattern: &str) -> Vec<&str> {
@@ -141,7 +158,10 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
     let dir = context.resolve_existing_dir(args.path.as_deref())?;
     let pattern = GlobBuilder::new(&args.pattern)
         .build()
-        .with_context(|| format!("invalid glob pattern {}", args.pattern))?
+        .map_err(|source| ToolError::InvalidGlob {
+            pattern: args.pattern.clone(),
+            source,
+        })?
         .compile_matcher();
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
     let prefix = glob_literal_prefix(&args.pattern);
@@ -176,7 +196,7 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
     let search_dir_entries = (matches.items.is_empty() && !matches.walk.budget_exhausted)
         .then(|| top_level_entry_names(&dir));
     let path = context.display_path(&dir);
-    render_within_budget(
+    Ok(render_within_budget(
         &matches.items,
         matches.truncated || matches.walk.budget_exhausted,
         MAX_RESPONSE_BYTES,
@@ -206,7 +226,7 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
                 args.raw_json,
             )
         },
-    )
+    )?)
 }
 
 fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
@@ -243,7 +263,7 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
         (matches.is_empty() && path.is_dir() && !collected.walk.budget_exhausted)
             .then(|| top_level_entry_names(&path));
     let display_path = context.display_path(&path);
-    render_within_budget(
+    Ok(render_within_budget(
         &matches,
         collected.truncated || collected.walk.budget_exhausted,
         MAX_RESPONSE_BYTES,
@@ -282,5 +302,5 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
                 args.raw_json,
             )
         },
-    )
+    )?)
 }

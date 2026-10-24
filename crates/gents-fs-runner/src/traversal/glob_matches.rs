@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use anyhow::Result;
 use globset::GlobMatcher;
+use std::io::Result;
 
 use crate::context::RunnerContext;
 use crate::model::{Collected, FilesystemEntry};
