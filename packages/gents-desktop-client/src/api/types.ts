@@ -1,3 +1,7 @@
+import type { ProviderRecoveryRequest } from "../generated/ProviderRecoveryRequest.js";
+import type { ProviderRecoveryPlan } from "../generated/ProviderRecoveryPlan.js";
+import type { ProviderRecoveryApply } from "../generated/ProviderRecoveryApply.js";
+import type { ProviderRecoveryResult } from "../generated/ProviderRecoveryResult.js";
 import type { DesktopBackgroundToolRequest } from "../generated/DesktopBackgroundToolRequest.js";
 import type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
 import type { SessionForkResult } from "../generated/SessionForkResult.js";
@@ -20,7 +24,7 @@ import type { ManagedServerResetResult } from "../generated/ManagedServerResetRe
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
-import type { BackendUsageView } from "../generated/BackendUsageView.js";
+import type { AccountUsageView } from "../generated/AccountUsageView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryRequest } from "../generated/InferenceDiscoveryRequest.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
@@ -321,6 +325,12 @@ export type DesktopApiAdapter = {
     provider: OauthProvider,
     onUrl: (url: string) => void,
   ) => Promise<() => void>;
+  fetchProviderRecovery?: (
+    request: ProviderRecoveryRequest,
+  ) => Promise<ProviderRecoveryPlan | null>;
+  applyProviderRecovery?: (
+    request: ProviderRecoveryApply,
+  ) => Promise<ProviderRecoveryResult>;
   listProviderAccounts?: (nodeDid: string) => Promise<ProviderAccountView[]>;
   disconnectProviderAccount?: (
     nodeDid: string,
@@ -343,7 +353,7 @@ export type DesktopApiAdapter = {
     nodeDid: string,
     refresh: boolean,
     provider?: string | null,
-  ) => Promise<BackendUsageView[]>;
+  ) => Promise<AccountUsageView[]>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

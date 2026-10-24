@@ -6992,7 +6992,12 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     let identity = node_identity("config-accounts");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache = std::sync::Arc::new(crate::usage_observation::UsageCache::with_endpoints(
+        crate::usage_observation::UsageEndpoints {
+            claude_usage: "http://127.0.0.1:9/usage".into(),
+            grok_billing: "http://127.0.0.1:9/billing".into(),
+        },
+    ));
     seed_account_view(&cache, &node, &owner).await;
     let mut tool_config = config(&["node", "profile", "backend"]);
     tool_config.agent_id = "alpha".into();
@@ -7063,7 +7068,7 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
 }
 
 #[tokio::test]
-async fn config_backend_accounts_needs_the_backend_grant() {
+async fn config_backend_accounts_is_readable_without_the_backend_grant() {
     let node = build_agent_node().await;
     let identity = node_identity("config-accounts-grant");
     let owner = identity.did().to_string();
@@ -7082,8 +7087,12 @@ async fn config_backend_accounts_needs_the_backend_grant() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    assert!(config
+    config
         .call(json!({"argv":["backend", "accounts"]}).to_string())
+        .await
+        .unwrap();
+    assert!(config
+        .call(json!({"argv":["backend", "list"]}).to_string())
         .await
         .is_err());
 }

@@ -1372,7 +1372,7 @@ async fn newer_observations_win_and_backend_edits_get_an_empty_cache() {
 }
 
 #[tokio::test]
-async fn default_limits_tool_reads_cache_without_credentials_or_upstream() {
+async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credentials() {
     use crate::llm::tool::Tool;
     let node = node().await;
     let cache = Arc::new(UsageCache::default());
@@ -1386,12 +1386,22 @@ async fn default_limits_tool_reads_cache_without_credentials_or_upstream() {
     )
     .await
     .unwrap();
+    let (url, received) = test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
+    let mut backend = backend(A, "ChatGptCodex", "runtime", json!({"kind":"node_oauth"}));
+    backend.endpoint = origin(&url);
+    crate::config_client::write_inference_backend_document(&local(&node), &backend)
+        .await
+        .unwrap();
     let tool = ProviderLimitsTool {
         node,
         node_did: A.into(),
         cache,
     };
     let output = tool.call(ProviderLimitsArgs {}).await.unwrap();
+    received.await.unwrap();
+    let cached = tool.call(ProviderLimitsArgs {}).await.unwrap();
+    let cached: Value = serde_json::from_str(&cached).unwrap();
+    assert_eq!(cached["accounts"][0]["read"]["outcome"], "skipped_recent");
     let value: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(
         value["accounts"][0]["limits"]["windows"][0]["used_pct"],

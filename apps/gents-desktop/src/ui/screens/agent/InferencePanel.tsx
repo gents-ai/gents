@@ -22,7 +22,7 @@ import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
 import { useAccounts, useProviderUsage, useSetupCatalog } from "@/hooks/useProviders";
 import { healthy, KINDS, SUBSCRIPTION } from "./inferenceKinds";
-import { UsageBar } from "./ProviderUsage";
+import { UsageBar, AllProviderLimits } from "./ProviderUsage";
 import { AccountDialogs, backendAccount, type AccountAction } from "./ProviderAccounts";
 import { BackendEditor } from "./BackendEditor";
 import { addItem, addingFrom } from "./draftItems";
@@ -74,7 +74,7 @@ export function InferencePanel({
   const [acting, setActing] = useState<AccountAction | null>(null);
   const providerUsage = useProviderUsage(deployment.nodeDid, item);
   const usageOf = (backendId: string) =>
-    providerUsage.usage.find((u) => u.backendId === backendId);
+    providerUsage.usage.find((u) => u.backendIds.includes(backendId));
   const catalog = useSetupCatalog();
   const providers = catalog.providers;
   const adding = addingFrom(item);
@@ -137,6 +137,12 @@ export function InferencePanel({
             Retry
           </Button>
         </div>
+      )}
+      {!item && (
+        <AllProviderLimits
+          views={providerUsage.usage}
+          onRefresh={() => providerUsage.refresh(null)}
+        />
       )}
       <ListDetail
         base={base}
