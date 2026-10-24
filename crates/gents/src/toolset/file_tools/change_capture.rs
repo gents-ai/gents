@@ -14,6 +14,17 @@ use serde::{Serialize, Serializer};
 
 use super::{content_hash, open_regular_file};
 
+/// Only native file operations whose implementation cannot mutate files emit
+/// this witness. Dispatch binds it to the accepted physical invocation; its
+/// winning terminal supplies request and source scope. Success alone is not a
+/// witness for shell, plugin or other arbitrary operations.
+#[derive(Debug, Clone)]
+pub(crate) struct VerifiedUnchanged(());
+
+pub(super) fn unchanged_output() -> DeferredToolWrites {
+    DeferredToolWrites::new(VerifiedUnchanged(()))
+}
+
 #[derive(Clone)]
 pub(crate) struct FileChanges(Arc<ChangeBatch>);
 
@@ -27,6 +38,10 @@ impl Serialize for FileChanges {
 }
 
 impl FileChanges {
+    pub(crate) fn metadata(&self) -> Vec<gents_protocol::file_inventory::FileChangeMetadata> {
+        self.0.changes.iter().map(Into::into).collect()
+    }
+
     pub(crate) fn belongs_to(&self, tool_call_doc_id: &str) -> bool {
         self.0.tool_call_doc_id == tool_call_doc_id
     }

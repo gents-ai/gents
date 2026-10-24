@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  RenderedTimelineItem,
+  RenderedToolCallView,
+} from "@source-inc/gents-desktop-client";
 import { CompactToolGroup } from "./CompactToolGroup.js";
+import { MessageList } from "../Transcript.js";
 
 HTMLDialogElement.prototype.showModal = function () {
   this.open = true;
@@ -69,4 +73,53 @@ it("opens the actual failed action from mixed history while retaining every chro
   fireEvent.click(screen.getByRole("button", { name: "Close actions" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(document.activeElement).toBe(summary);
+});
+
+it("keeps a long interrupted block to three rows and opens every original action in order", () => {
+  const requestTurn = {
+    requestDocId: "physical",
+    requestId: "request",
+    settled: false,
+  };
+  const timelineItems: RenderedTimelineItem[] = Array.from(
+    { length: 24 },
+    (_, index) => [
+      {
+        kind: "toolGroup" as const,
+        itemKey: `group-${index}`,
+        tools: [
+          {
+            ...tool(
+              String(index),
+              index >= 21 ? "running" : index === 3 ? "error" : "success",
+            ),
+            requestTurn,
+          },
+        ],
+      },
+      {
+        kind: "assistantMessage" as const,
+        itemKey: `blank-${index}`,
+        content: "",
+        requestTurn,
+        reconstruction: { state: "ready" as const },
+      },
+    ],
+  ).flat();
+  render(<MessageList timelineItems={timelineItems} compactTools />);
+  const rows = screen.getAllByRole("button", { name: /^View actions:/ });
+  expect(rows).toHaveLength(3);
+  expect(rows[1]?.textContent).toContain("2 actions running");
+  expect(rows[2]?.textContent).toContain("command-23");
+  fireEvent.click(rows[0]!);
+  const dialog = screen.getByRole("dialog", { name: "Actions 24" });
+  const details = Array.from(
+    dialog.querySelectorAll<HTMLDetailsElement>(".tool-item"),
+  );
+  expect(
+    details.map((item) => item.querySelector(".tool-primary")?.textContent),
+  ).toEqual(Array.from({ length: 24 }, (_, index) => `command-${index}`));
+  expect(details[3]?.open).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Close actions" }));
+  expect(document.activeElement).toBe(rows[0]);
 });

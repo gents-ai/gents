@@ -1,0 +1,11 @@
+type FileInventoryRequest @branchable {
+    request_key: String @index(unique: true) @immutable
+    peer_id: String @immutable
+    requester_did: String @index @immutable
+    node_did: String @index @immutable
+    session_id: String @immutable
+    demand: JSON @immutable
+    created_at: DateTime @immutable
+    status: String @index
+    response: JSON
+}

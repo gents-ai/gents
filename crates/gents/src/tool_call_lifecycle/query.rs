@@ -15,6 +15,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
+use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 
 use super::{
@@ -93,12 +94,44 @@ impl ToolCallLifecycle {
         session_id: &str,
         requester_did: Option<&str>,
     ) -> Result<Option<Self>> {
+        ConfigAccess::transact_local_readonly(&node, None, "tool_call.load_by_doc_id", |txn| {
+            let node = node.clone();
+            Box::pin(async move {
+                Self::load_by_doc_id_in_txn(txn, node, doc_id, node_did, session_id, requester_did)
+                    .await
+            })
+        })
+        .await
+    }
+
+    pub(crate) async fn load_by_doc_id_in_txn(
+        txn: &ConfigApplyTxn<'_>,
+        node: Arc<EmbeddedNode>,
+        doc_id: &str,
+        node_did: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<Option<Self>> {
         let physical = escape_graphql_string(doc_id);
         let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-        Self::load_filtered(node, format!("{scope},_docID:{{_eq:\"{physical}\"}}")).await
+        Self::load_filtered_in_txn(txn, node, &format!("{scope},_docID:{{_eq:\"{physical}\"}}"))
+            .await
     }
 
     async fn load_filtered(node: Arc<EmbeddedNode>, filter: String) -> Result<Option<Self>> {
+        ConfigAccess::transact_local_readonly(&node, None, "tool_call.load", |txn| {
+            let node = node.clone();
+            let filter = &filter;
+            Box::pin(async move { Self::load_filtered_in_txn(txn, node, filter).await })
+        })
+        .await
+    }
+
+    async fn load_filtered_in_txn(
+        txn: &ConfigApplyTxn<'_>,
+        node: Arc<EmbeddedNode>,
+        filter: &str,
+    ) -> Result<Option<Self>> {
         let query = format!(
             r#"{{AgentToolCall(filter:{{{filter}}},limit:2){{
                     _docID
@@ -125,8 +158,7 @@ impl ToolCallLifecycle {
         }}}}"#
         );
 
-        let resp =
-            crate::graphql::graphql_with_transaction_retry(&node, &query, "tool_call.load").await?;
+        let resp = txn.execute_local_response(&query).await?;
         if resp.has_errors() {
             return Err(anyhow!(
                 "load AgentToolCall query failed: {:?}",
@@ -168,8 +200,8 @@ impl ToolCallLifecycle {
             .map(|effect| effect.parent_tool_call_doc_id.as_str())
             .or(spawned_by_tool_call_doc_id.as_deref())
             .unwrap_or(&row.doc_id);
-        let accepted = Self::load_direct_binding(
-            &node,
+        let accepted = Self::load_direct_binding_in_txn(
+            txn,
             admission_doc_id,
             owner,
             &row.session_id,
@@ -250,7 +282,7 @@ impl ToolCallLifecycle {
                 "plugin effect must remain foreground work"
             );
         }
-        let arguments = if plugin_effect.is_some() {
+        let arguments = if let Some(effect) = &plugin_effect {
             let binding = super::delivery::ToolOutputBinding {
                 node: node.clone(),
                 tool_call_doc_id: row.doc_id.clone(),
@@ -259,43 +291,29 @@ impl ToolCallLifecycle {
                 node_did: owner.to_owned(),
                 requester_did: row.requester_did.clone(),
             };
+            let mut parent_binding = binding.clone();
+            parent_binding.tool_call_doc_id = effect.parent_tool_call_doc_id.clone();
+            super::plugin_effect::validate_parent(
+                txn,
+                &parent_binding,
+                &accepted.accepted_header_doc_id,
+                &accepted.execution_generation,
+                row.message_sequence,
+                deadline_at,
+                false,
+            )
+            .await?;
             Some(
-                crate::config_client::ConfigAccess::transact_local_readonly(
-                    &node,
-                    None,
-                    "tool_call.load_plugin_arguments",
-                    |txn| {
-                        Box::pin(async {
-                            let mut parent_binding = binding.clone();
-                            parent_binding.tool_call_doc_id = plugin_effect
-                                .as_ref()
-                                .unwrap()
-                                .parent_tool_call_doc_id
-                                .clone();
-                            super::plugin_effect::validate_parent(
-                                txn,
-                                &parent_binding,
-                                &accepted.accepted_header_doc_id,
-                                &accepted.execution_generation,
-                                row.message_sequence,
-                                deadline_at,
-                                false,
-                            )
-                            .await?;
-                            super::plugin_effect::arguments_in_txn(
-                                txn,
-                                &binding,
-                                &row.doc_id,
-                                &accepted.execution_generation,
-                                &row.tool_call_id,
-                                &row.tool_name,
-                            )
-                            .await
-                            .map(|(reference, _)| reference)
-                        })
-                    },
+                super::plugin_effect::arguments_in_txn(
+                    txn,
+                    &binding,
+                    &row.doc_id,
+                    &accepted.execution_generation,
+                    &row.tool_call_id,
+                    &row.tool_name,
                 )
-                .await?,
+                .await?
+                .0,
             )
         } else if spawned_by_tool_call_doc_id.is_none() {
             Some(accepted.arguments.clone())
@@ -311,9 +329,9 @@ impl ToolCallLifecycle {
             row.requester_did.as_deref(),
         );
         let request_doc = escape_graphql_string(&accepted.request_doc_id);
-        let request_response = crate::graphql::graphql_with_transaction_retry(&node, &format!(
+        let request_response = txn.execute_local_response(&format!(
             r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{request_doc}" }} }}, limit: 2) {{ request_id }} }}"#
-        ), "tool_call.load_request").await?;
+        )).await?;
         anyhow::ensure!(
             !request_response.has_errors(),
             "tool owner request lookup failed: {:?}",
@@ -364,7 +382,7 @@ impl ToolCallLifecycle {
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             plugin_writes: None,
-            file_changes: None,
+            file_capture: None,
             spawned_by_tool_call_doc_id,
             plugin_effect,
             doc_id: Some(row.doc_id),
@@ -418,6 +436,76 @@ mod tests {
         );
         assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
         lifecycle
+    }
+
+    #[tokio::test]
+    async fn accepted_tool_reads_retain_the_callers_snapshot_through_terminal_commit() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "inventory-accepted-snapshot".into(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = fixture.node;
+        let tool = fixture.tool;
+        let doc_id = tool.doc_id.clone().unwrap();
+        let session_id = tool.session_id.clone();
+        let did = fixture.node_did;
+        let requester = tool.requester_did.clone();
+        let tool = Arc::new(tokio::sync::Mutex::new(tool));
+        ConfigAccess::transact_local_readonly(&node, None, "test.tool.accepted_snapshot", |txn| {
+            let node = node.clone();
+            let tool = tool.clone();
+            let (doc_id, session_id, did, requester) = (&doc_id, &session_id, &did, &requester);
+            Box::pin(async move {
+                let before = ToolCallLifecycle::load_by_doc_id_in_txn(
+                    txn,
+                    node.clone(),
+                    doc_id,
+                    did,
+                    session_id,
+                    requester.as_deref(),
+                )
+                .await?
+                .expect("accepted physical tool");
+                assert_eq!(before.state, ToolCallState::Running);
+                tokio::spawn(async move { tool.lock().await.complete("finished").await }).await??;
+                let after = ToolCallLifecycle::load_by_doc_id_in_txn(
+                    txn,
+                    node,
+                    doc_id,
+                    did,
+                    session_id,
+                    requester.as_deref(),
+                )
+                .await?
+                .expect("same accepted physical tool");
+                assert_eq!(after.state, ToolCallState::Running);
+                assert_eq!(after.accepted_header_doc_id, before.accepted_header_doc_id);
+                assert_eq!(after.execution_generation, before.execution_generation);
+                assert_eq!(after.arguments, before.arguments);
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        let fresh = ToolCallLifecycle::load_by_doc_id(
+            node.clone(),
+            &doc_id,
+            &did,
+            &session_id,
+            requester.as_deref(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(fresh.state, ToolCallState::Completed);
+        node.shutdown().await;
+        tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 
     #[tokio::test]

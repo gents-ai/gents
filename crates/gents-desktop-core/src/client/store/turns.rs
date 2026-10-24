@@ -55,11 +55,42 @@ pub fn session_turn_request<'a>(
     )
 }
 
+fn display_replacement_request<'a>(
+    requests: &[&'a AgentRequestRow],
+    selected: &'a AgentRequestRow,
+) -> &'a AgentRequestRow {
+    let mut current = selected;
+    let mut seen = RapidHashSet::new();
+    while gents::lifecycle::replaced_by(current).is_some() {
+        let Some(doc_id) = current.doc_id.as_deref() else {
+            break;
+        };
+        if !seen.insert(doc_id) {
+            break;
+        }
+        let Some(next) = current
+            .superseded_by_request_doc_id
+            .as_deref()
+            .and_then(|doc| {
+                in_scope(requests, current, |candidate| {
+                    candidate.doc_id.as_deref() == Some(doc)
+                        && candidate.node_did == current.node_did
+                        && candidate.session_id == current.session_id
+                })
+            })
+        else {
+            break;
+        };
+        current = next;
+    }
+    current
+}
+
 pub fn session_display_request<'a>(
     requests: &[&'a AgentRequestRow],
     selected: &'a AgentRequestRow,
 ) -> &'a AgentRequestRow {
-    let turn = session_turn_request(requests, selected);
+    let turn = session_turn_request(requests, display_replacement_request(requests, selected));
     if !turn
         .lifecycle_state
         .is_some_and(RequestLifecycleState::is_terminal)
@@ -92,7 +123,7 @@ pub fn session_display_request<'a>(
         .rev()
         .copied()
         .find(in_scope)
-        .map(|row| session_turn_request(requests, row))
+        .map(|row| session_turn_request(requests, display_replacement_request(requests, row)))
         .unwrap_or(turn)
 }
 

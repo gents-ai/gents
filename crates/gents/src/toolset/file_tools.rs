@@ -348,6 +348,13 @@ impl Tool for ListFilesTool {
         }
     }
 
+    fn deferred_writes(
+        &self,
+        _output: &Self::Output,
+    ) -> Option<gents_loop::live_output::DeferredToolWrites> {
+        Some(change_capture::unchanged_output())
+    }
+
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
         error.into_dispatch_error()
     }
@@ -439,6 +446,13 @@ impl Tool for ReadFileTool {
         )?)
     }
 
+    fn deferred_writes(
+        &self,
+        _output: &Self::Output,
+    ) -> Option<gents_loop::live_output::DeferredToolWrites> {
+        Some(change_capture::unchanged_output())
+    }
+
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
         error.into_dispatch_error()
     }
@@ -509,6 +523,13 @@ impl Tool for GlobTool {
         } else {
             Ok(output)
         }
+    }
+
+    fn deferred_writes(
+        &self,
+        _output: &Self::Output,
+    ) -> Option<gents_loop::live_output::DeferredToolWrites> {
+        Some(change_capture::unchanged_output())
     }
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
@@ -588,6 +609,13 @@ impl Tool for GrepTool {
         } else {
             Ok(output)
         }
+    }
+
+    fn deferred_writes(
+        &self,
+        _output: &Self::Output,
+    ) -> Option<gents_loop::live_output::DeferredToolWrites> {
+        Some(change_capture::unchanged_output())
     }
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {

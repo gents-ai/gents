@@ -64,28 +64,58 @@ async fn retain_file_changes(
         "requester_did": requester_did, "file_changes": changes,
     });
     let existing = txn.execute(&format!(
-        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(tool_call_doc_id),
     )).await?;
     let rows = existing["data"]["ToolFileChange"]
         .as_array()
         .context("file change lookup omitted observations")?;
-    if !rows.is_empty() {
+    let observation_doc_id = if let [row] = rows.as_slice() {
+        let mut observed = row.clone();
+        let id = observed
+            .as_object_mut()
+            .context("file observation is not an object")?
+            .remove("_docID")
+            .context("file observation omitted physical identity")?;
         anyhow::ensure!(
-            rows.len() == 1 && rows[0] == input,
+            observed == input,
             "file changes conflict with an existing observation"
         );
-        return Ok(());
-    }
-    let result = txn.execute_with_variables(
-        "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
-        &serde_json::json!({"input": input}),
-    ).await?;
-    anyhow::ensure!(
-        crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
-            .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
-        "file change observation was not retained"
-    );
+        id.as_str()
+            .context("file observation identity is not a string")?
+            .to_owned()
+    } else {
+        anyhow::ensure!(rows.is_empty(), "file changes have multiple observations");
+        let result = txn.execute_with_variables(
+            "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+            &serde_json::json!({"input": input}),
+        ).await?;
+        let rows = crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
+            .context("file change observation was not retained")?;
+        anyhow::ensure!(
+            rows.len() == 1,
+            "file capture must retain exactly one observation"
+        );
+        rows[0]["_docID"]
+            .as_str()
+            .context("file capture omitted its observation identity")?
+            .to_owned()
+    };
+    super::file_inventory::retain_inventory(
+        txn,
+        super::file_inventory::Metadata::Images {
+            observation_doc_id: &observation_doc_id,
+            changes,
+        },
+        tool_call_doc_id,
+        request_doc_id,
+        &crate::session_origin::SessionScope {
+            node_did: node_did.to_owned(),
+            session_id: session_id.to_owned(),
+            requester_did: requester_did.map(str::to_owned),
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -1010,10 +1040,10 @@ impl ToolCallLifecycle {
             operation,
             fixture_now,
         } = options;
-        if self.file_changes.is_some() {
+        if self.file_capture.is_some() {
             anyhow::ensure!(
                 self.node.node_identity_did() == Some(self.node_did.as_str()),
-                "retaining file images requires the configured node identity"
+                "retaining file capture requires the configured node identity"
             );
         }
         let doc_id = self
@@ -1063,7 +1093,7 @@ impl ToolCallLifecycle {
             .clone()
             .filter(|_| fields.state == ToolCallState::Completed);
 
-        let file_changes = self.file_changes.clone();
+        let file_capture = self.file_capture.clone();
         let published = ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
@@ -1086,7 +1116,7 @@ impl ToolCallLifecycle {
                 let plugin_effect = plugin_effect.clone();
                 let presentation = presentation.clone();
                 let plugin_writes = plugin_writes.clone();
-                let file_changes = file_changes.clone();
+                let file_capture = file_capture.clone();
                 Box::pin(async move {
                     if tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME {
                         txn.contend_with_request_siblings();
@@ -1144,17 +1174,39 @@ impl ToolCallLifecycle {
                         .await
                         .map_err(plugin_writes_failed)?;
                     }
-                    if let (true, Some(changes)) = (published, &file_changes) {
-                        retain_file_changes(
-                            txn,
-                            &doc_id,
-                            &request_doc_id,
-                            &node_did,
-                            &session_id,
-                            requester_did.as_deref(),
-                            changes,
-                        )
-                        .await?;
+                    if let (true, Some(changes)) = (published, &file_capture) {
+                        match changes {
+                            super::file_inventory::FileCapture::Images(images) => {
+                                retain_file_changes(
+                                    txn,
+                                    &doc_id,
+                                    &request_doc_id,
+                                    &node_did,
+                                    &session_id,
+                                    requester_did.as_deref(),
+                                    images,
+                                )
+                                .await?
+                            }
+                            super::file_inventory::FileCapture::Unchanged { tool_call_doc_id } => {
+                                anyhow::ensure!(
+                                    tool_call_doc_id.as_deref() == Some(doc_id.as_str()),
+                                    "unchanged capture belongs to another physical tool"
+                                );
+                                super::file_inventory::retain_inventory(
+                                    txn,
+                                    super::file_inventory::Metadata::Unchanged,
+                                    &doc_id,
+                                    &request_doc_id,
+                                    &crate::session_origin::SessionScope {
+                                        node_did: node_did.clone(),
+                                        session_id: session_id.clone(),
+                                        requester_did: requester_did.clone(),
+                                    },
+                                )
+                                .await?;
+                            }
+                        }
                     }
                     Ok(published)
                 })

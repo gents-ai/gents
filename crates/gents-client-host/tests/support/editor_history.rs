@@ -177,6 +177,7 @@ pub fn reply(request: &Value, options: Options) -> Option<fake_llm::ChatAction> 
     Some(fake_llm::ChatAction::Sse(response))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn populate(
     client: &mut Attachment,
     id: &mut u32,

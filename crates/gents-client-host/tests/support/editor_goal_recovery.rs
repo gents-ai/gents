@@ -43,7 +43,7 @@ impl Provider {
         match self.attempts.fetch_add(1, Ordering::SeqCst) {
             0 => None,
             audit @ (1 | 3 | 5) => Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
-                &format!("goal-blocked-audit-{}", (audit + 1) / 2),
+                &format!("goal-blocked-audit-{}", audit.div_ceil(2)),
                 "update_goal",
                 &json!({"status":"blocked", "reason":BLOCKED_REASON}).to_string(),
             ))),

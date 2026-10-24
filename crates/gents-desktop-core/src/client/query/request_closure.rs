@@ -163,7 +163,7 @@ pub(super) async fn close_request_rows_with<'a>(
             let edges = [
                 (
                     Edge::Physical,
-                    if folded {
+                    if folded || gents::lifecycle::replaced_by(row).is_some() {
                         row.superseded_by_request_doc_id.as_deref()
                     } else {
                         None

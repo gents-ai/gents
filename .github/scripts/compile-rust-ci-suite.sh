@@ -74,3 +74,7 @@ cargo test "${cargo_args[@]}" --all-targets --no-run
 if [[ -n "${separate_package}" ]]; then
   cargo test -p "${separate_package}" --all-targets --no-run
 fi
+
+if [[ "${suite}" == desktop ]]; then
+  "$(dirname "${BASH_SOURCE[0]}")/desktop-runtime-journey.sh" build
+fi

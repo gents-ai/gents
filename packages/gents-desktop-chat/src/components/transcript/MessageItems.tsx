@@ -170,6 +170,14 @@ export function UserMessageItem({
   );
 }
 
+export function isEmptyAssistantMessage(item: AssistantMessage) {
+  return (
+    item.reconstruction.state === "ready" &&
+    !normalizeTranscriptText(item.content) &&
+    !normalizeTranscriptText(item.reasoning)
+  );
+}
+
 export function AssistantMessageItem({
   item,
   animateReveal = false,
@@ -179,7 +187,7 @@ export function AssistantMessageItem({
 }) {
   const content = normalizeTranscriptText(item.content);
   const reasoning = normalizeTranscriptText(item.reasoning);
-  if (item.reconstruction.state === "ready" && !content && !reasoning) {
+  if (isEmptyAssistantMessage(item)) {
     return null;
   }
   return (

@@ -586,6 +586,36 @@ fn extent_streams_from_closing(
     Ok(streams)
 }
 
+/// Refines the owned tool-output reference boundary. An authored background
+/// receipt is not terminal tool output, even after its tool becomes terminal.
+pub fn tool_output_reference_owned(
+    records: &[ObservedSegment<'_>],
+    reference: &PayloadRef,
+    request_doc_id: &str,
+    tool_call_doc_id: &str,
+) -> bool {
+    let Ok(closing) = closing_for_reference(records, &[], &[], reference) else {
+        return false;
+    };
+    closing.segment.request_doc_id == request_doc_id
+        && closing.segment.source
+            == (OutputSource::ToolCall {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+            })
+        && closing.segment.writer
+            == (OutputWriter::ToolExecution {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+            })
+        && reconstruct_extent_streams(records, &[], &[], reference).is_ok_and(|streams| {
+            streams.iter().all(|stream| {
+                matches!(
+                    stream.declaration.payload,
+                    StreamPayload::ToolOutput | StreamPayload::Media { .. }
+                )
+            })
+        })
+}
+
 pub fn reconstruct_stream(
     records: &[ObservedSegment<'_>],
     denied: &[String],

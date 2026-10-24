@@ -39,6 +39,7 @@ pub mod eth;
 pub mod eval;
 pub mod event_delivery_contract;
 pub mod external_adapter_capture;
+pub mod file_inventory;
 pub mod file_lock;
 pub mod goal;
 pub mod graph_package;

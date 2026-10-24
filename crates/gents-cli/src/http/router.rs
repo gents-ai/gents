@@ -174,6 +174,10 @@ pub(crate) fn runtime_contract_router(
             gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
             get(crate::http::inference::inference_settings_handler),
         )
+        .route(
+            gents_protocol::file_inventory::FILE_INVENTORY_OPERATOR_PATH,
+            post(crate::http::file_inventory::operator_inventory_handler),
+        )
         .route("/self", get(self_handler))
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
@@ -897,6 +901,195 @@ mod tests {
             replicated_schema: Default::default(),
             serve_lifecycle: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn operator_inventory_authenticates_and_replays_native_metadata() {
+        use gents::config_client::ConfigAccess;
+        use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+        use gents_protocol::file_inventory::{
+            FileInventoryAdmission, FileInventoryPageDemand, FileInventoryRefusalReason,
+            FileInventoryReply, FILE_INVENTORY_OPERATOR_PATH,
+        };
+        use gents_protocol::session_hydration::HydrationRequest;
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path().join("operator"));
+        paths.ensure_root_dirs().await.unwrap();
+        let identity = Arc::new(PrincipalIdentity::load_or_create(&paths).await.unwrap());
+        let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
+        foreign_paths.ensure_root_dirs().await.unwrap();
+        let foreign = PrincipalIdentity::load_or_create(&foreign_paths)
+            .await
+            .unwrap();
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = identity.did();
+        let session_id = "operator-http-session";
+        let session_doc_id = ConfigAccess::transact_local_write(&node, None, "test.inventory.http_setup", |txn| {
+            Box::pin(async move {
+                let result = txn.execute_with_variables(
+                    "mutation($node: NodeMutationInputArg!, $backend: InferenceBackendMutationInputArg!, $session: AgentSessionMutationInputArg!) { create_Node(input: $node) { _docID } create_InferenceBackend(input: $backend) { _docID } create_AgentSession(input: $session) { _docID } }",
+                    &json!({
+                        "node": {"node_did": owner, "default_agent_id": "fixture", "enabled": true},
+                        "backend": {"node_did": owner, "backend_id": "fixture", "name": "Fixture",
+                            "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1",
+                            "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
+                        "session": {"session_id": session_id, "node_did": owner, "requester_did": owner,
+                            "agent_id": "fixture", "created_at": "2026-10-24T00:00:00Z"},
+                    })).await?;
+                gents::graphql::created_doc_id(&result, "AgentSession")
+            })
+        }).await.unwrap();
+        let runtime = gents::Gents::builder()
+            .node(node.clone())
+            .identity(identity.clone())
+            .tool_ceiling(gents::ToolCeiling::meta_only())
+            .agent("fixture")
+            .backend_id("fixture")
+            .model_name("fixture")
+            .done()
+            .build()
+            .await
+            .unwrap();
+        let mut state = state();
+        state.node_did = owner.into();
+        assert!(state.activation_runtime.set(runtime).is_ok());
+        let app = Router::new()
+            .route(
+                FILE_INVENTORY_OPERATOR_PATH,
+                post(crate::http::file_inventory::operator_inventory_handler),
+            )
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let graphql = format!("http://{addr}/api/v0/graphql");
+        let endpoint = GraphqlEndpoint::as_principal(&graphql, owner);
+        let url = format!("http://{addr}{FILE_INVENTORY_OPERATOR_PATH}");
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let demand = FileInventoryPageDemand {
+            admission: FileInventoryAdmission {
+                request: HydrationRequest {
+                    request_key: format!("operator-client:{session_id}"),
+                    peer_id: "operator-client".into(),
+                    requester_did: owner.into(),
+                    node_did: owner.into(),
+                    session_id: session_id.into(),
+                },
+                session_doc_id,
+            },
+            attempt_id: "operator-http-attempt".into(),
+            cursor: None,
+        };
+        let response = client.post(&url).json(&demand).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let response = client
+            .post(&url)
+            .bearer_auth("invalid-token")
+            .json(&demand)
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+        let wrong_audience =
+            gents::identity::defradb_bearer_authorization(owner, "other.invalid").unwrap();
+        let response = client
+            .post(&url)
+            .header(header::AUTHORIZATION, wrong_audience)
+            .json(&demand)
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+        let foreign_endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
+        let response = foreign_endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&demand)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let access = ConfigAccess::local(node.clone());
+        assert!(
+            access
+                .execute("{ FileInventoryPage { _docID } }")
+                .await
+                .unwrap()["data"]["FileInventoryPage"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "unauthorized reads must not prepare metadata"
+        );
+        let mut retained = None;
+        for _ in 0..2 {
+            let response = endpoint
+                .authorize(client.post(&url))
+                .unwrap()
+                .json(&demand)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let reply: FileInventoryReply = response.json().await.unwrap();
+            gents::file_inventory::verify_reply(&demand, &reply, identity.as_ref())
+                .await
+                .unwrap();
+            let FileInventoryReply::Page(page) = &reply else {
+                panic!("operator received a refusal");
+            };
+            assert_eq!(page.page.binding.coverage.entries, 0);
+            assert_eq!(page.page.binding.coverage.pending, 0);
+            assert_eq!(page.page.binding.coverage.unknown, 0);
+            if let Some(prior) = &retained {
+                assert_eq!(&reply, prior);
+            }
+            retained = Some(reply);
+        }
+        let mut cross_source = demand.clone();
+        cross_source.admission.request.node_did = foreign.did().into();
+        let response = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&cross_source)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let mut missing = demand.clone();
+        missing.admission.request.session_id.push_str("-missing");
+        missing.attempt_id.push_str("-missing");
+        let response = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&missing)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let refused: FileInventoryReply = response.json().await.unwrap();
+        gents::file_inventory::verify_reply(&missing, &refused, identity.as_ref())
+            .await
+            .unwrap();
+        assert!(matches!(refused, FileInventoryReply::Refused(receipt)
+            if receipt.reason == FileInventoryRefusalReason::Unavailable));
+        drop(server);
+        drop(access);
+        node.shutdown().await;
     }
 
     #[tokio::test]

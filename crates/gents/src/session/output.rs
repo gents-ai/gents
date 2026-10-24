@@ -297,6 +297,26 @@ impl RequestOutputRows {
 }
 
 impl ReadAccess<'_, '_> {
+    async fn request_segment_values(
+        self,
+        request_doc_id: &str,
+        operation: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        if let Self::Txn(txn) = self {
+            return txn
+                .cursor_rows(
+                    "AgentOutputSegment",
+                    AGENT_OUTPUT_SEGMENT_FIELDS,
+                    &super::canonical_rows::request_output_segments_filter(request_doc_id),
+                )
+                .await;
+        }
+        let response = self
+            .query(&request_output_segments_query(request_doc_id), operation)
+            .await?;
+        Ok(rows_value(&response, "AgentOutputSegment")?.to_vec())
+    }
+
     async fn query(self, document: &str, operation: &str) -> Result<serde_json::Value> {
         let response = match self {
             Self::Node(node) => {
@@ -640,18 +660,10 @@ async fn load_canonical_payload(
         !request_doc_id.trim().is_empty(),
         "canonical payload request id is blank"
     );
-    let response = access
-        .query(
-            &request_output_segments_query(request_doc_id),
-            "load_canonical_payload",
-        )
+    let values = access
+        .request_segment_values(request_doc_id, "load_canonical_payload")
         .await?;
-    let rows = decode_scoped_request_output_segments(
-        rows_value(&response, "AgentOutputSegment")?,
-        node_did,
-        None,
-        requester_did,
-    )?;
+    let rows = decode_scoped_request_output_segments(&values, node_did, None, requester_did)?;
     if let Some(expected_source) = expected_source {
         anyhow::ensure!(
             rows.iter().any(|row| {
@@ -747,7 +759,7 @@ async fn load_header(
             .map(|did| format!(r#""{}""#, crate::graphql::escape_graphql_string(did)))
             .unwrap_or_else(|| "null".into());
         let query = format!(
-            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
+            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
             crate::graphql::escape_graphql_string(header_doc_id),
             crate::graphql::escape_graphql_string(node_did)
         );
@@ -818,8 +830,8 @@ async fn coordinate_twins(
         let escaped = crate::graphql::escape_graphql_string(key);
         let query = format!(
             r#"{{
-            key_matches: AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{escaped}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
-            sequence_matches: AgentMessage(filter: {{ {scope}, sequence: {{ _eq: {sequence} }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+            key_matches: AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }}
+            sequence_matches: AgentMessage(filter: {{ {scope}, sequence: {{ _eq: {sequence} }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }}
         }}"#
         );
         let response = access
@@ -922,18 +934,10 @@ async fn request_rows(
     }
     #[cfg(test)]
     record_request_output_scan();
-    let response = access
-        .query(
-            &request_output_segments_query(request_doc_id),
-            "load_output_source",
-        )
+    let values = access
+        .request_segment_values(request_doc_id, "load_output_source")
         .await?;
-    let rows = decode_scoped_request_output_segments(
-        rows_value(&response, "AgentOutputSegment")?,
-        node_did,
-        None,
-        requester_did,
-    )?;
+    let rows = decode_scoped_request_output_segments(&values, node_did, None, requester_did)?;
     let rows = Arc::new(RequestOutputRows::from(rows));
     local.insert(request_doc_id.to_owned(), Arc::clone(&rows));
     Ok(rows)
@@ -949,17 +953,24 @@ async fn source_rows(
     #[cfg(test)]
     let _ = SOURCE_OUTPUT_QUERIES
         .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let query = super::canonical_rows::source_output_segments_query(request_doc_id, source)?;
-    let response = access.query(&query, "load_output_source").await?;
-    Ok(decode_scoped_request_output_segments(
-        rows_value(&response, "AgentOutputSegment")?,
-        node_did,
-        None,
-        requester_did,
-    )?
-    .into_iter()
-    .filter(|row| row.segment.source == *source)
-    .collect())
+    let values = if let ReadAccess::Txn(txn) = access {
+        txn.cursor_rows(
+            "AgentOutputSegment",
+            AGENT_OUTPUT_SEGMENT_FIELDS,
+            &super::canonical_rows::source_output_segments_filter(request_doc_id, source)?,
+        )
+        .await?
+    } else {
+        let query = super::canonical_rows::source_output_segments_query(request_doc_id, source)?;
+        let response = access.query(&query, "load_output_source").await?;
+        rows_value(&response, "AgentOutputSegment")?.to_vec()
+    };
+    Ok(
+        decode_scoped_request_output_segments(&values, node_did, None, requester_did)?
+            .into_iter()
+            .filter(|row| row.segment.source == *source)
+            .collect(),
+    )
 }
 
 /// One source's segments in a write transaction, read through the
@@ -1162,7 +1173,7 @@ async fn load_referenced_segments(
             continue;
         }
         let query = format!(
-            r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+            r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
             crate::graphql::escape_graphql_string(&close_id),
             crate::graphql::escape_graphql_string(node_did)
         );
@@ -2909,3 +2920,6 @@ mod tests {
         assert_eq!(b.1, gents_protocol::message::Message::user("hello"));
     }
 }
+
+#[cfg(test)]
+mod paging_tests;

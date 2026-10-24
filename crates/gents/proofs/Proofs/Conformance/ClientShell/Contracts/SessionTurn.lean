@@ -9,9 +9,9 @@ def row (doc request : Nat) (state : RowState) (requester : Nat := 1)
     (foldedInto : Option Nat := none) (queuedAfter retryParent : Option Nat := none)
     (retryParentDoc : Option Nat := none) (completed : Bool := false)
     (publicInput : Bool := true) (authoredInputMaterialized : Bool := false)
-    (backgroundWake : Bool := false) : Row :=
+    (backgroundWake : Bool := false) (replacedBy : Option Nat := none) : Row :=
   { doc, request, requester, state, foldedInto, queuedAfter, retryParent,
-    retryParentDoc, completed, publicInput, authoredInputMaterialized, backgroundWake }
+    retryParentDoc, completed, publicInput, authoredInputMaterialized, backgroundWake, replacedBy }
 
 def scenarios : List (String × List Row) :=
   [ ("retry_waiting_behind_another_turn_has_no_answer_yet",
@@ -123,6 +123,7 @@ def rowJson (r : Row) : String :=
   ",\"requester\":" ++ toString r.requester ++
   ",\"state\":" ++ jsonString (stateName r.state) ++
   ",\"folded_into\":" ++ optNat r.foldedInto ++
+  ",\"replaced_by\":" ++ optNat r.replacedBy ++
   ",\"queued_after\":" ++ optNat r.queuedAfter ++
   ",\"retry_parent\":" ++ optNat r.retryParent ++
   ",\"retry_parent_doc\":" ++ optNat r.retryParentDoc ++
@@ -192,9 +193,42 @@ def casesJson : String :=
         row 2 101 .terminal (completed := true) (backgroundWake := true)
           (authoredInputMaterialized := true),
         row 3 102 .terminal (foldedInto := some 2)] [] (some 1),
+     caseJsonWithSelection "replaced_queue_input_resolves_to_completed_fold_owner"
+       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+        row 2 101 .terminal (replacedBy := some 3),
+        row 3 102 .terminal (foldedInto := some 1)] [] (some 2),
+     caseJsonWithSelection "replaced_queue_input_resolves_to_active_fold_owner"
+       [row 1 100 .active, row 2 101 .terminal (replacedBy := some 3),
+        row 3 102 .terminal (foldedInto := some 1)] [] (some 2),
+     caseJsonWithSelection "edited_input_waits_without_becoming_folded"
+       [row 1 100 .active, row 2 101 .terminal (replacedBy := some 3),
+        row 3 102 .unclaimed (queuedAfter := some 100)] [] (some 2),
+     caseJsonWithSelection "replacement_missing_successor_does_not_guess"
+       [row 1 100 .terminal (replacedBy := some 9)] [] (some 1),
+     caseJsonWithSelection "replacement_cannot_follow_foreign_requester"
+       [row 1 100 .terminal (replacedBy := some 2),
+        row 2 101 .active (requester := 2)] [] (some 1),
+     caseJsonWithSelection "replacement_cycle_is_bounded"
+       [row 1 100 .terminal (replacedBy := some 2),
+        row 2 101 .terminal (replacedBy := some 1)] [] (some 1),
+     caseJsonWithSelection "replacement_keeps_physical_successor_among_logical_twins"
+       [row 1 100 .terminal (replacedBy := some 3),
+        row 2 101 .active (requester := 2), row 3 101 .unclaimed] [] (some 1),
+     caseJsonWithSelection "replacement_sorted_after_successor_preserves_completed_turn"
+       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+        row 3 102 .terminal (foldedInto := some 1),
+        row 2 101 .terminal (replacedBy := some 3)] [] (some 2),
+     caseJsonWithSelection "replacement_retains_omittable_completed_successor"
+       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+        row 2 101 .terminal (replacedBy := some 1)] [] (some 2),
+     caseJsonWithSelection "replacement_chain_preserves_completed_turn"
+       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+        row 2 101 .terminal (replacedBy := some 3),
+        row 3 102 .terminal (replacedBy := some 4),
+        row 4 103 .terminal (foldedInto := some 1)] [] (some 2),
      caseJsonWithSelection "older_active_row_does_not_revive_a_newer_terminal_turn"
        [row 1 100 .active, row 2 101 .terminal] [] (some 2)]) ++ "]"
 
-def caseCount : Nat := scenarios.length + 10
+def caseCount : Nat := scenarios.length + 20
 
 end Conformance.ClientShellContracts.SessionTurnCases

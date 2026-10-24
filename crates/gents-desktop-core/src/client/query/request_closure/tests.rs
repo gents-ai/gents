@@ -20,6 +20,14 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     crate::client::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
+    let outside_scope = ConfigAccess::write_local(
+        &node,
+        "test.seed_unavailable_successor",
+        r#"mutation { create_AgentRequest(input: { purpose: "normal", request_id: "unavailable-successor", node_did: "another-node", session_id: "another-session" }) { _docID } }"#,
+    )
+    .await
+    .unwrap();
+    let missing_doc = gents::graphql::created_doc_id(&outside_scope, "AgentRequest").unwrap();
     let mut seeded = Vec::new();
     for (case_index, case) in cases.enumerate() {
         let session = format!("{case_index}-{}", case["name"].as_str().unwrap());
@@ -32,7 +40,9 @@ async fn generated_request_closures_use_exact_database_dependencies() {
             let state = match row["state"].as_str().unwrap() {
                 "unclaimed" => "pending",
                 "active" => "processing",
-                "terminal" if row["folded_into"].is_number() => "superseded",
+                "terminal" if row["folded_into"].is_number() || row["replaced_by"].is_number() => {
+                    "superseded"
+                }
                 "terminal" if row["completed"] == true => "completed",
                 "terminal" => "failed",
                 other => panic!("unknown modeled state {other}"),
@@ -90,20 +100,23 @@ async fn generated_request_closures_use_exact_database_dependencies() {
             );
         }
         for row in modeled {
-            let Some(owner) = row["folded_into"].as_u64() else {
+            let Some(owner) = row["folded_into"].as_u64().or(row["replaced_by"].as_u64()) else {
                 continue;
             };
             let owner_request = modeled
                 .iter()
                 .find(|row| row["doc"].as_u64() == Some(owner))
-                .unwrap()["request"]
-                .as_u64()
-                .unwrap();
+                .and_then(|row| row["request"].as_u64())
+                .unwrap_or(owner);
             let doc = escape_graphql_string(&docs[&row["doc"].as_u64().unwrap()]);
             let update = graphql_input_literal(&json!({
                 "superseded_by_request":format!("request-{owner_request}"),
-                "superseded_by_request_doc_id":docs[&owner],
-                "failure_reason":gents::lifecycle::FOLDED_REASON,
+                "superseded_by_request_doc_id":docs.get(&owner).cloned().unwrap_or_else(|| missing_doc.clone()),
+                "failure_reason":if row["folded_into"].is_number() {
+                    gents::lifecycle::FOLDED_REASON
+                } else {
+                    gents::lifecycle::REPLACED_REASON
+                },
             }))
             .unwrap();
             ConfigAccess::write_local(&node, "test.seed_fold_owner", &format!(

@@ -396,6 +396,32 @@ impl ClientHost {
                     .map_err(backend_error)?;
                 encode(crate::types::ChatSendResult::from(submitted))
             }
+            ClientCommand::SessionFileInventory {
+                node_did,
+                session_id,
+                action,
+            } => encode(
+                crate::commands::session_file_inventory(
+                    &self.core,
+                    node_did,
+                    session_id,
+                    action.unwrap_or_default(),
+                )
+                .await
+                .map_err(backend_error)?,
+            ),
+            ClientCommand::InventoryFileChange {
+                node_did,
+                session_id,
+                reference,
+                retry_id,
+            } => encode(
+                crate::commands::inventory_file_change(
+                    &self.core, node_did, session_id, reference, retry_id,
+                )
+                .await
+                .map_err(backend_error)?,
+            ),
             ClientCommand::ToolFileChanges {
                 node_did,
                 session_id,

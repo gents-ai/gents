@@ -402,12 +402,13 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
     let mut referenced_blocks = 0usize;
+    let mut max_manifest_height = 0usize;
+    let payloads = ["request_body", "provenance_payload"];
     let mut leaf_keys = std::collections::BTreeSet::new();
     let mut previous_body_bytes = 0usize;
     let mut last_turn_new_content_bytes = 0usize;
     let mut last_turn_row_bytes = 0usize;
     let mut blocks_before_last_turn = 0usize;
-    let mut first_turn_block_rows = 0usize;
     for turn in 0..turns {
         let body = serde_json::json!({
             "model":"m", "messages": (0..=turn).map(|index|
@@ -447,9 +448,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             blocks_before_last_turn = block_payload_bytes(db.node.as_ref()).await;
         }
         sink.capture(rendered.clone()).await.unwrap();
-        if turn == 0 {
-            first_turn_block_rows = block_count(db.node.as_ref()).await;
-        }
         let query = format!(
             r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json provenance_json capture_version}} }}"#,
             escape_graphql_string(&rendered.capture_key)
@@ -463,14 +461,13 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         );
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
-        for payload in ["request_body", "provenance_payload"] {
+        for payload in payloads {
             let record = stored_payload_record(&container, payload);
             assert_eq!(record["kind"], "tree", "payload {payload}");
             let keys = manifest_payload_keys(db.node.as_ref(), &container, payload).await;
-            assert_eq!(
-                keys.len(),
-                record["tree"]["leaves"].as_u64().unwrap() as usize
-            );
+            assert_eq!(record["tree"]["leaves"].as_u64(), Some(keys.len() as u64));
+            max_manifest_height =
+                max_manifest_height.max(record["tree"]["height"].as_u64().unwrap() as usize);
             referenced_blocks += keys.len();
             leaf_keys.extend(keys);
         }
@@ -515,14 +512,16 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         new_bytes += turn_row_bytes;
     }
     let block_rows = block_count(db.node.as_ref()).await;
+    let manifest_path_budget = payloads.len() * turns * max_manifest_height;
     assert!(
         referenced_blocks > turns * (turns + 1) / 2,
         "{referenced_blocks} references must grow quadratically for this assertion to mean \
          anything"
     );
     assert!(
-        block_rows <= first_turn_block_rows * turns,
-        "{block_rows} stored blocks for {turns} turns against {first_turn_block_rows} for the first turn: storage must grow linearly, not with the conversation"
+        leaf_keys.len() < 4 * turns && block_rows <= leaf_keys.len() + manifest_path_budget,
+        "{block_rows} stored blocks and {} unique leaves against {referenced_blocks} references for {turns} turns with a {manifest_path_budget}-node manifest path budget: storage must grow with new content and its paths, not with the conversation",
+        leaf_keys.len(),
     );
     assert!(
         leaf_keys.len() * 2 < referenced_blocks,
@@ -756,9 +755,11 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
         manifest_payload_keys(db.node.as_ref(), &edited_container, "request_body").await;
     manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
 
-    assert_ne!(
-        post_edit_body, pre_edit_body,
-        "the edit must change the manifest's content-addressed leaf sequence"
+    assert!(
+        pre_edit_body
+            .iter()
+            .any(|key| !post_edit_body.contains(key)),
+        "the post-edit manifest must drop replaced content even when it shares a structural prefix"
     );
     let shared_tail = shared_manifest_suffix(&pre_edit_body, &post_edit_body);
     assert!(

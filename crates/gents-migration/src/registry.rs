@@ -446,6 +446,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreihw4weuomlxjf2imd46bw5mgcpbfaicnbjiuqhs5yo6tvaam4prae"
     ),
     baseline_entry!(
+        gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME,
+        gents_protocol::schemas::TOOL_FILE_INVENTORY,
+        "bafyreifcfokctbxkg54oujluu7mjepz4p56lnrmkzj36ng34glaaxg4vuq"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
         gents_protocol::schemas::COMPACTION_ENTRY,
         "bafyreidfp36wuikilut4cnvs7qwmqbyyd5yyyaz5g7umk2lfqwzqojgn4q"
@@ -579,6 +584,26 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST,
         "bafyreihbcklqo55343lt7spcif4xftwqbsfe6flznvpge3sfcre3sakdgu"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_REQUEST,
+        "bafyreie5fnoj47pu4shae63v7gx4mnxcovmrs5kttnries67sb2ftgk6rm"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_PAGE,
+        "bafyreiaf5sdqtuiursuwu5djfotcmqcx6zlhkrsmrj3kyea6pntrzabbsu"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_REPLY,
+        "bafyreicj5rsouhjk2j36qigmwamnlyh6xqzwttvdhvvcxkkdsmzgwnnsei"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_PROGRESS,
+        "bafyreifvr5ggapacp6y7b7vg2cmlwbkqmhbwia5julkp5cwa2x44drseye"
     ),
     baseline_entry!(
         gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME,
@@ -882,6 +907,7 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+    gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
     gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
     gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
     gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,

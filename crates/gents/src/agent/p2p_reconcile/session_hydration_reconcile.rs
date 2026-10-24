@@ -21,7 +21,8 @@ use super::session_hydration::{
     VerifiedActiveMembership,
 };
 use super::session_hydration_closure::{
-    build_canonical_closure, CanonicalClosureInput, ScopedDocument, ToolEffectRow,
+    build_canonical_selection, CanonicalClosureInput, CanonicalPublicationOrigin, ScopedDocument,
+    ToolEffectRow,
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -32,11 +33,19 @@ use crate::session::canonical_rows::{
 };
 
 mod file_images;
+mod inventory;
+mod inventory_order;
+mod inventory_requests;
+pub(crate) use inventory::refusal_reason as file_inventory_refusal_reason;
+pub use inventory::{FileInventoryPageError, FileInventorySnapshot};
+mod selection;
+use selection::load_hydration_selection;
 
 #[derive(Clone, Copy)]
 enum DeliveryTarget<'a> {
     Transcript(&'a BTreeSet<HydrationDocument>),
     FileImage(&'a str),
+    FileInventory(&'a str),
 }
 
 #[cfg(test)]
@@ -44,7 +53,9 @@ impl DeliveryTarget<'_> {
     fn transcript(self) -> BTreeSet<HydrationDocument> {
         match self {
             Self::Transcript(documents) => documents.clone(),
-            Self::FileImage(_) => panic!("transcript delivery received file images"),
+            Self::FileImage(_) | Self::FileInventory(_) => {
+                panic!("transcript delivery received file images")
+            }
         }
     }
 }
@@ -95,6 +106,9 @@ struct LoadedHydrationAdmission {
 struct HydrationSelection {
     documents: BTreeSet<HydrationDocument>,
     authorized_reference_closure: BTreeSet<SessionHydrationDocumentKey>,
+    publications: Vec<CanonicalPublicationOrigin>,
+    headers: Vec<crate::session::canonical_rows::TranscriptMessageRow>,
+    output_segments: Vec<crate::session::canonical_rows::OutputSegmentRow>,
 }
 
 struct AdmittedHydration {
@@ -349,7 +363,11 @@ pub async fn run_session_hydration_reconciler(
         Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
     let mut subscription = crate::subscribe_collections(
         &node,
-        ["SessionHydrationRequest", "FileImageHydrationRequest"],
+        [
+            "SessionHydrationRequest",
+            "FileImageHydrationRequest",
+            "FileInventoryRequest",
+        ],
     )?;
     let sweep_interval = super::intervals::sweep_interval();
     let mut interval =
@@ -406,6 +424,9 @@ async fn sweep_hydration_requests_until_cancelled(
 
 async fn sweep_hydration_requests(store: &GraphqlHydrationStore, delivery: &dyn HydrationDelivery) {
     sweep_transcript_requests(store, delivery).await;
+    if let Err(error) = inventory_requests::reconcile_inventory_requests(store, delivery).await {
+        tracing::warn!(%error, "file inventory sweep failed");
+    }
     if let Err(error) = file_images::reconcile_file_images(store, delivery).await {
         tracing::warn!(%error, "file-image hydration sweep failed");
     }
@@ -437,6 +458,50 @@ struct GraphqlHydrationStore {
     identity: Arc<dyn NodeIdentity>,
 }
 
+/// Read-only source operation. The caller must still persist and deliver its
+/// correlated receipt through the owned transport; no image readers are added.
+pub async fn sign_file_inventory_page(
+    node: Arc<EmbeddedNode>,
+    enrollment: EnrollmentAuthorityHandle,
+    identity: Arc<dyn NodeIdentity>,
+    demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
+) -> Result<gents_protocol::file_inventory::FileInventoryPageReceipt> {
+    let request_key = demand.derive_request_key()?;
+    let admission = &demand.admission;
+    let store = GraphqlHydrationStore {
+        node,
+        enrollment,
+        identity,
+    };
+    let loaded = store.inventory_admission(demand).await?;
+    anyhow::ensure!(
+        matches!(
+            decide_hydration(&admission.request, &loaded.catalog),
+            HydrationVerdict::Admit(_)
+        ),
+        "file inventory session is not authorized"
+    );
+    let fence = loaded
+        .authorization
+        .context("file inventory has no authenticated enrollment fence")?;
+    let snapshot = FileInventorySnapshot::load(&store.node, admission).await?;
+    let page = snapshot.page(demand.cursor.as_ref())?;
+    crate::file_inventory::sign_current_page(
+        store.identity.as_ref(),
+        &request_key,
+        page,
+        || async {
+            let current = store.inventory_admission(demand).await?;
+            Ok(current.authorization.as_ref() == Some(&fence)
+                && matches!(
+                    decide_hydration(&admission.request, &current.catalog),
+                    HydrationVerdict::Admit(_)
+                ))
+        },
+    )
+    .await
+}
+
 struct EmbeddedHydrationDelivery {
     node: Arc<EmbeddedNode>,
 }
@@ -456,19 +521,30 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
                     doc_id: document.doc_id.clone(),
                 })
                 .collect(),
+            DeliveryTarget::FileInventory(document) => {
+                vec![defra_p2p_adapter::P2pDocumentRequest {
+                    collection: gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME.to_owned(),
+                    doc_id: document.to_owned(),
+                }]
+            }
             DeliveryTarget::FileImage(document) => vec![defra_p2p_adapter::P2pDocumentRequest {
                 collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.to_owned(),
                 doc_id: document.to_owned(),
             }],
         };
         super::embedded_impl::push_documents_to_peer(&self.node, peer_id, documents).await?;
-        if let DeliveryTarget::FileImage(document) = target {
+        let explicit = match target {
+            DeliveryTarget::FileImage(document) => {
+                Some((gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, document))
+            }
+            DeliveryTarget::FileInventory(document) => {
+                Some((gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME, document))
+            }
+            DeliveryTarget::Transcript(_) => None,
+        };
+        if let Some((collection, document)) = explicit {
             let acknowledged = super::embedded_impl::EmbeddedRemoteP2pAdmin::new(self.node.clone())
-                .document_heads_acknowledged(
-                    peer_id,
-                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-                    &[document.to_owned()],
-                )
+                .document_heads_acknowledged(peer_id, collection, &[document.to_owned()])
                 .await?;
             anyhow::ensure!(
                 acknowledged == [true],
@@ -616,466 +692,6 @@ impl HydrationRequestStore for GraphqlHydrationStore {
     }
 }
 
-async fn load_hydration_selection(
-    node: &EmbeddedNode,
-    request: &HydrationRequest,
-) -> Result<HydrationSelection> {
-    let session_id = escape_graphql_string(&request.session_id);
-    let node_did = escape_graphql_string(&request.node_did);
-    let requester_did = escape_graphql_string(&request.requester_did);
-    let query = hydration_selection_query(&session_id, &node_did, &requester_did);
-    let response =
-        graphql_with_transaction_retry(node, &query, "query session hydration selection").await?;
-
-    let mut root_headers = rows::<serde_json::Value>(&response, "AgentMessage")?
-        .iter()
-        .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
-    let mut root_header_ids = root_headers
-        .iter()
-        .map(|row| row.doc_id.clone())
-        .collect::<Vec<_>>();
-    let mut terminal_request_ids = BTreeSet::new();
-    for request_row in rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")? {
-        if request_row.is_terminal() {
-            terminal_request_ids.insert(
-                request_row
-                    .doc_id
-                    .clone()
-                    .context("terminal hydration request omitted physical id")?,
-            );
-            match request_row
-                .terminal_output
-                .context("terminal hydration request omitted terminal_output")?
-            {
-                gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
-                    let selected = root_headers
-                        .iter()
-                        .find(|row| row.doc_id == message_doc_id)
-                        .context("terminal hydration selection is missing its exact header")?;
-                    anyhow::ensure!(
-                        selected.message.session_id == request.session_id
-                            && selected.message.request_doc_id == request_row.doc_id,
-                        "terminal hydration selection does not belong to the exact request"
-                    );
-                    anyhow::ensure!(
-                        selected.message.role == gents_protocol::output::MessageRole::Assistant
-                            && matches!(
-                                selected.message.publication,
-                                gents_protocol::output::MessagePublication::RequestExecution { .. }
-                                    | gents_protocol::output::MessagePublication::RequestRecovery { .. }
-                            ),
-                        "terminal hydration selection is not an eligible assistant header"
-                    );
-                    root_header_ids.push(message_doc_id);
-                }
-                gents_protocol::output::TerminalOutput::NoMessage => {}
-            }
-        }
-    }
-    root_header_ids.sort();
-    root_header_ids.dedup();
-    load_origin_headers(
-        node,
-        &mut root_headers,
-        &request.node_did,
-        &request.requester_did,
-    )
-    .await?;
-    let mut output_segments = rows::<serde_json::Value>(&response, "AgentOutputSegment")?
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
-    load_referenced_segments(
-        node,
-        &root_headers,
-        &mut output_segments,
-        &request.node_did,
-        &request.requester_did,
-    )
-    .await?;
-    let mut bases = Vec::new();
-    let mut effects = Vec::new();
-    for row in rows::<gents_protocol::row::AgentToolCallRow>(&response, "AgentToolCall")? {
-        observe_tool_call(row, &mut bases, &mut effects);
-    }
-    for collection in [
-        gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest,
-        gents_protocol::session_hydration::SessionHydrationCollection::CompactionEntry,
-    ] {
-        let name = hydration_collection_name(collection);
-        bases.extend(
-            rows::<TranscriptRow>(&response, name)?
-                .into_iter()
-                .filter_map(|row| {
-                    Some(ScopedDocument {
-                        collection,
-                        doc_id: row.doc_id.filter(|value| !value.is_empty())?,
-                        requester_did: row.requester_did.unwrap_or_default(),
-                        node_did: row.node_did.unwrap_or_default(),
-                        session_id: row.session_id.unwrap_or_default(),
-                    })
-                }),
-        );
-    }
-    load_referenced_bases(
-        node,
-        &root_headers,
-        &output_segments,
-        &mut bases,
-        &mut effects,
-        &request.node_did,
-        &request.requester_did,
-    )
-    .await?;
-    load_effect_children(node, request, &bases, &mut effects).await?;
-    let parents = bases
-        .iter()
-        .filter(|row| {
-            row.collection
-                == gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall
-        })
-        .map(|row| row.doc_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let effect_requests = effects
-        .iter()
-        .filter(|row| {
-            crate::tool_call_lifecycle::PluginEffectBinding::decode(
-                row.plugin_parent_tool_call_doc_id.as_deref(),
-                row.plugin_effect_ordinal,
-                row.spawned,
-                &row.tool_call_id,
-            )
-            .ok()
-            .flatten()
-            .is_some_and(|binding| parents.contains(binding.parent_tool_call_doc_id.as_str()))
-        })
-        .map(|row| row.request_doc_id.clone())
-        .filter(|id| {
-            !output_segments
-                .iter()
-                .any(|segment| &segment.segment.request_doc_id == id)
-        })
-        .collect();
-    load_request_segments(
-        node,
-        effect_requests,
-        &mut output_segments,
-        &request.node_did,
-        &request.requester_did,
-    )
-    .await?;
-    let session_bases = bases
-        .iter()
-        .filter(|row| row.session_id == request.session_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut documents = build_canonical_closure(CanonicalClosureInput {
-        root_header_ids: &root_header_ids,
-        headers: &root_headers,
-        segments: &output_segments,
-        base_documents: &bases,
-        retained_bases: &session_bases,
-        tool_effects: &effects,
-        denied_headers: &[],
-        denied_segments: &[],
-        dependency_denials: &[],
-        node_did: &request.node_did,
-        requester_did: Some(&request.requester_did),
-        session_id: &request.session_id,
-    })
-    .context("build authorized canonical hydration closure")?;
-    for request_id in terminal_request_ids {
-        let row = bases
-            .iter()
-            .find(|row| {
-                row.collection
-                    == gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest
-                    && row.doc_id == request_id
-            })
-            .context("terminal hydration request missing from authorized base rows")?;
-        documents.insert(HydrationDocument {
-            collection: row.collection,
-            doc_id: row.doc_id.clone(),
-            requester_did: row.requester_did.clone(),
-            node_did: row.node_did.clone(),
-            session_id: row.session_id.clone(),
-        });
-    }
-    let authorized_reference_closure = documents
-        .iter()
-        .filter(|document| document.session_id != request.session_id)
-        .map(|document| SessionHydrationDocumentKey {
-            collection: document.collection,
-            doc_id: document.doc_id.clone(),
-        })
-        .collect();
-
-    Ok(HydrationSelection {
-        documents,
-        authorized_reference_closure,
-    })
-}
-
-async fn load_origin_headers(
-    node: &EmbeddedNode,
-    headers: &mut Vec<crate::session::canonical_rows::TranscriptMessageRow>,
-    node_did: &str,
-    requester_did: &str,
-) -> Result<()> {
-    let mut loaded = headers
-        .iter()
-        .map(|row| row.doc_id.clone())
-        .collect::<BTreeSet<_>>();
-    loop {
-        let next = headers
-            .iter()
-            .find_map(|row| match &row.message.publication {
-                gents_protocol::output::MessagePublication::Fork {
-                    origin_message_doc_id,
-                } if !loaded.contains(origin_message_doc_id) => Some(origin_message_doc_id.clone()),
-                _ => None,
-            });
-        let Some(doc_id) = next else {
-            return Ok(());
-        };
-        let id = escape_graphql_string(&doc_id);
-        let agent = escape_graphql_string(node_did);
-        let requester = escape_graphql_string(requester_did);
-        let response = graphql_with_transaction_retry(node, &format!(
-            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-        ), "query exact authorized hydration origin").await?;
-        let decoded = rows::<serde_json::Value>(&response, "AgentMessage")?
-            .iter()
-            .map(decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
-        anyhow::ensure!(
-            decoded.len() == 1,
-            "hydration origin is missing, denied, or conflicting"
-        );
-        loaded.insert(doc_id);
-        headers.extend(decoded);
-    }
-}
-
-async fn load_referenced_segments(
-    node: &EmbeddedNode,
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
-    segments: &mut Vec<crate::session::canonical_rows::OutputSegmentRow>,
-    node_did: &str,
-    requester_did: &str,
-) -> Result<()> {
-    let request_ids = headers
-        .iter()
-        .filter_map(|row| row.message.request_doc_id.clone())
-        .chain(headers.iter().flat_map(|row| {
-            row.message
-                .payload_references()
-                .into_iter()
-                .filter_map(|reference| {
-                    segments
-                        .iter()
-                        .find(|segment| segment.doc_id == reference.close_doc_id)
-                        .map(|segment| segment.segment.request_doc_id.clone())
-                })
-        }))
-        .collect::<BTreeSet<_>>();
-    load_request_segments(node, request_ids, segments, node_did, requester_did).await
-}
-
-async fn load_request_segments(
-    node: &EmbeddedNode,
-    request_ids: BTreeSet<String>,
-    segments: &mut Vec<crate::session::canonical_rows::OutputSegmentRow>,
-    node_did: &str,
-    requester_did: &str,
-) -> Result<()> {
-    for request_id in request_ids {
-        let response = graphql_with_transaction_retry(
-            node,
-            &crate::session::canonical_rows::request_output_segments_query(&request_id),
-            "query authorized hydration output extent",
-        )
-        .await?;
-        let values = rows::<serde_json::Value>(&response, "AgentOutputSegment")?;
-        for row in crate::session::canonical_rows::decode_scoped_request_output_segments(
-            &values,
-            node_did,
-            None,
-            Some(requester_did),
-        )? {
-            if !segments.iter().any(|known| known.doc_id == row.doc_id) {
-                segments.push(row);
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn load_referenced_bases(
-    node: &EmbeddedNode,
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
-    segments: &[crate::session::canonical_rows::OutputSegmentRow],
-    bases: &mut Vec<ScopedDocument>,
-    effects: &mut Vec<ToolEffectRow>,
-    node_did: &str,
-    requester_did: &str,
-) -> Result<()> {
-    use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
-    use gents_protocol::session_hydration::SessionHydrationCollection;
-    let mut wanted = BTreeSet::new();
-    for row in headers {
-        if let Some(id) = &row.message.request_doc_id {
-            wanted.insert((SessionHydrationCollection::AgentRequest, id.clone()));
-        }
-        if let MessagePublication::ToolDelivery { tool_call_doc_id } = &row.message.publication {
-            wanted.insert((
-                SessionHydrationCollection::AgentToolCall,
-                tool_call_doc_id.clone(),
-            ));
-        }
-        for block in &row.message.blocks {
-            if let MessageBlock::ToolCall {
-                tool_call_doc_id, ..
-            }
-            | MessageBlock::ToolResult {
-                tool_call_doc_id, ..
-            } = block
-            {
-                wanted.insert((
-                    SessionHydrationCollection::AgentToolCall,
-                    tool_call_doc_id.clone(),
-                ));
-            }
-        }
-    }
-    for row in segments {
-        if let OutputSource::ToolCall { tool_call_doc_id } = &row.segment.source {
-            wanted.insert((
-                SessionHydrationCollection::AgentToolCall,
-                tool_call_doc_id.clone(),
-            ));
-        }
-    }
-    let agent = escape_graphql_string(node_did);
-    let requester = escape_graphql_string(requester_did);
-    for (collection, doc_id) in wanted {
-        if bases
-            .iter()
-            .any(|row| row.collection == collection && row.doc_id == doc_id)
-            || (collection == SessionHydrationCollection::AgentToolCall
-                && effects.iter().any(|row| row.document.doc_id == doc_id))
-        {
-            continue;
-        }
-        let name = hydration_collection_name(collection);
-        let id = escape_graphql_string(&doc_id);
-        let fields = if collection == SessionHydrationCollection::AgentToolCall {
-            HYDRATION_TOOL_CALL_FIELDS
-        } else {
-            "_docID requester_did node_did session_id"
-        };
-        let response = graphql_with_transaction_retry(node, &format!(
-            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {fields} }} }}"#
-        ), "query exact authorized hydration provenance").await?;
-        if collection == SessionHydrationCollection::AgentToolCall {
-            let found = rows::<gents_protocol::row::AgentToolCallRow>(&response, name)?;
-            anyhow::ensure!(
-                found.len() == 1,
-                "hydration provenance is missing, denied, or conflicting"
-            );
-            for row in found {
-                observe_tool_call(row, bases, effects);
-            }
-            continue;
-        }
-        let found = rows::<TranscriptRow>(&response, name)?;
-        anyhow::ensure!(
-            found.len() == 1,
-            "hydration provenance is missing, denied, or conflicting"
-        );
-        let row = found.into_iter().next().expect("length checked");
-        bases.push(ScopedDocument {
-            collection,
-            doc_id: row
-                .doc_id
-                .context("hydration provenance omitted physical id")?,
-            requester_did: row.requester_did.unwrap_or_default(),
-            node_did: row.node_did.unwrap_or_default(),
-            session_id: row.session_id.unwrap_or_default(),
-        });
-    }
-    Ok(())
-}
-
-const HYDRATION_TOOL_CALL_FIELDS: &str = "_docID tool_call_key requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
-
-fn observe_tool_call(
-    row: gents_protocol::row::AgentToolCallRow,
-    bases: &mut Vec<ScopedDocument>,
-    effects: &mut Vec<ToolEffectRow>,
-) {
-    let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) else {
-        return;
-    };
-    let document = ScopedDocument {
-        collection: gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall,
-        doc_id,
-        requester_did: row.requester_did.unwrap_or_default(),
-        node_did: row.node_did.unwrap_or_default(),
-        session_id: row.session_id.unwrap_or_default(),
-    };
-    if row.plugin_parent_tool_call_doc_id.is_none() && row.plugin_effect_ordinal.is_none() {
-        bases.push(document);
-        return;
-    }
-    effects.push(ToolEffectRow {
-        document,
-        plugin_parent_tool_call_doc_id: row.plugin_parent_tool_call_doc_id,
-        plugin_effect_ordinal: row.plugin_effect_ordinal,
-        spawned: row.spawned_by_tool_call_doc_id.is_some(),
-        tool_call_id: row.tool_call_id.unwrap_or_default(),
-        request_doc_id: row.request_doc_id.unwrap_or_default(),
-        terminal_output: row.terminal_output.map(|terminal| terminal.output),
-    });
-}
-
-async fn load_effect_children(
-    node: &EmbeddedNode,
-    request: &HydrationRequest,
-    bases: &[ScopedDocument],
-    effects: &mut Vec<ToolEffectRow>,
-) -> Result<()> {
-    let parents = bases
-        .iter()
-        .filter(|row| {
-            row.collection
-                == gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall
-                && row.session_id != request.session_id
-        })
-        .map(|row| row.doc_id.as_str())
-        .collect::<BTreeSet<_>>();
-    if parents.is_empty() {
-        return Ok(());
-    }
-    let parents = crate::graphql::graphql_string_list_literal(parents);
-    let agent = escape_graphql_string(&request.node_did);
-    let requester = escape_graphql_string(&request.requester_did);
-    let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ AgentToolCall(filter: {{ plugin_parent_tool_call_doc_id: {{ _in: {parents} }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {HYDRATION_TOOL_CALL_FIELDS} }} }}"#
-    ), "query hydration plugin effect children").await?;
-    let mut ignored = Vec::new();
-    for row in rows::<gents_protocol::row::AgentToolCallRow>(&response, "AgentToolCall")? {
-        if !effects
-            .iter()
-            .any(|known| row.doc_id.as_deref() == Some(&known.document.doc_id))
-        {
-            observe_tool_call(row, &mut ignored, effects);
-        }
-    }
-    Ok(())
-}
-
 impl GraphqlHydrationStore {
     async fn load_admission_for_collection(
         &self,
@@ -1180,28 +796,6 @@ fn hydration_admission_query(session_id: &str, peer_id: &str) -> String {
             }}
             AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                 session_id requester_did node_did
-            }}
-        }}"#
-    )
-}
-
-fn hydration_selection_query(session_id: &str, node_did: &str, requester_did: &str) -> String {
-    format!(
-        r#"{{
-            AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID request_id requester_did node_did session_id lifecycle_state terminal_output
-            }}
-            AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                {AGENT_MESSAGE_FIELDS}
-            }}
-            AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                {HYDRATION_TOOL_CALL_FIELDS}
-            }}
-            AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session_id}" }}, _or: [{{ node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}] }}) {{
-                {AGENT_OUTPUT_SEGMENT_FIELDS}
-            }}
-            CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID requester_did node_did session_id
             }}
         }}"#
     )
@@ -1333,6 +927,9 @@ mod tests {
             Ok(HydrationSelection {
                 documents: self.catalog.documents.clone(),
                 authorized_reference_closure: self.catalog.authorized_reference_closure.clone(),
+                publications: Vec::new(),
+                headers: Vec::new(),
+                output_segments: Vec::new(),
             })
         }
         async fn authorization_is_current(
@@ -1661,34 +1258,28 @@ mod tests {
 
     #[tokio::test]
     async fn hydration_catalog_filter_is_accepted_by_real_schema() {
-        let node = crate::test_support::node_builder().build().await.unwrap();
+        let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+            .await
+            .unwrap();
+        let node = Arc::new(builder.build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let admission = hydration_admission_query("session-1", "peer-1");
         let response = node.execute(&admission).await;
         ensure_no_errors(&response, "real hydration admission query").unwrap();
-        let query =
-            hydration_selection_query("session-1", "did:key:agent-1", "did:key:requester-1");
-        let response = node.execute(&query).await;
-        ensure_no_errors(&response, "real hydration selection query").unwrap();
-        assert!(query.contains("AgentOutputSegment"));
-        assert!(!query.contains("AgentResponse"));
-        assert!(!query.contains("AgentToolResult"));
-    }
-
-    /// Every segment a node writes shares its `node_did`. Scope fields beside
-    /// `session_id` let the planner pick the `node_did` index and scan every
-    /// segment on the node, so the selection must stay on the session index.
-    #[tokio::test]
-    async fn hydration_segment_selection_uses_the_session_index() {
-        let node = crate::test_support::node_builder().build().await.unwrap();
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let query =
-            hydration_selection_query("session-1", "did:key:agent-1", "did:key:requester-1");
-        let plan = node.execute(&format!("query @explain {query}")).await;
-        ensure_no_errors(&plan, "hydration selection plan").unwrap();
-        let plan = plan.data.unwrap().to_string();
-        assert!(plan.contains("AgentOutputSegment_session_id_ASC"), "{plan}");
-        assert!(!plan.contains("AgentOutputSegment_node_did_ASC"), "{plan}");
+        let did = node.node_identity_did().unwrap().to_owned();
+        let request = HydrationRequest {
+            request_key: "peer-1:session-1".into(),
+            peer_id: "peer-1".into(),
+            requester_did: did.clone(),
+            node_did: did,
+            session_id: "session-1".into(),
+        };
+        assert!(load_hydration_selection(&node, &request)
+            .await
+            .unwrap()
+            .documents
+            .is_empty());
+        node.shutdown().await;
     }
 
     #[tokio::test]
@@ -1856,18 +1447,33 @@ mod tests {
             .iter()
             .any(|row| row.doc_id == terminal.output.close_doc_id));
 
-        let mut effects = Vec::new();
-        load_effect_children(
+        let effects = crate::config_client::ConfigAccess::transact_local_readonly(
             &node,
-            &request,
-            &[ScopedDocument {
-                collection: SessionHydrationCollection::AgentToolCall,
-                doc_id: parent_doc.clone(),
-                requester_did: requester,
-                node_did: agent,
-                session_id: "origin-session".into(),
-            }],
-            &mut effects,
+            None,
+            "test.hydration.effect_children",
+            |txn| {
+                let parent_doc = parent_doc.clone();
+                let requester = requester.clone();
+                let agent = agent.clone();
+                let request = &request;
+                Box::pin(async move {
+                    let mut effects = Vec::new();
+                    selection::load_effect_children(
+                        txn,
+                        request,
+                        &[ScopedDocument {
+                            collection: SessionHydrationCollection::AgentToolCall,
+                            doc_id: parent_doc.clone(),
+                            requester_did: requester,
+                            node_did: agent,
+                            session_id: "origin-session".into(),
+                        }],
+                        &mut effects,
+                    )
+                    .await?;
+                    Ok(effects)
+                })
+            },
         )
         .await
         .unwrap();

@@ -116,6 +116,93 @@ where
     Vec::<T>::deserialize(value).with_context(|| format!("decode {field} rows"))
 }
 
+/// DefraDB can return successful `data: {}` for a node-read denial. An absent
+/// root cannot certify an empty authorized inventory; only an explicit array
+/// supplies that observation.
+pub fn required_rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let value = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(field))
+        .with_context(|| format!("query omitted required {field} rows"))?;
+    Vec::<T>::deserialize(value).with_context(|| format!("decode required {field} rows"))
+}
+
+pub(crate) fn cursor_after_arg(after: Option<&str>) -> String {
+    after
+        .map(|cursor| format!(", after: \"{}\"", escape_graphql_string(cursor)))
+        .unwrap_or_default()
+}
+
+pub(crate) const CURSOR_PAGE_SIZE: usize = 64;
+
+pub(crate) fn cursor_query(
+    collection: &str,
+    fields: &str,
+    filter: &str,
+    after: Option<&str>,
+) -> String {
+    let after = cursor_after_arg(after);
+    format!(
+        r#"{{ _cursor {{ {collection}(first: {CURSOR_PAGE_SIZE}{after},
+        filter: {{ {filter} }}, order: [{{ _docID: ASC }}]) {{ {fields} }}
+        _pageInfo {{ hasNext endCursor }} }} }}"#
+    )
+}
+
+pub(crate) fn cursor_page<T>(
+    response: &defra_node::QueryResponse,
+    collection: &str,
+) -> Result<(Vec<T>, Option<String>)>
+where
+    T: serde::de::DeserializeOwned,
+{
+    cursor_page_data(response.data.as_ref(), collection)
+}
+
+pub(crate) fn cursor_page_data<T>(
+    data: Option<&serde_json::Value>,
+    collection: &str,
+) -> Result<(Vec<T>, Option<String>)>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let cursor = data
+        .and_then(|data| data.get("_cursor"))
+        .context("cursor query omitted _cursor")?;
+    let rows = cursor
+        .get(collection)
+        .context("cursor query omitted collection rows")?;
+    let page: Vec<T> = serde_json::from_value(rows.clone())
+        .with_context(|| format!("decode {collection} cursor page"))?;
+    let page_info = cursor
+        .get("_pageInfo")
+        .context("cursor query omitted _pageInfo")?;
+    let has_next = page_info
+        .get("hasNext")
+        .and_then(serde_json::Value::as_bool)
+        .context("cursor query omitted hasNext")?;
+    let next = if has_next {
+        anyhow::ensure!(
+            !page.is_empty(),
+            "cursor query returned an empty page with hasNext"
+        );
+        Some(
+            page_info
+                .get("endCursor")
+                .and_then(serde_json::Value::as_str)
+                .context("cursor query omitted endCursor")?
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    Ok((page, next))
+}
+
 pub fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
 where
     T: DeserializeOwned,

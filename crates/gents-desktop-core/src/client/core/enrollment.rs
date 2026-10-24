@@ -101,6 +101,9 @@ impl ClientCore {
             .await
     }
 
+    /// Route removal can hide a peer before its transport teardown completes.
+    /// A fresh challenge must await those effects so they cannot disconnect its
+    /// newly authenticated connection while the server verifies the candidate.
     pub async fn request_status_enrollment_with_label(
         &self,
         status: &Value,
@@ -116,6 +119,7 @@ impl ClientCore {
             .compare_runtime_schema(&self.node, &offer.owner_agent, status)
             .await
             .context("refusing to enroll with an incompatible runtime")?;
+        let _lifecycle = self.route_manager.lock().await;
         verify_enrollment_offer(&self.p2p, &self.node_identity, &offer).await?;
         confirm_network_admin_pin(&self.node, &offer).await?;
 
@@ -3497,6 +3501,61 @@ mod tests {
             "reconnected_route_satisfies_pending_request",
         )
         .await;
+        Arc::new(core).shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn enrollment_challenge_waits_for_prior_route_teardown() {
+        use crate::client::paths::DesktopPaths;
+        use futures::FutureExt;
+        use gents::agent::p2p_reconcile::read_client_replicated_schema;
+        use gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD;
+        use std::sync::atomic::Ordering::SeqCst;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut core = start_unsupervised_core(temp.path().to_path_buf()).await;
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
+        let transport = Arc::new(EnrollmentTransport {
+            peer: authority.offer.server_peer.clone(),
+            resolved: None,
+            connected: false.into(),
+            dials: 0.into(),
+            observations: 0.into(),
+        });
+        core.p2p = transport.clone();
+        let schema = read_client_replicated_schema(core.node_arc())
+            .await
+            .unwrap();
+        let status = json!({
+            "node_did":authority.offer.owner_agent,
+            "enrollment":{"token":authority.offer_token},
+            STATUS_REPLICATED_SCHEMA_FIELD:schema,
+        });
+        core.sync_state
+            .compare_runtime_schema(&core.node, &authority.offer.owner_agent, &status)
+            .await
+            .unwrap();
+        {
+            let cleanup = core.route_manager.lock().await;
+            let request = core.request_status_enrollment(&status);
+            tokio::pin!(request);
+            assert!(
+                request.as_mut().now_or_never().is_none(),
+                "an enrollment challenge raced the prior transport teardown"
+            );
+            assert_eq!(transport.dials.load(SeqCst), 0);
+            assert_eq!(transport.observations.load(SeqCst), 0);
+            drop(cleanup);
+            let error = request.await.unwrap_err();
+            assert!(format!("{error:#}").contains("identity challenge rejected"));
+            assert_eq!(transport.dials.load(SeqCst), 1);
+            assert_eq!(transport.observations.load(SeqCst), 1);
+        }
         Arc::new(core).shutdown().await.unwrap();
     }
 
