@@ -6,6 +6,8 @@ pub enum RegistryError {
     NoRowsArray,
     #[error("MCP registry returned an invalid scoped identity")]
     InvalidScopedIdentity,
+    #[error("MCP registry owner is required")]
+    OwnerRequired,
     #[error("duplicate MCP service {service_id} for node {node_did}")]
     DuplicateService {
         service_id: String,
@@ -56,10 +58,9 @@ pub async fn configured_mcp_services_on(
 }
 
 fn services_query(node_did: &str) -> anyhow::Result<String> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "MCP registry owner is required"
-    );
+    if node_did.trim().is_empty() {
+        return Err(RegistryError::OwnerRequired.into());
+    }
     let (fields, _) =
         crate::config_client::config_projection(crate::Collection::ToolServiceRegistry, None)?;
     let owner = crate::graphql::escape_graphql_string(node_did);

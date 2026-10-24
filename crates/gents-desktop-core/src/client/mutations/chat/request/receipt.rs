@@ -75,6 +75,24 @@ pub struct DeliveryUnconfirmed {
 /// recognisable after `write_with_receipt` wraps it.
 const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ReceiptReadError {
+    #[error("reading owner signed submission receipt")]
+    Unreadable(#[source] Box<ReceiptReadError>),
+    #[error(transparent)]
+    Query(#[from] gents::config_client::ConfigClientError),
+    #[error("request receipt query omitted rows")]
+    RowsOmitted,
+    #[error("ambiguous scoped submission receipt")]
+    Ambiguous,
+    #[error("decoding submission receipt row")]
+    DecodeRow(#[source] serde_json::Error),
+    #[error("submission receipt crossed exact request scope")]
+    CrossedScope,
+    #[error("submission receipt differs from prepared signed request")]
+    SignatureMismatch,
+}
+
 impl UnresolvedSubmission {
     pub(crate) fn accepts_composer_content(&self, content: &str) -> bool {
         if content.trim().is_empty() {
@@ -130,13 +148,16 @@ impl UnresolvedSubmission {
 pub(super) async fn owner_receipt(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
-) -> Result<bool> {
+) -> Result<bool, ReceiptReadError> {
     read_owner_receipt(access, create)
         .await
-        .context(RECEIPT_READ_CONTEXT)
+        .map_err(|error| ReceiptReadError::Unreadable(Box::new(error)))
 }
 
-async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
+async fn read_owner_receipt(
+    access: &ConfigAccess,
+    create: &AgentRequestCreate,
+) -> Result<bool, ReceiptReadError> {
     let ConfigAccess::Graphql(endpoint) = access else {
         return Ok(false);
     };
@@ -162,27 +183,29 @@ async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) 
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("request receipt query omitted rows")?;
-    ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
+        .ok_or(ReceiptReadError::RowsOmitted)?;
+    if rows.len() > 1 {
+        return Err(ReceiptReadError::Ambiguous);
+    }
     let Some(value) = rows.first() else {
         return Ok(false);
     };
     let row: AgentRequestRow =
-        serde_json::from_value(value.clone()).context("decoding submission receipt row")?;
-    ensure!(
-        row.request_id == create.request_id
-            && row.node_did.as_deref() == Some(create.node_did.as_str())
-            && row.session_id.as_deref() == Some(create.session_id.as_str())
-            && row.requester_did.as_deref()
-                == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
-        "submission receipt crossed exact request scope"
-    );
+        serde_json::from_value(value.clone()).map_err(ReceiptReadError::DecodeRow)?;
+    if !(row.request_id == create.request_id
+        && row.node_did.as_deref() == Some(create.node_did.as_str())
+        && row.session_id.as_deref() == Some(create.session_id.as_str())
+        && row.requester_did.as_deref()
+            == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()))
+    {
+        return Err(ReceiptReadError::CrossedScope);
+    }
     let signature = bs58::encode(&create.admission.signature).into_string();
-    ensure!(
-        row.admission_signer_did.as_deref() == Some(create.admission.signer_did.as_str())
-            && row.admission_signature.as_deref() == Some(signature.as_str()),
-        "submission receipt differs from prepared signed request"
-    );
+    if !(row.admission_signer_did.as_deref() == Some(create.admission.signer_did.as_str())
+        && row.admission_signature.as_deref() == Some(signature.as_str()))
+    {
+        return Err(ReceiptReadError::SignatureMismatch);
+    }
     Ok(true)
 }
 
@@ -203,7 +226,8 @@ pub(super) async fn commit_signed_submission(
         .write_with_receipt("desktop.chat.submit", &pending.mutation, || {
             owner_receipt(access, &pending.create)
         })
-        .await;
+        .await
+        .map_err(anyhow::Error::from);
     let Err(error) = written else {
         return Ok(pending.result);
     };

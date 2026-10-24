@@ -623,7 +623,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                     error.to_string().contains("integrity violation"),
                     "{}: unexpected error {}",
                     case.name,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 );
             }
             other => panic!("{}: unknown capture outcome {other}", case.name),

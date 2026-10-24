@@ -338,23 +338,25 @@ pub(crate) fn validate_write_tool_declarations(
         .collect::<rapidhash::RapidHashSet<_>>();
     let mut seen_tool_names = rapidhash::RapidHashSet::default();
     for (i, decl) in decls.iter().enumerate() {
-        decl.validate().map_err(|error| {
-            anyhow::anyhow!(
-                "write_tools[{i}] (tool {:?}) is malformed: {error}",
-                decl.tool_name
-            )
-        })?;
+        decl.validate()
+            .map_err(|error| DocumentConfigError::WriteToolMalformed {
+                index: i,
+                tool_name: decl.tool_name.clone(),
+                error: Box::new(error),
+            })?;
         crate::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
-            anyhow::anyhow!(
-                "write_tools[{i}] (tool {:?}) violates mailbox registration policy: {error}",
-                decl.tool_name
-            )
+            DocumentConfigError::WriteToolMailboxPolicy {
+                index: i,
+                tool_name: decl.tool_name.clone(),
+                error: error.to_string(),
+            }
         })?;
         if !decl.output_obligation_is_well_formed() {
-            return Err(anyhow::anyhow!(
-                "write_tools[{i}] (tool {:?}) output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
-                decl.tool_name
-            ));
+            return Err(DocumentConfigError::WriteToolOutputObligation {
+                index: i,
+                tool_name: decl.tool_name.clone(),
+            }
+            .into());
         }
         reject_tool_name_surface_collisions(
             "write_tools",
@@ -367,34 +369,39 @@ pub(crate) fn validate_write_tool_declarations(
         let mut seen_field_names = rapidhash::RapidHashSet::default();
         for (j, field) in decl.fields.iter().enumerate() {
             if !seen_field_names.insert(field.name.trim()) {
-                return Err(anyhow::anyhow!(
-                    "write_tools[{i}] (tool {:?}) has a duplicate field name {:?}; each WriteToolField in a declaration must have a unique name",
-                    decl.tool_name,
-                    field.name.trim()
-                ));
+                return Err(DocumentConfigError::WriteToolDuplicateField {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field: field.name.trim().to_owned(),
+                }
+                .into());
             }
             if field.fill.is_some() && field.required {
-                return Err(anyhow::anyhow!(
-                    "write_tools[{i}] (tool {:?}) field[{j}] {:?} is runtime-filled and cannot be required",
-                    decl.tool_name,
-                    field.name,
-                ));
+                return Err(DocumentConfigError::WriteToolRuntimeFilledRequired {
+                    index: i,
+                    tool_name: decl.tool_name.clone(),
+                    field_index: j,
+                    field: field.name.clone(),
+                }
+                .into());
             }
             if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
                 crate::graphql::validate_graphql_name(source_field).map_err(|error| {
-                    anyhow::anyhow!(
-                        "write_tools[{i}] (tool {:?}) field[{j}] has invalid source_field {:?}: {error}",
-                        decl.tool_name,
-                        source_field,
-                    )
+                    DocumentConfigError::WriteToolSourceField {
+                        index: i,
+                        tool_name: decl.tool_name.clone(),
+                        field_index: j,
+                        source_field: source_field.clone(),
+                        error,
+                    }
                 })?;
             }
         }
         if !seen_tool_names.insert(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "write_tools has a duplicate tool_name {:?}; each declared write tool must have a unique tool_name",
-                decl.tool_name.trim()
-            ));
+            return Err(DocumentConfigError::WriteToolDuplicateName {
+                tool_name: decl.tool_name.trim().to_owned(),
+            }
+            .into());
         }
     }
     Ok(())

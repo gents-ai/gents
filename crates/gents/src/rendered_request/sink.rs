@@ -4,13 +4,13 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::{
     canonical_json, canonical_json_string, RenderedCompletionRequest,
     RenderedRequestCaptureFactory, RenderedRequestCaptureSink, RenderedRequestContext,
+    RenderedRequestError, Result,
 };
 use crate::graphql::escape_graphql_string;
 
@@ -60,21 +60,18 @@ impl DefraRenderedRequestSink {
             "rendered_request::lookup",
         )
         .await?;
-        let data = response
-            .data
-            .ok_or_else(|| anyhow!("reading RenderedRequest by capture key returned no data"))?;
+        let data = response.data.ok_or(RenderedRequestError::LookupNoData)?;
         let rows = data
             .get(RENDERED_REQUEST_COLLECTION)
             .and_then(Value::as_array)
-            .ok_or_else(|| {
-                anyhow!("reading RenderedRequest by capture key returned an unexpected shape")
-            })?;
+            .ok_or(RenderedRequestError::LookupShape)?;
         match rows.len() {
             0 => Ok(None),
             1 => Ok(Some(rows[0].clone())),
-            count => Err(anyhow!(
-                "capture key {capture_key} matched {count} RenderedRequest rows; the unique index is not enforcing"
-            )),
+            count => Err(RenderedRequestError::CaptureKeyAmbiguous {
+                capture_key: capture_key.to_owned(),
+                count,
+            }),
         }
     }
 
@@ -85,10 +82,9 @@ impl DefraRenderedRequestSink {
         provenance_json: &str,
     ) -> Result<()> {
         if !rendered.request_doc_id.is_empty() && rendered.request_commit_cid.is_empty() {
-            anyhow::bail!(
-                "AgentRequest {} capture has no claimed DefraDB commit CID",
-                rendered.request_doc_id
-            );
+            return Err(RenderedRequestError::ClaimedRequestWithoutCommit {
+                request_doc_id: rendered.request_doc_id.clone(),
+            });
         }
         let source = serde_json::to_value(rendered.source)
             .ok()
@@ -142,9 +138,7 @@ impl DefraRenderedRequestSink {
             .and_then(single_mutation_result)
             .is_some_and(crate::graphql::response_has_documents)
         {
-            return Err(anyhow!(
-                "creating RenderedRequest returned no document; the capture is not durable"
-            ));
+            return Err(RenderedRequestError::RenderedRequestNotDurable);
         }
         Ok(())
     }
@@ -164,7 +158,8 @@ impl DefraRenderedRequestSink {
             return Ok(None);
         };
         let accounting_json = canonical_json_string(
-            &serde_json::to_value(accounting).context("encoding context accounting")?,
+            &serde_json::to_value(accounting)
+                .map_err(RenderedRequestError::EncodeContextAccounting)?,
         )?;
         Ok(Some((call_id, accounting_json)))
     }
@@ -188,12 +183,12 @@ impl DefraRenderedRequestSink {
             .get("data")
             .and_then(|data| data.get("InferenceCall"))
             .and_then(Value::as_array)
-            .ok_or_else(|| anyhow!("reading joined InferenceCall returned an unexpected shape"))?;
+            .ok_or(RenderedRequestError::InferenceCallShape)?;
         let [row] = rows.as_slice() else {
-            anyhow::bail!(
-                "rendered request admission call {call_id} matched {} InferenceCall rows",
-                rows.len()
-            );
+            return Err(RenderedRequestError::InferenceCallRowCount {
+                call_id: call_id.clone(),
+                count: rows.len(),
+            });
         };
         if let Some(stored) = row
             .get("context_accounting_json")
@@ -201,20 +196,22 @@ impl DefraRenderedRequestSink {
             .filter(|value| !value.trim().is_empty())
         {
             let stored: Value = serde_json::from_str(stored)
-                .context("decoding stored InferenceCall context_accounting_json")?;
+                .map_err(RenderedRequestError::DecodeStoredAccounting)?;
             let incoming: Value = serde_json::from_str(accounting_json)
-                .context("decoding incoming InferenceCall context_accounting_json")?;
+                .map_err(RenderedRequestError::DecodeIncomingAccounting)?;
             if canonical_json(&stored) == canonical_json(&incoming) {
                 return Ok(());
             }
-            anyhow::bail!("InferenceCall {call_id} already carries different context accounting");
+            return Err(RenderedRequestError::InferenceCallAccountingConflict {
+                call_id: call_id.clone(),
+            });
         }
 
         let doc_id = row
             .get("_docID")
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
-            .context("joined InferenceCall lacks physical identity")?;
+            .ok_or(RenderedRequestError::InferenceCallMissingDocId)?;
         let doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
@@ -234,7 +231,7 @@ impl DefraRenderedRequestSink {
             .and_then(single_mutation_result)
             .is_some_and(crate::graphql::response_has_documents)
         {
-            anyhow::bail!("updating InferenceCall context accounting returned no document");
+            return Err(RenderedRequestError::InferenceCallUpdateNotDurable);
         }
         Ok(())
     }
@@ -263,20 +260,20 @@ impl DefraRenderedRequestSink {
     }
 
     pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<()> {
-        anyhow::ensure!(
-            rendered.capture_version == gents_protocol::rendered_request::CAPTURE_VERSION,
-            "cannot write rendered-request capture version {}; writer supports version {}",
-            rendered.capture_version,
-            gents_protocol::rendered_request::CAPTURE_VERSION
-        );
+        if rendered.capture_version != gents_protocol::rendered_request::CAPTURE_VERSION {
+            return Err(RenderedRequestError::UnsupportedCaptureVersion {
+                version: rendered.capture_version,
+                writer: gents_protocol::rendered_request::CAPTURE_VERSION,
+            });
+        }
         let context_accounting = Self::inference_call_context_accounting(&rendered)?;
         let request_layout = super::encoding::capture_block_layout(&rendered.request_json)
-            .context("encoding rendered-request request_json")?;
+            .map_err(RenderedRequestError::EncodeRequestLayout)?;
         let provenance_payload_layout =
             super::encoding::capture_block_layout(&rendered.provenance_payload_json)
-                .context("encoding rendered-request provenance payload")?;
+                .map_err(RenderedRequestError::EncodeProvenanceLayout)?;
         let provenance_json = canonical_json_string(&rendered.provenance_json)
-            .context("encoding rendered-request provenance_json")?;
+            .map_err(RenderedRequestError::EncodeProvenanceJson)?;
         let request_chunks = super::encoding::chunk_capture_layout(&request_layout);
         let provenance_chunks = super::encoding::chunk_capture_layout(&provenance_payload_layout);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
@@ -383,11 +380,9 @@ impl DefraRenderedRequestSink {
             incoming_bytes = canonical_json_string(&incoming).map(|value| value.len()).unwrap_or_default(),
             "rendered-request capture key already names a different immutable fact"
         );
-        Err(anyhow!(
-            "rendered-request integrity violation: capture key {} already names a different \
-             canonical capture fact; a capture key is never rebound",
-            rendered.capture_key,
-        ))
+        Err(RenderedRequestError::IntegrityViolation {
+            capture_key: rendered.capture_key.clone(),
+        })
     }
 
     async fn canonical_stored_fact(&self, mut stored: Value) -> Result<Value> {
@@ -395,17 +390,17 @@ impl DefraRenderedRequestSink {
             .get("capture_version")
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .context("stored RenderedRequest lacks a numeric capture_version")?;
+            .ok_or(RenderedRequestError::StoredMissingVersion)?;
         let provenance_raw = stored
             .get("provenance_json")
             .and_then(Value::as_str)
-            .context("stored RenderedRequest provenance_json was not a string")?
+            .ok_or(RenderedRequestError::StoredProvenanceNotString)?
             .to_owned();
         let provenance_value: Value = serde_json::from_str(&provenance_raw)?;
         let encoded = stored
             .get("request_json")
             .and_then(Value::as_str)
-            .context("stored RenderedRequest request_json was not a string")?
+            .ok_or(RenderedRequestError::StoredRequestNotString)?
             .to_owned();
         let access = crate::config_client::ConfigAccess::local(Arc::clone(&self.node));
         let decoded_pair = if version == 1 {
@@ -429,24 +424,30 @@ impl DefraRenderedRequestSink {
             canonical_json(
                 provenance_value
                     .get("assembly_trace")
-                    .context("legacy provenance lacks assembly_trace")?,
+                    .ok_or(RenderedRequestError::LegacyProvenanceMissingTrace)?,
             )
         } else {
-            canonical_json(&decoded_pair.context("missing decoded capture pair")?.1)
+            canonical_json(
+                &decoded_pair
+                    .ok_or(RenderedRequestError::MissingDecodedPair)?
+                    .1,
+            )
         };
         let parsed = gents_protocol::rendered_request::ProvenanceManifest::parse(&provenance_raw)
-            .map_err(|error| anyhow!("decoding stored provenance manifest: {error}"))?;
+            .map_err(|error| RenderedRequestError::DecodeProvenanceManifest { error })?;
         stored["provenance_json"] = match parsed {
             gents_protocol::rendered_request::ParsedProvenance::Manifest(manifest) => {
                 canonical_json(&serde_json::to_value(manifest)?)
             }
             gents_protocol::rendered_request::ParsedProvenance::Unsupported {
                 manifest_version,
-            } => anyhow::bail!("unsupported provenance manifest version {manifest_version}"),
+            } => {
+                return Err(RenderedRequestError::UnsupportedProvenanceVersion { manifest_version })
+            }
         };
         stored
             .as_object_mut()
-            .context("stored RenderedRequest fact was not an object")?
+            .ok_or(RenderedRequestError::StoredNotObject)?
             .remove("capture_version");
         Ok(canonical_json(&stored))
     }
@@ -454,7 +455,7 @@ impl DefraRenderedRequestSink {
 
 fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value> {
     let source =
-        serde_json::to_value(rendered.source).context("encoding rendered-request source")?;
+        serde_json::to_value(rendered.source).map_err(RenderedRequestError::EncodeSource)?;
     Ok(canonical_json(&serde_json::json!({
         "request_doc_id": rendered.request_doc_id,
         "request_commit_cid": rendered.request_commit_cid,
@@ -526,16 +527,16 @@ async fn stored_block_doc_ids_in_txn(
         .get("data")
         .and_then(|data| data.get(RENDERED_REQUEST_BLOCK_COLLECTION))
         .and_then(Value::as_array)
-        .context("reading stored capture blocks returned an unexpected shape")?;
+        .ok_or(RenderedRequestError::StoredBlocksShape)?;
     for row in rows {
         let content_key = row
             .get("content_key")
             .and_then(Value::as_str)
-            .context("stored capture block row lacks content_key")?;
+            .ok_or(RenderedRequestError::StoredBlockMissingContentKey)?;
         let doc_id = row
             .get("_docID")
             .and_then(Value::as_str)
-            .context("stored capture block row lacks _docID")?;
+            .ok_or(RenderedRequestError::StoredBlockMissingDocId)?;
         stored.insert(content_key.to_owned(), doc_id.to_owned());
     }
     Ok(stored)
@@ -551,10 +552,9 @@ async fn create_blocks_in_txn(
     for batch in blocks.chunks(CAPTURE_BLOCK_CREATE_BATCH) {
         let input = batch
             .iter()
-            .map(|block| {
-                let payload = std::str::from_utf8(&block.bytes).context(
-                    "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
-                )?;
+            .map(|block| -> Result<serde_json::Value> {
+                let payload = std::str::from_utf8(&block.bytes)
+                    .map_err(RenderedRequestError::BlockNotUtf8)?;
                 Ok(serde_json::json!({
                     "content_key": block.content_key,
                     "payload": payload,
@@ -571,11 +571,10 @@ async fn create_blocks_in_txn(
             .get("data")
             .and_then(single_mutation_result)
             .and_then(Value::as_array)
-            .context("creating capture blocks returned no documents")?;
-        anyhow::ensure!(
-            rows.len() == batch.len(),
-            "capture block create omitted documents"
-        );
+            .ok_or(RenderedRequestError::CreateBlocksNoDocuments)?;
+        if rows.len() != batch.len() {
+            return Err(RenderedRequestError::CreateBlocksOmitted);
+        }
         let expected = batch
             .iter()
             .map(|block| block.content_key.as_str())
@@ -584,20 +583,18 @@ async fn create_blocks_in_txn(
             let key = row
                 .get("content_key")
                 .and_then(Value::as_str)
-                .context("created capture block lacks content_key")?;
+                .ok_or(RenderedRequestError::CreatedBlockMissingContentKey)?;
             let doc_id = row
                 .get("_docID")
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
-                .context("created capture block lacks _docID")?;
-            anyhow::ensure!(
-                expected.contains(key),
-                "capture block create returned an unexpected key"
-            );
-            anyhow::ensure!(
-                created.insert(key.to_owned(), doc_id.to_owned()).is_none(),
-                "capture block create repeated a key"
-            );
+                .ok_or(RenderedRequestError::CreatedBlockMissingDocId)?;
+            if !expected.contains(key) {
+                return Err(RenderedRequestError::CreateBlocksUnexpectedKey);
+            }
+            if created.insert(key.to_owned(), doc_id.to_owned()).is_some() {
+                return Err(RenderedRequestError::CreateBlocksRepeatedKey);
+            }
         }
     }
     Ok(created)
@@ -625,8 +622,9 @@ async fn pin_blocks_in_txn(
         .collect::<Vec<_>>();
     let witnesses = super::commits::field_commits_in_txn(txn, &witness_docs, "payload").await?;
     for ((block, doc_id), commit) in blocks.iter().zip(witness_docs).zip(witnesses) {
-        let commit = commit
-            .with_context(|| format!("capture block {doc_id} lacks a payload field commit"))?;
+        let commit = commit.ok_or_else(|| RenderedRequestError::PinnedBlockMissingCommit {
+            doc_id: doc_id.clone(),
+        })?;
         pins.insert(
             block.content_key.clone(),
             BlockPin {
@@ -644,16 +642,16 @@ fn payload_entries(
 ) -> Result<Vec<super::encoding::ManifestEntry>> {
     let entries = chunks
         .iter()
-        .map(|chunk| {
+        .map(|chunk| -> Result<super::encoding::ManifestEntry> {
             let pin = pins
                 .get(&chunk.content_key)
-                .context("capture block was not pinned")?;
+                .ok_or(RenderedRequestError::BlockNotPinned)?;
             Ok(super::encoding::ManifestEntry {
                 doc_id: pin.doc_id.clone(),
                 content_key: chunk.content_key.clone(),
                 field_commit_cid: pin.field_commit_cid.clone(),
                 byte_len: u64::try_from(chunk.bytes.len())
-                    .context("capture block length overflow")?,
+                    .map_err(RenderedRequestError::BlockLengthOverflow)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -666,21 +664,19 @@ async fn encode_payload_tree(
     pins: &mut std::collections::BTreeMap<String, BlockPin>,
 ) -> Result<super::encoding::EncodedJson> {
     use super::encoding::{self, ChunkedBlock, ManifestTree};
-    anyhow::ensure!(
-        !chunks.is_empty() && chunks.len() <= encoding::MAX_MANIFEST_BLOCKS,
-        "capture manifest exceeds leaf bound"
-    );
+    if chunks.is_empty() || chunks.len() > encoding::MAX_MANIFEST_BLOCKS {
+        return Err(RenderedRequestError::ManifestLeafBound);
+    }
     let leaves = chunks.len();
     let mut entries = payload_entries(chunks, pins)?;
     let mut height = 0;
     while entries.len() > 1 {
-        anyhow::ensure!(
-            height < encoding::MAX_MANIFEST_HEIGHT,
-            "capture manifest exceeds maximum height"
-        );
+        if height >= encoding::MAX_MANIFEST_HEIGHT {
+            return Err(RenderedRequestError::ManifestHeightExceeded);
+        }
         let nodes = encoding::manifest_groups(&entries)
             .into_iter()
-            .map(|group| {
+            .map(|group| -> Result<ChunkedBlock> {
                 let bytes = serde_json::to_vec(group)?;
                 Ok(ChunkedBlock {
                     content_key: encoding::block_content_key(&bytes),
@@ -730,7 +726,7 @@ pub(crate) fn defra_rendered_request_capture_factory(
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let sink: RenderedRequestCaptureSink = Arc::new(move |rendered| {
             let sink = sink.clone();
-            Box::pin(async move { sink.capture(rendered).await })
+            Box::pin(async move { sink.capture(rendered).await.map_err(anyhow::Error::from) })
         });
         sink
     })
@@ -1208,17 +1204,17 @@ mod tests {
         let next = rendered_turn(1, body);
         let error = sink.capture(next.clone()).await.unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("deleted"),
+            format!("{}", ErrorChain(&error)).contains("deleted"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(sink.stored_fact(&next.capture_key).await.unwrap().is_none());
         let reopened = DefraRenderedRequestSink::new(Arc::clone(&node));
         let error = reopened.capture(next.clone()).await.unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("deleted"),
+            format!("{}", ErrorChain(&error)).contains("deleted"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(reopened
             .stored_fact(&next.capture_key)
@@ -1352,7 +1348,7 @@ mod tests {
         assert!(
             error.to_string().contains("integrity violation"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         node.shutdown().await;
     }

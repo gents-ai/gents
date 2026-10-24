@@ -1,9 +1,9 @@
-use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
+use super::DefraWriteFailure;
 use crate::graphql::escape_graphql_string;
 
-pub(crate) fn parameters(schema: &str) -> Result<Value> {
+pub(crate) fn parameters(schema: &str) -> Result<Value, DefraWriteFailure> {
     let base = schema.trim_end_matches('!');
     let mut shape = if let Some(item) = base.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         json!({"type":"array", "items":parameters(item)?})
@@ -14,7 +14,11 @@ pub(crate) fn parameters(schema: &str) -> Result<Value> {
             "Float32" | "Float64" | "Float" => json!({"type":"number"}),
             "Boolean" => json!({"type":"boolean"}),
             "JSON" => json!({"type":["object", "array", "string", "number", "boolean"]}),
-            _ => bail!("unsupported bounded write field type `{schema}`"),
+            _ => {
+                return Err(DefraWriteFailure::UnsupportedFieldType {
+                    schema: schema.to_owned(),
+                })
+            }
         }
     };
     if !schema.ends_with('!') {
@@ -50,25 +54,27 @@ pub(crate) fn validate_input(
     required: bool,
     filled: bool,
     value: Option<&Value>,
-) -> Result<()> {
+) -> Result<(), DefraWriteFailure> {
     if filled {
         if value.is_some() {
-            bail!("runtime-filled field must not be supplied");
+            return Err(DefraWriteFailure::RuntimeFilledSupplied);
         }
         return Ok(());
     }
     match value {
-        None if required => bail!("required field missing"),
+        None if required => Err(DefraWriteFailure::RequiredFieldMissing),
         None => Ok(()),
         Some(value) => literal(schema, value).map(|_| ()),
     }
 }
 
-pub(super) fn literal(schema: &str, value: &Value) -> Result<String> {
+pub(super) fn literal(schema: &str, value: &Value) -> Result<String, DefraWriteFailure> {
     let nullable = !schema.ends_with('!');
     if value.is_null() {
         if !nullable {
-            bail!("null is not allowed for `{schema}`");
+            return Err(DefraWriteFailure::NullNotAllowed {
+                schema: schema.to_owned(),
+            });
         }
         return Ok("null".into());
     }
@@ -76,10 +82,12 @@ pub(super) fn literal(schema: &str, value: &Value) -> Result<String> {
     if let Some(item) = base.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         let values = value
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("expected `{schema}`"))?;
+            .ok_or_else(|| DefraWriteFailure::ExpectedSchemaValue {
+                schema: schema.to_owned(),
+            })?;
         if values.is_empty() {
             if !nullable {
-                bail!("empty nonnullable lists cannot be written by DefraDB");
+                return Err(DefraWriteFailure::EmptyNonnullableList);
             }
             return Ok("null".into());
         }
@@ -88,7 +96,7 @@ pub(super) fn literal(schema: &str, value: &Value) -> Result<String> {
             values
                 .iter()
                 .map(|v| literal(item, v))
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
                 .join(", ")
         ));
     }
@@ -100,24 +108,24 @@ pub(super) fn literal(schema: &str, value: &Value) -> Result<String> {
         ("Float32" | "Float64" | "Float", Value::Number(number)) => Ok(number.to_string()),
         ("Boolean", Value::Bool(value)) => Ok(value.to_string()),
         ("JSON", _) => json_literal(value),
-        _ => bail!("expected native JSON value matching `{schema}`; values are not coerced"),
+        _ => Err(DefraWriteFailure::NativeValueMismatch {
+            schema: schema.to_owned(),
+        }),
     }
 }
 
-fn json_literal(value: &Value) -> Result<String> {
+fn json_literal(value: &Value) -> Result<String, DefraWriteFailure> {
     reject_empty_json_arrays(value)?;
     Ok(gents_protocol::graphql::graphql_input_literal(value)?)
 }
 
 // The shared mutation renderer maps empty lists to null. A JSON scalar must not
 // silently change its contents, so reject that case before delegating rendering.
-fn reject_empty_json_arrays(value: &Value) -> Result<()> {
+fn reject_empty_json_arrays(value: &Value) -> Result<(), DefraWriteFailure> {
     match value {
         Value::Array(values) => {
             if values.is_empty() {
-                bail!(
-                    "empty JSON arrays cannot be represented in a DefraDB mutation without changing the value"
-                );
+                return Err(DefraWriteFailure::EmptyJsonArray);
             }
             values.iter().try_for_each(reject_empty_json_arrays)
         }

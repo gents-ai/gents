@@ -11,6 +11,8 @@ use tokio::sync::Notify;
 
 use super::{mutation_write_gate, ConfigAccess};
 
+type TestError = Box<dyn std::error::Error + Send + Sync>;
+
 struct BlockingSigner {
     private_key: Vec<u8>,
     armed: AtomicBool,
@@ -187,15 +189,15 @@ async fn run_paused_owned_read(
     access: ConfigAccess,
     reached: Arc<Notify>,
     release: Arc<Notify>,
-) -> anyhow::Result<serde_json::Value> {
+) -> Result<serde_json::Value, TestError> {
     super::ConfigApplyTxn::with_owned_local_operation_pause(reached, release, async move {
         tokio::time::timeout(
             Duration::from_millis(25),
             access.execute("{ NativeClaimLifetimeProbe { value } }"),
         )
         .await
-        .map_err(anyhow::Error::from)?
-        .map_err(anyhow::Error::from)
+        .map_err(TestError::from)?
+        .map_err(TestError::from)
     })
     .await
 }
@@ -205,7 +207,7 @@ async fn run_paused_owned_schema(
     reached: Arc<Notify>,
     release: Arc<Notify>,
     completed: Arc<Notify>,
-) -> anyhow::Result<()> {
+) -> Result<(), TestError> {
     super::ConfigApplyTxn::with_owned_local_operation_completion(
         reached,
         release,
@@ -216,8 +218,8 @@ async fn run_paused_owned_schema(
                 access.add_schema("type NativeClaimLifetimeSchemaProbe { value: String }"),
             )
             .await
-            .map_err(anyhow::Error::from)?
-            .map_err(anyhow::Error::from)
+            .map_err(TestError::from)?
+            .map_err(TestError::from)
         },
     )
     .await
@@ -461,7 +463,7 @@ async fn lean_readonly_transaction_retains_claim_until_native_cleanup_returns() 
                 Box::pin(async move {
                     txn.execute("{ NativeClaimLifetimeProbe { value } }")
                         .await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             }),
         )
@@ -539,7 +541,7 @@ async fn lean_mutation_transaction_cleanup_retains_claim_around_real_signed_work
                 Box::pin(async move {
                     txn.execute("mutation { create_NativeClaimLifetimeProbe(input: {value: \"txn\"}) {_docID} }")
                         .await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await
@@ -698,7 +700,7 @@ async fn lean_committed_readonly_transaction_leaves_claim_with_live_access() {
             Box::pin(async move {
                 txn.execute("{ NativeClaimLifetimeProbe { value } }")
                     .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await

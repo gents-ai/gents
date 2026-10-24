@@ -458,7 +458,7 @@ pub(crate) mod tests {
         ] {
             let error = verify_pack_coordinate(manifest, namespace, name, version)
                 .expect_err("every coordinate component is identity-bearing");
-            let message = ErrorChain(error.as_ref()).to_string();
+            let message = ErrorChain(&error).to_string();
             assert!(message.contains("different identity"), "{message}");
             assert!(
                 message.contains(&format!("{namespace}/{name}@{version}")),
@@ -577,11 +577,9 @@ pub(crate) mod tests {
             .await
             .expect_err("advertised bodies over the archive limit must not be buffered");
         assert!(
-            ErrorChain(error.as_ref())
-                .to_string()
-                .contains("compressed bound"),
+            ErrorChain(&error).to_string().contains("compressed bound"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 }

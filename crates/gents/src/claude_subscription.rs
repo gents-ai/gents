@@ -2,7 +2,6 @@ use rapidhash::RapidHashSet;
 use std::fmt;
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use futures::StreamExt;
 use rig::client::CompletionClient;
@@ -15,8 +14,19 @@ use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
 
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
-use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
+use crate::oauth_credential::{
+    BearerSource, DbCredentialBearer, OAuthCredentialError, OAuthRefreshKind,
+};
+use crate::oauth_http::OAuthHttpError;
 use crate::usage_observation::{UsageAccount, UsageReporter};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClaudeSubscriptionError {
+    #[error(transparent)]
+    Bearer(#[from] OAuthHttpError),
+}
+
+type Result<T, E = ClaudeSubscriptionError> = std::result::Result<T, E>;
 
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
 pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
@@ -256,7 +266,7 @@ impl ApiKeyBearer {
 }
 
 impl BearerSource for ApiKeyBearer {
-    async fn current_bearer(&self) -> Result<String> {
+    async fn current_bearer(&self) -> Result<String, OAuthCredentialError> {
         Ok(self.0.clone())
     }
 
@@ -301,11 +311,11 @@ impl StaticBearer {
 
 #[cfg(test)]
 impl BearerSource for StaticBearer {
-    async fn current_bearer(&self) -> Result<String> {
+    async fn current_bearer(&self) -> Result<String, OAuthCredentialError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.token
             .clone()
-            .map_err(|message| anyhow::anyhow!(message))
+            .map_err(|message| OAuthCredentialError::AccountUnavailable { message })
     }
 
     async fn invalidate(&self) {

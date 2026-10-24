@@ -274,7 +274,8 @@ pub(crate) async fn require_reachable_configuration(
     let probe = match access {
         Ok(access) => list_oauth_credentials_on(&access, node_did)
             .await
-            .map(|_| ()),
+            .map(|_| ())
+            .map_err(anyhow::Error::from),
         Err(error) => Err(error),
     };
     probe.map_err(|error| {
@@ -403,7 +404,9 @@ pub(crate) async fn observe_provider_accounts(
         .map(ProviderAccountView::pending_save)
         .collect();
     let stored = match access {
-        Ok(access) => list_oauth_credentials_on(&access, node_did).await,
+        Ok(access) => list_oauth_credentials_on(&access, node_did)
+            .await
+            .map_err(anyhow::Error::from),
         Err(error) => Err(error),
     };
     match stored {

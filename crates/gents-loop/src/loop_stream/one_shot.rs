@@ -18,7 +18,7 @@ pub struct AuxiliaryPersistenceFailure {
 pub struct OneShotProviderFailure {
     last_error: InferenceError,
     #[source]
-    source: Option<anyhow::Error>,
+    source: Option<LoopStreamError>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -28,42 +28,111 @@ pub struct OneShotNoVisibleOutput {
     source: LoopStreamError,
 }
 
-fn persistence_failure(operation: &'static str, source: anyhow::Error) -> anyhow::Error {
-    AuxiliaryPersistenceFailure { operation, source }.into()
+#[derive(Debug, thiserror::Error)]
+pub enum OneShotError {
+    #[error(transparent)]
+    Persistence(#[from] AuxiliaryPersistenceFailure),
+    #[error(transparent)]
+    ProviderFailure(#[from] OneShotProviderFailure),
+    #[error(transparent)]
+    NoVisibleOutput(#[from] OneShotNoVisibleOutput),
+    #[error("one-shot loop stream error")]
+    LoopStream(#[source] LoopStreamError),
+    #[error("provider stream ended without an explicit terminal response")]
+    MissingTerminalResponse,
+    #[error(transparent)]
+    Accumulator(#[from] crate::stream_processor::StreamProcessorError),
+    #[error(transparent)]
+    TurnIndex(#[from] std::num::TryFromIntError),
+    #[error("decoding validated structured output as {type_name} failed: {error}")]
+    StructuredDecode {
+        type_name: &'static str,
+        error: serde_json::Error,
+    },
+    #[error("received provider audit reached a nonpersistent auxiliary; a canonical output authority is required")]
+    AuditWithoutAuthority,
+    #[error("AuthoredInputReady reached the nonpersistent one-shot auxiliary; authored-input persistence belongs to the owned StreamProcessor consumer")]
+    AuthoredInputReachedAuxiliary,
+    #[error("auxiliary audit changed source")]
+    AuditChangedSource,
+    #[error("auxiliary output has no canonical sink")]
+    NoCanonicalSink,
+    #[error("auxiliary attempt overlaps another source")]
+    AttemptOverlapsSource,
+    #[error("auxiliary ready changed source")]
+    ReadyChangedSource,
+    #[error("auxiliary turn has no active source")]
+    TurnWithoutSource,
+    #[error("detached auxiliary request cannot call tools")]
+    DetachedToolCall,
+    #[error("auxiliary retract has no active source")]
+    RetractWithoutSource,
+    #[error("auxiliary retract changed source")]
+    RetractChangedSource,
+    #[error("auxiliary reminder has no source")]
+    ReminderWithoutSource,
+    #[error("auxiliary failure changed source")]
+    FailureChangedSource,
+    #[error("auxiliary text has no active source")]
+    TextWithoutSource,
+    #[error("auxiliary reasoning has no active source")]
+    ReasoningWithoutSource,
+    #[error("auxiliary reasoning delta has no active source")]
+    ReasoningDeltaWithoutSource,
+    #[error("auxiliary tool call has no active source")]
+    ToolCallWithoutSource,
+    #[error("auxiliary final response has no source")]
+    FinalWithoutSource,
+    #[error("receiving the auxiliary item after a flush failed: {flush}")]
+    ReceivingAfterFlushFailed {
+        flush: String,
+        #[source]
+        source: Box<OneShotError>,
+    },
+    #[error("retaining the received auxiliary item after a flush failed: {flush}")]
+    RetainingAfterFlushFailed {
+        flush: String,
+        #[source]
+        source: Box<OneShotError>,
+    },
+}
+
+fn persistence_failure(operation: &'static str, source: anyhow::Error) -> OneShotError {
+    OneShotError::Persistence(AuxiliaryPersistenceFailure { operation, source })
 }
 
 fn stream_failure(
     error: LoopStreamError,
     last_attempt_error: Option<InferenceError>,
-) -> anyhow::Error {
+) -> OneShotError {
     match last_attempt_error {
         Some(last_error) => OneShotProviderFailure {
             last_error,
-            source: Some(anyhow::Error::new(error)),
+            source: Some(error),
         }
         .into(),
         None if super::is_no_visible_output_failure(&error) => {
             OneShotNoVisibleOutput { source: error }.into()
         }
-        None => anyhow::Error::new(error).context("one-shot loop stream error"),
+        None => OneShotError::LoopStream(error),
     }
 }
 
-fn missing_final_failure(last_attempt_error: Option<InferenceError>) -> anyhow::Error {
+fn missing_final_failure(last_attempt_error: Option<InferenceError>) -> OneShotError {
     match last_attempt_error {
         Some(last_error) => OneShotProviderFailure {
             last_error,
             source: None,
         }
         .into(),
-        None => anyhow::anyhow!("provider stream ended without an explicit terminal response"),
+        None => OneShotError::MissingTerminalResponse,
     }
 }
 
 async fn emit_auxiliary(
     identity: (CaptureScope, usize, u32),
     event: AuxiliaryOutputEvent,
-) -> anyhow::Result<()> {
+) -> Result<(), OneShotError> {
     let observation = AuxiliaryOutputObservation {
         capture_scope: identity.0,
         turn: identity.1,
@@ -78,17 +147,15 @@ async fn emit_auxiliary(
                 Ok(_) => Err(error),
                 Err(close_error) => Err(persistence_failure(
                     "observation cleanup",
-                    close_error.context(format!(
-                        "original auxiliary error: {}",
-                        ErrorChain(error.as_ref())
-                    )),
+                    close_error
+                        .context(format!("original auxiliary error: {}", ErrorChain(&error))),
                 )),
             }
         }
     }
 }
 
-async fn close_received_auxiliary() -> anyhow::Result<()> {
+async fn close_received_auxiliary() -> Result<(), OneShotError> {
     match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
         Ok(true) => Ok(()),
         Ok(false) => Err(persistence_failure(
@@ -99,32 +166,27 @@ async fn close_received_auxiliary() -> anyhow::Result<()> {
     }
 }
 
-async fn close_received_auxiliary_after_error(error: anyhow::Error) -> anyhow::Error {
+async fn close_received_auxiliary_after_error(error: OneShotError) -> OneShotError {
     match close_received_auxiliary().await {
         Ok(()) => error,
         Err(close_error) => persistence_failure(
             "error cleanup",
-            close_error.context(format!(
-                "original one-shot error: {}",
-                ErrorChain(error.as_ref())
-            )),
+            anyhow::Error::new(close_error)
+                .context(format!("original one-shot error: {}", ErrorChain(&error))),
         ),
     }
 }
 
-async fn finish_one_shot_result<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
+async fn finish_one_shot_result<T>(result: Result<T, OneShotError>) -> Result<T, OneShotError> {
     match result {
         Ok(value) => Ok(value),
-        Err(error) if error.is::<AuxiliaryPersistenceFailure>() => Err(error),
+        Err(error) if matches!(error, OneShotError::Persistence(_)) => Err(error),
         Err(error) => {
             match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
                 Ok(_) => Err(error),
                 Err(close_error) => Err(persistence_failure(
                     "error cleanup",
-                    close_error.context(format!(
-                        "original one-shot error: {}",
-                        ErrorChain(error.as_ref())
-                    )),
+                    close_error.context(format!("original one-shot error: {}", ErrorChain(&error))),
                 )),
             }
         }
@@ -134,8 +196,10 @@ async fn finish_one_shot_result<T>(result: anyhow::Result<T>) -> anyhow::Result<
 fn ensure_auxiliary_identity(
     active: Option<(CaptureScope, usize, u32)>,
     observed: (CaptureScope, usize, u32),
-) -> anyhow::Result<()> {
-    anyhow::ensure!(active == Some(observed), "auxiliary audit changed source");
+) -> Result<(), OneShotError> {
+    if active != Some(observed) {
+        return Err(OneShotError::AuditChangedSource);
+    }
     Ok(())
 }
 
@@ -143,7 +207,7 @@ async fn flush_auxiliary_at_deadline<F, T>(
     sink: &AuxiliaryOutputSink,
     identity: (CaptureScope, usize, u32),
     progress: F,
-) -> (anyhow::Result<()>, Option<Option<T>>)
+) -> (Result<(), OneShotError>, Option<Option<T>>)
 where
     F: std::future::Future<Output = Option<T>>,
 {
@@ -152,10 +216,7 @@ where
         progress,
     )
     .await;
-    let flushed = match flushed {
-        Ok(()) => Ok(()),
-        Err(error) => Err(persistence_failure("deadline flush", error)),
-    };
+    let flushed = flushed.map_err(|error| persistence_failure("deadline flush", error));
     (flushed, item)
 }
 
@@ -165,7 +226,7 @@ pub async fn run_loop_to_text<M>(
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> anyhow::Result<String>
+) -> Result<String, OneShotError>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -180,7 +241,7 @@ async fn run_loop_to_text_inner<M>(
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> anyhow::Result<String>
+) -> Result<String, OneShotError>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -264,10 +325,10 @@ where
                 drop(stream);
                 let error = stream_failure(error, last_attempt_error.take());
                 let error = match flush_failure {
-                    Some(flush_error) => error.context(format!(
-                        "receiving the auxiliary item after a flush failed: {}",
-                        ErrorChain(flush_error.as_ref())
-                    )),
+                    Some(flush_error) => OneShotError::ReceivingAfterFlushFailed {
+                        flush: ErrorChain(&flush_error).to_string(),
+                        source: Box::new(error),
+                    },
                     None => error,
                 };
                 return Err(if active_auxiliary.is_some() {
@@ -281,10 +342,7 @@ where
             match item {
                 LoopStreamItem::ProviderAudit(observation) => {
                     if !auxiliary_enabled {
-                        anyhow::bail!(
-                            "received provider audit reached a nonpersistent auxiliary; \
-                         a canonical output authority is required"
-                        );
+                        return Err(OneShotError::AuditWithoutAuthority);
                     }
                     let identity = (
                         observation.capture_scope,
@@ -298,10 +356,7 @@ where
                 LoopStreamItem::SteeringBoundary { .. }
                 | LoopStreamItem::AuthoredInputReady { .. }
                 | LoopStreamItem::FinishOrIntake { .. } => {
-                    anyhow::bail!(
-                        "AuthoredInputReady reached the nonpersistent one-shot auxiliary; \
-                     authored-input persistence belongs to the owned StreamProcessor consumer"
-                    );
+                    return Err(OneShotError::AuthoredInputReachedAuxiliary);
                 }
                 LoopStreamItem::ProviderAttemptStarted {
                     turn,
@@ -316,15 +371,13 @@ where
                     }
                     .is_auxiliary_audit();
                     if auxiliary_enabled {
-                        anyhow::ensure!(
-                            auxiliary_sink.is_some(),
-                            "auxiliary output has no canonical sink"
-                        );
+                        if auxiliary_sink.is_none() {
+                            return Err(OneShotError::NoCanonicalSink);
+                        }
                         let identity = (capture_scope, turn, attempt);
-                        anyhow::ensure!(
-                            active_auxiliary.is_none(),
-                            "auxiliary attempt overlaps another source"
-                        );
+                        if active_auxiliary.is_some() {
+                            return Err(OneShotError::AttemptOverlapsSource);
+                        }
                         emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted).await?;
                         active_auxiliary = Some(identity);
                         last_auxiliary = Some(identity);
@@ -336,13 +389,10 @@ where
                     message,
                 } => {
                     if auxiliary_enabled {
-                        let identity = active_auxiliary.ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary turn has no active source")
-                        })?;
-                        anyhow::ensure!(
-                            (identity.1, identity.2) == (turn, attempt),
-                            "auxiliary ready changed source"
-                        );
+                        let identity = active_auxiliary.ok_or(OneShotError::TurnWithoutSource)?;
+                        if (identity.1, identity.2) != (turn, attempt) {
+                            return Err(OneShotError::ReadyChangedSource);
+                        }
                         let has_tools = matches!(&message, Message::Assistant { content, .. }
                             if content.iter().any(|block| matches!(block, AssistantContent::ToolCall(_))));
                         let accepted = crate::tool_policy::access_review::accepts_completion(
@@ -353,21 +403,17 @@ where
                         active_auxiliary = None;
                         // The producer can dispatch tools after this yield.
                         // Retain its final usage and audit before rejecting intent.
-                        anyhow::ensure!(
-                            accepted,
-                            "detached auxiliary request cannot call tools"
-                        );
+                        if !accepted {
+                            return Err(OneShotError::DetachedToolCall);
+                        }
                     }
                 }
                 LoopStreamItem::TurnRetracted { turn, attempt, .. } => {
                     if auxiliary_enabled {
-                        let identity = active_auxiliary.ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary retract has no active source")
-                        })?;
-                        anyhow::ensure!(
-                            (identity.1, identity.2) == (turn, attempt),
-                            "auxiliary retract changed source"
-                        );
+                        let identity = active_auxiliary.ok_or(OneShotError::RetractWithoutSource)?;
+                        if (identity.1, identity.2) != (turn, attempt) {
+                            return Err(OneShotError::RetractChangedSource);
+                        }
                         emit_auxiliary(identity, AuxiliaryOutputEvent::Retract).await?;
                         active_auxiliary = None;
                     } else {
@@ -378,7 +424,7 @@ where
                 LoopStreamItem::OutputObligationPending { reminder } => {
                     if auxiliary_enabled {
                         let identity = last_auxiliary
-                            .ok_or_else(|| anyhow::anyhow!("auxiliary reminder has no source"))?;
+                            .ok_or(OneShotError::ReminderWithoutSource)?;
                         emit_auxiliary(
                             identity,
                             AuxiliaryOutputEvent::OutputObligationPending { reminder },
@@ -397,10 +443,9 @@ where
                 } => {
                     if auxiliary_enabled {
                         if let Some(identity) = active_auxiliary {
-                            anyhow::ensure!(
-                                (identity.1, identity.2) == (turn, attempt),
-                                "auxiliary failure changed source"
-                            );
+                            if (identity.1, identity.2) != (turn, attempt) {
+                            return Err(OneShotError::FailureChangedSource);
+                        }
                             emit_auxiliary(
                                 identity,
                                 AuxiliaryOutputEvent::AttemptFailed { will_retry },
@@ -414,9 +459,7 @@ where
                 }
                 LoopStreamItem::Text(text) => {
                     if auxiliary_enabled {
-                        let identity = active_auxiliary.ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary text has no active source")
-                        })?;
+                        let identity = active_auxiliary.ok_or(OneShotError::TextWithoutSource)?;
                         emit_auxiliary(identity, AuxiliaryOutputEvent::TextDelta(text)).await?;
                     } else {
                         accumulator.push_text(&text);
@@ -424,9 +467,7 @@ where
                 }
                 LoopStreamItem::Reasoning(reasoning) => {
                     if auxiliary_enabled {
-                        let identity = active_auxiliary.ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary reasoning has no active source")
-                        })?;
+                        let identity = active_auxiliary.ok_or(OneShotError::ReasoningWithoutSource)?;
                         emit_auxiliary(identity, AuxiliaryOutputEvent::Reasoning(reasoning))
                             .await?;
                     } else {
@@ -435,9 +476,7 @@ where
                 }
                 LoopStreamItem::ReasoningDelta { id, reasoning } => {
                     if auxiliary_enabled {
-                        let identity = active_auxiliary.ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary reasoning delta has no active source")
-                        })?;
+                        let identity = active_auxiliary.ok_or(OneShotError::ReasoningDeltaWithoutSource)?;
                         emit_auxiliary(
                             identity,
                             AuxiliaryOutputEvent::ReasoningDelta {
@@ -452,9 +491,7 @@ where
                 }
                 LoopStreamItem::ToolCall { tool_call, .. } => {
                     if auxiliary_enabled {
-                        let identity = active_auxiliary.ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary tool call has no active source")
-                        })?;
+                        let identity = active_auxiliary.ok_or(OneShotError::ToolCallWithoutSource)?;
                         emit_auxiliary(identity, AuxiliaryOutputEvent::ToolCall(tool_call)).await?;
                     } else {
                         accumulator.push_tool_call(tool_call);
@@ -463,9 +500,7 @@ where
                 LoopStreamItem::ToolResult { .. } => {}
                 LoopStreamItem::Final { text } => {
                     if auxiliary_enabled {
-                        let identity = active_auxiliary.or(last_auxiliary).ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary final response has no source")
-                        })?;
+                        let identity = active_auxiliary.or(last_auxiliary).ok_or(OneShotError::FinalWithoutSource)?;
                         emit_auxiliary(identity, AuxiliaryOutputEvent::FinalText(text.clone()))
                             .await?;
                     } else {
@@ -474,7 +509,7 @@ where
                     final_text = Some(text);
                 }
             }
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, OneShotError>(())
         }
         .await;
         if let Some(error) = flush_failure {
@@ -484,10 +519,10 @@ where
                     close_received_auxiliary_after_error(error).await
                 }
                 Ok(()) => error,
-                Err(receipt_error) => receipt_error.context(format!(
-                    "retaining the received auxiliary item after a flush failed: {}",
-                    ErrorChain(error.as_ref())
-                )),
+                Err(receipt_error) => OneShotError::RetainingAfterFlushFailed {
+                    flush: ErrorChain(&error).to_string(),
+                    source: Box::new(receipt_error),
+                },
             });
         }
         processed?;
@@ -504,7 +539,7 @@ pub async fn run_loop_to_typed<M, T>(
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     mut config: LoopConfig,
-) -> anyhow::Result<T>
+) -> Result<T, OneShotError>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -512,11 +547,9 @@ where
 {
     config.structured_output = Some(StructuredOutputConfig::for_type::<T>());
     let raw = run_loop_to_text(model, prompt, history, tools, config).await?;
-    serde_json::from_str(&raw).map_err(|error| {
-        anyhow::anyhow!(
-            "decoding validated structured output as {} failed: {error}",
-            std::any::type_name::<T>()
-        )
+    serde_json::from_str(&raw).map_err(|error| OneShotError::StructuredDecode {
+        type_name: std::any::type_name::<T>(),
+        error,
     })
 }
 
@@ -608,9 +641,7 @@ mod tests {
             let error =
                 close_received_auxiliary_after_error(result.expect_err("mock flush fails")).await;
             assert!(error.to_string().contains("mock flush failure"));
-            assert!(error
-                .downcast_ref::<AuxiliaryPersistenceFailure>()
-                .is_some());
+            assert!(matches!(error, OneShotError::Persistence(_)));
             {
                 let events = captured
                     .lock()
@@ -740,33 +771,28 @@ mod tests {
                 reason: "provider failed".into(),
             }),
         );
-        assert!(provider.downcast_ref::<OneShotProviderFailure>().is_some());
-        assert!(
-            stream_failure(crate::rig_compat::loop_stream_error(stream_error()), None)
-                .downcast_ref::<OneShotProviderFailure>()
-                .is_none()
-        );
+        assert!(matches!(provider, OneShotError::ProviderFailure(_)));
+        assert!(!matches!(
+            stream_failure(crate::rig_compat::loop_stream_error(stream_error()), None),
+            OneShotError::ProviderFailure(_)
+        ));
         let no_visible = StreamingError::Completion(CompletionError::ProviderError(format!(
             "{}transport retry budget exhausted after 0 attempt(s)",
             super::super::NO_VISIBLE_OUTPUT_PREFIX
         )));
         let no_visible = stream_failure(crate::rig_compat::loop_stream_error(no_visible), None);
-        assert!(no_visible
-            .downcast_ref::<OneShotNoVisibleOutput>()
-            .is_some());
-        assert!(no_visible
-            .downcast_ref::<OneShotProviderFailure>()
-            .is_none());
-        assert!(
+        assert!(matches!(no_visible, OneShotError::NoVisibleOutput(_)));
+        assert!(!matches!(no_visible, OneShotError::ProviderFailure(_)));
+        assert!(matches!(
             missing_final_failure(Some(InferenceError::PermanentFailure {
                 reason: "provider failed".into(),
-            }))
-            .downcast_ref::<OneShotProviderFailure>()
-            .is_some()
-        );
-        assert!(missing_final_failure(None)
-            .downcast_ref::<OneShotProviderFailure>()
-            .is_none());
+            })),
+            OneShotError::ProviderFailure(_)
+        ));
+        assert!(!matches!(
+            missing_final_failure(None),
+            OneShotError::ProviderFailure(_)
+        ));
     }
 
     #[derive(Clone, Copy)]
@@ -851,19 +877,15 @@ mod tests {
                         .expect_err("cleanup failure must dominate identity error")
                 }
             };
-            assert!(error.downcast_ref::<OneShotProviderFailure>().is_none());
-            assert!(error.downcast_ref::<OneShotNoVisibleOutput>().is_none());
-            assert!(error
-                .downcast_ref::<AuxiliaryPersistenceFailure>()
-                .is_some());
-            assert!(ErrorChain(error.as_ref())
+            assert!(matches!(error, OneShotError::Persistence(_)));
+            assert!(ErrorChain(&error)
                 .to_string()
                 .contains("mock close failure"));
             assert_eq!(closes.load(Ordering::SeqCst), 1);
-            let error = finish_one_shot_result::<String>(Err(error.context("outer caller")))
+            let error = finish_one_shot_result::<String>(Err(error))
                 .await
-                .expect_err("wrapped persistence failure remains fatal");
-            assert!(error.is::<AuxiliaryPersistenceFailure>());
+                .expect_err("persistence failure remains fatal");
+            assert!(matches!(error, OneShotError::Persistence(_)));
             assert_eq!(closes.load(Ordering::SeqCst), 1);
         })
         .await;

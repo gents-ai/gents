@@ -88,6 +88,18 @@ pub(crate) enum RequestHelpersError {
     UnknownDurationSuffix { suffix: String },
     #[error("duration too large")]
     DurationTooLarge(#[source] std::num::TryFromIntError),
+    #[error("reading immutable signed submission receipt")]
+    ReadReceipt(#[source] gents::config_client::ConfigClientError),
+    #[error("request receipt query omitted rows")]
+    ReceiptRowsOmitted,
+    #[error("ambiguous scoped submission receipt")]
+    AmbiguousReceipt,
+    #[error("submission receipt crossed exact request scope")]
+    ReceiptCrossedScope,
+    #[error(transparent)]
+    ReceiptSignature(#[from] gents::RequestReceiptError),
+    #[error("submission receipt differs from prepared signed request")]
+    ReceiptDiffersFromPrepared,
 }
 
 pub(crate) fn ensure_local_request_signer(
@@ -602,9 +614,9 @@ pub(crate) async fn submit_prepared_agent_request_committed(
         .map_err(anyhow::Error::msg)?;
     access
         .write_with_receipt("cli.request.submit", &mutation, || async {
-            Ok(matching_prepared_receipt(graphql, &prepared.create)
-                .await?
-                .is_some())
+            matching_prepared_receipt(graphql, &prepared.create)
+                .await
+                .map(|row| row.is_some())
         })
         .await
         .with_context(|| {
@@ -652,23 +664,23 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest, Requ
 pub(crate) async fn matching_prepared_receipt(
     graphql: &GraphqlEndpoint,
     create: &AgentRequestCreate,
-) -> Result<Option<AgentRequestRow>> {
+) -> Result<Option<AgentRequestRow>, RequestHelpersError> {
     let Some(row) = read_submitted_receipt(graphql, create).await? else {
         return Ok(None);
     };
     let signature = bs58::encode(&create.admission.signature).into_string();
-    anyhow::ensure!(
-        row.admission_signer_did.as_deref() == Some(create.admission.signer_did.as_str())
-            && row.admission_signature.as_deref() == Some(signature.as_str()),
-        "submission receipt differs from prepared signed request"
-    );
+    if !(row.admission_signer_did.as_deref() == Some(create.admission.signer_did.as_str())
+        && row.admission_signature.as_deref() == Some(signature.as_str()))
+    {
+        return Err(RequestHelpersError::ReceiptDiffersFromPrepared);
+    }
     Ok(Some(row))
 }
 
 async fn read_submitted_receipt(
     graphql: &GraphqlEndpoint,
     create: &AgentRequestCreate,
-) -> Result<Option<AgentRequestRow>> {
+) -> Result<Option<AgentRequestRow>, RequestHelpersError> {
     let scope = gents::session::session_scope_filter(
         &create.node_did,
         &create.session_id,
@@ -688,24 +700,26 @@ async fn read_submitted_receipt(
         },
     )
     .await
-    .context("reading immutable signed submission receipt")?;
+    .map_err(RequestHelpersError::ReadReceipt)?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("request receipt query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
+        .ok_or(RequestHelpersError::ReceiptRowsOmitted)?;
+    if rows.len() > 1 {
+        return Err(RequestHelpersError::AmbiguousReceipt);
+    }
     let Some(value) = rows.first() else {
         return Ok(None);
     };
     let row: AgentRequestRow = serde_json::from_value(value.clone())?;
-    anyhow::ensure!(
-        row.request_id == create.request_id
-            && row.node_did.as_deref() == Some(create.node_did.as_str())
-            && row.session_id.as_deref() == Some(create.session_id.as_str())
-            && row.requester_did.as_deref()
-                == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
-        "submission receipt crossed exact request scope"
-    );
+    if !(row.request_id == create.request_id
+        && row.node_did.as_deref() == Some(create.node_did.as_str())
+        && row.session_id.as_deref() == Some(create.session_id.as_str())
+        && row.requester_did.as_deref()
+            == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()))
+    {
+        return Err(RequestHelpersError::ReceiptCrossedScope);
+    }
     gents::verify_request_receipt_signature(&row)?;
     Ok(Some(row))
 }

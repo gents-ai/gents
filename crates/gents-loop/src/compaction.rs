@@ -81,6 +81,23 @@ pub enum CompactionError {
     SplitExceedsRows,
     #[error("session compaction provider-prefix count overflow")]
     PrefixOverflow,
+    #[error(transparent)]
+    Reduction(#[from] ReductionError),
+    #[error(transparent)]
+    EstimateMessages(#[from] ProviderInputError),
+    #[error(transparent)]
+    BuildSummaryRequest(#[from] crate::error::LoopStreamError),
+    #[error("compaction_provider_failure: {deadline_context}{diagnostic}")]
+    GuidedProviderFailure {
+        deadline_context: &'static str,
+        diagnostic: String,
+    },
+    #[error("compaction_provider_failure: guided structured output failed: {guided}; non-guided JSON fallback failed: {fallback}")]
+    FallbackProviderFailure { guided: String, fallback: String },
+    #[error("guided compaction exhausted the request token budget")]
+    GuidedBudgetExhausted(#[source] crate::loop_stream::OneShotError),
+    #[error("non-guided compaction fallback exhausted the request token budget")]
+    FallbackBudgetExhausted(#[source] crate::loop_stream::OneShotError),
 }
 
 pub fn rolling_plan_is_valid(
@@ -609,7 +626,7 @@ where
             while consumed < old_messages.len() {
                 // A prior chunk may have consumed the shared request deadline
                 if deadline_elapsed(summary_config.deadline, self.now.as_ref()) {
-                    return Err(ReductionError::DeadlineElapsed.into());
+                    return Err(CompactionError::Reduction(ReductionError::DeadlineElapsed).into());
                 }
                 let remaining = &old_messages[consumed..];
                 let (chunk_len, chunk_input_tokens) = largest_fitting_summary_chunk(
@@ -639,13 +656,14 @@ where
                     self.now.clone(),
                 )
                 .await?;
-                consumed =
-                    consumed
-                        .checked_add(chunk_len)
-                        .ok_or(ReductionError::ExactCountOverflow {
+                consumed = consumed
+                    .checked_add(chunk_len)
+                    .ok_or(CompactionError::Reduction(
+                        ReductionError::ExactCountOverflow {
                             field: "messages_compacted",
                             value: old_messages.len(),
-                        })?;
+                        },
+                    ))?;
                 chunk_messages.push(chunk_len);
                 chunk_pair_closed.push(pair_closed);
                 chunk_can_dispatch.push(crate::provider_input::budget::can_dispatch(
@@ -673,7 +691,7 @@ where
                 .trim()
                 .to_string();
             if summary.is_empty() {
-                return Err(ReductionError::InvalidRollingPlan.into());
+                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
             }
             if !rolling_plan_is_valid(
                 old_messages.len(),
@@ -682,7 +700,7 @@ where
                 &chunk_can_dispatch,
                 consumed,
             ) {
-                return Err(ReductionError::InvalidRollingPlan.into());
+                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
             }
             let mut compacted_projection =
                 crate::prompt::compaction_summary_message(std::slice::from_ref(&summary))
@@ -693,16 +711,18 @@ where
                 .estimate_message_request(&compacted_projection)
                 .map_err(CompactionError::ProjectFinal)?;
             let prefix_len = old_messages.len();
-            u32::try_from(prefix_len).map_err(|_| ReductionError::ExactCountOverflow {
-                field: "messages_compacted",
-                value: prefix_len,
+            u32::try_from(prefix_len).map_err(|_| {
+                CompactionError::Reduction(ReductionError::ExactCountOverflow {
+                    field: "messages_compacted",
+                    value: prefix_len,
+                })
             })?;
             let outcome = apply_reduction_decision(
                 stripped_messages,
                 admission.decision(true, prefix_len, summary),
             );
             if matches!(outcome, ReductionOutcome::CannotFit) {
-                return Err(ReductionError::InvalidRollingPlan.into());
+                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
             }
             Ok(ReductionResult {
                 state: ReductionResultState::decided(outcome),
@@ -723,7 +743,7 @@ async fn largest_fitting_summary_chunk<M>(
     options: &ReductionOptions,
     absolute_start: usize,
     context_window: usize,
-) -> Result<(usize, usize)>
+) -> Result<(usize, usize), CompactionError>
 where
     M: ProviderModel,
 {
@@ -815,7 +835,7 @@ async fn summary_candidate_tokens<M>(
     prior_summary: Option<&str>,
     summary_config: &crate::loop_stream::LoopConfig,
     options: &ReductionOptions,
-) -> Result<usize>
+) -> Result<usize, CompactionError>
 where
     M: ProviderModel,
 {
@@ -834,12 +854,11 @@ where
         summary_config,
     )
     .await
-    .map_err(anyhow::Error::new)?;
+    .map_err(crate::rig_compat::loop_stream_error)?;
     summary_config
         .provider_input_counter
         .estimate_request(&request)
         .map_err(CompactionError::ProjectSummaryRequest)
-        .map_err(anyhow::Error::from)
 }
 
 async fn summarize_checkpoint<M>(
@@ -847,7 +866,7 @@ async fn summarize_checkpoint<M>(
     prepared_history: Vec<Message>,
     summary_config: crate::loop_stream::LoopConfig,
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
-) -> Result<ContinuationCheckpoint>
+) -> Result<ContinuationCheckpoint, CompactionError>
 where
     M: ProviderModel,
 {
@@ -869,7 +888,7 @@ where
                 && !deadline_elapsed(summary_config.deadline, now.as_ref()) =>
         {
             tracing::warn!(
-                error = %bounded_error_diagnostic(&ErrorChain(guided_error.as_ref()).to_string()),
+                error = %bounded_error_diagnostic(&ErrorChain(&guided_error).to_string()),
                 "guided compaction output exhausted recovery; trying one strict non-guided JSON fallback"
             );
             let mut fallback_config = summary_config;
@@ -894,53 +913,45 @@ where
             )
             .await
             .map_err(|fallback_error| {
-                if crate::loop_stream::aggregate_token_budget_exhaustion_message(
-                    fallback_error.as_ref(),
-                )
-                .is_some()
+                if crate::loop_stream::aggregate_token_budget_exhaustion_message(&fallback_error)
+                    .is_some()
                 {
-                    fallback_error.context(
-                        "non-guided compaction fallback exhausted the request token budget",
-                    )
+                    CompactionError::FallbackBudgetExhausted(fallback_error)
                 } else {
-                    anyhow::anyhow!(
-                        "compaction_provider_failure: guided structured output failed: {}; \
-                         non-guided JSON fallback failed: {}",
-                        bounded_error_diagnostic(&ErrorChain(guided_error.as_ref()).to_string()),
-                        bounded_error_diagnostic(&ErrorChain(fallback_error.as_ref()).to_string())
-                    )
+                    CompactionError::FallbackProviderFailure {
+                        guided: bounded_error_diagnostic(&ErrorChain(&guided_error).to_string()),
+                        fallback: bounded_error_diagnostic(
+                            &ErrorChain(&fallback_error).to_string(),
+                        ),
+                    }
                 }
             })?;
             parse_fallback_checkpoint(&raw).map_err(|fallback_error| {
-                anyhow::anyhow!(
-                    "compaction_provider_failure: guided structured output failed: {}; \
-                     non-guided JSON fallback failed: {}",
-                    bounded_error_diagnostic(&ErrorChain(guided_error.as_ref()).to_string()),
-                    bounded_error_diagnostic(&fallback_error)
-                )
+                CompactionError::FallbackProviderFailure {
+                    guided: bounded_error_diagnostic(&ErrorChain(&guided_error).to_string()),
+                    fallback: bounded_error_diagnostic(&fallback_error),
+                }
             })
         }
         Err(error) => {
-            if crate::loop_stream::aggregate_token_budget_exhaustion_message(error.as_ref())
-                .is_some()
-            {
-                return Err(error.context("guided compaction exhausted the request token budget"));
+            if crate::loop_stream::aggregate_token_budget_exhaustion_message(&error).is_some() {
+                return Err(CompactionError::GuidedBudgetExhausted(error));
             }
             let deadline_context = if deadline_elapsed(summary_config.deadline, now.as_ref()) {
                 "compaction deadline elapsed after "
             } else {
                 ""
             };
-            Err(anyhow::anyhow!(
-                "compaction_provider_failure: {deadline_context}{}",
-                bounded_error_diagnostic(&ErrorChain(error.as_ref()).to_string())
-            ))
+            Err(CompactionError::GuidedProviderFailure {
+                deadline_context,
+                diagnostic: bounded_error_diagnostic(&ErrorChain(&error).to_string()),
+            })
         }
     }
 }
 
-fn is_guided_output_failure(error: &anyhow::Error) -> bool {
-    let diagnostic = ErrorChain(error.as_ref()).to_string();
+fn is_guided_output_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let diagnostic = ErrorChain(error).to_string();
     diagnostic.contains("structured-output validation failed")
         || diagnostic.contains("completion produced no visible output")
 }
@@ -1095,7 +1106,7 @@ pub fn split_for_summary(
     provider: crate::backend_provider::BackendProviderKind,
     wire: crate::openai_wire::OpenAiWireApi,
     model: &str,
-) -> Result<(Vec<Message>, Vec<Message>)> {
+) -> Result<(Vec<Message>, Vec<Message>), CompactionError> {
     let counter = crate::provider_input::ProviderInputCounter::new(provider, wire, model);
     history::split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)
 }

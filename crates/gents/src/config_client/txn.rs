@@ -26,6 +26,19 @@ use crate::drop_cleanup::DropCleanup;
 
 type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
+/// Failure of a stable-id receipt write: the write itself, or the caller's
+/// receipt read after an ambiguous attempt.
+#[derive(Debug, thiserror::Error)]
+pub enum ReceiptWriteError<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    #[error(transparent)]
+    Write(#[from] ConfigClientError),
+    #[error("checking stable write receipt")]
+    Receipt(#[source] E),
+}
+
 enum TxnBackend<'a> {
     Http {
         endpoint: &'a GraphqlEndpoint,
@@ -2039,16 +2052,17 @@ fn finish_auto_commit<T>(
     result
 }
 
-async fn receipt_with_retry<F, Fut>(receipt: &F) -> anyhow::Result<bool>
+async fn receipt_with_retry<F, Fut, E>(receipt: &F) -> Result<bool, E>
 where
     F: Fn() -> Fut + Send + Sync,
-    Fut: Future<Output = anyhow::Result<bool>> + Send,
+    Fut: Future<Output = Result<bool, E>> + Send,
+    E: std::error::Error + Send + Sync + 'static,
 {
     for retry_index in 0..=retry::RECEIPT_WRITE_MAX_RETRIES {
         match receipt().await {
             Ok(present) => return Ok(present),
             Err(error)
-                if retry::is_retryable_ambiguous_write(error.as_ref())
+                if retry::is_retryable_ambiguous_write(&error)
                     && retry_index < retry::RECEIPT_WRITE_MAX_RETRIES =>
             {
                 tokio::time::sleep(retry::receipt_write_backoff(retry_index)).await;
@@ -2582,22 +2596,23 @@ impl ConfigAccess {
     /// failure is ambiguous, so the owner checks the caller's stable receipt
     /// before it may repost, and replays only after a successful receipt read
     /// confirms absence. Embedded access uses [`Self::write`].
-    pub async fn write_with_receipt<F, Fut>(
+    pub async fn write_with_receipt<F, Fut, E>(
         &self,
         operation: &'static str,
         mutation: &str,
         receipt: F,
-    ) -> anyhow::Result<()>
+    ) -> Result<(), ReceiptWriteError<E>>
     where
         F: Fn() -> Fut + Send + Sync,
-        Fut: Future<Output = anyhow::Result<bool>> + Send,
+        Fut: Future<Output = Result<bool, E>> + Send,
+        E: std::error::Error + Send + Sync + 'static,
     {
         graphql::ensure_mutation_document(mutation)?;
         let Self::Graphql(endpoint) = self else {
             self.write(operation, mutation).await?;
             return Ok(());
         };
-        let operation = WriteOperation::new(operation)?;
+        let operation = WriteOperation::new(operation).map_err(ConfigClientError::from)?;
         let max_attempts = retry::RECEIPT_WRITE_MAX_RETRIES + 1;
 
         for attempt in 1..=max_attempts {
@@ -2606,7 +2621,8 @@ impl ConfigAccess {
                 backend: WriteBackend::Http,
                 mode: WriteMode::AutoCommit,
                 retry_owner: RetryOwner::GentsReceipt,
-                ordinal: WriteAttemptOrdinal::new(attempt, max_attempts)?,
+                ordinal: WriteAttemptOrdinal::new(attempt, max_attempts)
+                    .map_err(ConfigClientError::from)?,
                 started: Instant::now(),
                 state: StdMutex::new(AttemptTelemetryState::default()),
                 cancelled_rollback: RollbackStatus::NotNeeded,
@@ -2690,7 +2706,7 @@ impl ConfigAccess {
                         },
                         ReceiptRecovery::StableIdReadFailed,
                     );
-                    return Err(receipt_error.context("checking stable write receipt"));
+                    return Err(ReceiptWriteError::Receipt(receipt_error));
                 }
             }
         }
@@ -3164,9 +3180,9 @@ mod variable_tests {
             inserted.data.unwrap()["MutationVariableProbe"],
             json!([{"label":"inserted","payload":{"empty":[]}}])
         );
-        let aborted: anyhow::Result<()> = ConfigAccess::transact_local_write(&node, None, "variable_probe_rollback", |txn| Box::pin(async move {
+        let aborted: Result<(), ConfigClientError> = ConfigAccess::transact_local_write(&node, None, "variable_probe_rollback", |txn| Box::pin(async move {
             txn.execute_with_variables("mutation($input: MutationVariableProbeMutationInputArg!) { update_MutationVariableProbe(filter:{key:{_eq:\"one\"}},input:$input) {_docID} }", &json!({"input":{"label":"must rollback","payload":{"lost":[]}}})).await?;
-            anyhow::bail!("intentional rollback")
+            Err(ConfigClientError::InjectedRollbackFailure)
         })).await;
         assert!(aborted.is_err());
         let read = node

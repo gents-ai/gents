@@ -2,16 +2,75 @@ use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{ensure, Context};
 
 use crate::pack::is_valid_pack_name;
+use crate::pack_archive::format::PackFormatError;
 use crate::pack_archive::{
     digest_hex, peek_header, read_pack, Bounds, PackArchive, PackHeader, EXTENSION,
 };
 
+type Result<T, E = PackStoreError> = std::result::Result<T, E>;
+
 const NAME_INDEX_DIR_NAME: &str = "by-name";
 
 const UNPACKED_HEADER: &str = ".pack-header.json";
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackStoreError {
+    #[error(transparent)]
+    Format(#[from] PackFormatError),
+    #[error("a name index entry has no directory")]
+    IndexEntryNoDirectory,
+    #[error("creating the pack name index at {}", path.display())]
+    CreateIndexDir {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("staging a pack name index entry in {}", path.display())]
+    StageIndexEntry {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("writing a pack name index entry")]
+    WriteIndexEntry(#[source] io::Error),
+    #[error("syncing a pack name index entry")]
+    SyncIndexEntry(#[source] io::Error),
+    #[error("storing the pack name index entry at {}", path.display())]
+    StoreIndexEntry {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("reading {}", path.display())]
+    ReadPath {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("opening {}", path.display())]
+    OpenPath {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("removing {}", path.display())]
+    RemovePath {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("{} is not a regular file", path.display())]
+    NotRegularFile { path: PathBuf },
+    #[error("reading the unpacked {path}")]
+    ReadUnpacked {
+        path: String,
+        #[source]
+        source: Box<PackStoreError>,
+    },
+}
 
 #[derive(Debug, Clone)]
 pub struct PackStore {
@@ -84,6 +143,13 @@ fn decode_version(file_name: &str) -> Option<String> {
     is_valid_index_version(&out).then_some(out)
 }
 
+fn read_directory(path: &Path) -> Result<std::fs::ReadDir> {
+    std::fs::read_dir(path).map_err(|source| PackStoreError::ReadPath {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 impl PackStore {
     pub fn new(home: &Path) -> Self {
         Self {
@@ -104,7 +170,7 @@ impl PackStore {
         Ok(self.path(digest)?.is_file())
     }
 
-    pub fn import(&self, input: impl Read, expected: Option<&str>) -> Result<StoredPack> {
+    pub fn import(&self, input: impl Read, expected: Option<&str>) -> anyhow::Result<StoredPack> {
         self.import_accepting(input, expected, |_| Ok(()))
     }
 
@@ -112,8 +178,8 @@ impl PackStore {
         &self,
         input: impl Read,
         expected: Option<&str>,
-        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> Result<()>,
-    ) -> Result<StoredPack> {
+        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> anyhow::Result<()>,
+    ) -> anyhow::Result<StoredPack> {
         if let Some(expected) = expected {
             digest_hex(expected)?;
         }
@@ -160,11 +226,15 @@ impl PackStore {
         })
     }
 
-    pub fn import_file(&self, file: &Path, expected: Option<&str>) -> Result<StoredPack> {
+    pub fn import_file(&self, file: &Path, expected: Option<&str>) -> anyhow::Result<StoredPack> {
         self.import_file_accepting(file, expected, |_| Ok(()))
     }
 
-    pub fn import_file_no_follow(&self, file: &Path, expected: Option<&str>) -> Result<StoredPack> {
+    pub fn import_file_no_follow(
+        &self,
+        file: &Path,
+        expected: Option<&str>,
+    ) -> anyhow::Result<StoredPack> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -193,15 +263,15 @@ impl PackStore {
         &self,
         file: &Path,
         expected: Option<&str>,
-        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> Result<()>,
-    ) -> Result<StoredPack> {
+        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> anyhow::Result<()>,
+    ) -> anyhow::Result<StoredPack> {
         let input =
             std::fs::File::open(file).with_context(|| format!("opening {}", file.display()))?;
         self.import_accepting(io::BufReader::new(input), expected, accept)
             .with_context(|| format!("{} is not a valid pack", file.display()))
     }
 
-    pub fn open(&self, digest: &str) -> Result<PackArchive> {
+    pub fn open(&self, digest: &str) -> anyhow::Result<PackArchive> {
         let hex = digest_hex(digest)?;
         let unpacked = self.unpacked_root().join(hex);
         if !unpacked.is_dir() {
@@ -262,9 +332,13 @@ impl PackStore {
     ) -> Result<BTreeMap<String, Vec<u8>>> {
         crate::pack::declared_paths(manifest)
             .into_iter()
-            .map(|path| {
-                let bytes = no_follow_read(&unpacked.join(&path))
-                    .with_context(|| format!("reading the unpacked {path}"))?;
+            .map(|path| -> Result<(String, Vec<u8>)> {
+                let bytes = no_follow_read(&unpacked.join(&path)).map_err(|source| {
+                    PackStoreError::ReadUnpacked {
+                        path: path.clone(),
+                        source: Box::new(source),
+                    }
+                })?;
                 Ok((path, bytes))
             })
             .collect()
@@ -304,25 +378,30 @@ impl PackStore {
         }
         let dir = target
             .parent()
-            .context("a name index entry has no directory")?;
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("creating the pack name index at {}", dir.display()))?;
+            .ok_or(PackStoreError::IndexEntryNoDirectory)?;
+        std::fs::create_dir_all(dir).map_err(|source| PackStoreError::CreateIndexDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
         let mut staged = tempfile::Builder::new()
             .prefix(".staging-")
             .tempfile_in(dir)
-            .with_context(|| format!("staging a pack name index entry in {}", dir.display()))?;
+            .map_err(|source| PackStoreError::StageIndexEntry {
+                path: dir.to_path_buf(),
+                source,
+            })?;
         staged
             .write_all(header.digest.as_bytes())
-            .context("writing a pack name index entry")?;
+            .map_err(PackStoreError::WriteIndexEntry)?;
         staged
             .as_file()
             .sync_all()
-            .context("syncing a pack name index entry")?;
+            .map_err(PackStoreError::SyncIndexEntry)?;
         staged
             .persist(&target)
-            .map_err(|error| error.error)
-            .with_context(|| {
-                format!("storing the pack name index entry at {}", target.display())
+            .map_err(|error| PackStoreError::StoreIndexEntry {
+                path: target.clone(),
+                source: error.error,
             })?;
         Ok(())
     }
@@ -331,20 +410,30 @@ impl PackStore {
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error).with_context(|| format!("reading {}", dir.display())),
+            Err(source) => {
+                return Err(PackStoreError::ReadPath {
+                    path: dir.to_path_buf(),
+                    source,
+                })
+            }
         };
         let mut versions = Vec::new();
         for entry in entries {
-            let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+            let entry = entry.map_err(|source| PackStoreError::ReadPath {
+                path: dir.to_path_buf(),
+                source,
+            })?;
             let Some(version) = entry.file_name().to_str().and_then(decode_version) else {
                 continue;
             };
             let digest = match std::fs::read_to_string(entry.path()) {
                 Ok(digest) => digest.trim().to_owned(),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("reading {}", entry.path().display()))
+                Err(source) => {
+                    return Err(PackStoreError::ReadPath {
+                        path: entry.path(),
+                        source,
+                    })
                 }
             };
             let present = match self.contains(&digest) {
@@ -392,7 +481,7 @@ impl PackStore {
         let digest = match std::fs::read_to_string(&path) {
             Ok(digest) => digest.trim().to_owned(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+            Err(source) => return Err(PackStoreError::ReadPath { path, source }),
         };
         let present = match self.contains(&digest) {
             Ok(present) => present,
@@ -416,12 +505,14 @@ impl PackStore {
         let namespace_entries = match std::fs::read_dir(&root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error).with_context(|| format!("reading {}", root.display())),
+            Err(source) => return Err(PackStoreError::ReadPath { path: root, source }),
         };
         let mut names = Vec::new();
         for namespace_entry in namespace_entries {
-            let namespace_entry =
-                namespace_entry.with_context(|| format!("reading {}", root.display()))?;
+            let namespace_entry = namespace_entry.map_err(|source| PackStoreError::ReadPath {
+                path: root.clone(),
+                source,
+            })?;
             if !namespace_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                 continue;
             }
@@ -429,11 +520,11 @@ impl PackStore {
                 continue;
             };
             let namespace_dir = namespace_entry.path();
-            let name_entries = std::fs::read_dir(&namespace_dir)
-                .with_context(|| format!("reading {}", namespace_dir.display()))?;
-            for name_entry in name_entries {
-                let name_entry =
-                    name_entry.with_context(|| format!("reading {}", namespace_dir.display()))?;
+            for name_entry in read_directory(&namespace_dir)? {
+                let name_entry = name_entry.map_err(|source| PackStoreError::ReadPath {
+                    path: namespace_dir.clone(),
+                    source,
+                })?;
                 if !name_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                     continue;
                 }
@@ -496,7 +587,12 @@ impl PackStore {
         let recorded = match std::fs::read_to_string(path) {
             Ok(recorded) => recorded,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+            Err(source) => {
+                return Err(PackStoreError::ReadPath {
+                    path: path.to_path_buf(),
+                    source,
+                })
+            }
         };
         if recorded.trim() != digest {
             return Ok(());
@@ -504,7 +600,10 @@ impl PackStore {
         match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error).with_context(|| format!("removing {}", path.display())),
+            Err(source) => Err(PackStoreError::RemovePath {
+                path: path.to_path_buf(),
+                source,
+            }),
         }
     }
 
@@ -513,29 +612,34 @@ impl PackStore {
         let namespace_entries = match std::fs::read_dir(&root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error).with_context(|| format!("reading {}", root.display())),
+            Err(source) => return Err(PackStoreError::ReadPath { path: root, source }),
         };
         for namespace_entry in namespace_entries {
             let namespace_dir = namespace_entry
-                .with_context(|| format!("reading {}", root.display()))?
+                .map_err(|source| PackStoreError::ReadPath {
+                    path: root.clone(),
+                    source,
+                })?
                 .path();
             if !namespace_dir.is_dir() {
                 continue;
             }
-            for name_entry in std::fs::read_dir(&namespace_dir)
-                .with_context(|| format!("reading {}", namespace_dir.display()))?
-            {
+            for name_entry in read_directory(&namespace_dir)? {
                 let name_dir = name_entry
-                    .with_context(|| format!("reading {}", namespace_dir.display()))?
+                    .map_err(|source| PackStoreError::ReadPath {
+                        path: namespace_dir.clone(),
+                        source,
+                    })?
                     .path();
                 if !name_dir.is_dir() {
                     continue;
                 }
-                for version_entry in std::fs::read_dir(&name_dir)
-                    .with_context(|| format!("reading {}", name_dir.display()))?
-                {
+                for version_entry in read_directory(&name_dir)? {
                     let path = version_entry
-                        .with_context(|| format!("reading {}", name_dir.display()))?
+                        .map_err(|source| PackStoreError::ReadPath {
+                            path: name_dir.clone(),
+                            source,
+                        })?
                         .path();
                     Self::remove_entry_if_records(&path, digest)?;
                 }
@@ -544,7 +648,7 @@ impl PackStore {
         Ok(())
     }
 
-    fn unpack(&self, digest: &str, target: &Path) -> Result<()> {
+    fn unpack(&self, digest: &str, target: &Path) -> anyhow::Result<()> {
         let path = self.path(digest)?;
         let file = std::fs::File::open(&path).with_context(|| {
             format!(
@@ -615,8 +719,11 @@ impl PackStore {
         match std::fs::remove_file(&archive) {
             Ok(()) => released = true,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("removing {}", archive.display()))
+            Err(source) => {
+                return Err(PackStoreError::RemovePath {
+                    path: archive,
+                    source,
+                })
             }
         }
         let retains_runs = unpacked
@@ -627,8 +734,11 @@ impl PackStore {
             match std::fs::remove_dir_all(&unpacked) {
                 Ok(()) => released = true,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(error).with_context(|| format!("removing {}", unpacked.display()))
+                Err(source) => {
+                    return Err(PackStoreError::RemovePath {
+                        path: unpacked,
+                        source,
+                    })
                 }
             }
         }
@@ -643,7 +753,7 @@ impl PackStore {
         Ok(released)
     }
 
-    pub fn verify(&self, digest: &str) -> Result<PackHeader> {
+    pub fn verify(&self, digest: &str) -> anyhow::Result<PackHeader> {
         let path = self.path(digest)?;
         let file = std::fs::File::open(&path).with_context(|| {
             format!(
@@ -671,22 +781,34 @@ pub(crate) fn no_follow_read(path: &Path) -> Result<Vec<u8>> {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)
-            .with_context(|| format!("opening {}", path.display()))?;
+            .map_err(|source| PackStoreError::OpenPath {
+                path: path.to_path_buf(),
+                source,
+            })?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
-            .with_context(|| format!("reading {}", path.display()))?;
+            .map_err(|source| PackStoreError::ReadPath {
+                path: path.to_path_buf(),
+                source,
+            })?;
         Ok(bytes)
     }
     #[cfg(not(unix))]
     {
-        let metadata = std::fs::symlink_metadata(path)
-            .with_context(|| format!("opening {}", path.display()))?;
-        ensure!(
-            metadata.file_type().is_file(),
-            "{} is not a regular file",
-            path.display()
-        );
-        std::fs::read(path).with_context(|| format!("reading {}", path.display()))
+        let metadata =
+            std::fs::symlink_metadata(path).map_err(|source| PackStoreError::OpenPath {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if !metadata.file_type().is_file() {
+            return Err(PackStoreError::NotRegularFile {
+                path: path.to_path_buf(),
+            });
+        }
+        std::fs::read(path).map_err(|source| PackStoreError::ReadPath {
+            path: path.to_path_buf(),
+            source,
+        })
     }
 }
 

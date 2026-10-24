@@ -179,7 +179,9 @@ pub fn apply_text(closure: &Closure, target: &Target, text: &str) -> Result<Clos
 }
 
 pub fn target_digest(closure: &Closure, target: &Target) -> anyhow::Result<String> {
-    desired_state_document_digest(&closure[target_index(closure, target)?].1)
+    Ok(desired_state_document_digest(
+        &closure[target_index(closure, target)?].1,
+    )?)
 }
 
 pub fn expectations(frozen: &[FrozenDocument]) -> Vec<DesiredStateExpectation> {
@@ -200,12 +202,12 @@ pub fn target_plan(
     frozen: &[FrozenDocument],
 ) -> anyhow::Result<DesiredStateApplyPlan> {
     let (collection, value) = &closure[target_index(closure, target)?];
-    DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+    Ok(DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: *collection,
         add: value.clone(),
         update: value.clone(),
     }])?
-    .with_expected(expectations(frozen))
+    .with_expected(expectations(frozen))?)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

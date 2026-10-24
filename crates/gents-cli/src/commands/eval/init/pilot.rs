@@ -561,7 +561,7 @@ mod tests {
         let before = fixture.ctx.access.execute(query).await.unwrap();
         let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
         assert!(
-            gents::config_client::stale_expectation(&error).is_some(),
+            gents::config_client::stale_expectation(error.as_ref()).is_some(),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -585,7 +585,7 @@ mod tests {
         assert_ne!(left.is_ok(), right.is_ok());
         let error = left.err().or_else(|| right.err()).unwrap();
         assert!(
-            gents::config_client::stale_expectation(&error).is_some(),
+            gents::config_client::stale_expectation(error.as_ref()).is_some(),
             "{}",
             ErrorChain(error.as_ref())
         );

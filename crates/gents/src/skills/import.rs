@@ -3,8 +3,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
-
 type Result<T, E = SkillsError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +29,24 @@ pub enum SkillsError {
     },
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("skill_id must not be blank")]
+    SkillIdBlank,
+    #[error("expected a skill directory or a SKILL.md file")]
+    NotSkillSource,
+    #[error("SKILL.md must contain instructions after its frontmatter")]
+    MissingInstructions,
+    #[error("SKILL.md has no parent directory")]
+    NoParentDirectory,
+    #[error("invalid metadata in {}", path.display())]
+    InvalidMetadata {
+        path: PathBuf,
+        #[source]
+        source: serde_yaml::Error,
+    },
+    #[error("checking agents/openai.yaml")]
+    CheckingMetadata(#[source] std::io::Error),
+    #[error("skill source directory must be UTF-8")]
+    SourceDirectoryNotUtf8,
 }
 
 use crate::document_config::SkillDocument;
@@ -100,35 +116,39 @@ pub fn load_skill_source(
     node_did: &str,
     resolve: impl Fn(&Path) -> anyhow::Result<PathBuf>,
 ) -> anyhow::Result<SkillDocument> {
-    anyhow::ensure!(!skill_id.trim().is_empty(), "skill_id must not be blank");
+    if skill_id.trim().is_empty() {
+        return Err(SkillsError::SkillIdBlank.into());
+    }
     let source = resolve(source)?;
     let file = if source.is_dir() {
         resolve(&source.join("SKILL.md"))?
     } else {
-        anyhow::ensure!(
-            source.file_name().is_some_and(|n| n == "SKILL.md"),
-            "expected a skill directory or a SKILL.md file"
-        );
+        if source.file_name().is_none_or(|n| n != "SKILL.md") {
+            return Err(SkillsError::NotSkillSource.into());
+        }
         source
     };
     let contents = read_source(&file)?;
     let (frontmatter, body) = parse_skill_md(&contents)?;
-    anyhow::ensure!(
-        !body.is_empty(),
-        "SKILL.md must contain instructions after its frontmatter"
-    );
+    if body.is_empty() {
+        return Err(SkillsError::MissingInstructions.into());
+    }
     let metadata_path = file
         .parent()
-        .context("SKILL.md has no parent directory")?
+        .ok_or(SkillsError::NoParentDirectory)?
         .join("agents/openai.yaml");
     let metadata = match std::fs::symlink_metadata(&metadata_path) {
         Ok(_) => {
             let path = resolve(&metadata_path)?;
-            serde_yaml::from_str::<OpenAiYaml>(&read_source(&path)?)
-                .with_context(|| format!("invalid metadata in {}", path.display()))?
+            serde_yaml::from_str::<OpenAiYaml>(&read_source(&path)?).map_err(|source| {
+                SkillsError::InvalidMetadata {
+                    path: path.clone(),
+                    source,
+                }
+            })?
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => OpenAiYaml::default(),
-        Err(error) => return Err(error).context("checking agents/openai.yaml"),
+        Err(error) => return Err(SkillsError::CheckingMetadata(error).into()),
     };
     let tool_refs = metadata
         .dependencies
@@ -160,9 +180,9 @@ pub fn load_skill_source(
         instructions: Some(body),
         source_directory: Some(
             file.parent()
-                .context("SKILL.md has no parent directory")?
+                .ok_or(SkillsError::NoParentDirectory)?
                 .to_str()
-                .context("skill source directory must be UTF-8")?
+                .ok_or(SkillsError::SourceDirectoryNotUtf8)?
                 .to_owned(),
         ),
         tool_refs,

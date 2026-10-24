@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
+use super::error::DocumentConfigError;
 use super::serde_helpers::deserialize_optional_string_vec;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,26 +58,27 @@ pub struct EthToolDocument {
 }
 
 impl EthToolDocument {
-    pub fn validate(&self) -> Result<()> {
-        anyhow::ensure!(!self.tool_id.trim().is_empty(), "EthTool requires tool_id");
-        anyhow::ensure!(
-            !self.node_did.trim().is_empty(),
-            "EthTool requires node_did"
-        );
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
+        if self.tool_id.trim().is_empty() {
+            return Err(DocumentConfigError::EthToolIdBlank);
+        }
+        if self.node_did.trim().is_empty() {
+            return Err(DocumentConfigError::EthToolNodeBlank);
+        }
         if let Some(chain_id) = self.chain_id {
-            anyhow::ensure!(chain_id > 0, "EthTool chain_id must be positive");
+            if chain_id <= 0 {
+                return Err(DocumentConfigError::EthToolChainIdNotPositive);
+            }
         }
         if let Some(rpc_url) = &self.rpc_url {
-            anyhow::ensure!(
-                !rpc_url.trim().is_empty(),
-                "EthTool rpc_url must not be blank"
-            );
+            if rpc_url.trim().is_empty() {
+                return Err(DocumentConfigError::EthToolRpcUrlBlank);
+            }
         }
         if let Some(binding_id) = &self.key_binding_id {
-            anyhow::ensure!(
-                !binding_id.trim().is_empty(),
-                "EthTool key_binding_id must not be blank"
-            );
+            if binding_id.trim().is_empty() {
+                return Err(DocumentConfigError::EthToolKeyBindingBlank);
+            }
         }
         crate::eth::HttpEthRpc::configured_timeout(self.rpc_timeout_secs)?;
         let methods =
@@ -87,12 +89,12 @@ impl EthToolDocument {
             self.key_binding_id.as_deref(),
             self.chain_id.map(|value| value as u64),
         )?;
-        if !methods.is_empty() || !calls.is_empty() {
-            anyhow::ensure!(
-                self.rpc_url.is_some() && self.chain_id.is_some(),
-                "EthTool {} advertises tools but has no rpc_url or chain_id",
-                self.tool_id
-            );
+        if (!methods.is_empty() || !calls.is_empty())
+            && (self.rpc_url.is_none() || self.chain_id.is_none())
+        {
+            return Err(DocumentConfigError::EthToolAdvertisesWithoutRpc {
+                tool_id: self.tool_id.clone(),
+            });
         }
         Ok(())
     }
@@ -118,10 +120,9 @@ pub(crate) async fn list_eth_tool_records(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<(String, EthToolDocument)>> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "Ethereum tool owner is required"
-    );
+    if node_did.trim().is_empty() {
+        return Err(DocumentConfigError::EthToolOwnerRequired.into());
+    }
     let owner = escape_graphql_string(node_did);
     let query = format!(
         "{{ EthTool(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{_docID {}}} }}",
@@ -135,10 +136,9 @@ pub(crate) async fn list_eth_tool_records(
 }
 
 pub fn eth_tool_by_id_query(node_did: &str, tool_id: &str) -> Result<String> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty() && !tool_id.trim().is_empty(),
-        "Ethereum owner and tool ID are required"
-    );
+    if node_did.trim().is_empty() || tool_id.trim().is_empty() {
+        return Err(DocumentConfigError::EthToolOwnerAndIdRequired.into());
+    }
     let owner = escape_graphql_string(node_did);
     let id = escape_graphql_string(tool_id);
     Ok(format!(

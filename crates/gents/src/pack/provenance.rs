@@ -90,7 +90,7 @@ pub(crate) async fn prepare_pack_plan_in_txn(
         }
         prepared.push(document);
     }
-    crate::config_client::DesiredStateApplyPlan::new(prepared)
+    Ok(crate::config_client::DesiredStateApplyPlan::new(prepared)?)
 }
 
 pub fn pack_document_digests(
@@ -118,7 +118,9 @@ pub(crate) fn pack_artifact_document_digest(value: &serde_json::Value) -> Result
         .as_object_mut()
         .context("pack document must be an object")?
         .remove("tags");
-    crate::config_client::desired_state_document_digest(&canonical)
+    Ok(crate::config_client::desired_state_document_digest(
+        &canonical,
+    )?)
 }
 
 fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Result<()> {

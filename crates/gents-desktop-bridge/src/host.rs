@@ -237,7 +237,7 @@ impl ClientHost {
                     false,
                 )
                 .await
-                .map_err(backend_error)?;
+                .map_err(|error| backend_error(error.into()))?;
                 if self.core.refresh_store().await.is_err() {
                     tracing::warn!("Account disconnected; its client observation is unavailable");
                 }

@@ -16,7 +16,8 @@ pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
 /// transaction owner classifies conflicts and storage failures by type. A
 /// caller error that wraps [`ConfigClientError`] or [`GraphqlResponseError`]
 /// returns it here; an `#[error(transparent)]` wrapper converted into
-/// `anyhow::Error` hides it from the source-chain search below.
+/// `anyhow::Error` hides it from the source-chain search below unless
+/// `access_error_in` names that wrapper.
 pub trait TransactionFailure {
     fn config_client_error(&self) -> Option<&ConfigClientError>;
 }
@@ -52,11 +53,21 @@ impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
 fn access_error_in<'a>(
     cause: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a ConfigClientError> {
-    cause.downcast_ref::<ConfigClientError>().or_else(|| {
+    fn wrapped<'a, E>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a ConfigClientError>
+    where
+        E: TransactionFailure + std::error::Error + 'static,
+    {
         cause
-            .downcast_ref::<GraphqlResponseError>()
+            .downcast_ref::<E>()
             .and_then(TransactionFailure::config_client_error)
-    })
+    }
+    cause
+        .downcast_ref::<ConfigClientError>()
+        .or_else(|| wrapped::<GraphqlResponseError>(cause))
+        .or_else(|| wrapped::<crate::document_config::DocumentConfigError>(cause))
+        .or_else(|| wrapped::<crate::oauth_credential::OAuthCredentialError>(cause))
+        .or_else(|| wrapped::<crate::usage_observation::UsageObservationError>(cause))
+        .or_else(|| wrapped::<crate::rendered_request::RenderedRequestError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

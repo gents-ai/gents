@@ -1,8 +1,8 @@
-use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use super::error::DefraQueryFailure;
 use super::MAX_FIELD_STRING_BYTES;
 
 #[derive(Debug, Deserialize)]
@@ -16,45 +16,37 @@ pub(super) struct FieldPage {
 }
 
 impl FieldPage {
-    pub fn validate(&self, fields: &[String]) -> Result<()> {
-        ensure!(
-            !self.doc_id.trim().is_empty(),
-            "field_page.doc_id must be nonempty"
-        );
-        ensure!(
-            fields.contains(&self.field),
-            "field_page.field must be in the selected projection"
-        );
-        ensure!(
-            self.offset_bytes == 0 || self.expected_hash.is_some(),
-            "field_page.expected_hash is required for continuation"
-        );
+    pub fn validate(&self, fields: &[String]) -> Result<(), DefraQueryFailure> {
+        if self.doc_id.trim().is_empty() {
+            return Err(DefraQueryFailure::FieldPageDocIdEmpty);
+        }
+        if !fields.contains(&self.field) {
+            return Err(DefraQueryFailure::FieldPageFieldNotSelected);
+        }
+        if self.offset_bytes != 0 && self.expected_hash.is_none() {
+            return Err(DefraQueryFailure::FieldPageHashRequired);
+        }
         Ok(())
     }
 
-    pub fn read(&self, row: &Value, fields: &[String]) -> Result<Value> {
+    pub fn read(&self, row: &Value, fields: &[String]) -> Result<Value, DefraQueryFailure> {
         self.validate(fields)?;
-        ensure!(
-            row["_docID"].as_str() == Some(self.doc_id.as_str()),
-            "field_page document does not match"
-        );
+        if row["_docID"].as_str() != Some(self.doc_id.as_str()) {
+            return Err(DefraQueryFailure::FieldPageDocMismatch);
+        }
         let text = row[&self.field]
             .as_str()
-            .context("field_page requires a String value")?;
+            .ok_or(DefraQueryFailure::FieldPageNotString)?;
         let page = utf8_page(
             text,
             self.offset_bytes,
             self.expected_hash.as_deref(),
             MAX_FIELD_STRING_BYTES,
         )
-        .map_err(|error| {
-            anyhow::anyhow!(match error {
-                Utf8PageError::MissingHash =>
-                    "field_page.expected_hash is required for continuation",
-                Utf8PageError::Changed => "field_page value changed; restart at offset 0",
-                Utf8PageError::Offset =>
-                    "field_page offset is not a UTF-8 boundary within the value",
-            })
+        .map_err(|error| match error {
+            Utf8PageError::MissingHash => DefraQueryFailure::FieldPageHashRequired,
+            Utf8PageError::Changed => DefraQueryFailure::FieldPageChanged,
+            Utf8PageError::Offset => DefraQueryFailure::FieldPageOffset,
         })?;
         Ok(
             json!({"doc_id":self.doc_id,"field":self.field,"text":page.text,"offset_bytes":self.offset_bytes,"next_offset_bytes":page.end,"total_bytes":text.len(),"value_hash":page.hash,"complete":page.end == text.len()}),

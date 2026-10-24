@@ -494,7 +494,7 @@ async fn maybe_inline_grok_login(
         Err(error) => {
             eprintln!(
                 "Could not check for an existing Grok credential: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
         }
     }
@@ -570,7 +570,7 @@ async fn maybe_inline_claude_login(
         Err(error) => {
             eprintln!(
                 "Could not check for an existing Claude credential: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
         }
     }
@@ -629,7 +629,7 @@ async fn maybe_inline_codex_login(
         Err(error) => {
             eprintln!(
                 "Could not check for an existing ChatGPT credential: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
         }
     }

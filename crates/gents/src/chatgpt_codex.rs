@@ -99,7 +99,7 @@ pub enum ChatGptCodexHeaderError {
 pub fn build_chatgpt_codex_headers(
     account_id: Option<&str>,
     is_fedramp: bool,
-) -> Result<HeaderMap, ChatGptCodexHeaderError> {
+) -> std::result::Result<HeaderMap, ChatGptCodexHeaderError> {
     let mut headers = HeaderMap::new();
     headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
     headers.insert(
@@ -537,7 +537,9 @@ mod tests {
     }
 
     impl BearerSource for CountingBearer {
-        async fn current_bearer(&self) -> Result<String> {
+        async fn current_bearer(
+            &self,
+        ) -> std::result::Result<String, crate::oauth_credential::OAuthCredentialError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.token.clone())
         }

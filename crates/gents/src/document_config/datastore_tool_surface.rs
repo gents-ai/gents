@@ -1,4 +1,6 @@
 use anyhow::Result;
+
+use super::error::DocumentConfigError;
 use serde::{Deserialize, Serialize};
 
 use crate::config_client::ConfigAccess;
@@ -49,7 +51,9 @@ pub async fn list_datastore_tool_surfaces(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<DatastoreToolSurfaceDocument>> {
-    anyhow::ensure!(!node_did.trim().is_empty(), "surface owner is required");
+    if node_did.trim().is_empty() {
+        return Err(DocumentConfigError::SurfaceOwnerRequired.into());
+    }
     let (fields, _) =
         crate::config_client::config_projection(crate::Collection::DatastoreToolSurface, None)?;
     let owner = escape_graphql_string(node_did);
@@ -62,16 +66,17 @@ pub async fn list_datastore_tool_surfaces(
         .get("data")
         .and_then(|data| data.get("DatastoreToolSurface"))
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("surface query returned no row array"))?;
+        .ok_or(DocumentConfigError::SurfaceRowsMissing)?;
     let mut ids = rapidhash::RapidHashSet::default();
     rows.iter()
         .map(|row| {
             let surface: DatastoreToolSurfaceDocument = serde_json::from_value(row.clone())?;
-            anyhow::ensure!(surface.node_did == node_did, "surface owner mismatch");
-            anyhow::ensure!(
-                ids.insert(surface.surface_id.clone()),
-                "duplicate surface identity within owner"
-            );
+            if surface.node_did != node_did {
+                return Err(DocumentConfigError::SurfaceOwnerMismatch.into());
+            }
+            if !ids.insert(surface.surface_id.clone()) {
+                return Err(DocumentConfigError::SurfaceDuplicateIdentity.into());
+            }
             Ok(surface)
         })
         .collect()

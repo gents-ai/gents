@@ -399,7 +399,7 @@ mod request_admission;
 pub use request_admission::final_claim_admission_disposition;
 pub use request_admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
-    verify_request_receipt_signature, SIGNED_REQUEST_FIELDS,
+    verify_request_receipt_signature, RequestReceiptError, SIGNED_REQUEST_FIELDS,
 };
 pub(crate) mod request_binding;
 pub mod retry;

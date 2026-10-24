@@ -1481,6 +1481,11 @@ where
         if matches!(
             error.downcast_ref::<crate::compaction::ReductionError>(),
             Some(crate::compaction::ReductionError::CannotFit)
+        ) || matches!(
+            error.downcast_ref::<crate::compaction::CompactionError>(),
+            Some(crate::compaction::CompactionError::Reduction(
+                crate::compaction::ReductionError::CannotFit
+            ))
         ) || error.is::<ReplayCheckpointError>()
             || error.is::<ReplayEvidenceViolation>()
         {

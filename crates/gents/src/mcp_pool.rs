@@ -4,7 +4,6 @@ use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::{
     model::{CallToolRequestParams, CallToolResult, ListToolsResult},
@@ -24,6 +23,49 @@ pub const NODE_DID_HEADER: &str = "x-node-did";
 const MCP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[derive(Debug, thiserror::Error)]
+pub enum McpPoolError {
+    #[error("list_tools: {error}")]
+    ListTools { error: String },
+    #[error("call_tool: {error}")]
+    CallTool { error: String },
+    #[error("MCP handshake failed for {service_id} ({endpoint}): {error}")]
+    Handshake {
+        service_id: String,
+        endpoint: String,
+        error: String,
+    },
+    #[error("invalid node DID header value")]
+    NodeDidHeader(#[source] reqwest::header::InvalidHeaderValue),
+    #[error("MCP list_tools on '{service_id}' timed out after {secs}s")]
+    ListToolsTimeout { service_id: String, secs: u64 },
+    #[error("MCP connect to '{service_id}' ({endpoint}) timed out after {secs}s")]
+    ConnectTimeout {
+        service_id: String,
+        endpoint: String,
+        secs: u64,
+    },
+    #[error(
+        "MCP service '{service_id}' endpoint '{endpoint}' is parked for {parked_for:?} after {strikes} consecutive connection/session failures (#639)"
+    )]
+    Parked {
+        service_id: String,
+        endpoint: String,
+        parked_for: std::time::Duration,
+        strikes: u32,
+    },
+    #[error(
+        "MCP service '{service_id}' endpoint '{endpoint}' connect already in flight after {strikes} consecutive connection/session failures (#639)"
+    )]
+    ConnectInFlight {
+        service_id: String,
+        endpoint: String,
+        strikes: u32,
+    },
+}
+
+type Result<T, E = McpPoolError> = std::result::Result<T, E>;
 
 type ListToolsFuture = Pin<Box<dyn Future<Output = Result<ListToolsResult>> + Send + 'static>>;
 type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send + 'static>>;
@@ -87,7 +129,9 @@ where
                 c.peer()
                     .list_tools(None)
                     .await
-                    .map_err(|e| anyhow::anyhow!("list_tools: {e}"))
+                    .map_err(|e| McpPoolError::ListTools {
+                        error: e.to_string(),
+                    })
             })
         }),
         call_tool_fn: Box::new(move |params| {
@@ -96,7 +140,9 @@ where
                 c.peer()
                     .call_tool(params)
                     .await
-                    .map_err(|e| anyhow::anyhow!("call_tool: {e}"))
+                    .map_err(|e| McpPoolError::CallTool {
+                        error: e.to_string(),
+                    })
             })
         }),
     }
@@ -112,7 +158,7 @@ fn streamable_http_transport_config(
     if let Some(node_did) = node_did_header {
         headers.insert(
             HeaderName::from_static(NODE_DID_HEADER),
-            HeaderValue::from_str(node_did).context("invalid node DID header value")?,
+            HeaderValue::from_str(node_did).map_err(McpPoolError::NodeDidHeader)?,
         );
     }
     insert_trace_context_headers(&mut headers, trace_context_headers);
@@ -150,10 +196,14 @@ async fn connect_mcp_service(
     config.retry_config = Arc::clone(&resume_policy)
         as Arc<dyn rmcp::transport::common::client_side_sse::SseRetryPolicy>;
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
-    let client = ()
-        .serve(transport)
-        .await
-        .map_err(|e| anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}"))?;
+    let client =
+        ().serve(transport)
+            .await
+            .map_err(|e| McpPoolError::Handshake {
+                service_id: service_id.to_owned(),
+                endpoint: endpoint.to_owned(),
+                error: e.to_string(),
+            })?;
     let mut connection = wrap_connection(endpoint.to_string(), client, resume_policy);
     connection.node_did_header = node_did_header.map(ToOwned::to_owned);
     connection.trace_context_headers = trace_context_headers;
@@ -346,7 +396,9 @@ impl McpPool {
         Fut: Future<Output = Result<ListToolsResult>> + Send + 'static,
     {
         Self::new_with_tool_handlers(handler, |_| async {
-            anyhow::bail!("call_tool was not expected")
+            Err(McpPoolError::CallTool {
+                error: "call_tool was not expected".to_owned(),
+            })
         })
     }
 
@@ -559,11 +611,9 @@ impl McpPool {
     ) -> Result<ListToolsResult> {
         tokio::time::timeout(timeout, (connection.list_tools_fn)())
             .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "MCP list_tools on '{service_id}' timed out after {}s",
-                    timeout.as_secs()
-                )
+            .map_err(|_| McpPoolError::ListToolsTimeout {
+                service_id: service_id.to_owned(),
+                secs: timeout.as_secs(),
             })?
     }
 
@@ -676,10 +726,11 @@ impl McpPool {
         {
             Err(_elapsed) => {
                 self.record_connect_failure(service_id, endpoint, park_node_did_header.as_deref());
-                anyhow::bail!(
-                    "MCP connect to '{service_id}' ({endpoint}) timed out after {}s",
-                    connect_timeout.as_secs()
-                );
+                return Err(McpPoolError::ConnectTimeout {
+                    service_id: service_id.to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    secs: connect_timeout.as_secs(),
+                });
             }
             Ok(Err(error)) => {
                 self.record_connect_failure(service_id, endpoint, park_node_did_header.as_deref());
@@ -717,19 +768,19 @@ impl McpPool {
                         key,
                     });
                 }
-                anyhow::bail!(
-                    "MCP service '{service_id}' endpoint '{endpoint}' is parked for {:?} after \
-                     {} consecutive connection/session failures (#639)",
-                    state.parked_until - now,
-                    state.strikes
-                );
+                return Err(McpPoolError::Parked {
+                    service_id: service_id.to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    parked_for: state.parked_until - now,
+                    strikes: state.strikes,
+                });
             }
             if state.connect_in_flight {
-                anyhow::bail!(
-                    "MCP service '{service_id}' endpoint '{endpoint}' connect already in flight \
-                     after {} consecutive connection/session failures (#639)",
-                    state.strikes
-                );
+                return Err(McpPoolError::ConnectInFlight {
+                    service_id: service_id.to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    strikes: state.strikes,
+                });
             }
             state.connect_in_flight = true;
             return Ok(DialReservation::Reserved {

@@ -10,7 +10,7 @@ pub enum SchemaError {
 }
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> anyhow::Result<()> {
-    gents::schema::ensure_runtime_schemas(node).await
+    Ok(gents::schema::ensure_runtime_schemas(node).await?)
 }
 
 #[allow(dead_code)]

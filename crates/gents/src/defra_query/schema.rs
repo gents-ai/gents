@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
+use super::error::DefraQueryFailure;
 use super::query::{collect_filter_field_keys, is_restricted_field, DefraQueryParams};
 use super::render::validate_identifier;
 use crate::graphql::escape_graphql_string;
@@ -47,18 +47,20 @@ pub(crate) fn is_aggregate_pseudo_field(name: &str) -> bool {
 
 const TYPE_FIELDS: &str = "fields { name type { name kind ofType { name kind } } }";
 
-pub fn introspection_query(collection: &str) -> Result<String> {
-    validate_identifier(collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;
+pub fn introspection_query(collection: &str) -> Result<String, DefraQueryFailure> {
+    validate_identifier(collection)
+        .map_err(|error| DefraQueryFailure::InvalidCollectionName { error })?;
     Ok(format!(
         r#"{{ __type(name: "{name}") {{ {TYPE_FIELDS} }} }}"#,
         name = escape_graphql_string(collection)
     ))
 }
 
-pub fn introspection_query_many(collections: &[&str]) -> Result<String> {
+pub fn introspection_query_many(collections: &[&str]) -> Result<String, DefraQueryFailure> {
     let mut query = String::from("{");
     for (index, collection) in collections.iter().enumerate() {
-        validate_identifier(collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;
+        validate_identifier(collection)
+            .map_err(|error| DefraQueryFailure::InvalidCollectionName { error })?;
         query.push_str(&format!(
             r#" c{index}: __type(name: "{name}") {{ {TYPE_FIELDS} }}"#,
             name = escape_graphql_string(collection)

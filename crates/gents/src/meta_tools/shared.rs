@@ -77,6 +77,7 @@ impl MetaToolContext {
                 discovery.as_secs()
             )
         })?
+        .map_err(anyhow::Error::from)
     }
 
     pub(super) fn blocked_service_error(

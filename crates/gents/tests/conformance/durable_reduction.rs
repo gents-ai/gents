@@ -226,7 +226,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                     error.to_string().contains("conflicting immutable facts"),
                     "{}: expected immutable-fact conflict, got {}",
                     case.name,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 );
                 "conflict"
             }

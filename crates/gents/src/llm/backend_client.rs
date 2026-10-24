@@ -284,7 +284,7 @@ pub(crate) async fn build_backend_client(
                     "timed out after {build_timeout:?} building the Claude subscription completion client"
                 )
             })
-            .and_then(|result| result)
+            .and_then(|result| result.map_err(anyhow::Error::from))
             .with_context(|| {
                 format!(
                     "building Claude subscription completion client for agent {}",

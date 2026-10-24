@@ -136,7 +136,8 @@ fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), Struc
         })?;
     task.prompt_template = text.to_owned();
     task.validate().map_err(|error| invalid(error.into()))?;
-    let plan = DesiredStateApplyPlan::from_pack_config(&config).map_err(invalid)?;
+    let plan =
+        DesiredStateApplyPlan::from_pack_config(&config).map_err(|error| invalid(error.into()))?;
     let references = ConfigReferences::from_documents(
         &config.node.node_did,
         plan.documents()

@@ -14,7 +14,7 @@ pub(super) fn validate_automation(manifest: &DesiredStateManifest, errors: &mut 
             schedule
                 .cadence
                 .validate()
-                .map_err(|error| format!("{}", ErrorChain(error.as_ref())))
+                .map_err(|error| format!("{}", ErrorChain(&error)))
         }))
         .chain(manifest.event_sources.iter().map(|source| {
             source

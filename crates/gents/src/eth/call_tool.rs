@@ -6,7 +6,6 @@ use std::sync::Arc;
 use alloy_dyn_abi::{DynSolValue, FunctionExt, JsonAbiExt};
 use alloy_json_abi::Function;
 use alloy_primitives::{keccak256, Address, I256, U256};
-use anyhow::{anyhow, bail};
 use k256::elliptic_curve::zeroize::Zeroizing;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -573,7 +572,7 @@ async fn execute_write(
     .await;
     let receipt = receipt.map_err(|error| {
         let message = error.to_string();
-        let class = if super::submit::is_gas_or_fee_cap_error(error.as_ref()) {
+        let class = if super::submit::is_gas_or_fee_cap_error(&error) {
             FailureClass::PolicyDenied
         } else {
             FailureClass::External
@@ -632,6 +631,38 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
     Ok(())
 }
 
+#[derive(Debug, thiserror::Error)]
+enum SigningKeyError {
+    #[error("write tool has no chain key binding")]
+    NoBinding,
+    #[error("EthTool {tool_id:?} no longer exists")]
+    ToolMissing { tool_id: String },
+    #[error("chain key binding {binding_id:?} does not exist")]
+    BindingMissing { binding_id: String },
+    #[error("EthTool {tool_id:?} is disabled")]
+    ToolDisabled { tool_id: String },
+    #[error("EthTool {tool_id:?} belongs to another node")]
+    ToolOtherNode { tool_id: String },
+    #[error("EthTool {tool_id:?} changed chain_id")]
+    ToolChainChanged { tool_id: String },
+    #[error("EthTool {tool_id:?} no longer selects chain key binding {binding_id:?}")]
+    ToolBindingChanged { tool_id: String, binding_id: String },
+    #[error("chain key binding {binding_id:?} belongs to another node")]
+    BindingOtherNode { binding_id: String },
+    #[error("chain key binding {binding_id:?} is revoked")]
+    BindingRevoked { binding_id: String },
+    #[error("chain key binding {binding_id:?} has an unsupported backend")]
+    BindingBackend { binding_id: String },
+    #[error("chain key binding {binding_id:?} has no creation time")]
+    BindingNoCreatedAt { binding_id: String },
+    #[error("chain key binding {binding_id:?} has no attestation")]
+    BindingNoAttestation { binding_id: String },
+    #[error("chain key binding {binding_id:?} has an invalid attestation")]
+    BindingAttestationInvalid { binding_id: String },
+    #[error("chain key material does not match binding {binding_id:?}")]
+    KeyMaterialMismatch { binding_id: String },
+}
+
 async fn load_signing_key(
     node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
@@ -647,7 +678,7 @@ async fn load_signing_key_with_store(
     let binding_id = resolved
         .binding_id
         .as_deref()
-        .ok_or_else(|| anyhow!("write tool has no chain key binding"))?;
+        .ok_or(SigningKeyError::NoBinding)?;
     let (tool, binding): (EthToolDocument, ChainKeyBindingDocument) =
         crate::config_client::ConfigAccess::transact_local_write(
             node,
@@ -662,8 +693,8 @@ async fn load_signing_key_with_store(
                         &resolved.eth_tool_id,
                     )
                     .await?
-                    .ok_or_else(|| {
-                        anyhow!("EthTool {:?} no longer exists", resolved.eth_tool_id)
+                    .ok_or_else(|| SigningKeyError::ToolMissing {
+                        tool_id: resolved.eth_tool_id.clone(),
                     })?;
                     let binding = crate::config_client::read_desired_state_document_in_txn(
                         txn,
@@ -672,7 +703,9 @@ async fn load_signing_key_with_store(
                         binding_id,
                     )
                     .await?
-                    .ok_or_else(|| anyhow!("chain key binding {binding_id:?} does not exist"))?;
+                    .ok_or_else(|| SigningKeyError::BindingMissing {
+                        binding_id: binding_id.to_owned(),
+                    })?;
                     Ok::<_, anyhow::Error>((
                         serde_json::from_value(tool)?,
                         serde_json::from_value(binding)?,
@@ -682,44 +715,64 @@ async fn load_signing_key_with_store(
         )
         .await?;
     if !tool.enabled {
-        bail!("EthTool {:?} is disabled", resolved.eth_tool_id);
+        return Err(SigningKeyError::ToolDisabled {
+            tool_id: resolved.eth_tool_id.clone(),
+        }
+        .into());
     }
     if tool.node_did != resolved.principal_did {
-        bail!("EthTool {:?} belongs to another node", resolved.eth_tool_id);
+        return Err(SigningKeyError::ToolOtherNode {
+            tool_id: resolved.eth_tool_id.clone(),
+        }
+        .into());
     }
     if tool.chain_id != i64::try_from(resolved.chain_id).ok() {
-        bail!("EthTool {:?} changed chain_id", resolved.eth_tool_id);
+        return Err(SigningKeyError::ToolChainChanged {
+            tool_id: resolved.eth_tool_id.clone(),
+        }
+        .into());
     }
     if tool.key_binding_id.as_deref() != Some(binding_id) {
-        bail!(
-            "EthTool {:?} no longer selects chain key binding {binding_id:?}",
-            resolved.eth_tool_id
-        );
+        return Err(SigningKeyError::ToolBindingChanged {
+            tool_id: resolved.eth_tool_id.clone(),
+            binding_id: binding_id.to_owned(),
+        }
+        .into());
     }
     if binding.node_did != resolved.principal_did {
-        bail!("chain key binding {binding_id:?} belongs to another node");
+        return Err(SigningKeyError::BindingOtherNode {
+            binding_id: binding_id.to_owned(),
+        }
+        .into());
     }
     if binding
         .revoked_at
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
     {
-        bail!("chain key binding {binding_id:?} is revoked");
+        return Err(SigningKeyError::BindingRevoked {
+            binding_id: binding_id.to_owned(),
+        }
+        .into());
     }
     if binding.key_backend.as_deref() != Some(KEY_BACKEND_KEYRING) {
-        bail!("chain key binding {binding_id:?} has an unsupported backend");
+        return Err(SigningKeyError::BindingBackend {
+            binding_id: binding_id.to_owned(),
+        }
+        .into());
     }
     let created_at = binding
         .created_at
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("chain key binding {binding_id:?} has no creation time"))?;
-    let attestation = decode_attestation(
-        binding
-            .attestation
-            .as_deref()
-            .ok_or_else(|| anyhow!("chain key binding {binding_id:?} has no attestation"))?,
-    )?;
+        .ok_or_else(|| SigningKeyError::BindingNoCreatedAt {
+            binding_id: binding_id.to_owned(),
+        })?;
+    let attestation = decode_attestation(binding.attestation.as_deref().ok_or_else(|| {
+        SigningKeyError::BindingNoAttestation {
+            binding_id: binding_id.to_owned(),
+        }
+    })?)?;
     let payload = attestation_payload(
         binding_id,
         &binding.node_did,
@@ -728,12 +781,18 @@ async fn load_signing_key_with_store(
         created_at,
     );
     if !crate::identity::verify_did_signature(&binding.node_did, &payload, &attestation)? {
-        bail!("chain key binding {binding_id:?} has an invalid attestation");
+        return Err(SigningKeyError::BindingAttestationInvalid {
+            binding_id: binding_id.to_owned(),
+        }
+        .into());
     }
     let secret = Zeroizing::new(store.load(&binding_storage_key(&binding.node_did, binding_id))?);
     let address = address_from_secret(&secret)?;
     if !address.eq_ignore_ascii_case(&binding.address) {
-        bail!("chain key material does not match binding {binding_id:?}");
+        return Err(SigningKeyError::KeyMaterialMismatch {
+            binding_id: binding_id.to_owned(),
+        }
+        .into());
     }
     Ok(*secret)
 }

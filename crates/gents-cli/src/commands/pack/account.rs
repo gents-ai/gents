@@ -32,7 +32,7 @@ async fn login_with_password(
         !password.is_empty(),
         "the password read from standard input is empty"
     );
-    client.login(username, password).await
+    Ok(client.login(username, password).await?)
 }
 
 pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {

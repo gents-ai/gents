@@ -616,7 +616,7 @@ fn inference_plan(
         desired(Collection::InferenceSampling, sampling),
         desired(Collection::InferenceProfile, profile),
     ]);
-    DesiredStateApplyPlan::new(documents)
+    Ok(DesiredStateApplyPlan::new(documents)?)
 }
 
 fn desired(collection: Collection, value: Value) -> DesiredStateApplyDocument {

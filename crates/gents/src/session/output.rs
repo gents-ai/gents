@@ -1791,7 +1791,7 @@ async fn preload_replay_capture_blocks(
         }
     }
     crate::rendered_request::preload_manifest_blocks(node, &manifests, cache).await?;
-    crate::rendered_request::preload_manifest_trees(node, &trees, cache).await
+    Ok(crate::rendered_request::preload_manifest_trees(node, &trees, cache).await?)
 }
 
 /// Validate a restored replay's physical request and bounded transcript view
@@ -2173,13 +2173,7 @@ async fn replay_capture_from_row(
     .await
     {
         Ok(verified) => Ok(verified),
-        Err(error)
-            if error
-                .downcast_ref::<crate::rendered_request::CaptureStoreReadError>()
-                .is_some() =>
-        {
-            Err(error)
-        }
+        Err(error) if crate::rendered_request::is_capture_store_read(error.as_ref()) => Err(error),
         Err(error) => {
             warn_unverifiable_replay_capture(capture_key, &error);
             Ok(None)

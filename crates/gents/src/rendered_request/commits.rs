@@ -5,19 +5,27 @@
 //!   filter on a malformed input, so no `fieldName` filter is sent; the field
 //!   is selected in Rust instead.
 
-use anyhow::{Context, Result};
-
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError};
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CommitsError {
+pub enum CommitsError {
     #[error("batched _commits response carried no data object")]
     NoBatchData,
     #[error("batched _commits response carried no array for {doc_id}")]
     BatchMissingArray { doc_id: String },
     #[error("_commits response carried no data._commits array")]
     NoCommitArray,
+    #[error("reading _commits for rendered request {doc_id}")]
+    Read {
+        doc_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("reading batched _commits in transaction")]
+    BatchRead(#[source] ConfigClientError),
+    #[error(transparent)]
+    Execute(#[from] ConfigClientError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +37,7 @@ pub struct RequestJsonCommit {
 pub async fn request_json_commit(
     access: &ConfigAccess,
     doc_id: &str,
-) -> Result<Option<RequestJsonCommit>> {
+) -> Result<Option<RequestJsonCommit>, CommitsError> {
     field_commit(access, doc_id, "request_json").await
 }
 
@@ -37,7 +45,7 @@ pub async fn field_commit(
     access: &ConfigAccess,
     doc_id: &str,
     field_name: &str,
-) -> Result<Option<RequestJsonCommit>> {
+) -> Result<Option<RequestJsonCommit>, CommitsError> {
     let query = format!(
         r#"query {{ _commits(docID: "{doc_id}") {{ cid height fieldName }} }}"#,
         doc_id = escape_graphql_string(doc_id),
@@ -45,8 +53,11 @@ pub async fn field_commit(
     let response = access
         .execute(&query)
         .await
-        .with_context(|| format!("reading _commits for rendered request {doc_id}"))?;
-    Ok(select_field_commit(&response, field_name)?)
+        .map_err(|source| CommitsError::Read {
+            doc_id: doc_id.to_owned(),
+            source,
+        })?;
+    select_field_commit(&response, field_name)
 }
 
 /// Maximum `_commits` aliases in one statement of [`field_commits_in_txn`],
@@ -58,10 +69,10 @@ pub(crate) async fn field_commits<F, Fut>(
     doc_ids: &[String],
     field_name: &str,
     mut execute: F,
-) -> Result<Vec<Option<RequestJsonCommit>>>
+) -> Result<Vec<Option<RequestJsonCommit>>, CommitsError>
 where
     F: FnMut(String) -> Fut,
-    Fut: std::future::Future<Output = Result<serde_json::Value>>,
+    Fut: std::future::Future<Output = Result<serde_json::Value, CommitsError>>,
 {
     let mut commits = Vec::with_capacity(doc_ids.len());
     for batch in doc_ids.chunks(FIELD_COMMIT_ALIAS_BATCH) {
@@ -106,11 +117,9 @@ pub(crate) async fn field_commits_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     doc_ids: &[String],
     field_name: &str,
-) -> Result<Vec<Option<RequestJsonCommit>>> {
+) -> Result<Vec<Option<RequestJsonCommit>>, CommitsError> {
     field_commits(doc_ids, field_name, |query| async move {
-        txn.execute(&query)
-            .await
-            .context("reading batched _commits in transaction")
+        txn.execute(&query).await.map_err(CommitsError::BatchRead)
     })
     .await
 }

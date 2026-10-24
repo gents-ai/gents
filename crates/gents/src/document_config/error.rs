@@ -1,6 +1,11 @@
 use gents_protocol::graphql::GraphqlError;
 
+use crate::config_client::ConfigClientError;
 use crate::template::TemplateError;
+use crate::trigger_engine::TriggerEngineError;
+use crate::Collection;
+
+use super::references::MissingReference;
 
 use super::eval_definition::LLM_JUDGE_CHECK;
 use super::task_validation::MAX_TASK_HOOK_TIMEOUT_SECS;
@@ -102,6 +107,45 @@ pub enum DocumentConfigError {
         expected: String,
     },
 
+    #[error("write_tools[{index}] (tool {tool_name:?}) is malformed: {error}")]
+    WriteToolMalformed {
+        index: usize,
+        tool_name: String,
+        error: Box<DocumentConfigError>,
+    },
+    #[error(
+        "write_tools[{index}] (tool {tool_name:?}) violates mailbox registration policy: {error}"
+    )]
+    WriteToolMailboxPolicy {
+        index: usize,
+        tool_name: String,
+        error: String,
+    },
+    #[error("write_tools[{index}] (tool {tool_name:?}) output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field")]
+    WriteToolOutputObligation { index: usize, tool_name: String },
+    #[error("write_tools[{index}] (tool {tool_name:?}) has a duplicate field name {field:?}; each WriteToolField in a declaration must have a unique name")]
+    WriteToolDuplicateField {
+        index: usize,
+        tool_name: String,
+        field: String,
+    },
+    #[error("write_tools[{index}] (tool {tool_name:?}) field[{field_index}] {field:?} is runtime-filled and cannot be required")]
+    WriteToolRuntimeFilledRequired {
+        index: usize,
+        tool_name: String,
+        field_index: usize,
+        field: String,
+    },
+    #[error("write_tools[{index}] (tool {tool_name:?}) field[{field_index}] has invalid source_field {source_field:?}: {error}")]
+    WriteToolSourceField {
+        index: usize,
+        tool_name: String,
+        field_index: usize,
+        source_field: String,
+        error: GraphqlError,
+    },
+    #[error("write_tools has a duplicate tool_name {tool_name:?}; each declared write tool must have a unique tool_name")]
+    WriteToolDuplicateName { tool_name: String },
     #[error("tool_name must be non-empty")]
     WriteToolNameBlank,
     #[error("invalid collection {collection:?}: {error}")]
@@ -432,11 +476,132 @@ pub enum DocumentConfigError {
     ChainKeyBindingAttestation,
     #[error("ChainKeyBinding has no created_at timestamp")]
     ChainKeyBindingCreatedAt,
+    #[error("chain key owner is required")]
+    ChainKeyOwnerRequired,
+    #[error("chain key owner and binding ID are required")]
+    ChainKeyOwnerAndBindingRequired,
+    #[error("duplicate ChainKeyBinding physical identity")]
+    ChainKeyBindingDuplicate,
     #[error("chain key binding update must be an object")]
     ChainKeyBindingUpdateNotObject,
 
     #[error("{field} response has no rows array")]
     RowsArrayMissing { field: String },
+    #[error("EthTool requires tool_id")]
+    EthToolIdBlank,
+    #[error("EthTool requires node_did")]
+    EthToolNodeBlank,
+    #[error("EthTool chain_id must be positive")]
+    EthToolChainIdNotPositive,
+    #[error("EthTool rpc_url must not be blank")]
+    EthToolRpcUrlBlank,
+    #[error("EthTool key_binding_id must not be blank")]
+    EthToolKeyBindingBlank,
+    #[error("EthTool {tool_id} advertises tools but has no rpc_url or chain_id")]
+    EthToolAdvertisesWithoutRpc { tool_id: String },
+    #[error("Ethereum tool owner is required")]
+    EthToolOwnerRequired,
+    #[error("Ethereum owner and tool ID are required")]
+    EthToolOwnerAndIdRequired,
+    #[error(transparent)]
+    Eth(#[from] crate::eth::EthError),
+
+    #[error("schedule interval_secs must be >= 1; got {interval_secs}")]
+    ScheduleIntervalNotPositive { interval_secs: i64 },
+    #[error("cron schedule requires a non-empty expression")]
+    CronExpressionBlank,
+    #[error("cron schedule requires timezone")]
+    CronTimezoneBlank,
+    #[error(transparent)]
+    ScheduleCron(#[from] crate::schedule_cron::ScheduleCronError),
+
+    #[error(transparent)]
+    ConfigClient(#[from] ConfigClientError),
+    #[error(transparent)]
+    MissingReference(#[from] MissingReference),
+    #[error("profile {profile_id} references a missing backend")]
+    ProfileMissingBackend { profile_id: String },
+    #[error("configuration selected for removal does not exist")]
+    RemovalTargetMissing,
+    #[error("{} configuration owner does not match reference scope", collection.graphql_type())]
+    ConfigOwnerMismatch { collection: Collection },
+    #[error("configuration requires logical ID")]
+    ConfigurationRequiresLogicalId,
+    #[error("{} {id} field {field} has a blank reference ID", collection.graphql_type())]
+    BlankReferenceId {
+        collection: Collection,
+        id: String,
+        field: String,
+    },
+    #[error("Agent {agent_id:?} is the default agent of {node_did} and must be enabled; enable it or choose another default first")]
+    DefaultAgentDisabled { agent_id: String, node_did: String },
+    #[error("AgentTarget {id} requires target_node_did and agent_id")]
+    AgentTargetRequiresIds { id: String },
+    #[error("trigger task missing")]
+    TriggerTaskMissing,
+    #[error("trigger event source missing")]
+    TriggerEventSourceMissing,
+    #[error("callback event source missing")]
+    CallbackEventSourceMissing,
+    #[error(
+        "trigger {trigger_id} has a schedule source; use an event source or remove the option"
+    )]
+    TriggerScheduleOption {
+        trigger_id: String,
+        #[source]
+        source: TriggerEngineError,
+    },
+    #[error("trigger {trigger_id} sources FireOutcome but task {task_id} enables emit_outcome")]
+    TriggerFireOutcomeSource { trigger_id: String, task_id: String },
+    #[error(
+        "trigger {trigger_id} task {task_id} {field} references unavailable source scope {scope}"
+    )]
+    TriggerUnavailableScope {
+        trigger_id: String,
+        task_id: String,
+        field: &'static str,
+        scope: String,
+    },
+    #[error(transparent)]
+    Template(#[from] TemplateError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
+    #[error("trigger observation owner is required")]
+    TriggerObservationOwnerRequired,
+    #[error("query Trigger cursor failed: {error}")]
+    TriggerCursorQueryFailed { error: String },
+    #[error("query Trigger cursor for {alias} failed: {messages}")]
+    TriggerCursorAliasFailed { alias: String, messages: String },
+    #[error("ambiguous scoped trigger observation")]
+    TriggerObservationAmbiguous,
+    #[error("trigger cursor result was omitted")]
+    TriggerCursorOmitted,
+    #[error("missing canonical configuration rows")]
+    InferenceProfileRowsMissing,
+    #[error("configuration row must be an object")]
+    ConfigurationRowNotObject,
+    #[error("configuration row missing physical ID")]
+    ConfigurationRowMissingPhysicalId,
+    #[error("foreign InferenceProfile row")]
+    ForeignInferenceProfileRow,
+    #[error("duplicate scoped InferenceProfile ID")]
+    DuplicateScopedInferenceProfile,
+    #[error("node DID must not be blank")]
+    NodeDidBlank,
+    #[error("job block for {coordinate} is not valid: {problems}")]
+    JobBlockInvalid {
+        coordinate: String,
+        problems: String,
+    },
+    #[error("surface owner is required")]
+    SurfaceOwnerRequired,
+    #[error("surface query returned no row array")]
+    SurfaceRowsMissing,
+    #[error("surface owner mismatch")]
+    SurfaceOwnerMismatch,
+    #[error("duplicate surface identity within owner")]
+    SurfaceDuplicateIdentity,
     #[error("document row must be an object")]
     RowNotObject,
     #[error("document row requires physical ID")]
@@ -447,4 +612,13 @@ pub enum DocumentConfigError {
         #[source]
         source: serde_json::Error,
     },
+}
+
+impl crate::config_client::TransactionFailure for DocumentConfigError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            _ => None,
+        }
+    }
 }

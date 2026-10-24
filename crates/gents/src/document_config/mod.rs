@@ -136,7 +136,9 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
 pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-    anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
+    if node_did.trim().is_empty() {
+        return Err(DocumentConfigError::NodeDidBlank.into());
+    }
     let owner = node_did.to_owned();
     let existing: Option<Node> =
         ConfigAccess::transact_local_readonly(node, None, "ensure_node.read", |txn| {

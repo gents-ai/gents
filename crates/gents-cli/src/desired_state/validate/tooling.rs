@@ -27,11 +27,7 @@ pub(super) fn validate_eth_tools(manifest: &DesiredStateManifest, errors: &mut V
     }
     for tool in &manifest.eth_tools {
         if let Err(error) = tool.validate() {
-            errors.push(format!(
-                "EthTool {}: {}",
-                tool.tool_id,
-                ErrorChain(error.as_ref())
-            ));
+            errors.push(format!("EthTool {}: {}", tool.tool_id, ErrorChain(&error)));
         }
     }
 }

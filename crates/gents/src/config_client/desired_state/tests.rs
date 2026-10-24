@@ -722,7 +722,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         .await
         .unwrap_err();
     assert!(
-        stale_expectation(&error).is_some(),
+        stale_expectation(error.as_ref()).is_some(),
         "drifted live row must be rejected: {}",
         ErrorChain(error.as_ref())
     );
@@ -750,10 +750,15 @@ async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Opt
         .transact_write("test.cas.read", |txn| {
             let (owner, id) = (owner.clone(), id.clone());
             Box::pin(async move {
-                read_desired_state_document_in_txn(txn, Collection::InferenceBackend, &owner, &id)
-                    .await?
-                    .map(|live| desired_state_document_digest(&live))
-                    .transpose()
+                Ok(read_desired_state_document_in_txn(
+                    txn,
+                    Collection::InferenceBackend,
+                    &owner,
+                    &id,
+                )
+                .await?
+                .map(|live| desired_state_document_digest(&live))
+                .transpose()?)
             })
         })
         .await
@@ -811,7 +816,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
         .await
         .unwrap_err();
 
-    let stale = stale_expectation(&error).expect("typed StaleExpectation");
+    let stale = stale_expectation(error.as_ref()).expect("typed StaleExpectation");
     assert_eq!(stale.drifted.len(), 1);
     assert_eq!(stale.drifted[0].id, "other");
     assert_eq!(stale.drifted[0].expected, frozen_other);
@@ -846,7 +851,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         })
         .await
         .unwrap_err();
-    assert!(stale_expectation(&error).is_some());
+    assert!(stale_expectation(error.as_ref()).is_some());
 
     let wrongly_present =
         DesiredStateApplyPlan::new(vec![document(backend(owner, "third"))])?.with_expected(
@@ -859,7 +864,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         })
         .await
         .unwrap_err();
-    let stale = stale_expectation(&error).expect("typed StaleExpectation");
+    let stale = stale_expectation(error.as_ref()).expect("typed StaleExpectation");
     assert_eq!(stale.drifted[0].found, None);
     Ok(())
 }
@@ -877,7 +882,9 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             Collection::InferenceBackend,
             Some(&doc_for(owner, id, content)),
         )?;
-        desired_state_document_digest(&projected.context("projection")?)
+        Ok(desired_state_document_digest(
+            &projected.context("projection")?,
+        )?)
     }
 
     let mut exercised = Vec::new();
@@ -919,7 +926,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         assert_eq!(outcome.is_ok(), case.applied, "case {}", case.name);
         if let Err(error) = &outcome {
             assert!(
-                stale_expectation(error).is_some(),
+                stale_expectation(error.as_ref()).is_some(),
                 "case {}: {}",
                 case.name,
                 ErrorChain(error.as_ref())
@@ -962,7 +969,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             );
             if let Err(error) = &replay {
                 assert!(
-                    stale_expectation(error).is_some(),
+                    stale_expectation(error.as_ref()).is_some(),
                     "case {} replay: {}",
                     case.name,
                     ErrorChain(error.as_ref())
@@ -2062,7 +2069,7 @@ fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
             |error| {
                 panic!(
                     "{prompt} resolves against the schema: {}",
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 )
             },
         );
@@ -2072,9 +2079,8 @@ fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
     let message = format!(
         "{}",
         ErrorChain(
-            validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
+            &validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
                 .unwrap_err()
-                .as_ref()
         )
     );
     assert!(
@@ -2088,9 +2094,8 @@ fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
     let message = format!(
         "{}",
         ErrorChain(
-            validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
+            &validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
                 .unwrap_err()
-                .as_ref()
         )
     );
     assert!(
@@ -2108,14 +2113,13 @@ fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
     let message = format!(
         "{}",
         ErrorChain(
-            validate_event_trigger_document_fields(
+            &validate_event_trigger_document_fields(
                 &session,
                 &task,
                 &source,
                 &schema_fields(&["message"])
             )
             .unwrap_err()
-            .as_ref()
         )
     );
     assert!(
@@ -2132,14 +2136,13 @@ fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
     let message = format!(
         "{}",
         ErrorChain(
-            validate_event_trigger_document_fields(
+            &validate_event_trigger_document_fields(
                 &trigger,
                 &task,
                 &source,
                 &schema_fields(&["message"])
             )
             .unwrap_err()
-            .as_ref()
         )
     );
     assert!(

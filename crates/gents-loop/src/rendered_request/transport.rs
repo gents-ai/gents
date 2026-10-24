@@ -12,6 +12,14 @@ use sha2::{Digest, Sha256};
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
 
+#[derive(Debug, thiserror::Error)]
+enum TransportError {
+    #[error("{message}")]
+    UnexplainedSend { message: String },
+    #[error("{message}")]
+    CaptureFailed { message: String },
+}
+
 /// Persist the exact provider body before sending; a failed capture refuses
 /// the request (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`).
 #[derive(Clone, Debug, Default)]
@@ -145,9 +153,11 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 "refusing provider send: a completion body reached the transport with no armed \
                  rendered-request capture"
             );
-            return Err(http_client::Error::Instance(
-                anyhow::anyhow!(scope::unexplained_send_message(scope.context(), &path)).into(),
-            ));
+            return Err(http_client::Error::Instance(Box::new(
+                TransportError::UnexplainedSend {
+                    message: scope::unexplained_send_message(scope.context(), &path),
+                },
+            )));
         }
         CaptureDecision::Capture {
             scope,
@@ -217,16 +227,17 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 error = %ErrorChain(error.as_ref()),
                 "refusing provider send: rendered-request capture failed"
             );
-            Err(http_client::Error::Instance(
-                anyhow::anyhow!(scope::capture_failure_message(
-                    stage,
-                    &capture_scope,
-                    turn_index,
-                    attempt,
-                    &error,
-                ))
-                .into(),
-            ))
+            Err(http_client::Error::Instance(Box::new(
+                TransportError::CaptureFailed {
+                    message: scope::capture_failure_message(
+                        stage,
+                        &capture_scope,
+                        turn_index,
+                        attempt,
+                        &error,
+                    ),
+                },
+            )))
         }
     }
 }

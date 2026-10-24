@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use alloy_primitives::{keccak256, Address, U256};
-use anyhow::{anyhow, bail, Context};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,6 +16,7 @@ use crate::graphql::escape_graphql_string;
 use super::error::{EthError, Result};
 use super::keys::{address_from_secret, sign_prehash_recoverable};
 use super::rpc::{decode_revert_data, parse_hex_u64, EthRpcClient, JsonRpcTransport};
+use crate::config_client::ConfigClientError;
 
 const STATUS_PREPARED: &str = "prepared";
 const STATUS_SUBMITTED_UNKNOWN: &str = "submitted_unknown";
@@ -75,6 +75,32 @@ pub(crate) struct SubmitReceipt {
     pub(crate) tx_hash: String,
     pub(crate) status: SubmitStatus,
     pub(crate) receipt: Option<Value>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SubmitError {
+    #[error(transparent)]
+    Eth(#[from] EthError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("persisting prepared Ethereum submission")]
+    Persist(#[source] ConfigClientError),
+    #[error("prepared Ethereum submission was not readable after create")]
+    SubmissionNotReadable,
+    #[error("eth_sendRawTransaction did not return a hash: {value}")]
+    SendReturnedNoHash { value: Value },
+    #[error("node returned transaction hash {returned}, expected {expected}")]
+    NodeHashMismatch { returned: String, expected: String },
+    #[error("cannot broadcast Ethereum submission in state {status}")]
+    CannotBroadcast { status: String },
+    #[error("Ethereum receipt has no status: {receipt}")]
+    ReceiptNoStatus { receipt: Value },
+    #[error("Ethereum receipt has invalid status {status}")]
+    ReceiptInvalidStatus { status: u64 },
+    #[error("cannot persist Ethereum receipt in submission state {status}")]
+    CannotPersistReceipt { status: String },
 }
 
 type NonceSlot = Arc<tokio::sync::Mutex<()>>;
@@ -139,17 +165,20 @@ pub(crate) async fn submit_transaction<T>(
     request: SubmitRequest,
     nonces: &NonceGate,
     options: SubmitOptions,
-) -> anyhow::Result<SubmitReceipt>
+) -> std::result::Result<SubmitReceipt, SubmitError>
 where
     T: JsonRpcTransport,
 {
     validate_request(&request)?;
-    let derived = address_from_secret(secret).context("deriving submit signer address")?;
+    let derived = address_from_secret(secret).map_err(|source| EthError::SubmitSignerAddress {
+        source: Box::new(source),
+    })?;
     if !derived.eq_ignore_ascii_case(&request.from) {
-        bail!(
-            "signing key address {derived} does not match from address {}",
-            request.from
-        );
+        return Err(EthError::SignerMismatch {
+            derived,
+            from: request.from.clone(),
+        }
+        .into());
     }
     let submission_key = submission_key(&request);
     let request_hash = request_hash(&request)?;
@@ -187,10 +216,11 @@ where
         doc_id: String::new(),
         submission_key: submission_key.clone(),
         principal_did: request.principal_did.trim().to_string(),
-        chain_id: i64::try_from(request.chain_id).context("chain_id exceeds DefraDB Int")?,
+        chain_id: i64::try_from(request.chain_id)
+            .map_err(|source| EthError::ChainIdExceedsInt { source })?,
         request_hash,
         from_address: request.from.to_ascii_lowercase(),
-        nonce: i64::try_from(nonce).context("nonce exceeds DefraDB Int")?,
+        nonce: i64::try_from(nonce).map_err(|source| EthError::NonceExceedsInt { source })?,
         raw_transaction,
         tx_hash,
         status: STATUS_PREPARED.to_string(),
@@ -202,11 +232,11 @@ where
             verify_existing(&existing, &request, &prepared.request_hash)?;
             return resume_submission(node, client, existing, options).await;
         }
-        return Err(create_error).context("persisting prepared Ethereum submission");
+        return Err(SubmitError::Persist(create_error));
     }
     let persisted = load_submission(node, &submission_key)
         .await?
-        .ok_or_else(|| anyhow!("prepared Ethereum submission was not readable after create"))?;
+        .ok_or(SubmitError::SubmissionNotReadable)?;
     resume_submission(node, client, persisted, options).await
 }
 
@@ -291,7 +321,7 @@ async fn resume_submission<T>(
     client: &EthRpcClient<T>,
     record: SubmissionRecord,
     options: SubmitOptions,
-) -> anyhow::Result<SubmitReceipt>
+) -> std::result::Result<SubmitReceipt, SubmitError>
 where
     T: JsonRpcTransport,
 {
@@ -307,20 +337,19 @@ where
     if let Ok(value) = &send_result {
         let returned = value
             .as_str()
-            .ok_or_else(|| anyhow!("eth_sendRawTransaction did not return a hash: {value}"))?;
+            .ok_or_else(|| SubmitError::SendReturnedNoHash {
+                value: value.clone(),
+            })?;
         if !returned.eq_ignore_ascii_case(&record.tx_hash) {
-            bail!(
-                "node returned transaction hash {returned}, expected {}",
-                record.tx_hash
-            );
+            return Err(SubmitError::NodeHashMismatch {
+                returned: returned.to_owned(),
+                expected: record.tx_hash.clone(),
+            });
         }
     }
     let submitted_status = next_submission_status(&record.status, SubmissionEvent::Broadcast)
-        .ok_or_else(|| {
-            anyhow!(
-                "cannot broadcast Ethereum submission in state {}",
-                record.status
-            )
+        .ok_or_else(|| SubmitError::CannotBroadcast {
+            status: record.status.clone(),
         })?;
     update_submission(node, &record.doc_id, submitted_status, None).await?;
 
@@ -379,15 +408,17 @@ async fn persist_receipt(
     node: &Arc<EmbeddedNode>,
     record: &SubmissionRecord,
     receipt: Value,
-) -> anyhow::Result<SubmitReceipt> {
+) -> std::result::Result<SubmitReceipt, SubmitError> {
     let success = receipt
         .get("status")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("Ethereum receipt has no status: {receipt}"))?;
+        .ok_or_else(|| SubmitError::ReceiptNoStatus {
+            receipt: receipt.clone(),
+        })?;
     let status = match parse_hex_u64(success)? {
         1 => SubmitStatus::ConfirmedSuccess,
         0 => SubmitStatus::ConfirmedReverted,
-        other => bail!("Ethereum receipt has invalid status {other}"),
+        other => return Err(SubmitError::ReceiptInvalidStatus { status: other }),
     };
     let event = match status {
         SubmitStatus::ConfirmedSuccess => SubmissionEvent::ObserveSuccess,
@@ -395,10 +426,9 @@ async fn persist_receipt(
         SubmitStatus::SubmittedUnknown => unreachable!(),
     };
     let persisted_status = next_submission_status(&record.status, event).ok_or_else(|| {
-        anyhow!(
-            "cannot persist Ethereum receipt in submission state {}",
-            record.status
-        )
+        SubmitError::CannotPersistReceipt {
+            status: record.status.clone(),
+        }
     })?;
     update_submission(node, &record.doc_id, persisted_status, Some(&receipt)).await?;
     Ok(SubmitReceipt {
@@ -453,7 +483,7 @@ async fn next_nonce<T>(
     client: &EthRpcClient<T>,
     from: &str,
     chain_id: u64,
-) -> anyhow::Result<u64>
+) -> std::result::Result<u64, SubmitError>
 where
     T: JsonRpcTransport,
 {
@@ -469,7 +499,7 @@ async fn max_in_flight_nonce(
     node: &EmbeddedNode,
     from: &str,
     chain_id: u64,
-) -> anyhow::Result<Option<u64>> {
+) -> std::result::Result<Option<u64>, SubmitError> {
     let from = escape_graphql_string(&from.to_ascii_lowercase());
     let query = format!(
         r#"{{
@@ -620,7 +650,7 @@ fn raw_transaction_hash(raw_transaction: &str) -> Result<String> {
 async fn load_submission(
     node: &EmbeddedNode,
     submission_key: &str,
-) -> anyhow::Result<Option<SubmissionRecord>> {
+) -> std::result::Result<Option<SubmissionRecord>, SubmitError> {
     let key = escape_graphql_string(submission_key);
     let query = format!(
         r#"{{
@@ -648,7 +678,7 @@ async fn load_submission(
 async fn create_submission(
     node: &std::sync::Arc<EmbeddedNode>,
     record: &SubmissionRecord,
-) -> anyhow::Result<()> {
+) -> std::result::Result<(), ConfigClientError> {
     let submission_key = escape_graphql_string(&record.submission_key);
     let principal_did = escape_graphql_string(&record.principal_did);
     let request_hash = escape_graphql_string(&record.request_hash);
@@ -689,7 +719,7 @@ async fn update_submission(
     doc_id: &str,
     status: &str,
     receipt: Option<&Value>,
-) -> anyhow::Result<()> {
+) -> std::result::Result<(), SubmitError> {
     let doc_id = escape_graphql_string(doc_id);
     let status = escape_graphql_string(status);
     let receipt = match receipt {
@@ -848,18 +878,11 @@ fn decode_hex(value: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-pub(crate) fn is_gas_or_fee_cap_error(error: &(dyn std::error::Error + 'static)) -> bool {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        if matches!(
-            error.downcast_ref::<EthError>(),
-            Some(EthError::GasLimitExceedsCap { .. } | EthError::MaxFeeExceedsCap { .. })
-        ) {
-            return true;
-        }
-        current = error.source();
-    }
-    false
+pub(crate) fn is_gas_or_fee_cap_error(error: &SubmitError) -> bool {
+    matches!(
+        error,
+        SubmitError::Eth(EthError::GasLimitExceedsCap { .. } | EthError::MaxFeeExceedsCap { .. })
+    )
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -1265,7 +1288,7 @@ mod tests {
         assert!(
             error.to_string().contains("does not match"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -1375,9 +1398,10 @@ mod tests {
         let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
         let mut capped = request("capped");
         capped.caps.max_fee_per_gas = Some(100);
-        let error = gas_fees(&client, &capped).await.expect_err("cap");
+        let error = SubmitError::from(gas_fees(&client, &capped).await.expect_err("cap"));
         assert!(
-            matches!(error, EthError::MaxFeeExceedsCap { .. }) && is_gas_or_fee_cap_error(&error),
+            matches!(error, SubmitError::Eth(EthError::MaxFeeExceedsCap { .. }))
+                && is_gas_or_fee_cap_error(&error),
             "{}",
             ErrorChain(&error)
         );

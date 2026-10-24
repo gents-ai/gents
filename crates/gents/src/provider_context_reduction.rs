@@ -1,15 +1,161 @@
-use anyhow::{Context, Result};
+use crate::config_client::ConfigClientError;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::llm::message::Message;
-use gents_loop::claude_messages_body::{prepare_replay_checkpoint, ReplayTag, TaggedAssistantRow};
+use gents_loop::claude_messages_body::{
+    prepare_replay_checkpoint, ReplayCheckpointError, ReplayTag, TaggedAssistantRow,
+};
 use gents_loop::loop_stream::TaggedMessage;
 
 const REDUCTION_KEY_PREFIX: &str = "provider-context-reduction:v1";
 const SOURCE_BOUNDARY_VERSION: u32 = 2;
+
+type Result<T, E = ProviderContextReductionError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderContextReductionError {
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    RenderedRequest(#[from] crate::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    CanonicalJson(#[from] gents_loop::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("decoding ProviderContextReduction retained_suffix_json")]
+    DecodeRetainedSuffix(#[source] serde_json::Error),
+    #[error("decoding ProviderContextReduction compacted_prefix_json")]
+    DecodeCompactedPrefix(#[source] serde_json::Error),
+    #[error("decoding ProviderContextReduction replay_associations_json")]
+    DecodeReplayAssociations(#[source] serde_json::Error),
+    #[error("decoding ProviderContextReduction source_boundary_json")]
+    DecodeSourceBoundary(#[source] serde_json::Error),
+    #[error("decoding ProviderContextReduction checkpoint_messages_json")]
+    DecodeCheckpoint(#[source] serde_json::Error),
+    #[error("decoding ProviderContextReduction rows")]
+    DecodeRows(#[source] serde_json::Error),
+    #[error("capturing provider-context source boundary for session {session_id}")]
+    CaptureBoundaryQuery {
+        session_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("row has no string {field}")]
+    MissingStringField { field: String },
+    #[error("AgentMessage {doc_id} has no sequence")]
+    BoundaryRowMissingSequence { doc_id: String },
+    #[error("AgentMessage {doc_id} has no composite commit CID")]
+    BoundaryMissingCommit { doc_id: String },
+    #[error("capturing provider-context source boundary returned {rows} high-water rows")]
+    BoundaryRowCount { rows: usize },
+    #[error("provider-context reduction checkpoint cannot be empty")]
+    EmptyCheckpoint,
+    #[error("provider-context reduction index starts at one")]
+    IndexZero,
+    #[error("provider-context reduction split crosses an open tool-call/result pair")]
+    OpenPairSplit,
+    #[error(
+        "provider-context reduction checkpoint disagrees with its summary and retained suffix"
+    )]
+    CheckpointMismatch,
+    #[error("provider-context reduction key {reduction_key} has {count} visible logical twins")]
+    TwinsBeforeCreate { reduction_key: String, count: usize },
+    #[error("creating ProviderContextReduction {reduction_key}")]
+    Create {
+        reduction_key: String,
+        #[source]
+        source: crate::rendered_request::RenderedRequestError,
+    },
+    #[error("provider-context reduction key {reduction_key} has {count} visible logical twins after create")]
+    TwinsAfterCreate { reduction_key: String, count: usize },
+    #[error("loading ProviderContextReduction for request {request_doc_id}")]
+    LoadForRequest {
+        request_doc_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("checking ProviderContextReduction consumption for request {request_doc_id}")]
+    ConsumptionCheck {
+        request_doc_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("loading ProviderContextReduction key {reduction_key}")]
+    LoadByKey {
+        reduction_key: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("provider-context reduction key {reduction_key} is already bound to conflicting immutable facts")]
+    ConflictingFacts { reduction_key: String },
+    #[error("ProviderContextReduction {reduction_key} has index {index}, expected {expected}")]
+    IndexMismatch {
+        reduction_key: String,
+        index: i64,
+        expected: i64,
+    },
+    #[error(
+        "ProviderContextReduction {reduction_key} has parent {parent:?}, expected {expected:?}"
+    )]
+    ParentMismatch {
+        reduction_key: String,
+        parent: Option<String>,
+        expected: Option<String>,
+    },
+    #[error("ProviderContextReduction {reduction_key} rebinds its request-local chain")]
+    RebindsChain { reduction_key: String },
+    #[error("ProviderContextReduction has a negative reduction index")]
+    NegativeReductionIndex(#[source] std::num::TryFromIntError),
+    #[error("ProviderContextReduction has a negative turn index")]
+    NegativeTurnIndex(#[source] std::num::TryFromIntError),
+    #[error(
+        "ProviderContextReduction {reduction_key} does not match its immutable identity tuple"
+    )]
+    IdentityMismatch { reduction_key: String },
+    #[error("ProviderContextReduction {reduction_key} has an open tool-call/result split")]
+    OpenSplit { reduction_key: String },
+    #[error("ProviderContextReduction {reduction_key} has incomplete producer-call provenance")]
+    IncompleteProducerCall { reduction_key: String },
+    #[error(
+        "ProviderContextReduction {reduction_key} stored a split through a tool-call/result pair"
+    )]
+    SplitThroughPair { reduction_key: String },
+    #[error("ProviderContextReduction {reduction_key} messages_compacted disagrees with its exact prefix")]
+    MessagesCompactedMismatch { reduction_key: String },
+    #[error("ProviderContextReduction {reduction_key} has a negative token estimate")]
+    NegativeTokens { reduction_key: String },
+    #[error("validating ProviderContextReduction {reduction_key}")]
+    CheckpointInvalid {
+        reduction_key: String,
+        #[source]
+        source: Box<ProviderContextReductionError>,
+    },
+    #[error(
+        "ProviderContextReduction replay association lengths disagree with the exact native split"
+    )]
+    ReplayLengthsMismatch,
+    #[error("ProviderContextReduction replay association crosses its physical request")]
+    ReplayCrossesRequest,
+    #[error("ProviderContextReduction associates a non-assistant native row")]
+    NonAssistantAssociation,
+    #[error("validating ProviderContextReduction canonical replay associations")]
+    CanonicalReplay(#[source] ReplayCheckpointError),
+    #[error("checkpoint is missing its rendered summary")]
+    CheckpointMissingSummary,
+    #[error("unsupported checkpoint prefix version")]
+    UnsupportedCheckpointVersion,
+    #[error("checkpoint prefix disagrees with its summary")]
+    CheckpointPrefixMismatch,
+    #[error("ProviderContextReduction checkpoint has invalid stored projection structure")]
+    CheckpointProjectionInvalid,
+    #[error("provider-context reduction source boundary is bound to another request version")]
+    BoundaryVersionMismatch,
+    #[error("provider-context reduction source boundary has an empty fact identity")]
+    BoundaryEmptyIdentity,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptFactRef {
@@ -123,20 +269,20 @@ pub struct ProviderContextReduction {
 impl ProviderContextReduction {
     pub fn checkpoint_messages(&self) -> Result<Vec<Message>> {
         let suffix: Vec<Message> = serde_json::from_str(&self.retained_suffix_json)
-            .context("decoding ProviderContextReduction retained_suffix_json")?;
+            .map_err(ProviderContextReductionError::DecodeRetainedSuffix)?;
         decode_checkpoint(&self.checkpoint_messages_json, &suffix, &self.summary)
     }
 
     pub(crate) fn replay_associations(&self) -> Result<ReplayAssociations> {
         serde_json::from_str(&self.replay_associations_json)
-            .context("decoding ProviderContextReduction replay_associations_json")
+            .map_err(ProviderContextReductionError::DecodeReplayAssociations)
     }
 
     pub(crate) fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
         let prefix: Vec<Message> = serde_json::from_str(&self.compacted_prefix_json)
-            .context("decoding ProviderContextReduction compacted_prefix_json")?;
+            .map_err(ProviderContextReductionError::DecodeCompactedPrefix)?;
         let suffix: Vec<Message> = serde_json::from_str(&self.retained_suffix_json)
-            .context("decoding ProviderContextReduction retained_suffix_json")?;
+            .map_err(ProviderContextReductionError::DecodeRetainedSuffix)?;
         let associations = self.replay_associations()?;
         validate_replay_associations(&associations, &prefix, &suffix, &self.request_doc_id)?;
         let checkpoint = decode_checkpoint(&self.checkpoint_messages_json, &suffix, &self.summary)?;
@@ -155,7 +301,7 @@ impl ProviderContextReduction {
 
     pub fn source_boundary(&self) -> Result<SourceBoundary> {
         serde_json::from_str(&self.source_boundary_json)
-            .context("decoding ProviderContextReduction source_boundary_json")
+            .map_err(ProviderContextReductionError::DecodeSourceBoundary)
     }
 
     pub fn active_reduction_keys(&self) -> Vec<String> {
@@ -243,9 +389,12 @@ pub async fn capture_source_boundary(
     let response =
         graphql_with_transaction_retry(node, &query, "capturing provider-context source boundary")
             .await
-            .with_context(|| {
-                format!("capturing provider-context source boundary for session {session_id}")
-            })?;
+            .map_err(
+                |source| ProviderContextReductionError::CaptureBoundaryQuery {
+                    session_id: session_id.to_owned(),
+                    source,
+                },
+            )?;
     let rows = response
         .data
         .as_ref()
@@ -257,27 +406,29 @@ pub async fn capture_source_boundary(
         [] => None,
         [row] => {
             let doc_id = required_str(row, "_docID")?;
-            let sequence = row
-                .get("sequence")
-                .and_then(Value::as_i64)
-                .with_context(|| format!("AgentMessage {doc_id} has no sequence"))?;
+            let sequence = row.get("sequence").and_then(Value::as_i64).ok_or_else(|| {
+                ProviderContextReductionError::BoundaryRowMissingSequence {
+                    doc_id: doc_id.to_owned(),
+                }
+            })?;
             let commit = crate::graphql::newest_document_composite_commit(
                 node,
                 doc_id,
                 &format!("AgentMessage {doc_id} source boundary"),
             )
             .await?
-            .with_context(|| format!("AgentMessage {doc_id} has no composite commit CID"))?;
+            .ok_or_else(|| ProviderContextReductionError::BoundaryMissingCommit {
+                doc_id: doc_id.to_owned(),
+            })?;
             Some(TranscriptFactRef {
                 doc_id: doc_id.to_string(),
                 sequence,
                 commit_cid: commit.cid,
             })
         }
-        rows => anyhow::bail!(
-            "capturing provider-context source boundary returned {} high-water rows",
-            rows.len()
-        ),
+        rows => {
+            return Err(ProviderContextReductionError::BoundaryRowCount { rows: rows.len() });
+        }
     };
     Ok(SourceBoundary {
         boundary_version: SOURCE_BOUNDARY_VERSION,
@@ -292,10 +443,10 @@ pub(crate) async fn persist(
     input: NewProviderContextReduction<'_>,
 ) -> Result<ProviderContextReduction> {
     if input.checkpoint_messages.is_empty() {
-        anyhow::bail!("provider-context reduction checkpoint cannot be empty");
+        return Err(ProviderContextReductionError::EmptyCheckpoint);
     }
     if input.reduction_index == 0 {
-        anyhow::bail!("provider-context reduction index starts at one");
+        return Err(ProviderContextReductionError::IndexZero);
     }
     validate_source_boundary(
         input.source_boundary,
@@ -311,13 +462,11 @@ pub(crate) async fn persist(
         input.compacted_prefix.len(),
     ) == input.compacted_prefix.len();
     if !pair_closed {
-        anyhow::bail!("provider-context reduction split crosses an open tool-call/result pair");
+        return Err(ProviderContextReductionError::OpenPairSplit);
     }
     let expected_checkpoint = checkpoint_from_suffix(input.retained_suffix, input.summary);
     if input.checkpoint_messages != expected_checkpoint {
-        anyhow::bail!(
-            "provider-context reduction checkpoint disagrees with its summary and retained suffix"
-        );
+        return Err(ProviderContextReductionError::CheckpointMismatch);
     }
     validate_replay_associations(
         input.replay_associations,
@@ -340,10 +489,12 @@ pub(crate) async fn persist(
             intended.ensure_matches(existing)?;
             return Ok(existing.clone());
         }
-        twins => anyhow::bail!(
-            "provider-context reduction key {reduction_key} has {} visible logical twins",
-            twins.len()
-        ),
+        twins => {
+            return Err(ProviderContextReductionError::TwinsBeforeCreate {
+                reduction_key: reduction_key.clone(),
+                count: twins.len(),
+            });
+        }
     }
 
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -432,19 +583,22 @@ pub(crate) async fn persist(
                     compacted_tokens = input.compacted_tokens,
                 );
                 txn.execute(&mutation).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, crate::rendered_request::RenderedRequestError>(())
             })
         },
     )
     .await
-    .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
+    .map_err(|source| ProviderContextReductionError::Create {
+        reduction_key: reduction_key.clone(),
+        source,
+    })?;
 
     let rows = load_by_key(node, &reduction_key).await?;
     if rows.len() != 1 {
-        anyhow::bail!(
-            "provider-context reduction key {reduction_key} has {} visible logical twins after create",
-            rows.len()
-        );
+        return Err(ProviderContextReductionError::TwinsAfterCreate {
+            reduction_key: reduction_key.clone(),
+            count: rows.len(),
+        });
     }
     intended.ensure_matches(&rows[0])?;
     Ok(rows.into_iter().next().expect("length checked"))
@@ -504,8 +658,9 @@ pub async fn load_for_request(
     let response =
         graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by request")
             .await
-            .with_context(|| {
-                format!("loading ProviderContextReduction for request {request_doc_id}")
+            .map_err(|source| ProviderContextReductionError::LoadForRequest {
+                request_doc_id: request_doc_id.to_owned(),
+                source,
             })?;
     let mut rows: Vec<ProviderContextReduction> = serde_json::from_value(
         response
@@ -557,8 +712,9 @@ pub async fn load_unconsumed_for_request(
         "checking ProviderContextReduction consumption",
     )
     .await
-    .with_context(|| {
-        format!("checking ProviderContextReduction consumption for request {request_doc_id}")
+    .map_err(|source| ProviderContextReductionError::ConsumptionCheck {
+        request_doc_id: request_doc_id.to_owned(),
+        source,
     })?;
     let captures = response
         .data
@@ -644,7 +800,10 @@ async fn load_by_key(
     let response =
         graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by key")
             .await
-            .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
+            .map_err(|source| ProviderContextReductionError::LoadByKey {
+                reduction_key: reduction_key.to_owned(),
+                source,
+            })?;
     let mut rows = serde_json::from_value(
         response
             .data
@@ -653,7 +812,7 @@ async fn load_by_key(
             .cloned()
             .unwrap_or_else(|| json!([])),
     )
-    .context("decoding ProviderContextReduction rows")?;
+    .map_err(ProviderContextReductionError::DecodeRows)?;
     hydrate_rows(node, &mut rows).await?;
     Ok(rows)
 }
@@ -760,10 +919,9 @@ impl IntendedReduction {
             && row.original_tokens == self.original_tokens
             && row.compacted_tokens == self.compacted_tokens;
         if !matches {
-            anyhow::bail!(
-                "provider-context reduction key {} is already bound to conflicting immutable facts",
-                self.reduction_key
-            );
+            return Err(ProviderContextReductionError::ConflictingFacts {
+                reduction_key: self.reduction_key.clone(),
+            });
         }
         Ok(())
     }
@@ -773,23 +931,21 @@ fn validate_chain(rows: &[ProviderContextReduction]) -> Result<()> {
     for (index, row) in rows.iter().enumerate() {
         let expected_index = i64::try_from(index + 1).unwrap_or(i64::MAX);
         if row.reduction_index != expected_index {
-            anyhow::bail!(
-                "ProviderContextReduction {} has index {}, expected {}",
-                row.reduction_key,
-                row.reduction_index,
-                expected_index
-            );
+            return Err(ProviderContextReductionError::IndexMismatch {
+                reduction_key: row.reduction_key.clone(),
+                index: row.reduction_index,
+                expected: expected_index,
+            });
         }
         let expected_parent = index
             .checked_sub(1)
             .map(|parent| rows[parent].reduction_key.as_str());
         if row.parent_reduction_key.as_deref() != expected_parent {
-            anyhow::bail!(
-                "ProviderContextReduction {} has parent {:?}, expected {:?}",
-                row.reduction_key,
-                row.parent_reduction_key,
-                expected_parent
-            );
+            return Err(ProviderContextReductionError::ParentMismatch {
+                reduction_key: row.reduction_key.clone(),
+                parent: row.parent_reduction_key.clone(),
+                expected: expected_parent.map(str::to_owned),
+            });
         }
     }
     Ok(())
@@ -806,15 +962,14 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
             || row.request_id != first.request_id
             || row.request_doc_id != first.request_doc_id
         {
-            anyhow::bail!(
-                "ProviderContextReduction {} rebinds its request-local chain",
-                row.reduction_key
-            );
+            return Err(ProviderContextReductionError::RebindsChain {
+                reduction_key: row.reduction_key.clone(),
+            });
         }
         let reduction_index = usize::try_from(row.reduction_index)
-            .context("ProviderContextReduction has a negative reduction index")?;
+            .map_err(ProviderContextReductionError::NegativeReductionIndex)?;
         let turn_index = usize::try_from(row.turn_index)
-            .context("ProviderContextReduction has a negative turn index")?;
+            .map_err(ProviderContextReductionError::NegativeTurnIndex)?;
         let expected_key = reduction_key(
             &row.node_did,
             &row.session_id,
@@ -823,51 +978,48 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
             reduction_index,
         )?;
         if row.reduction_key != expected_key {
-            anyhow::bail!(
-                "ProviderContextReduction {} does not match its immutable identity tuple",
-                row.reduction_key
-            );
+            return Err(ProviderContextReductionError::IdentityMismatch {
+                reduction_key: row.reduction_key.clone(),
+            });
         }
         if !row.pair_closed {
-            anyhow::bail!(
-                "ProviderContextReduction {} has an open tool-call/result split",
-                row.reduction_key
-            );
+            return Err(ProviderContextReductionError::OpenSplit {
+                reduction_key: row.reduction_key.clone(),
+            });
         }
         if row.producer_call_id.is_some() != row.producer_call_seq.is_some() {
-            anyhow::bail!(
-                "ProviderContextReduction {} has incomplete producer-call provenance",
-                row.reduction_key
-            );
+            return Err(ProviderContextReductionError::IncompleteProducerCall {
+                reduction_key: row.reduction_key.clone(),
+            });
         }
         let boundary = row.source_boundary()?;
         validate_source_boundary(&boundary, &row.request_doc_id, &row.request_commit_cid)?;
         let prefix: Vec<Message> = serde_json::from_str(&row.compacted_prefix_json)
-            .context("decoding ProviderContextReduction compacted_prefix_json")?;
+            .map_err(ProviderContextReductionError::DecodeCompactedPrefix)?;
         let suffix: Vec<Message> = serde_json::from_str(&row.retained_suffix_json)
-            .context("decoding ProviderContextReduction retained_suffix_json")?;
+            .map_err(ProviderContextReductionError::DecodeRetainedSuffix)?;
         let split = prefix.len();
         let source = [prefix.as_slice(), suffix.as_slice()].concat();
         if crate::compaction::pair_safe_boundary(&source, split) != split {
-            anyhow::bail!(
-                "ProviderContextReduction {} stored a split through a tool-call/result pair",
-                row.reduction_key
-            );
+            return Err(ProviderContextReductionError::SplitThroughPair {
+                reduction_key: row.reduction_key.clone(),
+            });
         }
         if row.messages_compacted != i64::try_from(split).unwrap_or(i64::MAX) {
-            anyhow::bail!(
-                "ProviderContextReduction {} messages_compacted disagrees with its exact prefix",
-                row.reduction_key
-            );
+            return Err(ProviderContextReductionError::MessagesCompactedMismatch {
+                reduction_key: row.reduction_key.clone(),
+            });
         }
         if row.original_tokens < 0 || row.compacted_tokens < 0 {
-            anyhow::bail!(
-                "ProviderContextReduction {} has a negative token estimate",
-                row.reduction_key
-            );
+            return Err(ProviderContextReductionError::NegativeTokens {
+                reduction_key: row.reduction_key.clone(),
+            });
         }
-        decode_checkpoint(&row.checkpoint_messages_json, &suffix, &row.summary).with_context(
-            || format!("validating ProviderContextReduction {}", row.reduction_key),
+        decode_checkpoint(&row.checkpoint_messages_json, &suffix, &row.summary).map_err(
+            |source| ProviderContextReductionError::CheckpointInvalid {
+                reduction_key: row.reduction_key.clone(),
+                source: Box::new(source),
+            },
         )?;
         validate_replay_associations(
             &row.replay_associations()?,
@@ -885,18 +1037,18 @@ pub(crate) fn validate_replay_associations(
     suffix: &[Message],
     request_doc_id: &str,
 ) -> Result<()> {
-    anyhow::ensure!(
-        associations.prefix_rows.len() == prefix.len()
-            && associations.retained_rows.len() == suffix.len(),
-        "ProviderContextReduction replay association lengths disagree with the exact native split"
-    );
-    anyhow::ensure!(
-        associations
-            .required
-            .iter()
-            .all(|tag| tag.request_doc_id == request_doc_id),
-        "ProviderContextReduction replay association crosses its physical request"
-    );
+    if associations.prefix_rows.len() != prefix.len()
+        || associations.retained_rows.len() != suffix.len()
+    {
+        return Err(ProviderContextReductionError::ReplayLengthsMismatch);
+    }
+    if !associations
+        .required
+        .iter()
+        .all(|tag| tag.request_doc_id == request_doc_id)
+    {
+        return Err(ProviderContextReductionError::ReplayCrossesRequest);
+    }
     let mut assistant_rows = Vec::new();
     let mut assistant_split = 0;
     for (messages, sources, in_prefix) in [
@@ -917,10 +1069,11 @@ pub(crate) fn validate_replay_associations(
                         assistant_split += 1;
                     }
                 }
-                _ => anyhow::ensure!(
-                    association.source.is_none(),
-                    "ProviderContextReduction associates a non-assistant native row"
-                ),
+                _ => {
+                    if association.source.is_some() {
+                        return Err(ProviderContextReductionError::NonAssistantAssociation);
+                    }
+                }
             }
         }
     }
@@ -929,7 +1082,7 @@ pub(crate) fn validate_replay_associations(
         assistant_rows,
         assistant_split,
     )
-    .context("validating ProviderContextReduction canonical replay associations")?;
+    .map_err(ProviderContextReductionError::CanonicalReplay)?;
     Ok(())
 }
 
@@ -954,31 +1107,31 @@ fn encode_checkpoint(checkpoint: &[Message], summary: &str) -> Result<String> {
             version: 1,
             prefix: checkpoint
                 .get(..prefix_len)
-                .context("checkpoint is missing its rendered summary")?
+                .ok_or(ProviderContextReductionError::CheckpointMissingSummary)?
                 .to_vec(),
         })?,
     )?)
 }
 
 fn decode_checkpoint(encoded: &str, suffix: &[Message], summary: &str) -> Result<Vec<Message>> {
-    let stored: StoredCheckpoint = serde_json::from_str(encoded)
-        .context("decoding ProviderContextReduction checkpoint_messages_json")?;
+    let stored: StoredCheckpoint =
+        serde_json::from_str(encoded).map_err(ProviderContextReductionError::DecodeCheckpoint)?;
     let checkpoint = match stored {
         StoredCheckpoint::Full(messages) => messages,
         StoredCheckpoint::Prefix(mut stored) => {
-            anyhow::ensure!(stored.version == 1, "unsupported checkpoint prefix version");
-            anyhow::ensure!(
-                stored.prefix.len() == usize::from(!summary.trim().is_empty()),
-                "checkpoint prefix disagrees with its summary"
-            );
+            if stored.version != 1 {
+                return Err(ProviderContextReductionError::UnsupportedCheckpointVersion);
+            }
+            if stored.prefix.len() != usize::from(!summary.trim().is_empty()) {
+                return Err(ProviderContextReductionError::CheckpointPrefixMismatch);
+            }
             stored.prefix.extend_from_slice(suffix);
             stored.prefix
         }
     };
-    anyhow::ensure!(
-        checkpoint_matches_stored_projection(&checkpoint, suffix, summary),
-        "ProviderContextReduction checkpoint has invalid stored projection structure"
-    );
+    if !checkpoint_matches_stored_projection(&checkpoint, suffix, summary) {
+        return Err(ProviderContextReductionError::CheckpointProjectionInvalid);
+    }
     Ok(checkpoint)
 }
 
@@ -1019,13 +1172,11 @@ pub(crate) fn validate_source_boundary(
         || boundary.request_doc_id != request_doc_id
         || boundary.request_commit_cid != request_commit_cid
     {
-        anyhow::bail!(
-            "provider-context reduction source boundary is bound to another request version"
-        );
+        return Err(ProviderContextReductionError::BoundaryVersionMismatch);
     }
     if let Some(row) = &boundary.canonical_through {
         if row.doc_id.is_empty() || row.commit_cid.is_empty() {
-            anyhow::bail!("provider-context reduction source boundary has an empty fact identity");
+            return Err(ProviderContextReductionError::BoundaryEmptyIdentity);
         }
     }
     Ok(())
@@ -1038,9 +1189,11 @@ fn graphql_optional_string(value: Option<&str>) -> String {
 }
 
 fn required_str<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
-    row.get(field)
-        .and_then(Value::as_str)
-        .with_context(|| format!("row has no string {field}"))
+    row.get(field).and_then(Value::as_str).ok_or_else(|| {
+        ProviderContextReductionError::MissingStringField {
+            field: field.to_owned(),
+        }
+    })
 }
 
 #[cfg(test)]

@@ -1214,11 +1214,13 @@ fn replacement_plan(
     merged: &Map<String, Value>,
 ) -> Result<DesiredStateApplyPlan> {
     let value = Value::Object(merged.clone());
-    DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: target.collection(),
-        add: value.clone(),
-        update: value,
-    }])
+    Ok(DesiredStateApplyPlan::new(vec![
+        DesiredStateApplyDocument {
+            collection: target.collection(),
+            add: value.clone(),
+            update: value,
+        },
+    ])?)
 }
 
 async fn candidate_doc(

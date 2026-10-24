@@ -27,7 +27,7 @@ async fn outdated_packs(
     for pack in installed {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
         let (latest, outdated, error) = match client.package(namespace, name).await {
-            Err(error) => (None, None, Some(ErrorChain(error.as_ref()).to_string())),
+            Err(error) => (None, None, Some(ErrorChain(&error).to_string())),
             Ok(package) => match package["latest"].as_str() {
                 None => (
                     None,

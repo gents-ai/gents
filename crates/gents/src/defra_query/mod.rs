@@ -51,6 +51,7 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 
 pub(crate) mod bounded;
 mod command;
+mod error;
 mod field_page;
 pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;
@@ -62,6 +63,7 @@ pub(crate) mod render;
 pub(crate) mod schema;
 
 pub use bounded::BoundedQueryTool;
+pub use error::DefraQueryFailure;
 pub use query::{
     build_query, expand_collection_scope_aliases, is_restricted_field, CollectionScope,
     DefraQueryParams, AGENT_CONFIG_QUERY_COLLECTIONS, AGENT_CONFIG_SCOPE_ALIAS, DEFAULT_LIMIT,
@@ -92,6 +94,12 @@ impl std::error::Error for DefraQueryError {
 impl From<anyhow::Error> for DefraQueryError {
     fn from(error: anyhow::Error) -> Self {
         Self(error)
+    }
+}
+
+impl From<DefraQueryFailure> for DefraQueryError {
+    fn from(error: DefraQueryFailure) -> Self {
+        Self(error.into())
     }
 }
 

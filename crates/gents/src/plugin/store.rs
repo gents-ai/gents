@@ -219,7 +219,7 @@ pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     let path = store_path(home, digest_hex)?;
     let dir = store_dir(home);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    crate::pack_registry::stage_and_persist(&dir, &path, bytes)
+    Ok(crate::pack_registry::stage_and_persist(&dir, &path, bytes)?)
 }
 
 pub fn content_digest_hex(bytes: &[u8]) -> String {

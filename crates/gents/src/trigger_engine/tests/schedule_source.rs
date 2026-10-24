@@ -13,7 +13,7 @@ async fn read_trigger_cursor(
     )
     .await;
     anyhow::ensure!(results.len() == 1, "singleton cursor result is missing");
-    results.remove(0)
+    Ok(results.remove(0)?)
 }
 
 fn schedule_test_behavior() -> Arc<ResolvedAgent> {

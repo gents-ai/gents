@@ -25,7 +25,7 @@ impl ConfigCommandTool {
                             "id": id,
                             "error": ErrorChain(error.as_ref()).to_string()
                         });
-                        if let Some(missing) = error.downcast_ref::<crate::document_config::MissingReference>() {
+                        if let Some(crate::document_config::DocumentConfigError::MissingReference(missing)) = error.downcast_ref::<crate::document_config::DocumentConfigError>() {
                             diagnostic["field"] = json!(missing.field);
                             diagnostic["missing"] = json!({"collection":missing.target.graphql_type(),"id":missing.target_id});
                         }

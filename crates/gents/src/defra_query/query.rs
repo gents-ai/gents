@@ -1,7 +1,7 @@
-use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::error::DefraQueryFailure;
 use super::render::{render_filter, validate_identifier};
 
 pub const DEFAULT_LIMIT: u32 = 50;
@@ -133,42 +133,44 @@ impl CollectionScope {
         matches!(self, Self::All)
     }
 
-    pub fn ensure_allowed(&self, collection: &str) -> Result<()> {
+    pub fn ensure_allowed(&self, collection: &str) -> Result<(), DefraQueryFailure> {
         crate::document_config::reject_protected_collection_name(collection)?;
         match self {
             Self::All => Ok(()),
             Self::Only(allowed) if allowed.contains(collection) => Ok(()),
-            Self::None => bail!(
-                "collection {collection:?} is not within the allowed query scope: [] (deny-all)"
-            ),
-            Self::Only(allowed) => bail!(
-                "collection {collection:?} is not within the allowed query scope: [{}]",
-                allowed.iter().cloned().collect::<Vec<_>>().join(", ")
-            ),
+            Self::None => Err(DefraQueryFailure::ScopeDenyAll {
+                collection: collection.to_owned(),
+            }),
+            Self::Only(allowed) => Err(DefraQueryFailure::ScopeOutside {
+                collection: collection.to_owned(),
+                allowed: allowed.iter().cloned().collect::<Vec<_>>().join(", "),
+            }),
         }
     }
 }
 
-pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result<String> {
-    validate_identifier(&params.collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;
+pub fn build_query(
+    params: &DefraQueryParams,
+    scope: &CollectionScope,
+) -> Result<String, DefraQueryFailure> {
+    validate_identifier(&params.collection)
+        .map_err(|error| DefraQueryFailure::InvalidCollectionName { error })?;
     scope.ensure_allowed(&params.collection)?;
 
     if params.fields.is_empty() {
-        bail!("`fields` must list at least one field to return");
+        return Err(DefraQueryFailure::FieldsEmpty);
     }
     if params.fields.iter().any(|f| f == "*") {
-        bail!(
-            "wildcard field \"*\" must be the only entry: call with fields: [\"*\"] \
-             to list the collection's queryable fields"
-        );
+        return Err(DefraQueryFailure::WildcardNotOnly);
     }
     for field in &params.fields {
-        validate_identifier(field).map_err(|e| anyhow!("invalid field name: {e}"))?;
+        validate_identifier(field)
+            .map_err(|error| DefraQueryFailure::InvalidFieldName { error })?;
         if is_restricted_field(&params.collection, field) {
-            bail!(
-                "field {field:?} on {:?} is restricted and cannot be queried",
-                params.collection
-            );
+            return Err(DefraQueryFailure::FieldRestricted {
+                field: field.clone(),
+                collection: params.collection.clone(),
+            });
         }
     }
 
@@ -180,10 +182,10 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
         collect_filter_field_keys(filter, &mut filter_fields);
         for field in &filter_fields {
             if is_restricted_field(&params.collection, field) {
-                bail!(
-                    "field {field:?} on {:?} is restricted and cannot be used in a filter",
-                    params.collection
-                );
+                return Err(DefraQueryFailure::FilterFieldRestricted {
+                    field: field.clone(),
+                    collection: params.collection.clone(),
+                });
             }
         }
         let rendered = render_filter(filter)?;
@@ -224,7 +226,7 @@ mod tests {
                 CollectionScope::restricted(vec![name.to_string()]),
             ] {
                 let err = build_query(&params(name, &["x"]), &scope).unwrap_err();
-                let message = format!("{}", ErrorChain(err.as_ref()));
+                let message = format!("{}", ErrorChain(&err));
                 assert!(message.contains("protected"), "{message}");
                 assert!(message.contains(name), "{message}");
             }

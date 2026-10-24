@@ -1,8 +1,9 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use super::error::DefraQueryFailure;
 use super::{
     build_query, discovery_payload, introspection_query, parse_collection_schema, CollectionScope,
     DefraQueryParams,
@@ -46,7 +47,7 @@ impl From<DefraQueryParams> for QueryParams {
     }
 }
 
-pub fn query_help(command: Option<&str>) -> Result<&'static str> {
+pub fn query_help(command: Option<&str>) -> Result<&'static str, DefraQueryFailure> {
     match command {
         None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks keywords with BM25. Configuration uses config; schema definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
@@ -54,7 +55,7 @@ pub fn query_help(command: Option<&str>) -> Result<&'static str> {
         Some("search") => Ok("{argv:[\"search\"],collection:\"Reports\",options:{fields:[\"duty\"],search_fields:[\"duty\"],text:\"crew duty\",limit:5}}. Returns native BM25 _score, highest first; zero-score rows may follow matches. search_fields are String fields; fields selects returned values. Default limit 10, maximum 1000. Optional filter uses native operators; optional order uses find’s typed field-order tie-breakers. _docID breaks remaining ties. Configure fulltext indexes through schema help indexes fulltext; no embeddings needed."),
         Some("explain") => Ok("{argv:[\"explain\"],collection:\"Shipment\",options:{fields:[\"reference\"],filter:{status:{_eq:\"queued\"}},limit:20,mode:\"simple\"}}. Uses the same fields/filter/order/offset/limit and scope as find. Default simple inspects the native plan without executing the query. Set mode:execute only when the user requests measured execution; this runs the bounded read and returns native execution metrics. Execution metrics describe native work, not a matching-row total; use count for that. No mutations. Index observations are native plan facts; recommendations for other workloads are inferences."),
         Some("count") => Ok("{argv:[\"count\"],collection:\"Shipment\",options:{filter:{status:{_eq:\"queued\"}}}}. Returns total_count from DefraDB COUNT over every matching row; no fields/limit/offset/order."),
-        _ => bail!("unknown query command; call query with {{\"argv\":[\"help\"]}}"),
+        _ => Err(DefraQueryFailure::UnknownQueryCommand),
     }
 }
 
@@ -63,33 +64,31 @@ pub fn build_paged_query(
     scope: &CollectionScope,
     order: Option<&Value>,
     offset: u32,
-) -> Result<String> {
-    ensure!(
-        offset <= 100_000,
-        "offset exceeds 100000; use a narrower filter"
-    );
+) -> Result<String, DefraQueryFailure> {
+    if offset > 100_000 {
+        return Err(DefraQueryFailure::OffsetTooLarge);
+    }
     let base = build_query(params, scope)?;
     let mut orders = Vec::new();
     if let Some(value) = order {
         let entries: Vec<&Value> = match value {
             Value::Object(_) => vec![value],
             Value::Array(entries) => entries.iter().collect(),
-            _ => bail!("order must be an object or array of single-field objects"),
+            _ => return Err(DefraQueryFailure::OrderShape),
         };
-        ensure!(
-            !entries.is_empty() && entries.len() <= 16,
-            "order must contain 1–16 fields"
-        );
+        if entries.is_empty() || entries.len() > 16 {
+            return Err(DefraQueryFailure::OrderCount);
+        }
         for entry in entries {
             let obj = entry
                 .as_object()
                 .filter(|v| v.len() == 1)
-                .context("each order entry must contain one field and ASC or DESC")?;
+                .ok_or(DefraQueryFailure::OrderEntry)?;
             let (field, direction) = obj.iter().next().unwrap();
             let direction = direction
                 .as_str()
                 .filter(|v| matches!(*v, "ASC" | "DESC"))
-                .context("order direction must be ASC or DESC")?;
+                .ok_or(DefraQueryFailure::OrderDirection)?;
             let guard = DefraQueryParams {
                 fields: vec![field.clone()],
                 ..params.clone()
@@ -108,7 +107,9 @@ pub fn build_paged_query(
         .join(", ");
     let insertion = base
         .rfind(") {")
-        .context("query renderer omitted argument boundary")?;
+        .ok_or(DefraQueryFailure::RendererBoundaryMissing {
+            boundary: "argument",
+        })?;
     let mut out = base;
     out.insert_str(
         insertion,
@@ -391,7 +392,7 @@ fn collect_plan_observations(plan: &Value, out: &mut Vec<String>) {
     }
 }
 
-pub fn render_result(value: Value) -> Result<String> {
+pub fn render_result(value: Value) -> Result<String, DefraQueryFailure> {
     Ok(serde_json::to_string(
         &crate::tool_output::Ordered::reading_order(
             value,

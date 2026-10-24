@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use gents_protocol::error_chain::ErrorChain;
 
 use super::error::DocumentConfigError;
@@ -38,10 +38,11 @@ fn render_trigger_runtime_mutation(
 pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],
-) -> Vec<Result<Option<String>>> {
+) -> Vec<std::result::Result<Option<String>, DocumentConfigError>> {
+    type Cursor = std::result::Result<Option<String>, DocumentConfigError>;
     let mut results = std::iter::repeat_with(|| None)
         .take(scopes.len())
-        .collect::<Vec<Option<Result<Option<String>>>>>();
+        .collect::<Vec<Option<Cursor>>>();
 
     for (chunk_index, chunk) in scopes.chunks(TRIGGER_CURSOR_BATCH_SIZE).enumerate() {
         let chunk_start = chunk_index * TRIGGER_CURSOR_BATCH_SIZE;
@@ -50,7 +51,8 @@ pub(crate) async fn load_trigger_next_run_at_batch(
         for (index, (node_did, trigger_id)) in chunk.iter().enumerate() {
             let result_index = chunk_start + index;
             if node_did.is_empty() {
-                results[result_index] = Some(Err(anyhow!("trigger observation owner is required")));
+                results[result_index] =
+                    Some(Err(DocumentConfigError::TriggerObservationOwnerRequired));
                 continue;
             }
             let alias = format!("trigger_{index}");
@@ -77,10 +79,10 @@ pub(crate) async fn load_trigger_next_run_at_batch(
             Ok(response) => response,
             Err(error) => {
                 for (result_index, _) in aliases {
-                    results[result_index] = Some(Err(anyhow!(
-                        "query Trigger cursor failed: {}",
-                        ErrorChain(&error)
-                    )));
+                    results[result_index] =
+                        Some(Err(DocumentConfigError::TriggerCursorQueryFailed {
+                            error: ErrorChain(&error).to_string(),
+                        }));
                 }
                 continue;
             }
@@ -121,9 +123,10 @@ pub(crate) async fn load_trigger_next_run_at_batch(
                     .chain(global_errors.iter().copied())
                     .collect::<Vec<_>>()
                     .join("; ");
-                results[result_index] = Some(Err(anyhow!(
-                    "query Trigger cursor for {alias} failed: {messages}"
-                )));
+                results[result_index] = Some(Err(DocumentConfigError::TriggerCursorAliasFailed {
+                    alias,
+                    messages,
+                }));
                 continue;
             }
 
@@ -135,7 +138,7 @@ pub(crate) async fn load_trigger_next_run_at_batch(
             if let Some(rows) = rows {
                 if rows.len() > 1 {
                     results[result_index] =
-                        Some(Err(anyhow!("ambiguous scoped trigger observation")));
+                        Some(Err(DocumentConfigError::TriggerObservationAmbiguous));
                     continue;
                 }
             }
@@ -149,7 +152,7 @@ pub(crate) async fn load_trigger_next_run_at_batch(
 
     results
         .into_iter()
-        .map(|result| result.unwrap_or_else(|| Err(anyhow!("trigger cursor result was omitted"))))
+        .map(|result| result.unwrap_or(Err(DocumentConfigError::TriggerCursorOmitted)))
         .collect()
 }
 
@@ -183,10 +186,9 @@ pub(crate) async fn update_trigger_runtime_fields(
     updates: TriggerRuntimeUpdate,
 ) -> Result<()> {
     let escaped_owner = escape_graphql_string(node_did);
-    anyhow::ensure!(
-        !node_did.is_empty(),
-        "trigger observation owner is required"
-    );
+    if node_did.is_empty() {
+        return Err(DocumentConfigError::TriggerObservationOwnerRequired.into());
+    }
     if updates.next_run_at.is_none()
         && updates.last_attempt_at.is_none()
         && updates.last_fired_source_doc_id.is_none()
@@ -261,7 +263,11 @@ pub(crate) async fn update_trigger_runtime_fields(
                     .and_then(serde_json::Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                anyhow::ensure!(rows.len() <= 1, "ambiguous scoped trigger observation");
+                if rows.len() > 1 {
+                    return Err(anyhow::Error::from(
+                        DocumentConfigError::TriggerObservationAmbiguous,
+                    ));
+                }
                 let Some(row) = rows.first() else {
                     tracing::info!(
                         trigger_id,

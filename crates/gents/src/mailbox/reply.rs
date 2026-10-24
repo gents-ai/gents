@@ -82,65 +82,89 @@ pub(crate) async fn claim_reply_in_txn(
     Ok(())
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ReplyError {
+    #[error("mailbox item does not accept a request reply")]
+    ItemNotStartRequest,
+    #[error("mailbox reply is not authenticated")]
+    NotAuthenticated,
+    #[error("mailbox reply must be interactive")]
+    NotInteractive,
+    #[error("mailbox reply deadline has expired")]
+    DeadlineExpired,
+    #[error("mailbox reply is missing its request document ID")]
+    MissingRequestDocId,
+    #[error("mailbox reply requester does not match")]
+    RequesterMismatch,
+    #[error("mailbox reply target node does not match")]
+    TargetNodeMismatch,
+    #[error("mailbox reply target agent does not match")]
+    TargetAgentMismatch,
+    #[error("mailbox reply session does not match")]
+    SessionMismatch,
+    #[error("mailbox reply source does not match")]
+    SourceMismatch,
+    #[error("mailbox item is closed or was consumed by another request")]
+    ItemClosed,
+}
+
 pub(super) fn validate_reply_claim(
     item: &MailboxItem,
     request: &AgentRequest,
     authenticated: bool,
     deadline_valid: bool,
-) -> Result<()> {
-    ensure!(
-        item.parsed_action() == Some(MailboxAction::StartRequest),
-        "mailbox item does not accept a request reply"
-    );
-    ensure!(authenticated, "mailbox reply is not authenticated");
-    ensure!(
-        request.execution_origin.as_deref() == Some("interactive"),
-        "mailbox reply must be interactive"
-    );
-    ensure!(
-        deadline_valid
-            || (item.parsed_status() == Some(MailboxStatus::Acted)
-                && item.resolved_doc_id.as_deref() == Some(request.doc_id.as_str())),
-        "mailbox reply deadline has expired"
-    );
-    ensure!(
-        !request.doc_id.is_empty(),
-        "mailbox reply is missing its request document ID"
-    );
-    ensure!(
-        request
-            .requester_did
-            .as_deref()
-            .is_some_and(|did| !did.is_empty() && did == item.requester_did),
-        "mailbox reply requester does not match"
-    );
-    ensure!(
-        !request.node_did.is_empty() && request.node_did == item.target_node_did,
-        "mailbox reply target node does not match"
-    );
-    ensure!(
-        !item.target_agent_id.is_empty() && request.agent_id == item.target_agent_id,
-        "mailbox reply target agent does not match"
-    );
-    ensure!(
-        item.session_id
-            .as_ref()
-            .is_none_or(|session| session == &request.session_id),
-        "mailbox reply session does not match"
-    );
-    ensure!(
-        !item.doc_id.is_empty()
-            && request.caused_by_source_doc_id.as_deref() == Some(item.doc_id.as_str()),
-        "mailbox reply source does not match"
-    );
-    ensure!(
-        match item.parsed_status() {
-            Some(MailboxStatus::Open) => true,
-            Some(MailboxStatus::Acted) =>
-                item.resolved_doc_id.as_deref() == Some(request.doc_id.as_str()),
-            _ => false,
-        },
-        "mailbox item is closed or was consumed by another request"
-    );
+) -> std::result::Result<(), ReplyError> {
+    if !(item.parsed_action() == Some(MailboxAction::StartRequest)) {
+        return Err(ReplyError::ItemNotStartRequest);
+    }
+    if !(authenticated) {
+        return Err(ReplyError::NotAuthenticated);
+    }
+    if !(request.execution_origin.as_deref() == Some("interactive")) {
+        return Err(ReplyError::NotInteractive);
+    }
+    if !(deadline_valid
+        || (item.parsed_status() == Some(MailboxStatus::Acted)
+            && item.resolved_doc_id.as_deref() == Some(request.doc_id.as_str())))
+    {
+        return Err(ReplyError::DeadlineExpired);
+    }
+    if !(!request.doc_id.is_empty()) {
+        return Err(ReplyError::MissingRequestDocId);
+    }
+    if !(request
+        .requester_did
+        .as_deref()
+        .is_some_and(|did| !did.is_empty() && did == item.requester_did))
+    {
+        return Err(ReplyError::RequesterMismatch);
+    }
+    if !(!request.node_did.is_empty() && request.node_did == item.target_node_did) {
+        return Err(ReplyError::TargetNodeMismatch);
+    }
+    if !(!item.target_agent_id.is_empty() && request.agent_id == item.target_agent_id) {
+        return Err(ReplyError::TargetAgentMismatch);
+    }
+    if !(item
+        .session_id
+        .as_ref()
+        .is_none_or(|session| session == &request.session_id))
+    {
+        return Err(ReplyError::SessionMismatch);
+    }
+    if !(!item.doc_id.is_empty()
+        && request.caused_by_source_doc_id.as_deref() == Some(item.doc_id.as_str()))
+    {
+        return Err(ReplyError::SourceMismatch);
+    }
+    if !(match item.parsed_status() {
+        Some(MailboxStatus::Open) => true,
+        Some(MailboxStatus::Acted) => {
+            item.resolved_doc_id.as_deref() == Some(request.doc_id.as_str())
+        }
+        _ => false,
+    }) {
+        return Err(ReplyError::ItemClosed);
+    }
     Ok(())
 }

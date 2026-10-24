@@ -82,7 +82,9 @@ fn binding_fields() -> Result<String> {
 }
 
 pub fn list_chain_key_bindings_query(node_did: &str) -> Result<String> {
-    anyhow::ensure!(!node_did.trim().is_empty(), "chain key owner is required");
+    if node_did.trim().is_empty() {
+        return Err(DocumentConfigError::ChainKeyOwnerRequired.into());
+    }
     let owner = escape_graphql_string(node_did);
     Ok(format!(
         "{{ ChainKeyBinding(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{ _docID {} }} }}",
@@ -91,10 +93,9 @@ pub fn list_chain_key_bindings_query(node_did: &str) -> Result<String> {
 }
 
 pub fn chain_key_binding_by_id_query(node_did: &str, binding_id: &str) -> Result<String> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty() && !binding_id.trim().is_empty(),
-        "chain key owner and binding ID are required"
-    );
+    if node_did.trim().is_empty() || binding_id.trim().is_empty() {
+        return Err(DocumentConfigError::ChainKeyOwnerAndBindingRequired.into());
+    }
     let owner = escape_graphql_string(node_did);
     let binding = escape_graphql_string(binding_id);
     Ok(format!(
@@ -131,10 +132,9 @@ pub async fn load_chain_key_binding_by_doc_id(
     let response = graphql_with_transaction_retry(node, &query, "read ChainKeyBinding").await?;
     let mut rows =
         super::serde_helpers::try_rows_with_doc_id(response.data.as_ref(), "ChainKeyBinding")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "duplicate ChainKeyBinding physical identity"
-    );
+    if rows.len() > 1 {
+        return Err(DocumentConfigError::ChainKeyBindingDuplicate.into());
+    }
     Ok(rows.pop())
 }
 
@@ -158,10 +158,9 @@ pub fn preserve_chain_key_binding_update_fields(
 pub fn upsert_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Result<String> {
     let owner = escape_graphql_string(&doc.node_did);
     let binding = escape_graphql_string(&doc.binding_id);
-    anyhow::ensure!(
-        !doc.node_did.trim().is_empty() && !doc.binding_id.trim().is_empty(),
-        "chain key owner and binding ID are required"
-    );
+    if doc.node_did.trim().is_empty() || doc.binding_id.trim().is_empty() {
+        return Err(DocumentConfigError::ChainKeyOwnerAndBindingRequired.into());
+    }
     let (_, add) = crate::config_client::config_projection(
         crate::Collection::ChainKeyBinding,
         Some(&serde_json::to_value(doc)?),
@@ -177,10 +176,9 @@ pub fn upsert_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Resul
 }
 
 pub fn create_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Result<String> {
-    anyhow::ensure!(
-        !doc.node_did.trim().is_empty() && !doc.binding_id.trim().is_empty(),
-        "chain key owner and binding ID are required"
-    );
+    if doc.node_did.trim().is_empty() || doc.binding_id.trim().is_empty() {
+        return Err(DocumentConfigError::ChainKeyOwnerAndBindingRequired.into());
+    }
     let (_, value) = crate::config_client::config_projection(
         crate::Collection::ChainKeyBinding,
         Some(&serde_json::to_value(doc)?),

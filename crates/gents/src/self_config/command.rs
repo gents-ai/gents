@@ -505,7 +505,16 @@ impl ConfigCommandTool {
         argv: &[String],
         deleting: bool,
     ) -> (String, Value) {
-        let missing = error.downcast_ref::<crate::document_config::MissingReference>();
+        let missing = error
+            .downcast_ref::<crate::document_config::MissingReference>()
+            .or_else(|| {
+                match error.downcast_ref::<crate::document_config::DocumentConfigError>() {
+                    Some(crate::document_config::DocumentConfigError::MissingReference(
+                        missing,
+                    )) => Some(missing),
+                    _ => None,
+                }
+            });
         let message = missing.map_or_else(
             || ErrorChain(error.as_ref()).to_string(),
             |missing| {

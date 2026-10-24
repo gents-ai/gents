@@ -133,7 +133,7 @@ pub(crate) async fn validate_manifest_against_live(
             if let Err(error) = gents::config_client::validate_event_trigger_document_fields(
                 trigger, task, source, &declared,
             ) {
-                errors.push(format!("{}", ErrorChain(error.as_ref())));
+                errors.push(format!("{}", ErrorChain(&error)));
             }
         }
     }

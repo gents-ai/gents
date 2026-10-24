@@ -163,7 +163,7 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
         err.to_string()
             .contains("gents claude-login --node-did did:key:z6MkNobody"),
         "{}",
-        ErrorChain(err.as_ref())
+        ErrorChain(&err)
     );
 }
 

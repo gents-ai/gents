@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Result;
+type TestError = Box<dyn std::error::Error + Send + Sync>;
+type Result<T = (), E = TestError> = std::result::Result<T, E>;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
@@ -147,7 +148,7 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
     ConfigAccess::transact_local_write(&node, None, "test.clean_noop", |_| {
-        Box::pin(async { Ok::<_, anyhow::Error>(()) })
+        Box::pin(async { Ok::<_, TestError>(()) })
     })
     .await
     .unwrap();
@@ -155,7 +156,7 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
         Box::pin(async move {
             txn.execute(r#"mutation { create_WriteTelemetryLevelProbe(input: { value: "changed" }) { _docID } }"#)
                 .await?;
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, TestError>(())
         })
     })
     .await
@@ -244,7 +245,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
                     .await?;
                     completed.fetch_add(1, Ordering::Relaxed);
                 }
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         }),
     ));
@@ -283,7 +284,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
             Box::pin(async move {
                 txn.execute(r#"mutation { create_MutationPauseProbe(input: { value: "contender" }) { _docID } }"#)
                     .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         }),
     ));
@@ -330,7 +331,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
             Box::pin(async move {
                 txn.execute(r#"mutation { create_MutationPauseProbe(input: { value: "outside" }) { _docID } }"#)
                     .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         }),
     )
@@ -348,7 +349,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
             Box::pin(async move {
                 txn.execute(r#"mutation { create_MutationPauseProbe(input: { value: "fault" }) { _docID } }"#)
                     .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         }),
     )
@@ -387,7 +388,7 @@ async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
                 Box::pin(async move {
                     txn.execute(r#"mutation { create_ArmedMutationPauseProbe(input: { value: "scoped" }) { _docID } }"#)
                         .await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await
@@ -408,7 +409,7 @@ async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
             Box::pin(async move {
                 txn.execute(r#"mutation { create_ArmedMutationPauseProbe(input: { value: "outside" }) { _docID } }"#)
                     .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         }),
     )
@@ -496,7 +497,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
                 })
             })
         },
-        |_| Box::pin(async { Ok::<_, anyhow::Error>(()) }),
+        |_| Box::pin(async { Ok::<_, TestError>(()) }),
     ));
 
     tokio::select! {
@@ -588,7 +589,7 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
                             r#"mutation { create_NativeCompletionProbe(input: { value: "abandoned" }) { _docID } }"#,
                         )
                         .await?;
-                        Ok::<_, anyhow::Error>(())
+                        Ok::<_, TestError>(())
                     })
                 },
             ),
@@ -733,7 +734,7 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
                                 .is_err_and(crate::config_client::is_transaction_step_unavailable),
                             "a poisoned transaction admitted a later statement: {second:?}"
                         );
-                        Ok::<_, anyhow::Error>(())
+                        Ok::<_, TestError>(())
                     })
                 },
             ),
@@ -794,7 +795,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
         &node,
         None,
         "test.cancel_before_begin",
-        |_| Box::pin(async { Ok::<_, anyhow::Error>(()) }),
+        |_| Box::pin(async { Ok::<_, TestError>(()) }),
     ));
 
     tokio::time::timeout(Duration::from_millis(10), &mut transaction)
@@ -1476,7 +1477,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
                         let operation = crate::config_client::write_telemetry::WriteOperation::new(
                             "test.write_admission.trace",
                         )?;
-                        Ok::<_, anyhow::Error>((owner, gate.acquire(operation).await?))
+                        Ok::<_, TestError>((owner, gate.acquire(operation).await?))
                     });
                 }
                 WriteAdmissionAction::Observe { owner, event } => {
@@ -1609,7 +1610,7 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
                 r#"mutation {{ update_OwnedWriteFact(filter: {{value: {{_eq: "{observed}"}}}}, input: {{value: "canonical"}}) {{ _docID }} }}"#,
             ))
             .await?;
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, TestError>(())
         })
     })
     .await
@@ -1753,7 +1754,7 @@ resources:
                         r#"mutation { add_IdentityFact(input: {value: "secret"}) { _docID } }"#,
                     )
                     .await?;
-                Ok::<_, anyhow::Error>(
+                Ok::<_, TestError>(
                     response["data"]["add_IdentityFact"][0]["_docID"]
                         .as_str()
                         .expect("created document id")
@@ -2021,7 +2022,7 @@ async fn http_commit_conflict_replays_callback_under_new_transaction_id() {
                     r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
                 )
                 .await?;
-                Ok::<_, anyhow::Error>(id)
+                Ok::<_, TestError>(id)
             })
         })
         .await
@@ -2091,7 +2092,7 @@ async fn idempotent_transaction_replays_non_conflict_commit_failure() {
                         r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
                     )
                     .await?;
-                    Ok::<_, anyhow::Error>(id)
+                    Ok::<_, TestError>(id)
                 })
             },
         )
@@ -2159,7 +2160,7 @@ async fn idempotent_transaction_does_not_replay_domain_rejection() {
             "test.http_idempotent_domain_rejection",
             move |_| {
                 callbacks_for_attempt.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move { Err::<(), _>(anyhow::anyhow!("stale domain state")) })
+                Box::pin(async move { Err::<(), _>(TestError::from("stale domain state")) })
             },
         )
         .await
@@ -2188,7 +2189,7 @@ async fn observing_transaction_reports_conflict_without_replay() {
                     r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
                 )
                 .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await

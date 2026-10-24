@@ -1,6 +1,6 @@
-use anyhow::{ensure, Context, Result};
 use serde_json::{Map, Value};
 
+use super::error::DefraQueryFailure;
 use super::{
     build_paged_query, build_query, CollectionSchema, CollectionScope, DefraQueryParams, MAX_LIMIT,
 };
@@ -13,41 +13,42 @@ pub(super) fn build_search_query(
     scope: &CollectionScope,
     schema: &CollectionSchema,
     options: &Map<String, Value>,
-) -> Result<String> {
+) -> Result<String, DefraQueryFailure> {
     let text = options
         .get("text")
         .and_then(Value::as_str)
         .filter(|text| !text.trim().is_empty())
-        .context(
-            "options.text must be nonempty search terms; call query with argv:[help,search]",
-        )?;
+        .ok_or(DefraQueryFailure::SearchTextMissing)?;
     let fields: Vec<String> = serde_json::from_value(
-        options.get("search_fields").cloned().context(
-            "options.search_fields is required; call query with argv:[fields] to discover names",
-        )?,
+        options
+            .get("search_fields")
+            .cloned()
+            .ok_or(DefraQueryFailure::SearchFieldsMissing)?,
     )
-    .context(
-        "options.search_fields must be an array of field names; call query with argv:[help,search]",
-    )?;
+    .map_err(DefraQueryFailure::SearchFieldsInvalid)?;
     let guard = DefraQueryParams {
         fields: fields.clone(),
         ..params.clone()
     };
     build_query(&guard, scope)?;
+    let visible = schema.visible_fields(&params.collection);
     for field in &fields {
-        ensure!(schema.visible_fields(&params.collection).iter()
-            .any(|f| f.name == *field && f.named_type() == "String"),
-            "search field {field:?} must be an available String field; call query with argv:[fields]");
+        if !visible
+            .iter()
+            .any(|f| f.name == *field && f.named_type() == "String")
+        {
+            return Err(DefraQueryFailure::SearchFieldUnavailable {
+                field: field.clone(),
+            });
+        }
     }
-    ensure!(
-        !params.fields.iter().any(|field| field == SCORE_FIELD),
-        "{SCORE_FIELD} is reserved for the native BM25 score; omit it from options.fields"
-    );
+    if params.fields.iter().any(|field| field == SCORE_FIELD) {
+        return Err(DefraQueryFailure::ScoreFieldReserved);
+    }
     let limit = params.limit.unwrap_or(10);
-    ensure!(
-        (1..=MAX_LIMIT).contains(&limit),
-        "search limit must be 1–{MAX_LIMIT}; call query with argv:[help,search]"
-    );
+    if !(1..=MAX_LIMIT).contains(&limit) {
+        return Err(DefraQueryFailure::SearchLimit);
+    }
     let params = DefraQueryParams {
         limit: Some(limit),
         ..params.clone()
@@ -55,14 +56,16 @@ pub(super) fn build_search_query(
     let mut query = build_paged_query(&params, scope, options.get("order"), 0)?;
     let order = query
         .rfind("order: [")
-        .context("query renderer omitted order boundary")?;
+        .ok_or(DefraQueryFailure::RendererBoundaryMissing { boundary: "order" })?;
     query.insert_str(
         order + "order: [".len(),
         &format!("{{_alias: {{{SCORE_FIELD}: DESC}}}}, "),
     );
     let selection = query
         .rfind(" } }")
-        .context("query renderer omitted selection boundary")?;
+        .ok_or(DefraQueryFailure::RendererBoundaryMissing {
+            boundary: "selection",
+        })?;
     let fields = fields
         .iter()
         .map(|field| format!("\"{}\"", escape_graphql_string(field)))

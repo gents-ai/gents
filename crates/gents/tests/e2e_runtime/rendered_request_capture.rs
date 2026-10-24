@@ -335,7 +335,7 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
     assert!(
         error.to_string().contains("integrity violation"),
         "unexpected error: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(
         commit_set(db.node.as_ref(), &first.capture_key).await,
@@ -352,7 +352,7 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
     assert!(
         error.to_string().contains("integrity violation"),
         "unexpected error: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(
         commit_set(db.node.as_ref(), &first.capture_key).await,
@@ -369,7 +369,7 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
     assert!(
         error.to_string().contains("integrity violation"),
         "unexpected error: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     let rows = rendered_requests(db.node.as_ref(), &first.request_id).await;
@@ -1059,11 +1059,9 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
         .await
         .expect_err("missing version must fail closed");
     assert!(
-        ErrorChain(error.as_ref())
-            .to_string()
-            .contains("capture_version"),
+        ErrorChain(&error).to_string().contains("capture_version"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(
         commit_set(db.node.as_ref(), &missing_version.capture_key).await,
@@ -2688,9 +2686,7 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
             } else {
                 gents::rendered_request::decode_capture_json_embedded(node, version, &stored, kind)
                     .await
-                    .unwrap_or_else(|error| {
-                        panic!("decode {field}: {}", ErrorChain(error.as_ref()))
-                    })
+                    .unwrap_or_else(|error| panic!("decode {field}: {}", ErrorChain(&error)))
             };
             row[field] = Value::String(
                 gents::rendered_request::canonical_json_string(&decoded)

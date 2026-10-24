@@ -1059,7 +1059,7 @@ pub fn wire_plugin(
     reviewed_job: Option<&gents_protocol::job::PluginJobSettings>,
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
-) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
+) -> Result<(Tools, super::AgentContext, WireReport), DocumentConfigError> {
     use crate::plugin_job::settings;
     use gents_protocol::job::{JobPolicy, PluginJobSettings};
 
@@ -1139,11 +1139,12 @@ pub fn wire_plugin(
             }
             union_into(&mut agents.target_ids, &block.agent_targets);
             let problems = settings::validate(&block);
-            anyhow::ensure!(
-                problems.is_empty(),
-                "job block for {coordinate} is not valid: {}",
-                problems.join("; ")
-            );
+            if !problems.is_empty() {
+                return Err(DocumentConfigError::JobBlockInvalid {
+                    coordinate: coordinate.clone(),
+                    problems: problems.join("; "),
+                });
+            }
             changed.push(format!(
                 "{} job block for {coordinate}",
                 if merged { "merged" } else { "wrote" }
@@ -1224,7 +1225,7 @@ pub fn unwire_plugin(
     plugin: &crate::plugin::store::InstalledPlugin,
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
-) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
+) -> Result<(Tools, super::AgentContext, WireReport), DocumentConfigError> {
     use crate::plugin_job::settings;
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
@@ -1314,11 +1315,12 @@ pub fn unwire_plugin(
             ));
         } else {
             let problems = settings::validate(block);
-            anyhow::ensure!(
-                problems.is_empty(),
-                "job block for {coordinate} is not valid: {}",
-                problems.join("; ")
-            );
+            if !problems.is_empty() {
+                return Err(DocumentConfigError::JobBlockInvalid {
+                    coordinate: coordinate.clone(),
+                    problems: problems.join("; "),
+                });
+            }
         }
     }
 

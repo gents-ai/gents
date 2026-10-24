@@ -59,8 +59,8 @@ pub use contract::{
     TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
-    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
-    OneShotProviderFailure,
+    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
+    OneShotNoVisibleOutput, OneShotProviderFailure,
 };
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::resolve_replay_evidence;

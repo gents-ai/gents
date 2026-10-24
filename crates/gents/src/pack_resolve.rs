@@ -1,11 +1,44 @@
-use std::path::Path;
-
-use anyhow::Result;
+use std::error::Error;
+use std::path::{Path, PathBuf};
 
 use crate::pack::{is_valid_pack_name, InstalledPack};
 use crate::pack_archive::{PackArchive, DEFAULT_NAMESPACE};
-use crate::pack_registry::{fetch_pack, RegistryClient, RegistryError};
+use crate::pack_registry::{fetch_pack, PackRegistryError, RegistryClient, RegistryError};
 use crate::pack_store::{is_valid_index_version, PackStore};
+
+type Result<T, E = PackResolveError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackResolveError {
+    #[error("{spec:?} names no version after @")]
+    NoVersion { spec: String },
+    #[error(
+        "{spec:?} names an invalid version; a version is ASCII letters, digits, '.', '+' or '-', and never a bare '.' or '..'"
+    )]
+    InvalidVersion { spec: String },
+    #[error(
+        "{spec:?} is not a pack name; expected name, ns/name, or either with @version, namespace and name both snake_case"
+    )]
+    NotPackName { spec: String },
+    #[error(
+        "{pinned} is not in the pack store of {} and the registry at {registry_url} could not be reached; fetch it while online with `gents pack fetch {pinned} --store`, or name a directory or .pack file.",
+        home.display()
+    )]
+    OfflineUnreachable {
+        pinned: String,
+        home: PathBuf,
+        registry_url: String,
+    },
+    #[error(
+        "{pinned} is not in the pack store of {} and the registry at {registry_url} has no such pack.",
+        home.display()
+    )]
+    OfflineNotFound {
+        pinned: String,
+        home: PathBuf,
+        registry_url: String,
+    },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackSpec<'a> {
@@ -17,12 +50,16 @@ pub struct PackSpec<'a> {
 pub fn parse_pack_spec(spec: &str) -> Result<PackSpec<'_>> {
     let (coordinate, version) = match spec.split_once('@') {
         Some((coordinate, version)) => {
-            anyhow::ensure!(!version.is_empty(), "{spec:?} names no version after @");
-            anyhow::ensure!(
-                is_valid_index_version(version),
-                "{spec:?} names an invalid version; a version is ASCII letters, \
-                 digits, '.', '+' or '-', and never a bare '.' or '..'"
-            );
+            if version.is_empty() {
+                return Err(PackResolveError::NoVersion {
+                    spec: spec.to_owned(),
+                });
+            }
+            if !is_valid_index_version(version) {
+                return Err(PackResolveError::InvalidVersion {
+                    spec: spec.to_owned(),
+                });
+            }
             (coordinate, Some(version))
         }
         None => (spec, None),
@@ -30,11 +67,11 @@ pub fn parse_pack_spec(spec: &str) -> Result<PackSpec<'_>> {
     let (namespace, name) = coordinate
         .split_once('/')
         .unwrap_or((DEFAULT_NAMESPACE, coordinate));
-    anyhow::ensure!(
-        is_valid_pack_name(namespace) && is_valid_pack_name(name),
-        "{spec:?} is not a pack name; expected name, ns/name, or either with @version, \
-         namespace and name both snake_case"
-    );
+    if !(is_valid_pack_name(namespace) && is_valid_pack_name(name)) {
+        return Err(PackResolveError::NotPackName {
+            spec: spec.to_owned(),
+        });
+    }
     Ok(PackSpec {
         namespace,
         name,
@@ -63,7 +100,10 @@ pub struct ResolveOptions<'a> {
     pub installed: &'a [InstalledPack],
 }
 
-pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<ResolvedNamedPack> {
+pub async fn resolve_named(
+    spec: &str,
+    options: &ResolveOptions<'_>,
+) -> anyhow::Result<ResolvedNamedPack> {
     let parsed = parse_pack_spec(spec)?;
     let coordinate = format!("{}/{}", parsed.namespace, parsed.name);
 
@@ -117,6 +157,24 @@ pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<R
     })
 }
 
+/// The registry cause sits at the first `RegistryError` inside a `PackRegistryError` on the source
+/// chain; a boxed `#[source]` link is a `Box<PackRegistryError>`, not the enum itself.
+fn registry_cause<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a RegistryError> {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        let pack_error = error.downcast_ref::<PackRegistryError>().or_else(|| {
+            error
+                .downcast_ref::<Box<PackRegistryError>>()
+                .map(Box::as_ref)
+        });
+        if let Some(PackRegistryError::Registry(registry)) = pack_error {
+            return Some(registry);
+        }
+        current = error.source();
+    }
+    None
+}
+
 fn offline_pack_error(
     coordinate: &str,
     version: Option<&str>,
@@ -131,21 +189,19 @@ fn offline_pack_error(
         Some(version) => format!("{coordinate}@{version}"),
         None => coordinate.to_owned(),
     };
-    match error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<RegistryError>())
-    {
-        Some(RegistryError::Unreachable { .. }) => anyhow::anyhow!(
-            "{pinned} is not in the pack store of {} and the registry at {registry_url} \
-             could not be reached; fetch it while online with `gents pack fetch {pinned} \
-             --store`, or name a directory or .pack file.",
-            home.display()
-        ),
-        Some(RegistryError::NotFound { .. }) => anyhow::anyhow!(
-            "{pinned} is not in the pack store of {} and the registry at {registry_url} \
-             has no such pack.",
-            home.display()
-        ),
+    match registry_cause(error.as_ref()) {
+        Some(RegistryError::Unreachable { .. }) => PackResolveError::OfflineUnreachable {
+            pinned,
+            home: home.to_path_buf(),
+            registry_url: registry_url.to_owned(),
+        }
+        .into(),
+        Some(RegistryError::NotFound { .. }) => PackResolveError::OfflineNotFound {
+            pinned,
+            home: home.to_path_buf(),
+            registry_url: registry_url.to_owned(),
+        }
+        .into(),
         None => error.context(format!("resolving {coordinate} from the registry")),
     }
 }
@@ -158,7 +214,7 @@ mod tests {
 
     const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:1";
 
-    fn expect_err(result: Result<ResolvedNamedPack>) -> anyhow::Error {
+    fn expect_err(result: anyhow::Result<ResolvedNamedPack>) -> anyhow::Error {
         match result {
             Ok(_) => panic!("expected an error"),
             Err(error) => error,

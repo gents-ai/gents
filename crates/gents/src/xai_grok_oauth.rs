@@ -85,12 +85,18 @@ pub fn grok_client_version_gate_guidance() -> String {
 }
 
 #[derive(Debug, thiserror::Error)]
+enum XaiGrokOAuthError {
+    #[error(transparent)]
+    Bearer(#[from] crate::oauth_http::OAuthHttpError),
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum XaiGrokHeaderError {
     #[error("Grok client version could not be encoded as an HTTP header")]
     ClientVersion(#[source] reqwest::header::InvalidHeaderValue),
 }
 
-pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap, XaiGrokHeaderError> {
+pub fn build_xai_grok_oauth_headers() -> std::result::Result<HeaderMap, XaiGrokHeaderError> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Accept",
@@ -290,7 +296,7 @@ async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     node_did: &str,
     account_ref: Option<&str>,
-) -> Result<CapturingXaiGrokOAuthHttpClient> {
+) -> std::result::Result<CapturingXaiGrokOAuthHttpClient, XaiGrokOAuthError> {
     let provider = XAI_OAUTH_PROVIDER;
     let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
         node,
@@ -371,7 +377,9 @@ mod tests {
     }
 
     impl BearerSource for CountingBearer {
-        async fn current_bearer(&self) -> Result<String> {
+        async fn current_bearer(
+            &self,
+        ) -> std::result::Result<String, crate::oauth_credential::OAuthCredentialError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.token.clone())
         }

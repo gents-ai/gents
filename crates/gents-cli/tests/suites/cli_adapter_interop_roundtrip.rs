@@ -335,7 +335,7 @@ async fn negative_external_capture_imports_reject_bad_mappings_without_partial_r
         ensure_runtime_schemas(&node).await.map_err(|error| {
             format!(
                 "creating runtime schemas for {name}: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             )
         })?;
 

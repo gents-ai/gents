@@ -182,50 +182,33 @@ pub fn incompatible_store(
         })
 }
 
-/// Transparent wrappers forward `source()` past the sentinel they carry, so
-/// each link is also matched against the enums that wrap it.
+/// Each wrapper is matched by its own type too, since transparent wrappers
+/// forward `source()` past the sentinel they carry.
 fn find_incompatible<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a IncompatibleStore> {
-    chain(error).find_map(|cause| {
-        cause
-            .downcast_ref::<IncompatibleStore>()
-            .or_else(|| {
-                cause
-                    .downcast_ref::<StorageBackendError>()
-                    .and_then(StorageBackendError::incompatible)
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::store_key::StoreKeyError>()
-                    .and_then(crate::store_key::StoreKeyError::incompatible)
-            })
-    })
+    find_source::<IncompatibleStore>(error)
+        .or_else(|| {
+            find_source::<StorageBackendError>(error).and_then(StorageBackendError::incompatible)
+        })
+        .or_else(|| {
+            find_source::<crate::store_key::StoreKeyError>(error)
+                .and_then(crate::store_key::StoreKeyError::incompatible)
+        })
 }
 
 fn find_insecure_key<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a crate::identity::InsecureKeyPermissions> {
-    chain(error).find_map(|cause| {
-        cause
-            .downcast_ref::<crate::identity::InsecureKeyPermissions>()
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::identity::IdentityError>()
-                    .and_then(crate::identity::IdentityError::insecure_key)
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::store_key::StoreKeyError>()
-                    .and_then(crate::store_key::StoreKeyError::insecure_key)
-            })
-    })
-}
-
-fn chain<'a>(
-    error: &'a (dyn std::error::Error + 'static),
-) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
-    std::iter::successors(Some(error), |cause| cause.source())
+    find_source::<crate::identity::InsecureKeyPermissions>(error)
+        .or_else(|| {
+            find_source::<crate::identity::IdentityError>(error)
+                .and_then(crate::identity::IdentityError::insecure_key)
+        })
+        .or_else(|| {
+            find_source::<crate::store_key::StoreKeyError>(error)
+                .and_then(crate::store_key::StoreKeyError::insecure_key)
+        })
 }
 
 pub fn classify_store_error(error: anyhow::Error, data_path: &Path) -> anyhow::Error {
@@ -380,7 +363,7 @@ mod tests {
         let error = crate::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .expect_err("an older lineage must not open");
-        let store = incompatible_store(error.as_ref(), &data).expect("typed refusal");
+        let store = incompatible_store(&error, &data).expect("typed refusal");
         assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
         assert!(
             node.get_collection(gents_protocol::schemas::NODE_NAME)

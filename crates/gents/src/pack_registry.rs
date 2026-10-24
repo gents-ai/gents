@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde_json::Value;
 
 use crate::pack::PackManifest;
@@ -9,6 +9,8 @@ use crate::pack_store::PackStore;
 
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
 pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
+
+type Result<T, E = PackRegistryError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
@@ -22,6 +24,149 @@ pub enum RegistryError {
     },
     #[error("the registry has nothing at {url}")]
     NotFound { url: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackRegistryError {
+    #[error(transparent)]
+    Registry(#[from] RegistryError),
+    #[error("{url} is not a valid registry URL: {error}")]
+    InvalidUrl { url: String, error: String },
+    #[error("{url} cannot be a base for a registry URL")]
+    CannotBeBase { url: String },
+    #[error(
+        "refusing to send a password or registry token to {url} over plain http; use an https:// registry, or one on localhost/127.0.0.1"
+    )]
+    InsecureTransport { url: reqwest::Url },
+    #[error("the registry rejected the request to {url} ({status}): {body}")]
+    Rejected {
+        url: String,
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("reading the registry's response from {url}")]
+    Decode {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("reading the download body from {url}")]
+    ReadBody {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("publishing to {url}")]
+    Publish {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("downloading {coordinate} from the registry failed ({status})")]
+    DownloadFailed {
+        coordinate: String,
+        status: reqwest::StatusCode,
+    },
+    #[error(
+        "registry pack {coordinate} advertises {advertised} bytes, over the {limit} byte compressed bound"
+    )]
+    AdvertisedTooLarge {
+        coordinate: String,
+        advertised: u64,
+        limit: u64,
+    },
+    #[error("registry pack {coordinate} exceeds the {limit} byte compressed bound")]
+    DownloadTooLarge { coordinate: String, limit: u64 },
+    #[error("saving {coordinate}")]
+    SaveDownload {
+        coordinate: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "the registry advertised digest {advertised} for {coordinate} but the bytes hash to {computed}; refusing to install a pack that does not match what the registry described"
+    )]
+    DigestMismatch {
+        advertised: String,
+        coordinate: String,
+        computed: String,
+    },
+    #[error(
+        "the registry returned pack {returned} for requested coordinate {requested}; refusing to install an artifact under a different identity"
+    )]
+    CoordinateMismatch { returned: String, requested: String },
+    #[error("the registry answered a sign-in without a token")]
+    NoToken,
+    #[error("looking up {coordinate} on the registry")]
+    LookupPack {
+        coordinate: String,
+        #[source]
+        source: Box<PackRegistryError>,
+    },
+    #[error("registry package has no published version")]
+    NoVersion,
+    #[error("the registry did not advertise an artifact digest")]
+    NoDigest,
+    #[error("credentials lock path has no parent")]
+    CredentialsLockNoParent,
+    #[error("credentials path has no parent")]
+    CredentialsNoParent,
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("opening {}", path.display())]
+    OpenFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("locking {}", path.display())]
+    LockFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not valid JSON", path.display())]
+    CredentialsNotJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("reading {}", path.display())]
+    ReadCredentials {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("staging credentials in {}", dir.display())]
+    StageCredentials {
+        dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("restricting the credentials file")]
+    RestrictCredentials(#[source] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("writing credentials")]
+    WriteCredentials(#[source] std::io::Error),
+    #[error("saving {}", path.display())]
+    SaveFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("staging the download in {}", dir.display())]
+    StageDownload {
+        dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing the staged download")]
+    WriteStaged(#[source] std::io::Error),
 }
 
 pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
@@ -62,10 +207,15 @@ impl RegistryClient {
     }
 
     fn api_url(&self, segments: &[&str]) -> Result<reqwest::Url> {
-        let mut url = reqwest::Url::parse(&self.base_url)
-            .with_context(|| format!("{} is not a valid registry URL", self.base_url))?;
+        let mut url =
+            reqwest::Url::parse(&self.base_url).map_err(|error| PackRegistryError::InvalidUrl {
+                url: self.base_url.clone(),
+                error: error.to_string(),
+            })?;
         url.path_segments_mut()
-            .map_err(|()| anyhow::anyhow!("{} cannot be a base for a registry URL", self.base_url))?
+            .map_err(|()| PackRegistryError::CannotBeBase {
+                url: self.base_url.clone(),
+            })?
             .extend(["api", "v1"])
             .extend(segments);
         Ok(url)
@@ -88,29 +238,34 @@ impl RegistryClient {
 
     /// Passwords and registry tokens may only travel over HTTPS or loopback HTTP.
     fn require_secure(url: &reqwest::Url) -> Result<()> {
-        anyhow::ensure!(
-            url.scheme() == "https" || Self::host_is_loopback(url),
-            "refusing to send a password or registry token to {url} over plain http; use an https:// registry, or one on localhost/127.0.0.1"
-        );
+        if url.scheme() != "https" && !Self::host_is_loopback(url) {
+            return Err(PackRegistryError::InsecureTransport { url: url.clone() });
+        }
         Ok(())
     }
 
     async fn json_or_error(response: reqwest::Response, url: &str) -> Result<Value> {
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(RegistryError::NotFound {
+            return Err(PackRegistryError::Registry(RegistryError::NotFound {
                 url: url.to_owned(),
-            }
-            .into());
+            }));
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("the registry rejected the request to {url} ({status}): {body}");
+            return Err(PackRegistryError::Rejected {
+                url: url.to_owned(),
+                status,
+                body,
+            });
         }
         response
             .json::<Value>()
             .await
-            .with_context(|| format!("reading the registry's response from {url}"))
+            .map_err(|source| PackRegistryError::Decode {
+                url: url.to_owned(),
+                source,
+            })
     }
 
     async fn get_json(&self, segments: &[&str]) -> Result<Value> {
@@ -167,32 +322,41 @@ impl RegistryClient {
             .await
             .map_err(|source| self.unreachable(source))?;
         let status = response.status();
-        anyhow::ensure!(
-            status.is_success(),
-            "downloading {namespace}/{name}@{version} from the registry failed ({status})"
-        );
+        let coordinate = format!("{namespace}/{name}@{version}");
+        if !status.is_success() {
+            return Err(PackRegistryError::DownloadFailed { coordinate, status });
+        }
         let limit = crate::pack_archive::MAX_PACK_BYTES as u64;
         if let Some(advertised) = response.content_length() {
-            anyhow::ensure!(
-                advertised <= limit,
-                "registry pack {namespace}/{name}@{version} advertises {advertised} bytes, over the {limit} byte compressed bound"
-            );
+            if advertised > limit {
+                return Err(PackRegistryError::AdvertisedTooLarge {
+                    coordinate,
+                    advertised,
+                    limit,
+                });
+            }
         }
         let mut hasher = Sha256::new();
         let mut written = 0u64;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .with_context(|| format!("reading the download body from {url}"))?
+        while let Some(chunk) =
+            response
+                .chunk()
+                .await
+                .map_err(|source| PackRegistryError::ReadBody {
+                    url: url.to_string(),
+                    source,
+                })?
         {
             written += chunk.len() as u64;
-            anyhow::ensure!(
-                written <= limit,
-                "registry pack {namespace}/{name}@{version} exceeds the {limit} byte compressed bound"
-            );
+            if written > limit {
+                return Err(PackRegistryError::DownloadTooLarge { coordinate, limit });
+            }
             hasher.update(&chunk);
             out.write_all(&chunk)
-                .with_context(|| format!("saving {namespace}/{name}@{version}"))?;
+                .map_err(|source| PackRegistryError::SaveDownload {
+                    coordinate: coordinate.clone(),
+                    source,
+                })?;
         }
         Ok(format!("{:x}", hasher.finalize()))
     }
@@ -207,12 +371,11 @@ impl RegistryClient {
             .send()
             .await
             .map_err(|source| self.unreachable(source))?;
-        Self::json_or_error(response, url.as_str())
-            .await?
-            .get("token")
+        let body = Self::json_or_error(response, url.as_str()).await?;
+        body.get("token")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .context("the registry answered a sign-in without a token")
+            .ok_or(PackRegistryError::NoToken)
     }
 
     pub async fn me(&self, token: &str) -> Result<Value> {
@@ -279,7 +442,10 @@ impl RegistryClient {
             .body(bytes)
             .send()
             .await
-            .with_context(|| format!("publishing to {url}"))?;
+            .map_err(|source| PackRegistryError::Publish {
+                url: url.to_string(),
+                source,
+            })?;
         Self::json_or_error(response, url.as_str()).await
     }
 }
@@ -309,10 +475,13 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 pub fn verify_digest(bytes: &[u8], advertised: &str, coordinate: &str) -> Result<()> {
     let computed = sha256_hex(bytes);
-    anyhow::ensure!(
-        computed == advertised,
-        "the registry advertised digest {advertised} for {coordinate} but the bytes hash to {computed}; refusing to install a pack that does not match what the registry described"
-    );
+    if computed != advertised {
+        return Err(PackRegistryError::DigestMismatch {
+            advertised: advertised.to_owned(),
+            coordinate: coordinate.to_owned(),
+            computed,
+        });
+    }
     Ok(())
 }
 
@@ -322,15 +491,18 @@ pub fn verify_pack_coordinate(
     name: &str,
     version: &str,
 ) -> Result<()> {
-    anyhow::ensure!(
-        manifest.metadata.namespace == namespace
-            && manifest.name == name
-            && manifest.version == version,
-        "the registry returned pack {}/{name_in_manifest}@{version_in_manifest} for requested coordinate {namespace}/{name}@{version}; refusing to install an artifact under a different identity",
-        manifest.metadata.namespace,
-        name_in_manifest = manifest.name,
-        version_in_manifest = manifest.version,
-    );
+    if manifest.metadata.namespace != namespace
+        || manifest.name != name
+        || manifest.version != version
+    {
+        return Err(PackRegistryError::CoordinateMismatch {
+            returned: format!(
+                "{}/{}@{}",
+                manifest.metadata.namespace, manifest.name, manifest.version
+            ),
+            requested: format!("{namespace}/{name}@{version}"),
+        });
+    }
     Ok(())
 }
 
@@ -345,11 +517,14 @@ pub async fn resolve_pack_coordinate(
         None => client
             .package(namespace, name)
             .await
-            .with_context(|| format!("looking up {namespace}/{name} on the registry"))?
+            .map_err(|source| PackRegistryError::LookupPack {
+                coordinate: format!("{namespace}/{name}"),
+                source: Box::new(source),
+            })?
             .get("latest")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .context("registry package has no published version")?
+            .ok_or(PackRegistryError::NoVersion)?
             .to_owned(),
     };
     let artifact_digest = client
@@ -357,7 +532,7 @@ pub async fn resolve_pack_coordinate(
         .await?
         .get("digest")
         .and_then(Value::as_str)
-        .context("the registry did not advertise an artifact digest")?
+        .ok_or(PackRegistryError::NoDigest)?
         .to_owned();
     Ok(RegistryCoordinate {
         namespace: namespace.to_owned(),
@@ -391,7 +566,7 @@ pub async fn fetch_pack(
     namespace: &str,
     name: &str,
     version: Option<&str>,
-) -> Result<RegistryPack> {
+) -> anyhow::Result<RegistryPack> {
     let coordinate = resolve_pack_coordinate(client, namespace, name, version).await?;
     let coordinate_label = format!(
         "{}/{}@{}",
@@ -399,7 +574,7 @@ pub async fn fetch_pack(
     );
     let advertised = format!("sha256:{}", coordinate.artifact_digest);
     let index = cache_home
-        .map(|home| -> Result<PathBuf> {
+        .map(|home| -> anyhow::Result<PathBuf> {
             let hex = crate::pack_archive::digest_hex(&advertised)
                 .context("the registry advertised a malformed digest")?;
             Ok(home
@@ -453,12 +628,12 @@ pub async fn fetch_pack(
             );
             let stored = store
                 .import_file_accepting(staged.path(), None, |verified| {
-                    verify_pack_coordinate(
+                    Ok(verify_pack_coordinate(
                         &verified.manifest,
                         &coordinate.namespace,
                         &coordinate.name,
                         &coordinate.version,
-                    )
+                    )?)
                 })
                 .with_context(|| format!("installing {coordinate_label} from the registry"))?;
             let archive = store.open(&stored.header.digest)?;
@@ -501,7 +676,7 @@ pub mod credentials {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    use anyhow::{Context, Result};
+    use super::{PackRegistryError, Result};
 
     fn path(home: &Path) -> PathBuf {
         home.join(crate::home::REGISTRY_DIR_NAME)
@@ -518,49 +693,75 @@ pub mod credentials {
         let path = lock_path(home);
         let dir = path
             .parent()
-            .context("credentials lock path has no parent")?;
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+            .ok_or(PackRegistryError::CredentialsLockNoParent)?;
+        std::fs::create_dir_all(dir).map_err(|source| PackRegistryError::CreateDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(&path)
-            .with_context(|| format!("opening {}", path.display()))?;
-        file.lock()
-            .with_context(|| format!("locking {}", path.display()))?;
+            .map_err(|source| PackRegistryError::OpenFile {
+                path: path.clone(),
+                source,
+            })?;
+        file.lock().map_err(|source| PackRegistryError::LockFile {
+            path: path.clone(),
+            source,
+        })?;
         Ok(file)
     }
 
     fn read_all(home: &Path) -> Result<BTreeMap<String, String>> {
         match std::fs::read(path(home)) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("{} is not valid JSON", path(home).display())),
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| {
+                PackRegistryError::CredentialsNotJson {
+                    path: path(home),
+                    source,
+                }
+            }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
-            Err(error) => Err(error).with_context(|| format!("reading {}", path(home).display())),
+            Err(source) => Err(PackRegistryError::ReadCredentials {
+                path: path(home),
+                source,
+            }),
         }
     }
 
     fn write_all(home: &Path, tokens: &BTreeMap<String, String>) -> Result<()> {
         let file = path(home);
-        let dir = file.parent().context("credentials path has no parent")?;
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        let mut staged = tempfile::NamedTempFile::new_in(dir)
-            .with_context(|| format!("staging credentials in {}", dir.display()))?;
+        let dir = file
+            .parent()
+            .ok_or(PackRegistryError::CredentialsNoParent)?;
+        std::fs::create_dir_all(dir).map_err(|source| PackRegistryError::CreateDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let mut staged = tempfile::NamedTempFile::new_in(dir).map_err(|source| {
+            PackRegistryError::StageCredentials {
+                dir: dir.to_path_buf(),
+                source,
+            }
+        })?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             staged
                 .as_file()
                 .set_permissions(std::fs::Permissions::from_mode(0o600))
-                .context("restricting the credentials file")?;
+                .map_err(PackRegistryError::RestrictCredentials)?;
         }
         std::io::Write::write_all(&mut staged, &serde_json::to_vec_pretty(tokens)?)
-            .context("writing credentials")?;
+            .map_err(PackRegistryError::WriteCredentials)?;
         staged
             .persist(&file)
-            .map_err(|error| error.error)
-            .with_context(|| format!("saving {}", file.display()))?;
+            .map_err(|error| PackRegistryError::SaveFile {
+                path: file.clone(),
+                source: error.error,
+            })?;
         Ok(())
     }
 
@@ -588,16 +789,23 @@ pub mod credentials {
 
 pub fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let mut staged = tempfile::NamedTempFile::new_in(dir)
-        .with_context(|| format!("staging the download in {}", dir.display()))?;
+    let mut staged = tempfile::NamedTempFile::new_in(dir).map_err(|source| {
+        PackRegistryError::StageDownload {
+            dir: dir.to_path_buf(),
+            source,
+        }
+    })?;
     staged
         .write_all(bytes)
-        .context("writing the staged download")?;
+        .map_err(PackRegistryError::WriteStaged)?;
     staged.as_file().sync_all().ok();
     match staged.persist_noclobber(dest) {
         Ok(_) => Ok(()),
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(error.error).with_context(|| format!("saving {}", dest.display())),
+        Err(error) => Err(PackRegistryError::SaveFile {
+            path: dest.to_path_buf(),
+            source: error.error,
+        }),
     }
 }
 
@@ -774,7 +982,7 @@ mod tests {
             client.search("demo", 1).await.unwrap_err(),
             client.download("acme", "demo", "1.0.0").await.unwrap_err(),
         ] {
-            let message = format!("{}", ErrorChain(error.as_ref()));
+            let message = format!("{}", ErrorChain(&error));
             assert!(
                 message.contains("could not reach the registry at http://127.0.0.1:1"),
                 "{message}"
@@ -843,13 +1051,13 @@ mod tests {
         ] {
             let url = reqwest::Url::parse(loopback).unwrap();
             RegistryClient::require_secure(&url).unwrap_or_else(|error| {
-                panic!("{loopback} must be allowed: {}", ErrorChain(error.as_ref()))
+                panic!("{loopback} must be allowed: {}", ErrorChain(&error))
             });
         }
 
         let cleartext = reqwest::Url::parse("http://registry.example/api/v1/login").unwrap();
         let error = RegistryClient::require_secure(&cleartext).unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains("https"), "{message}");
         assert!(message.contains("http://registry.example"), "{message}");
     }
