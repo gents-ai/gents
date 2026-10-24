@@ -2,12 +2,14 @@ use super::*;
 use crate::config_client::{
     validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 
 impl ConfigCommandTool {
     pub(super) async fn validate_saved(&self, argv: &[String]) -> Result<String> {
         self.ensure_agent_catalog("validate", None)?;
-        anyhow::ensure!(argv.is_empty(), "validate takes no parameters; it checks saved configuration for your authenticated node");
+        if !argv.is_empty() {
+            return Err(CommandError::ValidateParameters.into());
+        }
         let identity = self.core.identity()?;
         let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local_readonly(
             &self.node,
@@ -25,7 +27,7 @@ impl ConfigCommandTool {
                             "id": id,
                             "error": ErrorChain(error.as_ref()).to_string()
                         });
-                        if let Some(crate::document_config::DocumentConfigError::MissingReference(missing)) = error.downcast_ref::<crate::document_config::DocumentConfigError>() {
+                        if let Some(crate::document_config::DocumentConfigError::MissingReference(missing)) = find_source::<crate::document_config::DocumentConfigError>(error.as_ref()) {
                             diagnostic["field"] = json!(missing.field);
                             diagnostic["missing"] = json!({"collection":missing.target.graphql_type(),"id":missing.target_id});
                         }

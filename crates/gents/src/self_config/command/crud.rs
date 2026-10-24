@@ -348,10 +348,10 @@ impl ConfigCommandTool {
         if target == SelfConfigTarget::AgentContext {
             return Ok(());
         }
-        self.ensure_resource(match target.category() {
+        Ok(self.ensure_resource(match target.category() {
             "mcp_service" => "mcp-service",
             other => other,
-        })
+        })?)
     }
 
     async fn document_agent(&self, target: SelfConfigTarget, id: &str) -> Result<Option<String>> {
@@ -418,7 +418,7 @@ impl ConfigCommandTool {
                 Ok(text) => results.push(json!({"index":index,"ok":true,"result":serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text)),"config_execution":receipt})),
                 Err(error) => {
                     let deleting = argv.first().is_some_and(|word| word == "cleanup") || argv.iter().take(3).any(|word| word == "delete");
-                    let (message, recovery) = child.failure_guidance(&error, argv, deleting);
+                    let (message, recovery) = child.failure_guidance(error.as_ref(), argv, deleting);
                     results.push(json!({"index":index,"ok":false,"error":message,"recovery":recovery,"config_execution":receipt}));
                     return Err(BatchFailure { results, failed_index:index, unattempted:commands.len()-index-1 }.into());
                 }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::agent::RuntimeSnapshotObserver;
@@ -13,6 +13,12 @@ use crate::runtime_status::RuntimeStatusHandle;
 use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 
 use super::context::AgentResolution;
+
+#[derive(Debug, thiserror::Error)]
+enum RouterError {
+    #[error("executor queue for agent {agent_id} closed unexpectedly")]
+    ExecutorQueueClosed { agent_id: String },
+}
 
 #[derive(Clone)]
 pub(in crate::agent) struct RuntimeAdmissionGate {
@@ -260,11 +266,8 @@ where
                     }
                     permit = dispatcher.reserve() => permit,
                 };
-                let permit = permit.map_err(|_| {
-                    anyhow!(
-                        "executor queue for agent {} closed unexpectedly",
-                        resolution.agent_id
-                    )
+                let permit = permit.map_err(|_| RouterError::ExecutorQueueClosed {
+                    agent_id: resolution.agent_id.clone(),
                 })?;
                 if active_snapshot_rx.has_changed().unwrap_or(false) {
                     pending_request = Some(request);

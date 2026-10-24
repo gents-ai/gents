@@ -11,26 +11,25 @@ enum AuthoringCall {
     Verify { pack: String },
 }
 
-fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
+fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall, CommandError> {
     let parsed = ParsedArgs::parse(argv)?;
     match verb {
         "scaffold" => {
-            anyhow::ensure!(
-                parsed.switches.is_empty(),
-                "pack scaffold takes no switches"
-            );
-            anyhow::ensure!(
-                parsed.positionals.len() == 1,
-                "pack scaffold requires exactly one snake_case NAME; the pack is created at <NAME> inside the effective tool root"
-            );
+            if !parsed.switches.is_empty() {
+                return Err(CommandError::ScaffoldSwitches);
+            }
+            if parsed.positionals.len() != 1 {
+                return Err(CommandError::ScaffoldName);
+            }
             for option in parsed.options.keys() {
-                anyhow::ensure!(
-                    matches!(
-                        option.as_str(),
-                        "namespace" | "kind" | "template" | "language"
-                    ),
-                    "unknown pack scaffold option --{option}; accepted: --namespace, --kind, --template, --language"
-                );
+                if !matches!(
+                    option.as_str(),
+                    "namespace" | "kind" | "template" | "language"
+                ) {
+                    return Err(CommandError::ScaffoldOption {
+                        option: option.clone(),
+                    });
+                }
             }
             let kind = parsed
                 .one("kind")?
@@ -39,9 +38,9 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                     "graph" => Ok(Kind::Graph),
                     "assets" => Ok(Kind::Assets),
                     "plugins" => Ok(Kind::Plugins),
-                    other => Err(anyhow::anyhow!(
-                        "unknown pack kind {other:?}; accepted: documents, graph, assets, plugins"
-                    )),
+                    other => Err(CommandError::UnknownPackKind {
+                        kind: other.to_owned(),
+                    }),
                 })
                 .transpose()?;
             let template = parsed
@@ -52,9 +51,9 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                     "graph" => Ok(Template::Graph),
                     "plugin-tool" => Ok(Template::PluginTool),
                     "assets" => Ok(Template::Assets),
-                    other => Err(anyhow::anyhow!(
-                        "unknown pack template {other:?}; accepted: minimal, automation, graph, plugin-tool, assets"
-                    )),
+                    other => Err(CommandError::UnknownPackTemplate {
+                        template: other.to_owned(),
+                    }),
                 })
                 .transpose()?;
             Ok(AuthoringCall::Scaffold {
@@ -69,37 +68,29 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
             })
         }
         "check" => {
-            anyhow::ensure!(
-                parsed.switches.is_empty() && parsed.options.is_empty(),
-                "pack check takes only an optional DIR; it accepts no options"
-            );
-            anyhow::ensure!(
-                parsed.positionals.len() <= 1,
-                "pack check accepts at most one DIR"
-            );
+            if !(parsed.switches.is_empty() && parsed.options.is_empty()) {
+                return Err(CommandError::CheckOptions);
+            }
+            if parsed.positionals.len() > 1 {
+                return Err(CommandError::CheckDir);
+            }
             Ok(AuthoringCall::Check {
                 dir: parsed.positionals.first().cloned(),
             })
         }
         "verify" => {
-            anyhow::ensure!(
-                parsed.switches.is_empty() && parsed.options.is_empty(),
-                "pack verify takes only one PACK path; it accepts no options"
-            );
-            anyhow::ensure!(
-                parsed.positionals.len() == 1,
-                "pack verify requires exactly one built .pack path"
-            );
+            if !(parsed.switches.is_empty() && parsed.options.is_empty()) {
+                return Err(CommandError::VerifyOptions);
+            }
+            if parsed.positionals.len() != 1 {
+                return Err(CommandError::VerifyPath);
+            }
             Ok(AuthoringCall::Verify {
                 pack: parsed.positionals[0].clone(),
             })
         }
-        "build" => bail!(
-            "pack build isn't available through config. Run `gents pack build` from the operator CLI to build plugin artifacts before installing."
-        ),
-        "test" => bail!(
-            "pack test isn't available through config. Run `gents pack test` from the operator CLI."
-        ),
+        "build" => Err(CommandError::PackBuildUnavailable),
+        "test" => Err(CommandError::PackTestUnavailable),
         other => Err(CommandGuidance {
             message: format!(
                 "unknown pack authoring command {other:?}; authoring verbs are scaffold, check and verify"
@@ -114,15 +105,15 @@ fn ensure_mode(
     mode: crate::tool_surface::FileToolMode,
     write: bool,
     operation: &str,
-) -> Result<()> {
+) -> Result<(), CommandError> {
     use crate::tool_surface::FileToolMode;
     match (write, mode) {
-        (_, FileToolMode::Off) => bail!(
-            "pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off. Grant file tools, or run pack authoring from the operator CLI"
-        ),
-        (true, FileToolMode::ReadOnly) => bail!(
-            "pack {operation} may write inside the tool root (scaffold writes the template files), so it requires readwrite file tools, not the current read-only mode"
-        ),
+        (_, FileToolMode::Off) => Err(CommandError::PackFilesOff {
+            operation: operation.to_owned(),
+        }),
+        (true, FileToolMode::ReadOnly) => Err(CommandError::PackFilesReadOnly {
+            operation: operation.to_owned(),
+        }),
         _ => Ok(()),
     }
 }
@@ -268,7 +259,7 @@ mod tests {
         ] {
             let error =
                 ensure_mode(mode, true, "scaffold").expect_err("a write-refusing mode refuses");
-            let message = ErrorChain(error.as_ref()).to_string();
+            let message = ErrorChain(&error).to_string();
             assert!(
                 message.contains(expected),
                 "{message} should name {expected}"
@@ -276,7 +267,7 @@ mod tests {
         }
         for operation in ["check", "verify"] {
             let error = ensure_mode(FileToolMode::Off, false, operation).unwrap_err();
-            let message = ErrorChain(error.as_ref()).to_string();
+            let message = ErrorChain(&error).to_string();
             assert!(message.contains("file permission"), "{message}");
             assert!(ensure_mode(FileToolMode::ReadOnly, false, operation).is_ok());
         }

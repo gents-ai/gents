@@ -7,7 +7,6 @@
 //! crash durability or remote P2P merge. A blocked outside read is permitted;
 //! a partial pair is not.
 
-use anyhow::{bail, Context, Result};
 use gents::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -20,7 +19,9 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::watch;
 
-type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+type TestResult<T = ()> = std::result::Result<T, BoxError>;
+type Result<T = (), E = BoxError> = std::result::Result<T, E>;
 
 const ATOMICITY_SCHEMA: &str = r#"
 type TxnAtomicityLeft { label: String amount: Int }
@@ -41,18 +42,18 @@ fn ensure_no_errors(value: Value) -> Result<Value> {
         .and_then(Value::as_array)
         .is_some_and(|errors| !errors.is_empty())
     {
-        bail!("defradb reported errors: {value}");
+        return Err(format!("defradb reported errors: {value}").into());
     }
     Ok(value)
 }
 
 fn assert_acknowledged(value: &Value, collection: &str) -> Result<()> {
     let response = defra_node::QueryResponse::success(
-        value.get("data").context("mutation omitted data")?.clone(),
+        value.get("data").ok_or("mutation omitted data")?.clone(),
     );
     let field = format!("create_{collection}");
     let row = gents::graphql::single_mutation_document(&response, &field)?
-        .context("mutation returned no document")?;
+        .ok_or("mutation returned no document")?;
     assert!(
         row.get("_docID")
             .and_then(Value::as_str)
@@ -131,7 +132,7 @@ async fn committed_transaction_persists_both_writes() -> TestResult {
             Box::pin(async move {
                 let left = ensure_no_errors(txn.execute(&write_left("commit", 1)).await?)?;
                 let right = ensure_no_errors(txn.execute(&write_right("commit", 2)).await?)?;
-                Ok::<_, anyhow::Error>((left, right))
+                Ok::<_, BoxError>((left, right))
             })
         },
     )
@@ -159,7 +160,7 @@ async fn injected_error_after_first_write_persists_neither() -> TestResult {
             Box::pin(async move {
                 let first = ensure_no_errors(txn.execute(&write_left("rollback", 3)).await?)?;
                 assert_acknowledged(&first, "TxnAtomicityLeft")?;
-                Err(anyhow::anyhow!("injected failure after first write"))
+                Err("injected failure after first write".into())
             })
         },
     )
@@ -245,7 +246,7 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Te
                 }
                 let second = ensure_no_errors(txn.execute(&write_right("visible", 2)).await?)?;
                 assert_acknowledged(&second, "TxnAtomicityRight")?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, BoxError>(())
             })
         },
     );
@@ -326,7 +327,7 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
     )?;
     let found = read["data"]["TxnAtomicityUnique"]
         .as_array()
-        .context("unique read omitted collection")?
+        .ok_or("unique read omitted collection")?
         .len();
     if found > 0 {
         return Ok(false);
@@ -396,7 +397,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
                 ensure_no_errors(txn.execute(&write_note("root-a", "note-1", "seed")).await?)?;
                 ensure_no_errors(txn.execute(&write_note("root-a", "note-2", "seed")).await?)?;
                 ensure_no_errors(txn.execute(&write_note("root-b", "note-1", "seed")).await?)?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, BoxError>(())
             })
         },
     )
@@ -486,7 +487,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> TestResul
         |txn: &ConfigApplyTxn<'_>| {
             Box::pin(async move {
                 ensure_no_errors(txn.execute(&write_unique("existing", "seed")).await?)?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, BoxError>(())
             })
         },
     )
@@ -500,7 +501,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> TestResul
             Box::pin(async move {
                 let inserted = read_then_insert_unique(txn, "existing").await?;
                 ensure_no_errors(txn.execute(&write_left("other-write", 1)).await?)?;
-                Ok::<_, anyhow::Error>(inserted)
+                Ok::<_, BoxError>(inserted)
             })
         },
     )

@@ -1,4 +1,4 @@
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
@@ -305,11 +305,8 @@ where
                     .await;
             }
             Err(error) => {
-                let receiver_closed = error.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<ActiveSnapshotReceiverClosed>()
-                        .is_some()
-                });
+                let receiver_closed =
+                    find_source::<ActiveSnapshotReceiverClosed>(error.as_ref()).is_some();
                 tracing::error!(
                     generation = next_generation,
                     added_agents = diff.added,

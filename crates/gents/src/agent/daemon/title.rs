@@ -1,4 +1,4 @@
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -136,15 +136,13 @@ fn title_max_tokens(
 }
 
 fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<crate::agent::loop_stream::OneShotError>()
-        .is_some_and(|error| {
-            matches!(
-                error,
-                crate::agent::loop_stream::OneShotError::ProviderFailure(_)
-                    | crate::agent::loop_stream::OneShotError::NoVisibleOutput(_)
-            )
-        })
+    find_source::<crate::agent::loop_stream::OneShotError>(error.as_ref()).is_some_and(|error| {
+        matches!(
+            error,
+            crate::agent::loop_stream::OneShotError::ProviderFailure(_)
+                | crate::agent::loop_stream::OneShotError::NoVisibleOutput(_)
+        )
+    })
 }
 
 struct TitleGeneration<'a> {

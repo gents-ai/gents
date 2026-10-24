@@ -1,5 +1,5 @@
 use super::*;
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 
 mod authoring;
 mod crud;
@@ -53,9 +53,162 @@ Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batc
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
-struct CommandGuidance {
+pub(super) struct CommandGuidance {
     message: String,
     next_call: Value,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum CommandError {
+    #[error(transparent)]
+    Guidance(#[from] CommandGuidance),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Patch(#[from] crate::config_client::patch::PatchError),
+    #[error("argv requires a config command")]
+    ArgvRequired,
+    #[error(
+        "validate takes no parameters; it checks saved configuration for your authenticated node"
+    )]
+    ValidateParameters,
+    #[error("help accepts a command path only; remove target_id, set, clear and options")]
+    HelpWithArguments,
+    #[error("agent create/clone allocates the ID from options.display-name; omit target_id. The receipt returns the new agent, Context and Tools IDs; use resource update for later changes")]
+    AgentCreateWithTargetId,
+    #[error("target_id is not accepted by tools; omit it and select the owning agent with options.agent, e.g. {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}}")]
+    ToolsWithTargetId,
+    #[error(
+        "target_id is not accepted by {command:?}; see the command's --help for its parameters"
+    )]
+    TargetIdNotAccepted { command: String },
+    #[error(
+        "target ID {given:?} in argv conflicts with target_id {target_id:?}; send one of them"
+    )]
+    TargetIdConflict { given: String, target_id: String },
+    #[error("{collection} fields belong in set, not options: {fields}. Move all listed fields together; preserve values and keep command selectors such as agent in options")]
+    FieldsInOptions {
+        collection: &'static str,
+        fields: String,
+    },
+    #[error("invalid options key {name:?}; argv, target_id, set and clear belong at the top level beside options. Option names use lowercase letters and hyphens, without --")]
+    InvalidOptionsKey { name: String },
+    #[error("option {flag} supplied in both argv and options")]
+    OptionInArgvAndOptions { flag: String },
+    #[error("invalid patch field {field:?}; set/clear field names use underscores, not hyphens (e.g. system_prompt). Read resource update --help for writable fields")]
+    InvalidPatchField { field: String },
+    #[error("missing {label}: supply target_id, or a non-empty resource ID in argv before options or patch fields; see [\"help\"]")]
+    MissingResourceId { label: String },
+    #[error("config output must be an object")]
+    OutputNotObject,
+    #[error("empty option name")]
+    EmptyOptionName,
+    #[error("duplicate --default")]
+    DuplicateDefault,
+    #[error("--{name} requires a value")]
+    OptionValueMissing { name: String },
+    #[error("--{name} may be supplied once")]
+    OptionRepeated { name: String },
+    #[error("list command accepts no positional arguments")]
+    ListPositional,
+    #[error("read command received a write-only switch")]
+    ReadWriteSwitch,
+    #[error("unknown read option --{name}")]
+    UnknownReadOption { name: String },
+    #[error("pack operation requires PACKAGE")]
+    PackPackageRequired,
+    #[error("unexpected pack argument; see [\"help\",\"pack\"]")]
+    PackUnexpectedArgument,
+    #[error("unknown pack option --{name}; accepted: --inference-slot, --var, --digest")]
+    UnknownPackOption { name: String },
+    #[error("--{name} must be NAME=VALUE")]
+    PackPairFormat { name: String },
+    #[error("--{name} requires non-empty NAME and VALUE")]
+    PackPairEmpty { name: String },
+    #[error("duplicate --{name} name {key:?}")]
+    PackPairDuplicate { name: String, key: String },
+    #[error("unexpected positional argument {argument:?}; use top-level set for fields or clear for optional field names")]
+    PatchPositional { argument: String },
+    #[error("unexpected switch; use top-level set for fields or clear for optional field names")]
+    PatchSwitch,
+    #[error("unknown patch option --{name}; put fields in top-level set or clear, not options")]
+    UnknownPatchOption { name: String },
+    #[error("--set must be FIELD=JSON; strings need JSON quotes")]
+    PatchSetFormat,
+    #[error("--set field must not be empty")]
+    PatchSetEmptyField,
+    #[error("field {field:?} was supplied more than once")]
+    PatchFieldRepeated { field: String },
+    #[error("invalid JSON value for field {field:?}; strings need JSON quotes")]
+    PatchJson {
+        field: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("empty patch; use top-level set for fields or clear for optional field names")]
+    PatchEmpty,
+    #[error("--agent requires a AGENT_ID")]
+    AgentOptionMissing,
+    #[error("--agent requires a non-empty AGENT_ID")]
+    AgentOptionEmpty,
+    #[error("--agent may be supplied once")]
+    AgentOptionRepeated,
+    #[error("--allow-drop requires a Tools group name")]
+    AllowDropMissing,
+    #[error("allow-drop must name Tools groups")]
+    AllowDropJson(#[source] serde_json::Error),
+    #[error("allow-drop names unknown Tools group {name:?}; see [\"help\",\"tools\"]")]
+    AllowDropUnknownGroup { name: String },
+    #[error("--limit must be a positive integer")]
+    LimitInvalid(#[source] std::num::ParseIntError),
+    #[error("unknown cleanup resource {name:?}; see [\"help\",\"cleanup\"]")]
+    UnknownCleanupResource { name: String },
+    #[error("unknown profile target {name:?}; accepted: profile, sampling, execution, retry-policy, compaction")]
+    UnknownProfileTarget { name: String },
+    #[error("{resource} configuration is not granted; enabled resources: {enabled}")]
+    ResourceNotGranted { resource: String, enabled: String },
+    #[error("agent {operation} outside the current agent is not granted; the agent catalog grant (category node) is required")]
+    AgentCatalogRequired { operation: String },
+    #[error("agent {operation} is not granted; only editing the current agent is allowed without the agent catalog grant (category node)")]
+    AgentOperationNotGranted { operation: String },
+    #[error("no-lockout guard: agent must remain enabled")]
+    NoLockout,
+    #[error("agent {operation} requires the agent catalog grant (category node)")]
+    AgentNodeAuthority { operation: String },
+    #[error("--default changes the node's agent selection and requires the agent catalog grant (category node)")]
+    DefaultRequiresNode,
+    #[error("field {field:?} cannot be cleared; accepted: display_name, description, system_prompt, root")]
+    NotClearable { field: String },
+    #[error("{field} cannot be both set and cleared")]
+    SetAndClear { field: String },
+    #[error("pack scaffold takes no switches")]
+    ScaffoldSwitches,
+    #[error("pack scaffold requires exactly one snake_case NAME; the pack is created at <NAME> inside the effective tool root")]
+    ScaffoldName,
+    #[error("unknown pack scaffold option --{option}; accepted: --namespace, --kind, --template, --language")]
+    ScaffoldOption { option: String },
+    #[error("unknown pack kind {kind:?}; accepted: documents, graph, assets, plugins")]
+    UnknownPackKind { kind: String },
+    #[error("unknown pack template {template:?}; accepted: minimal, automation, graph, plugin-tool, assets")]
+    UnknownPackTemplate { template: String },
+    #[error("pack check takes only an optional DIR; it accepts no options")]
+    CheckOptions,
+    #[error("pack check accepts at most one DIR")]
+    CheckDir,
+    #[error("pack verify takes only one PACK path; it accepts no options")]
+    VerifyOptions,
+    #[error("pack verify requires exactly one built .pack path")]
+    VerifyPath,
+    #[error("pack build isn't available through config. Run `gents pack build` from the operator CLI to build plugin artifacts before installing.")]
+    PackBuildUnavailable,
+    #[error(
+        "pack test isn't available through config. Run `gents pack test` from the operator CLI."
+    )]
+    PackTestUnavailable,
+    #[error("pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off. Grant file tools, or run pack authoring from the operator CLI")]
+    PackFilesOff { operation: String },
+    #[error("pack {operation} may write inside the tool root (scaffold writes the template files), so it requires readwrite file tools, not the current read-only mode")]
+    PackFilesReadOnly { operation: String },
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -73,61 +226,77 @@ pub struct ConfigCommandParams {
 }
 
 impl ConfigCommandParams {
-    fn into_argv(self) -> Result<Vec<String>> {
-        anyhow::ensure!(!self.argv.is_empty(), "argv requires a config command");
-        if config_help_resource(&self.argv).is_some() {
-            anyhow::ensure!(
-                self.target_id.is_none()
-                    && self.set.is_empty()
-                    && self.clear.is_empty()
-                    && self.options.is_empty(),
-                "help accepts a command path only; remove target_id, set, clear and options"
-            );
+    fn into_argv(self) -> Result<Vec<String>, CommandError> {
+        if self.argv.is_empty() {
+            return Err(CommandError::ArgvRequired);
+        }
+        if config_help_resource(&self.argv).is_some()
+            && !(self.target_id.is_none()
+                && self.set.is_empty()
+                && self.clear.is_empty()
+                && self.options.is_empty())
+        {
+            return Err(CommandError::HelpWithArguments);
         }
         let mut argv = self.argv;
         normalize_verbs(&mut argv);
         if let Some(id) = self.target_id {
             required_resource_id(Some(&id), "target_id")?;
             let words = argv.iter().map(String::as_str).collect::<Vec<_>>();
-            let position = match words.as_slice() {
-                [resource, "preview", "create" | "update" | "delete", ..]
-                    if crud::resource_target(resource).is_some() && !(*resource == "agent" && words[2] == "create") => 3,
-                [resource, "get" | "create" | "update" | "delete", ..]
-                    if crud::resource_target(resource).is_some() && !(*resource == "agent" && words[1] == "create") => 2,
-                ["datastore" | "agent-target" | "execution", "preview", "create" | "edit", ..]
-                | ["agent", "preview", "edit" | "default", ..]
-                | ["backend" | "profile", "preview", "create", ..]
-                | ["pack", "preview", "install" | "update", ..] => 3,
-                ["datastore" | "agent-target" | "execution", "get" | "create" | "edit", ..]
-                | ["mcp-service", "get" | "preview" | "edit", ..]
-                | ["agent", "get" | "edit" | "default", ..]
-                | ["backend", "get" | "create" | "discover", ..]
-                | ["profile", "create", ..]
-                | ["skill", "get", ..]
-                | ["pack", "get" | "install" | "update" | "remove", ..]
-                | ["plugin", "get", ..] => 2,
-                ["automation", "get" | "preview" | "edit", _, ..] => 3,
-                ["get", ..] => return Err(CommandGuidance {
-                    message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
-                    next_call: json!({"argv":["agent","get"],"target_id":id}),
-                }.into()),
-                ["agent", "create" | "clone", ..] | ["agent", "preview", "create" | "clone", ..] => bail!(
-                    "agent create/clone allocates the ID from options.display-name; omit target_id. The receipt returns the new agent, Context and Tools IDs; use resource update for later changes"
-                ),
-                ["tools", ..] => bail!(
-                    "target_id is not accepted by tools; omit it and select the owning agent with options.agent, e.g. {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}}"
-                ),
-                _ => bail!(
-                    "target_id is not accepted by {:?}; see the command's --help for its parameters",
-                    words.join(" ")
-                ),
-            };
+            let position =
+                match words.as_slice() {
+                    [resource, "preview", "create" | "update" | "delete", ..]
+                        if crud::resource_target(resource).is_some()
+                            && !(*resource == "agent" && words[2] == "create") =>
+                    {
+                        3
+                    }
+                    [resource, "get" | "create" | "update" | "delete", ..]
+                        if crud::resource_target(resource).is_some()
+                            && !(*resource == "agent" && words[1] == "create") =>
+                    {
+                        2
+                    }
+                    ["datastore" | "agent-target" | "execution", "preview", "create" | "edit", ..]
+                    | ["agent", "preview", "edit" | "default", ..]
+                    | ["backend" | "profile", "preview", "create", ..]
+                    | ["pack", "preview", "install" | "update", ..] => 3,
+                    ["datastore" | "agent-target" | "execution", "get" | "create" | "edit", ..]
+                    | ["mcp-service", "get" | "preview" | "edit", ..]
+                    | ["agent", "get" | "edit" | "default", ..]
+                    | ["backend", "get" | "create" | "discover", ..]
+                    | ["profile", "create", ..]
+                    | ["skill", "get", ..]
+                    | ["pack", "get" | "install" | "update" | "remove", ..]
+                    | ["plugin", "get", ..] => 2,
+                    ["automation", "get" | "preview" | "edit", _, ..] => 3,
+                    ["get", ..] => return Err(CommandGuidance {
+                        message:
+                            "Put the resource before the verb: use agent get to inspect an agent."
+                                .into(),
+                        next_call: json!({"argv":["agent","get"],"target_id":id}),
+                    }
+                    .into()),
+                    ["agent", "create" | "clone", ..]
+                    | ["agent", "preview", "create" | "clone", ..] => {
+                        return Err(CommandError::AgentCreateWithTargetId)
+                    }
+                    ["tools", ..] => return Err(CommandError::ToolsWithTargetId),
+                    _ => {
+                        return Err(CommandError::TargetIdNotAccepted {
+                            command: words.join(" "),
+                        })
+                    }
+                };
             match argv.get(position).filter(|arg| !arg.starts_with('-')) {
                 None => argv.insert(position, id),
                 Some(given) if *given == id => {}
-                Some(given) => bail!(
-                    "target ID {given:?} in argv conflicts with target_id {id:?}; send one of them"
-                ),
+                Some(given) => {
+                    return Err(CommandError::TargetIdConflict {
+                        given: given.clone(),
+                        target_id: id,
+                    })
+                }
             }
         }
         let verb = argv.iter().skip(1).find(|word| word.as_str() != "preview");
@@ -145,23 +314,29 @@ impl ConfigCommandParams {
                         !backend_option && target.is_writable(name)
                     })
                     .collect();
-                anyhow::ensure!(misplaced.is_empty(),
-                    "{} fields belong in set, not options: {}. Move all listed fields together; preserve values and keep command selectors such as agent in options",
-                    target.collection_name(), misplaced.iter().map(|name| format!("set.{name}")).collect::<Vec<_>>().join(", "));
+                if !misplaced.is_empty() {
+                    return Err(CommandError::FieldsInOptions {
+                        collection: target.collection_name(),
+                        fields: misplaced
+                            .iter()
+                            .map(|name| format!("set.{name}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    });
+                }
             }
         }
         for (name, value) in self.options {
-            anyhow::ensure!(
-                name.bytes().next().is_some_and(|c| c.is_ascii_lowercase())
-                    && name.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
-                    && !matches!(name.as_str(), "set" | "clear"),
-                "invalid options key {name:?}; argv, target_id, set and clear belong at the top level beside options. Option names use lowercase letters and hyphens, without --"
-            );
+            if !(name.bytes().next().is_some_and(|c| c.is_ascii_lowercase())
+                && name.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
+                && !matches!(name.as_str(), "set" | "clear"))
+            {
+                return Err(CommandError::InvalidOptionsKey { name });
+            }
             let flag = format!("--{name}");
-            anyhow::ensure!(
-                !argv.contains(&flag),
-                "option {flag} supplied in both argv and options"
-            );
+            if argv.contains(&flag) {
+                return Err(CommandError::OptionInArgvAndOptions { flag });
+            }
             let values = match value {
                 Value::String(value) => vec![value],
                 Value::Array(items) if !items.is_empty() && items.iter().all(Value::is_string) => {
@@ -177,13 +352,13 @@ impl ConfigCommandParams {
             }
         }
         for (field, value) in self.set {
-            anyhow::ensure!(
-                !field.is_empty()
-                    && field
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || c == b'_'),
-                "invalid patch field {field:?}; set/clear field names use underscores, not hyphens (e.g. system_prompt). Read resource update --help for writable fields"
-            );
+            if field.is_empty()
+                || !field
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+            {
+                return Err(CommandError::InvalidPatchField { field });
+            }
             argv.extend([
                 "--set".into(),
                 format!("{field}={}", serde_json::to_string(&value)?),
@@ -242,10 +417,15 @@ fn help_verb(argv: &[String]) -> Vec<&str> {
     words
 }
 
-fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'a String> {
+fn required_resource_id<'a>(
+    value: Option<&'a String>,
+    label: &str,
+) -> Result<&'a String, CommandError> {
     value
         .filter(|id| !id.trim().is_empty() && !id.starts_with('-'))
-        .with_context(|| format!("missing {label}: supply target_id, or a non-empty resource ID in argv before options or patch fields; see [\"help\"]"))
+        .ok_or_else(|| CommandError::MissingResourceId {
+            label: label.to_owned(),
+        })
 }
 
 #[derive(Clone)]
@@ -317,12 +497,14 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
         log_config_call(&words, &observed, help, previewing, &result);
         match result {
             Ok(text) if help => Ok(text),
-            Ok(text) => append_receipt(&text, &receipt).map_err(Into::into),
+            Ok(text) => {
+                append_receipt(&text, &receipt).map_err(|error| anyhow::Error::from(error).into())
+            }
             Err(error) => {
-                let (message, recovery) = call.failure_guidance(&error, &words, deleting);
+                let (message, recovery) = call.failure_guidance(error.as_ref(), &words, deleting);
                 let failure = ordered! {
                     "error": message,
-                    "batch": error.downcast_ref::<crud::BatchFailure>().map(|failure| json!({"atomic":false,"results":failure.results,"failed_index":failure.failed_index,"unattempted":failure.unattempted})),
+                    "batch": find_source::<crud::BatchFailure>(error.as_ref()).map(|failure| json!({"atomic":false,"results":failure.results,"failed_index":failure.failed_index,"unattempted":failure.unattempted})),
                     "recovery": recovery,
                     "config_execution": receipt,
                 };
@@ -435,12 +617,12 @@ fn missing_reference_next_step(
 fn append_receipt(
     text: &str,
     receipt: &super::execution::ConfigExecutionReceipt,
-) -> Result<String> {
+) -> Result<String, CommandError> {
     let body = text
         .trim_end()
         .strip_suffix('}')
         .filter(|_| text.trim_start().starts_with('{'))
-        .context("config output must be an object")?
+        .ok_or(CommandError::OutputNotObject)?
         .trim_end();
     let separator = if body.ends_with('{') { "" } else { "," };
     Ok(format!(
@@ -501,14 +683,13 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
 impl ConfigCommandTool {
     fn failure_guidance(
         &self,
-        error: &anyhow::Error,
+        error: &(dyn std::error::Error + 'static),
         argv: &[String],
         deleting: bool,
     ) -> (String, Value) {
-        let missing = error
-            .downcast_ref::<crate::document_config::MissingReference>()
-            .or_else(|| {
-                match error.downcast_ref::<crate::document_config::DocumentConfigError>() {
+        let missing =
+            find_source::<crate::document_config::MissingReference>(error).or_else(|| {
+                match find_source::<crate::document_config::DocumentConfigError>(error) {
                     Some(crate::document_config::DocumentConfigError::MissingReference(
                         missing,
                     )) => Some(missing),
@@ -516,20 +697,25 @@ impl ConfigCommandTool {
                 }
             });
         let message = missing.map_or_else(
-            || ErrorChain(error.as_ref()).to_string(),
+            || ErrorChain(error).to_string(),
             |missing| {
                 format!(
                     "{} Cause: {}",
                     missing_reference_next_step(missing, deleting),
-                    ErrorChain(error.as_ref())
+                    ErrorChain(error)
                 )
             },
         );
-        if let Some(hint) = error.downcast_ref::<CommandGuidance>() {
+        let guidance = find_source::<CommandGuidance>(error).or_else(|| {
+            match find_source::<CommandError>(error) {
+                Some(CommandError::Guidance(hint)) => Some(hint),
+                _ => None,
+            }
+        });
+        if let Some(hint) = guidance {
             return (message, json!({"next_call":hint.next_call}));
         }
-        if let Some(schema) = error.downcast_ref::<crate::config_client::OutcomeSourceSchemaError>()
-        {
+        if let Some(schema) = find_source::<crate::config_client::OutcomeSourceSchemaError>(error) {
             let next = if schema.missing_handoff {
                 json!({"argv":["collection","preview","update",schema.collection],"options":{"patch":[{"op":"add","path":format!("/{}/Fields/-",schema.collection),"value":{"Name":"handoff_id","Kind":"String"}}]}})
             } else {
@@ -537,7 +723,7 @@ impl ConfigCommandTool {
             };
             return (message, json!({"tool":"schema","next_call":next}));
         }
-        if let Some(missing) = error.downcast_ref::<super::ops::MissingConfigDocument>() {
+        if let Some(missing) = find_source::<super::ops::MissingConfigDocument>(error) {
             if let Some((resource, _)) = HELP_INDEX
                 .iter()
                 .find(|(r, _)| crud::resource_target(r) == Some(missing.target))
@@ -546,7 +732,7 @@ impl ConfigCommandTool {
             }
         }
         let resources = model_resources(&self.categories, self.core.held_grants().pack_install);
-        if error.downcast_ref::<super::ops::MissingAgent>().is_some()
+        if find_source::<super::ops::MissingAgent>(error).is_some()
             && self.categories.contains("node")
         {
             return (message, json!({"next_call":{"argv":["agent","list"]}}));
@@ -1592,59 +1778,74 @@ impl ConfigCommandTool {
         }
     }
 
-    fn ensure_resource(&self, resource: &str) -> Result<()> {
+    fn ensure_resource(&self, resource: &str) -> Result<(), CommandError> {
         let category = match resource {
             "mcp-service" => "mcp_service",
             other => other,
         };
-        anyhow::ensure!(
-            self.categories.contains(category),
-            "{resource} configuration is not granted; enabled resources: {}",
-            model_resources(&self.categories, self.core.held_grants().pack_install).join(", ")
-        );
+        if !self.categories.contains(category) {
+            return Err(CommandError::ResourceNotGranted {
+                resource: resource.to_owned(),
+                enabled: model_resources(&self.categories, self.core.held_grants().pack_install)
+                    .join(", "),
+            });
+        }
         Ok(())
     }
 
-    fn ensure_agent_catalog(&self, operation: &str, agent_id: Option<&str>) -> Result<()> {
+    fn ensure_agent_catalog(
+        &self,
+        operation: &str,
+        agent_id: Option<&str>,
+    ) -> Result<(), CommandError> {
         let current_only = agent_id.is_some_and(|id| id == self.core.agent_id());
-        anyhow::ensure!(
-            self.categories.contains("node") || current_only,
-            "agent {operation} outside the current agent is not granted; the agent catalog grant (category node) is required"
-        );
+        if !(self.categories.contains("node") || current_only) {
+            return Err(CommandError::AgentCatalogRequired {
+                operation: operation.to_owned(),
+            });
+        }
         Ok(())
     }
 
-    fn ensure_agent_operation(&self, operation: &str, agent_id: Option<&str>) -> Result<()> {
+    fn ensure_agent_operation(
+        &self,
+        operation: &str,
+        agent_id: Option<&str>,
+    ) -> Result<(), CommandError> {
         let current_edit =
             operation == "edit" && agent_id.is_some_and(|id| id == self.core.agent_id());
-        anyhow::ensure!(
-            self.categories.contains("node") || current_edit,
-            "agent {operation} is not granted; only editing the current agent is allowed without the agent catalog grant (category node)"
-        );
+        if !(self.categories.contains("node") || current_edit) {
+            return Err(CommandError::AgentOperationNotGranted {
+                operation: operation.to_owned(),
+            });
+        }
         Ok(())
     }
 
-    fn ensure_agent_stays_enabled(&self, operation: &str, agent_id: Option<&str>) -> Result<()> {
-        anyhow::ensure!(
-            !(self.no_lockout && operation == "disable" && agent_id == Some(self.core.agent_id())),
-            "no-lockout guard: agent must remain enabled"
-        );
+    fn ensure_agent_stays_enabled(
+        &self,
+        operation: &str,
+        agent_id: Option<&str>,
+    ) -> Result<(), CommandError> {
+        if self.no_lockout && operation == "disable" && agent_id == Some(self.core.agent_id()) {
+            return Err(CommandError::NoLockout);
+        }
         Ok(())
     }
 
-    fn ensure_node_authority(&self, operation: &str) -> Result<()> {
-        anyhow::ensure!(
-            self.categories.contains("node"),
-            "agent {operation} requires the agent catalog grant (category node)"
-        );
+    fn ensure_node_authority(&self, operation: &str) -> Result<(), CommandError> {
+        if !self.categories.contains("node") {
+            return Err(CommandError::AgentNodeAuthority {
+                operation: operation.to_owned(),
+            });
+        }
         Ok(())
     }
 
-    fn ensure_default_selection(&self, params: &ConfigureAgentParams) -> Result<()> {
-        anyhow::ensure!(
-            !params.make_default || self.categories.contains("node"),
-            "--default changes the node's agent selection and requires the agent catalog grant (category node)"
-        );
+    fn ensure_default_selection(&self, params: &ConfigureAgentParams) -> Result<(), CommandError> {
+        if params.make_default && !self.categories.contains("node") {
+            return Err(CommandError::DefaultRequiresNode);
+        }
         Ok(())
     }
 
@@ -2343,7 +2544,7 @@ fn default_agent_params(action: &str, agent_id: &str) -> ConfigureAgentParams {
     }
 }
 
-fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {
+fn cleanup_target(name: &str) -> Result<SelfConfigTarget, CommandError> {
     match name {
         "agent" => Ok(SelfConfigTarget::Agent),
         "context" => Ok(SelfConfigTarget::AgentContext),
@@ -2362,33 +2563,35 @@ fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {
         "event-source" => Ok(SelfConfigTarget::EventSource),
         "datastore" => Ok(SelfConfigTarget::DatastoreToolSurface),
         "skill" => Ok(SelfConfigTarget::Skill),
-        other => bail!("unknown cleanup resource {other:?}; see [\"help\",\"cleanup\"]"),
+        other => Err(CommandError::UnknownCleanupResource {
+            name: other.to_owned(),
+        }),
     }
 }
 
-fn profile_target(name: &str) -> Result<(&'static str, SelfConfigTarget)> {
+fn profile_target(name: &str) -> Result<(&'static str, SelfConfigTarget), CommandError> {
     match name {
         "profile" => Ok(("profile", SelfConfigTarget::InferenceProfile)),
         "sampling" => Ok(("sampling", SelfConfigTarget::InferenceSampling)),
         "execution" => Ok(("execution", SelfConfigTarget::InferenceExecution)),
         "retry-policy" => Ok(("retry_policy", SelfConfigTarget::InferenceRetryPolicy)),
         "compaction" => Ok(("compaction", SelfConfigTarget::Compaction)),
-        other => bail!(
-            "unknown profile target {other:?}; accepted: profile, sampling, execution, retry-policy, compaction"
-        ),
+        other => Err(CommandError::UnknownProfileTarget {
+            name: other.to_owned(),
+        }),
     }
 }
 
-fn parse_limit(parsed: &ParsedArgs) -> Result<usize> {
+fn parse_limit(parsed: &ParsedArgs) -> Result<usize, CommandError> {
     parsed
         .one("limit")?
         .map(str::parse::<usize>)
         .transpose()
-        .context("--limit must be a positive integer")
+        .map_err(CommandError::LimitInvalid)
         .map(|limit| limit.unwrap_or(20))
 }
 
-fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>)> {
+fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>), CommandError> {
     let mut agent_id = None;
     let mut rest = Vec::with_capacity(argv.len());
     let mut index = 0;
@@ -2399,21 +2602,19 @@ fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>)
             Some(
                 argv.get(index)
                     .filter(|value| !value.starts_with("--"))
-                    .context("--agent requires a AGENT_ID")?
+                    .ok_or(CommandError::AgentOptionMissing)?
                     .clone(),
             )
         } else {
             arg.strip_prefix("--agent=").map(ToOwned::to_owned)
         };
         if let Some(value) = value {
-            anyhow::ensure!(
-                !value.trim().is_empty(),
-                "--agent requires a non-empty AGENT_ID"
-            );
-            anyhow::ensure!(
-                agent_id.replace(value).is_none(),
-                "--agent may be supplied once"
-            );
+            if value.trim().is_empty() {
+                return Err(CommandError::AgentOptionEmpty);
+            }
+            if agent_id.replace(value).is_some() {
+                return Err(CommandError::AgentOptionRepeated);
+            }
         } else {
             rest.push(arg.clone());
         }
@@ -2422,7 +2623,7 @@ fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>)
     Ok((agent_id, rest))
 }
 
-fn extract_allow_drop(argv: &[String]) -> Result<(BTreeSet<String>, Vec<String>)> {
+fn extract_allow_drop(argv: &[String]) -> Result<(BTreeSet<String>, Vec<String>), CommandError> {
     let mut groups = BTreeSet::new();
     let mut rest = Vec::with_capacity(argv.len());
     let mut index = 0;
@@ -2432,9 +2633,9 @@ fn extract_allow_drop(argv: &[String]) -> Result<(BTreeSet<String>, Vec<String>)
             let value = argv
                 .get(index)
                 .filter(|value| !value.starts_with("--"))
-                .context("--allow-drop requires a Tools group name")?;
+                .ok_or(CommandError::AllowDropMissing)?;
             let names: Vec<String> = if value.starts_with('[') {
-                serde_json::from_str(value).context("allow-drop must name Tools groups")?
+                serde_json::from_str(value).map_err(CommandError::AllowDropJson)?
             } else {
                 value
                     .split(',')
@@ -2442,12 +2643,12 @@ fn extract_allow_drop(argv: &[String]) -> Result<(BTreeSet<String>, Vec<String>)
                     .collect()
             };
             for name in names {
-                anyhow::ensure!(
-                    SelfConfigTarget::Tools
-                        .writable_fields()
-                        .contains(&name.as_str()),
-                    "allow-drop names unknown Tools group {name:?}; see [\"help\",\"tools\"]"
-                );
+                if !SelfConfigTarget::Tools
+                    .writable_fields()
+                    .contains(&name.as_str())
+                {
+                    return Err(CommandError::AllowDropUnknownGroup { name });
+                }
                 groups.insert(name);
             }
         } else {
@@ -2674,36 +2875,40 @@ pub(super) fn field_shape(collection: &str, path: &str) -> Option<Value> {
     Some(shape.clone())
 }
 
-fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams> {
+fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams, CommandError> {
     let package = argv
         .first()
-        .context("pack operation requires PACKAGE")?
+        .ok_or(CommandError::PackPackageRequired)?
         .clone();
     let parsed = ParsedArgs::parse(&argv[1..])?;
-    anyhow::ensure!(
-        parsed.positionals.is_empty() && parsed.switches.is_empty(),
-        "unexpected pack argument; see [\"help\",\"pack\"]"
-    );
-    for name in parsed.options.keys() {
-        anyhow::ensure!(
-            matches!(name.as_str(), "var" | "inference-slot" | "digest"),
-            "unknown pack option --{name}; accepted: --inference-slot, --var, --digest"
-        );
+    if !(parsed.positionals.is_empty() && parsed.switches.is_empty()) {
+        return Err(CommandError::PackUnexpectedArgument);
     }
-    let pairs = |name: &str| -> Result<BTreeMap<String, String>> {
+    for name in parsed.options.keys() {
+        if !matches!(name.as_str(), "var" | "inference-slot" | "digest") {
+            return Err(CommandError::UnknownPackOption { name: name.clone() });
+        }
+    }
+    let pairs = |name: &str| -> Result<BTreeMap<String, String>, CommandError> {
         let mut values = BTreeMap::new();
         for binding in parsed.options.get(name).into_iter().flatten() {
-            let (key, value) = binding
-                .split_once('=')
-                .with_context(|| format!("--{name} must be NAME=VALUE"))?;
-            anyhow::ensure!(
-                !key.is_empty() && !value.is_empty(),
-                "--{name} requires non-empty NAME and VALUE"
-            );
-            anyhow::ensure!(
-                values.insert(key.to_owned(), value.to_owned()).is_none(),
-                "duplicate --{name} name {key:?}"
-            );
+            let (key, value) =
+                binding
+                    .split_once('=')
+                    .ok_or_else(|| CommandError::PackPairFormat {
+                        name: name.to_owned(),
+                    })?;
+            if key.is_empty() || value.is_empty() {
+                return Err(CommandError::PackPairEmpty {
+                    name: name.to_owned(),
+                });
+            }
+            if values.insert(key.to_owned(), value.to_owned()).is_some() {
+                return Err(CommandError::PackPairDuplicate {
+                    name: name.to_owned(),
+                    key: key.to_owned(),
+                });
+            }
         }
         Ok(values)
     };
@@ -2715,53 +2920,58 @@ fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams> {
     })
 }
 
-fn parse_patch(argv: &[String], target: SelfConfigTarget) -> Result<SelfConfigPatch> {
+fn parse_patch(argv: &[String], target: SelfConfigTarget) -> Result<SelfConfigPatch, CommandError> {
     parse_patch_args(ParsedArgs::parse(argv)?, target)
 }
 
-fn parse_patch_args(parsed: ParsedArgs, target: SelfConfigTarget) -> Result<SelfConfigPatch> {
-    anyhow::ensure!(
-        parsed.positionals.is_empty(),
-        "unexpected positional argument {:?}; use top-level set for fields or clear for optional field names",
-        parsed.positionals[0]
-    );
-    anyhow::ensure!(
-        parsed.switches.is_empty(),
-        "unexpected switch; use top-level set for fields or clear for optional field names"
-    );
+fn parse_patch_args(
+    parsed: ParsedArgs,
+    target: SelfConfigTarget,
+) -> Result<SelfConfigPatch, CommandError> {
+    if let Some(argument) = parsed.positionals.first() {
+        return Err(CommandError::PatchPositional {
+            argument: argument.clone(),
+        });
+    }
+    if !parsed.switches.is_empty() {
+        return Err(CommandError::PatchSwitch);
+    }
     for name in parsed.options.keys() {
-        anyhow::ensure!(
-            matches!(name.as_str(), "set" | "clear"),
-            "unknown patch option --{name}; put fields in top-level set or clear, not options"
-        );
+        if !matches!(name.as_str(), "set" | "clear") {
+            return Err(CommandError::UnknownPatchOption { name: name.clone() });
+        }
     }
     let mut seen = BTreeSet::new();
     let mut patch = Vec::new();
     for assignment in parsed.options.get("set").into_iter().flatten() {
         let (field, raw) = assignment
             .split_once('=')
-            .context("--set must be FIELD=JSON; strings need JSON quotes")?;
-        anyhow::ensure!(!field.is_empty(), "--set field must not be empty");
-        anyhow::ensure!(
-            seen.insert(field.to_owned()),
-            "field {field:?} was supplied more than once"
-        );
-        let value = serde_json::from_str(raw).with_context(|| {
-            format!("invalid JSON value for field {field:?}; strings need JSON quotes")
+            .ok_or(CommandError::PatchSetFormat)?;
+        if field.is_empty() {
+            return Err(CommandError::PatchSetEmptyField);
+        }
+        if !seen.insert(field.to_owned()) {
+            return Err(CommandError::PatchFieldRepeated {
+                field: field.to_owned(),
+            });
+        }
+        let value = serde_json::from_str(raw).map_err(|source| CommandError::PatchJson {
+            field: field.to_owned(),
+            source,
         })?;
         patch.push((field.to_owned(), Some(value)));
     }
     for field in parsed.options.get("clear").into_iter().flatten() {
-        anyhow::ensure!(
-            seen.insert(field.to_owned()),
-            "field {field:?} was supplied more than once"
-        );
+        if !seen.insert(field.to_owned()) {
+            return Err(CommandError::PatchFieldRepeated {
+                field: field.to_owned(),
+            });
+        }
         patch.push((field.to_owned(), None));
     }
-    anyhow::ensure!(
-        !patch.is_empty(),
-        "empty patch; use top-level set for fields or clear for optional field names"
-    );
+    if patch.is_empty() {
+        return Err(CommandError::PatchEmpty);
+    }
     crate::config_client::patch::ensure_admissible(target, &patch)?;
     Ok(patch)
 }
@@ -2774,17 +2984,19 @@ struct ParsedArgs {
 }
 
 impl ParsedArgs {
-    fn parse(argv: &[String]) -> Result<Self> {
+    fn parse(argv: &[String]) -> Result<Self, CommandError> {
         let mut parsed = Self::default();
         let mut index = 0;
         while index < argv.len() {
             let arg = &argv[index];
             if let Some(raw) = arg.strip_prefix("--") {
                 if raw.is_empty() {
-                    bail!("empty option name");
+                    return Err(CommandError::EmptyOptionName);
                 }
                 if raw == "default" {
-                    anyhow::ensure!(parsed.switches.insert(raw.into()), "duplicate --default");
+                    if !parsed.switches.insert(raw.into()) {
+                        return Err(CommandError::DuplicateDefault);
+                    }
                     index += 1;
                     continue;
                 }
@@ -2798,7 +3010,9 @@ impl ParsedArgs {
                         argv.get(index)
                             .filter(|value| !value.starts_with("--"))
                             .cloned()
-                            .with_context(|| format!("--{name} requires a value"))?
+                            .ok_or_else(|| CommandError::OptionValueMissing {
+                                name: name.to_owned(),
+                            })?
                     }
                 };
                 parsed
@@ -2814,28 +3028,29 @@ impl ParsedArgs {
         Ok(parsed)
     }
 
-    fn one(&self, name: &str) -> Result<Option<&str>> {
+    fn one(&self, name: &str) -> Result<Option<&str>, CommandError> {
         let Some(values) = self.options.get(name) else {
             return Ok(None);
         };
-        anyhow::ensure!(values.len() == 1, "--{name} may be supplied once");
+        if values.len() != 1 {
+            return Err(CommandError::OptionRepeated {
+                name: name.to_owned(),
+            });
+        }
         Ok(values.first().map(String::as_str))
     }
 
-    fn reject_mutation_flags(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.positionals.is_empty(),
-            "list command accepts no positional arguments"
-        );
-        anyhow::ensure!(
-            self.switches.is_empty(),
-            "read command received a write-only switch"
-        );
+    fn reject_mutation_flags(&self) -> Result<(), CommandError> {
+        if !self.positionals.is_empty() {
+            return Err(CommandError::ListPositional);
+        }
+        if !self.switches.is_empty() {
+            return Err(CommandError::ReadWriteSwitch);
+        }
         for name in self.options.keys() {
-            anyhow::ensure!(
-                matches!(name.as_str(), "limit" | "cursor"),
-                "unknown read option --{name}"
-            );
+            if !matches!(name.as_str(), "limit" | "cursor") {
+                return Err(CommandError::UnknownReadOption { name: name.clone() });
+            }
         }
         Ok(())
     }
@@ -2845,7 +3060,7 @@ pub(super) fn agent_params(
     action: &str,
     operation: Option<String>,
     argv: &[String],
-) -> Result<ConfigureAgentParams> {
+) -> Result<ConfigureAgentParams, CommandError> {
     let parsed = ParsedArgs::parse(argv)?;
     let allowed = [
         "id",
@@ -2889,20 +3104,22 @@ pub(super) fn agent_params(
         .map(String::as_str)
         .collect();
     for field in &clear {
-        anyhow::ensure!(
-            matches!(
-                *field,
-                "display_name" | "description" | "system_prompt" | "root"
-            ),
-            "field {field:?} cannot be cleared; accepted: display_name, description, system_prompt, root"
-        );
+        if !matches!(
+            *field,
+            "display_name" | "description" | "system_prompt" | "root"
+        ) {
+            return Err(CommandError::NotClearable {
+                field: (*field).to_owned(),
+            });
+        }
     }
-    let update = |option: &str, field: &str| -> Result<StringUpdate> {
+    let update = |option: &str, field: &str| -> Result<StringUpdate, CommandError> {
         let value = parsed.one(option)?;
-        anyhow::ensure!(
-            !(value.is_some() && clear.contains(field)),
-            "{field} cannot be both set and cleared"
-        );
+        if value.is_some() && clear.contains(field) {
+            return Err(CommandError::SetAndClear {
+                field: field.to_owned(),
+            });
+        }
         Ok(match value {
             Some(value) => StringUpdate::Set(value.to_owned()),
             None if clear.contains(field) => StringUpdate::Clear,

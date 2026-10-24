@@ -22,7 +22,10 @@ pub(super) fn surface_patch(argv: &[String]) -> Result<SelfConfigPatch> {
             .or_default()
             .push(format!("entries={entries}"));
     }
-    parse_patch_args(parsed, SelfConfigTarget::DatastoreToolSurface)
+    Ok(parse_patch_args(
+        parsed,
+        SelfConfigTarget::DatastoreToolSurface,
+    )?)
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
@@ -622,7 +622,7 @@ where
                                         async {
                                             match processor.validate_execution().await {
                                                 Ok(()) => {}
-                                                Err(error) if error.is::<crate::lifecycle::ExecutionOwnershipLost>() => {
+                                                Err(error) if find_source::<crate::lifecycle::ExecutionOwnershipLost>(error.as_ref()).is_some() => {
                                                     tracing::warn!(
                                                         request_id = %request_id,
                                                         session_id = %session_id,

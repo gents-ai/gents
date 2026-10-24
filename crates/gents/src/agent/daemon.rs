@@ -1,4 +1,4 @@
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,9 +25,7 @@ pub(super) struct ShutdownDrainFailure {
 
 impl ShutdownDrainFailure {
     fn occurs_in(error: &anyhow::Error) -> bool {
-        error
-            .chain()
-            .any(|cause| cause.downcast_ref::<Self>().is_some())
+        find_source::<Self>(error.as_ref()).is_some()
     }
 }
 
@@ -1279,7 +1277,7 @@ where
 /// A work failure caused by losing the execution lease is not this execution's
 /// failure to report.
 async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
-    if error.is::<crate::lifecycle::ExecutionOwnershipLost>() {
+    if find_source::<crate::lifecycle::ExecutionOwnershipLost>(error.as_ref()).is_some() {
         return true;
     }
     matches!(lifecycle.owns_execution().await, Ok(false))

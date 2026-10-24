@@ -248,15 +248,15 @@ pub(super) struct MockModelEndpoint {
 }
 
 impl MockModelEndpoint {
-    pub(super) fn start(model_name: &str) -> anyhow::Result<Self> {
+    pub(super) fn start(model_name: &str) -> std::io::Result<Self> {
         Self::start_with_blocking_chat(model_name, false)
     }
 
-    pub(super) fn start_blocking_chat(model_name: &str) -> anyhow::Result<Self> {
+    pub(super) fn start_blocking_chat(model_name: &str) -> std::io::Result<Self> {
         Self::start_with_blocking_chat(model_name, true)
     }
 
-    fn start_with_blocking_chat(model_name: &str, blocking_chat: bool) -> anyhow::Result<Self> {
+    fn start_with_blocking_chat(model_name: &str, blocking_chat: bool) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
@@ -323,12 +323,28 @@ impl Drop for MockModelEndpoint {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum MockHttpError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("connection closed before headers")]
+    ConnectionClosed,
+    #[error("missing request line")]
+    MissingRequestLine,
+    #[error("missing request method")]
+    MissingRequestMethod,
+    #[error("missing request path")]
+    MissingRequestPath,
+}
+
 pub(super) struct HttpRequestData {
     pub(super) method: String,
     pub(super) path: String,
 }
 
-pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
+pub(super) fn read_http_request(
+    stream: &mut TcpStream,
+) -> std::result::Result<HttpRequestData, MockHttpError> {
     // macOS accepts inherit the listener's nonblocking mode; the read timeout
     // alone cannot stop an early WouldBlock from closing the fixture socket.
     stream.set_nonblocking(false)?;
@@ -338,7 +354,7 @@ pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRe
     let header_end = loop {
         let read = stream.read(&mut temp)?;
         if read == 0 {
-            anyhow::bail!("connection closed before headers");
+            return Err(MockHttpError::ConnectionClosed);
         }
         buffer.extend_from_slice(&temp[..read]);
         if let Some(index) = find_subslice(&buffer, b"\r\n\r\n") {
@@ -347,17 +363,15 @@ pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRe
     };
     let header_text = String::from_utf8_lossy(&buffer[..header_end]);
     let mut lines = header_text.split("\r\n").filter(|line| !line.is_empty());
-    let request_line = lines
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request line"))?;
+    let request_line = lines.next().ok_or(MockHttpError::MissingRequestLine)?;
     let mut parts = request_line.split_whitespace();
     let method = parts
         .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request method"))?
+        .ok_or(MockHttpError::MissingRequestMethod)?
         .to_string();
     let path = parts
         .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request path"))?
+        .ok_or(MockHttpError::MissingRequestPath)?
         .to_string();
     Ok(HttpRequestData { method, path })
 }
@@ -373,7 +387,7 @@ pub(super) fn write_http_response(
     status: &str,
     content_type: &str,
     body: &str,
-) -> anyhow::Result<()> {
+) -> std::io::Result<()> {
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
