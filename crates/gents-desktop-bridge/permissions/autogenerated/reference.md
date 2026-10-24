@@ -180,6 +180,32 @@ Denies the desktop_app_quit command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-attachment-read`
+
+</td>
+<td>
+
+Enables the desktop_attachment_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-attachment-read`
+
+</td>
+<td>
+
+Denies the desktop_attachment_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-backend-delete`
 
 </td>
@@ -2364,6 +2390,32 @@ Denies the desktop_provider_usage_read command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-request-attachments`
+
+</td>
+<td>
+
+Enables the desktop_request_attachments command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-request-attachments`
+
+</td>
+<td>
+
+Denies the desktop_request_attachments command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-request-resend`
 
 </td>
@@ -3253,7 +3305,7 @@ Client start/shutdown, selected-agent, and application quit
 </td>
 <td>
 
-Session/conversation snapshot and live-delta reads
+Session/conversation snapshot, live-delta and selected attachment reads
 
 </td>
 </tr>

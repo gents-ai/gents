@@ -4,7 +4,7 @@
    they are, the less either moves. */
 
 export type RowShape =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; attachments?: number }
   | { kind: "reply"; text: string }
   | { kind: "group"; open: boolean; steps: number }
   | { kind: "other" };
@@ -36,7 +36,14 @@ export function guessHeight(shape: RowShape, width: number): number {
   switch (shape.kind) {
     case "user": {
       const { prose, code } = linesOf(shape.text, width - 48);
-      return 68 + LINE_PX * prose + CODE_LINE_PX * code;
+      return (
+        68 +
+        LINE_PX * prose +
+        CODE_LINE_PX * code +
+        (shape.attachments
+          ? 96 * Math.ceil(shape.attachments / Math.max(1, Math.floor(width / 248)))
+          : 0)
+      );
     }
     case "reply": {
       const { prose, code } = linesOf(shape.text, width);

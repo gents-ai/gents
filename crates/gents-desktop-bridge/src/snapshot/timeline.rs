@@ -116,6 +116,7 @@ fn render_timeline_order(
                         request_id: pending_turn.request_id.clone(),
                         content: pending_turn.content.clone(),
                         captured_context: pending_turn.captured_context.clone(),
+                        attachments: pending_turn.attachments.clone(),
                         selected_skill_ids: pending_turn.selected_skill_ids.clone(),
                         lifecycle_state: pending_turn.lifecycle_state.clone(),
                         folded_into_request_id: pending_turn.folded_into_request_id.clone(),
@@ -169,6 +170,7 @@ pub(super) fn build_rendered_timeline(
                 || (!message.has_tool_results
                     && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
                         || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
+                        || message.attachments.as_ref().is_some_and(|a| !a.is_empty())
                         || message.has_tool_calls
                         || message
                             .captured_context
@@ -202,6 +204,7 @@ pub(super) fn build_rendered_timeline(
             match (
                 normalized_content.clone(),
                 unresolved
+                    || message.attachments.as_ref().is_some_and(|a| !a.is_empty())
                     || message
                         .captured_context
                         .as_ref()
@@ -217,6 +220,7 @@ pub(super) fn build_rendered_timeline(
                         sequence: message.sequence,
                         content: normalized_content.clone(),
                         captured_context: message.captured_context.clone(),
+                        attachments: message.attachments.clone(),
                         timestamp: normalize_optional(message.timestamp.as_deref()),
                         reconstruction,
                     }),
@@ -310,6 +314,7 @@ mod tests {
             display_role: Some("user".to_string()),
             display_content: Some(content.to_string()),
             captured_context: None,
+            attachments: None,
             reasoning: None,
             has_tool_calls: false,
             has_tool_results: false,
@@ -487,6 +492,7 @@ mod tests {
         let visible = MessageView {
             display_content: None,
             captured_context: Some(vec![capture]),
+            attachments: None,
             ..user_message("captured-user-input", 1, "")
         };
         let hidden = MessageView {
@@ -500,6 +506,7 @@ mod tests {
         );
         let empty = MessageView {
             captured_context: Some(Vec::new()),
+            attachments: None,
             ..visible
         };
         assert!(build_rendered_timeline(&[empty], &[], &[]).is_empty());

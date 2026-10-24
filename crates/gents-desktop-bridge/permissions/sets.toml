@@ -25,9 +25,11 @@ permissions = [
 
 [[set]]
 identifier = "session-read"
-description = "Session/conversation snapshot and live-delta reads"
+description = "Session/conversation snapshot, live-delta and selected attachment reads"
 permissions = [
   "allow-desktop-session-snapshot",
+  "allow-desktop-attachment-read",
+  "allow-desktop-request-attachments",
   "allow-desktop-session-live-delta",
   "allow-desktop-session-rows",
   "allow-desktop-session-goal",

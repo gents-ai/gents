@@ -1,3 +1,4 @@
+import type { RequestAttachment } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
@@ -850,7 +851,13 @@ export function createDesktopUiHarness(
   }
 
   let allowedFolders: AllowedFolder[] = [];
+  const attachmentPayloads = new Map<string, RequestAttachment[]>();
   const adapter: DesktopApiAdapter = {
+    readAttachment: async () => {
+      throw new Error("Native picker is unavailable in the browser harness");
+    },
+    requestAttachments: async (_node, _session, requestId) =>
+      attachmentPayloads.get(requestId) ?? [],
     async fetchSessionGoal() {
       return null;
     },
@@ -1409,9 +1416,22 @@ export function createDesktopUiHarness(
     },
     async sendChatMessage(request) {
       const content = request.content.trim();
-      if (!content) {
+      if (!content && !request.attachments?.length) {
         throw new Error("message content is required");
       }
+      const attachments = await Promise.all(
+        (request.attachments ?? []).map(async (a) => ({
+          name: a.name,
+          mediaType: a.mediaType,
+          size: Math.floor((a.data.length * 3) / 4),
+          digest: Array.from(
+            new Uint8Array(
+              await crypto.subtle.digest("SHA-256", new TextEncoder().encode(a.data)),
+            ),
+            (b) => b.toString(16).padStart(2, "0"),
+          ).join(""),
+        })),
+      );
 
       if (sendsHeld && request.sessionId === "session-large") {
         return {
@@ -1425,6 +1445,7 @@ export function createDesktopUiHarness(
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
         const requestId = `request-${++requestSeq}`;
+        attachmentPayloads.set(requestId, request.attachments ?? []);
         if (
           existing.turnState === "running" ||
           existing.turnState === "waitingForClaim"
@@ -1436,6 +1457,7 @@ export function createDesktopUiHarness(
               {
                 requestId,
                 content,
+                attachments,
                 selectedSkillIds: [],
                 lifecycleState: "pending",
                 foldedIntoRequestId: null,
@@ -1471,6 +1493,8 @@ export function createDesktopUiHarness(
               kind: "userMessage",
               itemKey: `${requestId}-user`,
               ownsTurn: true,
+              requestId,
+              attachments,
               sequence: nextSequence,
               content,
               timestamp: new Date().toISOString(),
@@ -1498,6 +1522,12 @@ export function createDesktopUiHarness(
       }
 
       const { session, requestId } = createSessionFromPrompt(content, request.agentId);
+      attachmentPayloads.set(requestId, request.attachments ?? []);
+      session.timelineItems = session.timelineItems.map((item) =>
+        item.kind === "userMessage" ? { ...item, requestId, attachments } : item,
+      );
+      syncSessions();
+      notify("store");
       const result: TaskRunResult = {
         requestDocId: `${requestId}-doc`,
         requestId,

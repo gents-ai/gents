@@ -5,12 +5,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::session::SessionTitle;
 
+mod attachment;
+pub use attachment::*;
 mod captured_context;
 pub use captured_context::*;
 #[cfg(test)]
 mod tests;
 
-pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 1;
+pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 2;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,14 +50,20 @@ pub struct RequestInput {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub captured_context: Vec<CapturedContext>,
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub attachments: Vec<RequestAttachment>,
 }
 
 impl RequestInput {
     /// The serving runtime must advertise support before a client publishes
     /// typed captures. This observation grants no request or workspace authority.
     pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
-        self.captured_context.is_empty()
-            || runtime_version == Some(u64::from(REQUEST_INPUT_CONTRACT_VERSION))
+        (self.attachments.is_empty() || runtime_version == Some(2))
+            && (self.captured_context.is_empty() || matches!(runtime_version, Some(1 | 2)))
     }
 
     pub fn goal_assignment_compatible(&self, runtime_version: Option<u64>) -> bool {
@@ -64,7 +72,9 @@ impl RequestInput {
     }
 
     pub fn has_authored_input(&self, prose: &str) -> bool {
-        !prose.trim().is_empty() || !self.captured_context.is_empty()
+        !prose.trim().is_empty()
+            || !self.captured_context.is_empty()
+            || !self.attachments.is_empty()
     }
 
     /// A retry or queue edit is a new physical request in the same session.
@@ -91,12 +101,13 @@ impl RequestInput {
     pub fn authored_message(&self, prose: &str) -> anyhow::Result<crate::message::Message> {
         use crate::message::{Message, UserContent};
         let mut content = Vec::with_capacity(self.captured_context.len() + 1);
-        if !prose.is_empty() || self.captured_context.is_empty() {
+        if !prose.is_empty() || (self.captured_context.is_empty() && self.attachments.is_empty()) {
             content.push(UserContent::text(prose));
         }
         for context in &self.captured_context {
             content.push(UserContent::Document(context.to_document()?));
         }
+        content.extend(self.attachments.iter().map(RequestAttachment::to_content));
         Ok(Message::User { content })
     }
 

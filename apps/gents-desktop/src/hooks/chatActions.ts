@@ -1,3 +1,5 @@
+import { attachmentMetadata } from "./attachmentMetadata";
+import type { RequestAttachment } from "@source-inc/gents-desktop-client";
 import {
   selectedNodeReadinessDecision,
   type ChatSendResult,
@@ -100,15 +102,24 @@ export function createChatActions({
   async function sendMessage(
     content: string,
     agentId?: string | null,
+    attachments: RequestAttachment[] = [],
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = selectedNode() ?? firstNode(stores.fleet.getState());
-    if (!node || !content.trim()) return null;
+    if (!node || (!content.trim() && !attachments.length)) return null;
 
+    const errorSessionId = store.getState().sessionId;
+    const reportSendFailure = (message: string) => {
+      stores.chat.setState({
+        submissionError: { nodeDid: node.nodeDid, sessionId: errorSessionId, message },
+      });
+      reportFailure(message);
+    };
+    stores.chat.setState({ submissionError: null });
     const projection = project();
     const status = projection.shellProjection.nonEmptyContentSendStatus;
     if (status.kind === "disabled") {
-      reportFailure(status.hint);
+      reportSendFailure(status.hint);
       return null;
     }
     const admission =
@@ -116,7 +127,7 @@ export function createChatActions({
         ? projection.agentReadiness
         : selectedNodeReadinessDecision(node, agentId);
     if (admission.kind !== "ready") {
-      reportFailure("The selected agent is unavailable");
+      reportSendFailure("The selected agent is unavailable");
       return null;
     }
 
@@ -130,7 +141,12 @@ export function createChatActions({
     };
     // A send whose delivery is unknown is reconciled, never re-sent under a
     // fresh identity: the owner may already hold the original request.
-    let earlier = unresolvedSubmissionFor(node.nodeDid, selectedSessionId, content);
+    let earlier = unresolvedSubmissionFor(
+      node.nodeDid,
+      selectedSessionId,
+      content,
+      attachments,
+    );
     if (
       earlier &&
       sessionShowsRequest(
@@ -145,11 +161,15 @@ export function createChatActions({
     }
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
+      const attachmentViews = attachments.length
+        ? await Promise.all(attachments.map(attachmentMetadata))
+        : [];
       const result = await api.sendChatMessage({
         nodeDid: node.nodeDid,
         agentId: admission.agentId,
         sessionId: earlier?.sessionId ?? selectedSessionId,
         content,
+        attachments,
         causedBySourceDocId: mailboxRoute?.itemId ?? null,
         cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
         resolveRequestId: earlier?.requestId ?? null,
@@ -160,7 +180,7 @@ export function createChatActions({
         // request, so it was not delivered.
         if (!selection.acceptsIntent(store, intentGeneration)) return null;
         chat.resetWorkflow(stores.chat);
-        reportFailure(EARLIER_SEND_NOT_DELIVERED_HINT);
+        reportSendFailure(EARLIER_SEND_NOT_DELIVERED_HINT);
         return null;
       }
       if (result.outcome === "deliveryUnknown") {
@@ -169,9 +189,9 @@ export function createChatActions({
           requestId: result.requestId,
           sessionId: result.sessionId,
           selectedSessionId,
-          contentKey: contentKey(content),
+          contentKey: contentKey(content, attachments),
         });
-        reportFailure(DELIVERY_UNKNOWN_HINT);
+        reportSendFailure(DELIVERY_UNKNOWN_HINT);
         if (selection.acceptsIntent(store, intentGeneration))
           chat.resetWorkflow(stores.chat);
         return null;
@@ -188,6 +208,7 @@ export function createChatActions({
           sessionId: result.sessionId,
           requestId: result.requestId,
           content,
+          attachments: attachmentViews,
           selectedSkillIds: [],
           lifecycleState: "pending",
           foldedIntoRequestId: null,
@@ -205,7 +226,7 @@ export function createChatActions({
     } catch (err) {
       if (!selection.acceptsIntent(store, intentGeneration)) return null;
       chat.resetWorkflow(stores.chat);
-      reportFailure(actionFailure("send the message", err));
+      reportSendFailure(actionFailure("send the message", err));
       return null;
     } finally {
       chat.endSubmission(stores.chat, ownedWorkflow);

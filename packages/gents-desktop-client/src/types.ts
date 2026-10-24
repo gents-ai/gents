@@ -235,3 +235,6 @@ export type { GoalControlView } from "./generated/GoalControlView.js";
 export type { GoalControlAction } from "./generated/GoalControlAction.js";
 export type { GoalControlRequest } from "./generated/GoalControlRequest.js";
 export type { GoalControlResult } from "./generated/GoalControlResult.js";
+
+export type { RequestAttachment } from "./generated/RequestAttachment.js";
+export type { AttachmentView } from "./generated/AttachmentView.js";

@@ -69,9 +69,28 @@ private def capturedNativeBlockJson : CanonicalOutput.MessageBlock (List UInt8) 
       ",\"captured_context\":" ++ metadata.compress ++ "}"
   | _ => panic! "captured input must contain only prose and documents"
 
+private def attachmentJson (a : RequestAttachment) : String :=
+  "{\"name\":" ++ jsonString a.name ++ ",\"mediaType\":" ++ jsonString a.mediaType ++
+    ",\"data\":" ++ jsonString a.data ++ "}"
+
+private def attachmentNativeJson (a : RequestAttachment) (metadata : Bool) : String :=
+  let image := a.mediaType.startsWith "image/"
+  let media := if image then a.mediaType.drop 6 else if a.mediaType == "application/pdf" then "pdf" else "txt"
+  "{\"type\":" ++ jsonString (if image then "image" else "document") ++
+    ",\"data\":{\"type\":\"base64\",\"value\":" ++ jsonString a.data ++ "},\"media_type\":" ++ jsonString media ++
+    (if image then ",\"detail\":" ++ jsonString attachmentImageDetail else "") ++
+    (if metadata then ",\"gents_attachment\":" ++ jsonString a.name else "") ++ "}"
+
+private def attachmentProviderJson (a : RequestAttachment) : String :=
+  if a.providerKind == "text" then
+    "{\"type\":\"text\",\"prefix\":" ++ jsonString (attachmentTextHeader (jsonString a.name)) ++
+      ",\"encoded_text\":" ++ jsonString a.data ++ "}"
+  else attachmentNativeJson a false
+
 private def capturedNativeMessageJson (c : RequestInputCase) : String :=
   let message := PromptAssembly.CapturedContext.authoredMessage c.authoredText c.input.capturedContext
-  "{\"role\":\"user\",\"content\":" ++ jsonArray (message.blocks.map capturedNativeBlockJson) ++ "}"
+  let blocks := if c.authoredText.isEmpty && !c.input.attachments.isEmpty && c.input.capturedContext.isEmpty then [] else message.blocks.map capturedNativeBlockJson
+  "{\"role\":\"user\",\"content\":" ++ jsonArray (blocks ++ c.input.attachments.map (fun a => attachmentNativeJson a true)) ++ "}"
 
 private def assignmentJson : Option GoalAssignmentInput → String
   | none => "null"
@@ -85,7 +104,8 @@ private def requestInputJson (input : RequestInput) : String :=
   ",\"queue\":" ++ queueJson input.queue ++
   ",\"goal_continuation\":" ++ goalJson input.goalContinuation ++
   ",\"captured_context\":" ++ jsonArray (input.capturedContext.map capturedContextJson) ++
-  ",\"goal_assignment\":" ++ assignmentJson input.goalAssignment ++ "}"
+  ",\"goal_assignment\":" ++ assignmentJson input.goalAssignment ++
+  ",\"attachments\":" ++ jsonArray (input.attachments.map attachmentJson) ++ "}"
 
 private def requestInputCaseJson (c : RequestInputCase) : String :=
   let queue := c.input.queue.getD { source := .backgroundCompletion, policy := .coalesce }
@@ -96,15 +116,19 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"runtime_goal_version\":" ++ jsonOptionalNat c.runtimeGoalVersion ++
   ",\"expected_goal_assignment_compatible\":" ++ boolString (goalAssignmentCompatible c.input c.runtimeGoalVersion) ++
   ",\"expected_captured_input_compatible\":" ++ boolString (capturedInputCompatible c.input c.runtimeInputVersion) ++
+  ",\"expected_attachments_well_formed\":" ++ boolString (attachmentsWellFormed c.input.attachments) ++
+  ",\"expected_attachment_parts\":" ++ jsonArray (c.input.attachments.map attachmentProviderJson) ++
+  ",\"expected_chat_attachments_supported\":" ++ boolString (c.input.attachments.all RequestAttachment.chatCompletionsSupported) ++
   ",\"expected_has_authored_input\":" ++ boolString (hasAuthoredInput c.input c.authoredText) ++
   ",\"expected_native_input\":" ++ capturedNativeMessageJson c ++
-  ",\"expected_provider_parts\":" ++ jsonOptionalStringArray (PromptAssembly.CapturedContext.providerParts? c.authoredText c.input.capturedContext) ++
+  ",\"expected_provider_parts\":" ++ jsonOptionalStringArray (if c.authoredText.isEmpty && !c.input.attachments.isEmpty && c.input.capturedContext.isEmpty then some [] else PromptAssembly.CapturedContext.providerParts? c.authoredText c.input.capturedContext) ++
   ",\"continuation_parent_doc_id\":" ++ jsonString "physical:parent" ++
   ",\"continuation_queue\":" ++ queueJson (some queue) ++
   ",\"continuation_goal\":" ++ goalJson c.input.goalContinuation ++
   ",\"expected_continuation\":" ++ requestInputJson (continuationInput c.input queue c.input.goalContinuation "physical:parent") ++
   ",\"reissued_source_doc_id\":" ++ jsonString "physical:parent" ++
   ",\"expected_reissued_input\":" ++ requestInputJson (reissuedInput c.input "physical:parent") ++
+  ",\"expected_fresh_input\":" ++ requestInputJson (freshSessionInput c.input) ++
   ",\"workspace\":" ++ workspaceJson c.workspace ++
   ",\"workspace_source\":" ++ workspaceJson c.workspaceSource ++
   ",\"workspace_source_authenticated\":" ++ boolString c.workspaceSourceAuthenticated ++

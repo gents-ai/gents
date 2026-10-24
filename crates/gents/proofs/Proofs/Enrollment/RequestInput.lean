@@ -35,6 +35,57 @@ structure GoalAssignmentInput where
   rootRequestDocId : Option String := none
   deriving DecidableEq, Repr
 
+/-- Attachment bytes travel in the signed request, never as paths to reopen.
+Base64 validity and media decoding are wire-codec obligations. Bounds apply to
+the encoded payload to bound document replication as well as provider input. -/
+structure RequestAttachment where
+  name : String
+  mediaType : String
+  data : String
+  deriving DecidableEq, Repr
+
+/-- OpenAI's chat transport requires explicit image detail even when automatic
+resolution is desired. -/
+def attachmentImageDetail : String := "auto"
+
+/-- The chat-completions adapter cannot transport PDFs as documents. Reject
+them rather than allowing its generic document conversion to emit base64 prose. -/
+def RequestAttachment.chatCompletionsSupported (a : RequestAttachment) : Bool :=
+  a.mediaType != "application/pdf"
+
+/-- UTF-8 text attachments decode at the provider boundary; binary attachments
+retain their native media kind. Base64 decoding remains a wire-codec obligation. -/
+def RequestAttachment.providerKind (a : RequestAttachment) : String :=
+  if a.mediaType == "text/plain" then "text"
+  else if a.mediaType.startsWith "image/" then "image" else "document"
+
+/-- The quoted name is supplied by the JSON string codec so filenames cannot
+introduce new header lines. Keep attached file text distinct from authored prose. -/
+def attachmentTextHeader (quotedName : String) : String :=
+  "Attached file " ++ quotedName ++ ":\n\n"
+
+def RequestAttachment.wellFormed (a : RequestAttachment) : Bool :=
+  !a.name.trim.isEmpty && a.name.utf8ByteSize <= 1024 &&
+    ["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "text/plain"].contains a.mediaType &&
+    !a.data.isEmpty && a.data.utf8ByteSize <= 5592408
+
+def attachmentsWellFormed (attachments : List RequestAttachment) : Bool :=
+  attachments.length <= 4 && attachments.all RequestAttachment.wellFormed &&
+    (attachments.map (fun a => a.data.utf8ByteSize)).sum <= 11184816
+
+def attachmentFields (attachments : List RequestAttachment) : List String :=
+  if attachments.isEmpty then [] else
+    ["attachments", toString attachments.length] ++
+      attachments.flatMap (fun a => [a.name, a.mediaType, a.data])
+
+theorem attachment_singleton_binds_content (a b : RequestAttachment)
+    (h : attachmentFields [a] = attachmentFields [b]) : a = b := by
+  cases a
+  cases b
+  simp_all [attachmentFields]
+
+theorem empty_attachments_keep_existing_framing : attachmentFields [] = [] := rfl
+
 structure RequestInput where
   selectedSkillIds : List String := []
   cwd : Option String := none
@@ -42,6 +93,7 @@ structure RequestInput where
   queue : Option RequestQueue := none
   goalContinuation : Option GoalContinuationInput := none
   capturedContext : List CapturedContext := []
+  attachments : List RequestAttachment := []
   goalAssignment : Option GoalAssignmentInput := none
   deriving DecidableEq, Repr
 
@@ -49,14 +101,15 @@ structure RequestInput where
 This is content presence, not admission authority or a requirement on internal
 runtime requests. -/
 def hasAuthoredInput (input : RequestInput) (prose : String) : Bool :=
-  !prose.trim.isEmpty || !input.capturedContext.isEmpty
+  !prose.trim.isEmpty || !input.capturedContext.isEmpty || !input.attachments.isEmpty
 
 /-- This observation prevents sending typed captures to a process that cannot
 decode them. It grants no authority; the selected runtime's identity, readiness
 and request admission retain their existing owners. Plain input does not need
 this new contract advertisement. -/
 def capturedInputCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
-  input.capturedContext.isEmpty || runtimeVersion == some 1
+  (input.attachments.isEmpty || runtimeVersion == some 2) &&
+    (input.capturedContext.isEmpty || runtimeVersion == some 1 || runtimeVersion == some 2)
 
 def goalAssignmentCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
   input.goalAssignment.isNone || runtimeVersion == some 3
@@ -67,6 +120,9 @@ physical document; all other captured invocation facts retain their owner. -/
 def reissuedInput (source : RequestInput) (sourceDocId : String) : RequestInput :=
   { source with goalAssignment := source.goalAssignment.map fun reference =>
       { reference with rootRequestDocId := some (reference.rootRequestDocId.getD sourceDocId) } }
+
+theorem reissued_input_preserves_attachments (source : RequestInput) (sourceDocId : String) :
+    (reissuedInput source sourceDocId).attachments = source.attachments := rfl
 
 theorem reissued_input_preserves_captures (source : RequestInput) (sourceDocId : String) :
     (reissuedInput source sourceDocId).capturedContext = source.capturedContext := rfl
@@ -91,6 +147,12 @@ theorem reissued_input_does_not_join_an_assignment (source : RequestInput) (sour
     (reissuedInput source sourceDocId).goalAssignment = none := by
   simp [reissuedInput, unassigned]
 
+def freshSessionInput (source : RequestInput) : RequestInput :=
+  {source with queue := none, goalContinuation := none, goalAssignment := none}
+
+theorem fresh_session_preserves_attachments (source : RequestInput) :
+    (freshSessionInput source).attachments = source.attachments := rfl
+
 /-- Runtime continuations remain in their parent's invocation directory. They
 do not replay the parent's title intent, queue position, captured context, or goal issuance facts.
 The executing host still validates the inherited directory against its policy. -/
@@ -111,6 +173,10 @@ theorem continuation_does_not_replay_creation (parent : RequestInput) (queue : R
 theorem continuation_does_not_replay_captured_context (parent : RequestInput)
     (queue : RequestQueue) (goal : Option GoalContinuationInput) (parentDocId : String) :
     (continuationInput parent queue goal parentDocId).capturedContext = [] := rfl
+
+theorem continuation_does_not_replay_attachments (parent : RequestInput)
+    (queue : RequestQueue) (goal : Option GoalContinuationInput) (parentDocId : String) :
+    (continuationInput parent queue goal parentDocId).attachments = [] := rfl
 
 theorem continuation_uses_current_control (parent : RequestInput) (queue : RequestQueue)
     (goal : Option GoalContinuationInput) (parentDocId : String) :
@@ -160,7 +226,8 @@ def requestInputFields (input : RequestInput) : CanonicalFields :=
     optionFields (fun s => [s]) input.cwd ++
     optionFields titleFields input.initialTitle ++ optionFields queueFields input.queue ++
     optionFields (fun goal => [toString goal.sequence, toString goal.wrapup]) input.goalContinuation ++
-    capturedContextExtensionFields input.capturedContext ++ goalAssignmentFields input.goalAssignment
+    capturedContextExtensionFields input.capturedContext ++ goalAssignmentFields input.goalAssignment ++
+    attachmentFields input.attachments
 
 theorem default_queue_has_no_encoding_extension (queue : RequestQueue) :
     queueExtensionFields {queue with delivery := .queue, position := none} = [] := by
@@ -181,14 +248,14 @@ def inputWithinContext (input : RequestInput) (skillIds : List String)
   input.selectedSkillIds.all skillIds.contains &&
     (input.cwd.map cwdAllowed).getD true &&
     (input.queue.map (fun q => queueSourceAllowed q.source)).getD true &&
-    input.capturedContext.all CapturedContext.wellFormed
+    input.capturedContext.all CapturedContext.wellFormed && attachmentsWellFormed input.attachments
 
 theorem continuation_retains_host_policy_checks (parent : RequestInput)
     (queue : RequestQueue) (goal : Option GoalContinuationInput) (parentDocId : String) (skills : List String)
     (cwdAllowed : String → Bool) (queueAllowed : SessionQueue.QueueSource → Bool) :
     inputWithinContext (continuationInput parent queue goal parentDocId) skills cwdAllowed queueAllowed =
       ((parent.cwd.map cwdAllowed).getD true && queueAllowed queue.source) := by
-  simp [continuationInput, inputWithinContext]
+  simp [continuationInput, inputWithinContext, attachmentsWellFormed]
 
 /-- Signed source observations do not widen the existing skill, directory or
 queue-source grants. Structural acceptance of a capture is not authorization. -/
@@ -197,7 +264,7 @@ theorem captures_do_not_widen_context (input : RequestInput) (skills : List Stri
     (h : inputWithinContext input skills cwdAllowed queueAllowed = true) :
     inputWithinContext {input with capturedContext := []} skills cwdAllowed queueAllowed = true := by
   simp only [inputWithinContext, Bool.and_eq_true] at h ⊢
-  exact ⟨h.1, by simp⟩
+  exact ⟨⟨h.1.1, by simp⟩, h.2⟩
 
 def agentMatchesSession (selected observed : String) : Bool :=
   !selected.trim.isEmpty && selected == observed
@@ -214,7 +281,7 @@ theorem activation_cannot_expand_allowlist (input : RequestInput) (skills : List
     (h : inputWithinContext input skills cwdAllowed queueAllowed = true) :
     ∀ skill ∈ input.selectedSkillIds, skill ∈ skills := by
   simp only [inputWithinContext, Bool.and_eq_true] at h
-  simpa using h.1.1.1
+  simpa using h.1.1.1.1
 
 theorem rejected_queue_source_cannot_grant (input : RequestInput)
     (queue : RequestQueue) (skills : List String) (cwdAllowed : String → Bool)
