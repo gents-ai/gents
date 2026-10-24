@@ -4,6 +4,7 @@ import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
+import Proofs.Conformance.ClientInstallation
 import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases
 import Proofs.Conformance.ClientRequestCacheIdentityCases
@@ -322,6 +323,8 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_installation_cases\":"
+      ++ Conformance.ClientInstallation.casesJson ++ ","
     ++ "\"client_observation_scope_cases\":"
       ++ Conformance.ClientObservationScope.casesJson ++ ","
     ++ "\"client_settings_cases\":"
