@@ -193,7 +193,13 @@ def resolutionCases : List (String × List Window) :=
 
 def comparisonCases : List (String × Snapshot × ClosureInput × String × String × String) :=
   let documents := capturedSnapshot.documents.filter (fun key => key.id != 11)
-  [ ("sequential_resource", capturedSnapshot, input sequentialHeaders, "node", "workspace", "file.rs")
+  let receiptClosure := { input sequentialHeaders with segments :=
+    ((terminalRecords tool).map fun segment =>
+      { segment with coordinate := ⟨tool.request, .authored 11⟩ }) ++ terminalRecords secondTool }
+  let receiptSnapshot := { capturedSnapshot with ordering := (capturedSnapshot.tools.map fun fact =>
+      window capturedSnapshot receiptClosure fact.tool) }
+  [ ("background_receipt_resource", receiptSnapshot, receiptClosure, "node", "workspace", "file.rs")
+  , ("sequential_resource", capturedSnapshot, input sequentialHeaders, "node", "workspace", "file.rs")
   , ("other_resource", capturedSnapshot, input sequentialHeaders, "node", "workspace", "other.rs")
   , ("other_source", capturedSnapshot, input sequentialHeaders, "other-node", "workspace", "file.rs")
   , ("missing_intermediate_delivery", { capturedSnapshot with documents },
