@@ -22,8 +22,8 @@ use super::p2p_ops::{
 use super::route_manager::{is_enrollment_peer, ClientRouteManager};
 use super::supervisor::spawn_p2p_supervisor_task;
 use super::{
-    ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
-    BOOTSTRAP_OPERATION_TIMEOUT,
+    ClientCore, ClientCoreError, ClientCoreOptions, ClientPeerStatus, P2PHealth,
+    BOOTSTRAP_OPERATION_BACKOFF, BOOTSTRAP_OPERATION_TIMEOUT,
 };
 
 impl ClientCore {
@@ -340,7 +340,7 @@ pub(super) async fn connect_peer_with_retry(
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
-) -> Result<()> {
+) -> Result<(), ClientCoreError> {
     connect_peer_with_retry_until(bus, p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
 }
 
@@ -349,7 +349,7 @@ pub(super) async fn force_connect_peer_with_retry(
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
-) -> Result<()> {
+) -> Result<(), ClientCoreError> {
     force_connect_peer_with_retry_until(bus, p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
 }
 
@@ -359,7 +359,7 @@ pub(super) async fn connect_peer_with_retry_until(
     addr: &str,
     label: &str,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<(), ClientCoreError> {
     let deadline = Instant::now() + timeout;
     let expected_peer_id = parse_public_peer_addr(addr)
         .ok()
@@ -386,7 +386,11 @@ pub(super) async fn connect_peer_with_retry_until(
                     }
                 }
                 if Instant::now() >= deadline {
-                    anyhow::bail!("timed out connecting bootstrap peer {label} at {addr}: {error}");
+                    return Err(ClientCoreError::ConnectBootstrapPeerTimedOut {
+                        label: label.to_owned(),
+                        addr: addr.to_owned(),
+                        error: Box::new(error),
+                    });
                 }
                 sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
             }
@@ -400,7 +404,7 @@ pub(super) async fn force_connect_peer_with_retry_until(
     addr: &str,
     label: &str,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<(), ClientCoreError> {
     let deadline = Instant::now() + timeout;
     let expected_peer_id = parse_public_peer_addr(addr)
         .ok()
@@ -421,9 +425,11 @@ pub(super) async fn force_connect_peer_with_retry_until(
                     }
                 }
                 if Instant::now() >= deadline {
-                    anyhow::bail!(
-                        "timed out force-connecting bootstrap peer {label} at {addr}: {error}"
-                    );
+                    return Err(ClientCoreError::ForceConnectBootstrapPeerTimedOut {
+                        label: label.to_owned(),
+                        addr: addr.to_owned(),
+                        error: Box::new(error),
+                    });
                 }
                 sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
             }
@@ -431,7 +437,10 @@ pub(super) async fn force_connect_peer_with_retry_until(
     }
 }
 
-pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
+pub(super) async fn is_connected_peer(
+    p2p: &Arc<dyn P2POps>,
+    peer_id: &str,
+) -> Result<bool, ClientCoreError> {
     let peers = p2p_connected_peers(p2p).await?;
     Ok(peers
         .iter()
@@ -450,7 +459,7 @@ async fn wait_for_connected_peer(
     peer_id: &str,
     deadline: Instant,
     label: &str,
-) -> Result<()> {
+) -> Result<(), ClientCoreError> {
     // Subscribe before the first observation so a connection that lands
     // between them still wakes this wait.
     let mut connections = bus.subscribe(&[events::EventName::PeerConnection]);
@@ -472,15 +481,23 @@ async fn wait_for_connected_peer(
         Ok(true) => Ok(()),
         // A closed bus delivers no further events; fall back to one live read.
         Ok(false) if is_connected_peer(p2p, peer_id).await? => Ok(()),
-        _ => anyhow::bail!("timed out waiting for bootstrap peer {peer_id} to connect for {label}"),
+        _ => Err(ClientCoreError::WaitBootstrapPeerTimedOut {
+            peer_id: peer_id.to_owned(),
+            label: label.to_owned(),
+        }),
     }
 }
 
-pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a str> {
+pub(super) fn normalize_required<'a>(
+    field: &str,
+    value: &'a str,
+) -> Result<&'a str, ClientCoreError> {
     let trimmed = value.trim();
     (!trimmed.is_empty())
         .then_some(trimmed)
-        .with_context(|| format!("{field} must not be empty"))
+        .ok_or_else(|| ClientCoreError::EmptyRequiredField {
+            field: field.to_owned(),
+        })
 }
 
 // Key custody is durable before the first encrypted write; existing plaintext

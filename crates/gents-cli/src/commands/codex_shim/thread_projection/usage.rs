@@ -1,7 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
-
 use super::CodexShimProjectionError;
 use gents::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
@@ -9,10 +7,26 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::commands::codex_shim::store::query_node_json;
+use crate::commands::codex_shim::store::{query_node_json, StoreError};
 use crate::commands::codex_shim::ShimState;
 
 use super::CodexThreadRecord;
+
+#[derive(Debug, thiserror::Error)]
+pub(in crate::commands::codex_shim) enum UsageError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    Projection(#[from] CodexShimProjectionError),
+    #[error("decoding AgentRequest rows for token usage")]
+    DecodeRequestRows(#[source] CodexShimProjectionError),
+    #[error("decoding InferenceCall rows for token usage")]
+    DecodeInferenceCallRows(#[source] CodexShimProjectionError),
+    #[error("decoding latest InferenceCall row for context usage")]
+    DecodeLatestInferenceCallRow(#[source] CodexShimProjectionError),
+}
+
+type Result<T, E = UsageError> = std::result::Result<T, E>;
 
 #[derive(Clone, Copy)]
 struct UsageScope<'a> {
@@ -183,7 +197,7 @@ async fn session_request_ids(
     );
     let response = query_node_json(&state.node, &query).await?;
     let rows = rows::<AgentRequestRow>(&response, "AgentRequest")
-        .context("decoding AgentRequest rows for token usage")?;
+        .map_err(UsageError::DecodeRequestRows)?;
     Ok(rows
         .into_iter()
         .map(|row| row.request_id)
@@ -290,7 +304,7 @@ async fn gather_request_usage(
         .collect::<BTreeMap<_, _>>();
 
     for row in rows::<InferenceCallUsageRow>(&response, "InferenceCall")
-        .context("decoding InferenceCall rows for token usage")?
+        .map_err(UsageError::DecodeInferenceCallRows)?
     {
         let usage = usage.entry(row.request_id).or_default();
         if let Some(tokens) = row.prompt_tokens.and_then(nonnegative_i64) {
@@ -347,7 +361,7 @@ async fn latest_requests_token_usage_scoped(
     );
     let response = query_node_json(&state.node, &query).await?;
     let rows = rows::<InferenceCallUsageRow>(&response, "InferenceCall")
-        .context("decoding latest InferenceCall row for context usage")?;
+        .map_err(UsageError::DecodeLatestInferenceCallRow)?;
     Ok(latest_usage_from_rows(rows, &positions))
 }
 

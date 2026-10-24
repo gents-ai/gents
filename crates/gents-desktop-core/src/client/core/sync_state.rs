@@ -7,9 +7,7 @@ use gents::agent::p2p_reconcile::{
     compare_client_replicated_schema, read_client_replicated_schema,
 };
 use gents::P2pSyncStatusSnapshot;
-use gents_protocol::peer_schema::{
-    ReplicatedSchema, ReplicatedSchemaSkew, STATUS_REPLICATED_SCHEMA_FIELD,
-};
+use gents_protocol::peer_schema::{ReplicatedSchema, STATUS_REPLICATED_SCHEMA_FIELD};
 use serde_json::Value;
 
 use super::{
@@ -20,6 +18,7 @@ use crate::client::peer_directory::RemovalCause;
 use crate::client::{PeerDirectory, PeerRecord};
 
 type LastErrorPatch = (Option<String>, Option<String>);
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 
 /// Replicated-schema compatibility is a live observation between two running
 /// nodes, owned here, and deliberately not part of the signed enrollment
@@ -152,7 +151,7 @@ impl ClientSyncStateOwner {
             .map_err(ClientCoreError::from)
     }
 
-    pub(super) async fn clear_ephemeral_pairing_readiness(&self) -> anyhow::Result<()> {
+    pub(super) async fn clear_ephemeral_pairing_readiness(&self) -> Result<()> {
         let mut directory = self.directory.write().await;
         directory.clear_ephemeral_pairing_readiness().await?;
         let records = directory.records().to_vec();
@@ -171,7 +170,7 @@ impl ClientSyncStateOwner {
         node_did: &str,
         graphql: &str,
         node_home: &str,
-    ) -> anyhow::Result<PeerRecord> {
+    ) -> Result<PeerRecord> {
         let mut directory = self.directory.write().await;
         let record = directory
             .upsert_local_standard_peer(label, addr, node_did, graphql, node_home)
@@ -197,7 +196,7 @@ impl ClientSyncStateOwner {
         admin_did: &str,
         authorization_sequence: u64,
         authorization_expires_at: &str,
-    ) -> anyhow::Result<PeerRecord> {
+    ) -> Result<PeerRecord> {
         let mut directory = self.directory.write().await;
         let record = directory
             .upsert_enrollment_peer(
@@ -221,7 +220,7 @@ impl ClientSyncStateOwner {
         &self,
         expected: &PeerRecord,
         replacement: PeerRecord,
-    ) -> anyhow::Result<Option<PeerRecord>> {
+    ) -> Result<Option<PeerRecord>> {
         let mut directory = self.directory.write().await;
         let replaced = directory.replace_if_matches(expected, replacement).await?;
         if replaced.is_some() {
@@ -234,7 +233,7 @@ impl ClientSyncStateOwner {
         &self,
         expected: &PeerRecord,
         ready: bool,
-    ) -> anyhow::Result<Option<PeerRecord>> {
+    ) -> Result<Option<PeerRecord>> {
         let mut directory = self.directory.write().await;
         if !directory.records().iter().any(|record| record == expected) {
             return Ok(None);
@@ -252,7 +251,7 @@ impl ClientSyncStateOwner {
         &self,
         expected: &PeerRecord,
         cause: RemovalCause,
-    ) -> anyhow::Result<Option<PeerRecord>> {
+    ) -> Result<Option<PeerRecord>> {
         let mut directory = self.directory.write().await;
         let removed = directory.queue_removal(expected, cause).await?;
         let records = directory.records().to_vec();
@@ -260,10 +259,7 @@ impl ClientSyncStateOwner {
         Ok(removed)
     }
 
-    pub(super) async fn complete_removal_if_matches(
-        &self,
-        expected: &PeerRecord,
-    ) -> anyhow::Result<bool> {
+    pub(super) async fn complete_removal_if_matches(&self, expected: &PeerRecord) -> Result<bool> {
         let mut directory = self.directory.write().await;
         let completed = directory.complete_removal_if_matches(expected).await?;
         if completed {
@@ -322,7 +318,7 @@ impl ClientSyncStateOwner {
         status: &Value,
     ) -> anyhow::Result<()> {
         let local = self.local_replicated_schema(local).await?;
-        self.record_runtime_schema(observation, local, status)
+        Ok(self.record_runtime_schema(observation, local, status)?)
     }
 
     /// Compare without recording; enrollment uses this before the offer is
@@ -334,7 +330,7 @@ impl ClientSyncStateOwner {
         status: &Value,
     ) -> anyhow::Result<()> {
         let local = self.local_replicated_schema(local).await?;
-        compare_runtime_status(local, runtime_did, status)
+        Ok(compare_runtime_status(local, runtime_did, status)?)
     }
 
     async fn local_replicated_schema(
@@ -351,14 +347,12 @@ impl ClientSyncStateOwner {
         observation: &RuntimeSchemaObservation,
         local: &ReplicatedSchema,
         status: &Value,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let observed = compare_runtime_status(local, &observation.runtime_did, status);
         let skew = match &observed {
             Ok(()) => None,
-            Err(error) => match error.downcast_ref::<ReplicatedSchemaSkew>() {
-                Some(skew) => Some(skew.clone()),
-                None => return observed,
-            },
+            Err(ClientCoreError::ReplicatedSchemaSkew(skew)) => Some(skew.clone()),
+            Err(_) => return observed,
         };
         let mut latest = self
             .schema_observation_latest
@@ -395,7 +389,7 @@ impl ClientSyncStateOwner {
     }
 
     #[cfg(test)]
-    pub(super) async fn upsert_for_test(&self, record: PeerRecord) -> anyhow::Result<()> {
+    pub(super) async fn upsert_for_test(&self, record: PeerRecord) -> Result<()> {
         let mut directory = self.directory.write().await;
         directory.upsert(record).await?;
         self.publish_persisted_directory(directory.records().to_vec());
@@ -542,21 +536,24 @@ fn compare_runtime_status(
     local: &ReplicatedSchema,
     runtime_did: &str,
     status: &Value,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let status_did = status.get("node_did").and_then(Value::as_str);
-    anyhow::ensure!(
-        status_did == Some(runtime_did),
-        "runtime status belongs to {}, not {runtime_did}",
-        status_did.unwrap_or("an unidentified runtime")
-    );
+    if status_did != Some(runtime_did) {
+        return Err(ClientCoreError::RuntimeStatusWrongNode {
+            status_did: status_did.map(str::to_owned),
+            runtime_did: runtime_did.to_owned(),
+        });
+    }
     let remote = match status.get(STATUS_REPLICATED_SCHEMA_FIELD) {
         Some(Value::Null) => {
-            anyhow::bail!("runtime {runtime_did} has not published its replicated schema yet")
+            return Err(ClientCoreError::RuntimeSchemaUnpublished {
+                runtime_did: runtime_did.to_owned(),
+            })
         }
         Some(schema) => serde_json::from_value::<ReplicatedSchema>(schema.clone()).ok(),
         None => None,
     };
-    compare_client_replicated_schema(local, remote.as_ref()).map_err(anyhow::Error::from)
+    Ok(compare_client_replicated_schema(local, remote.as_ref())?)
 }
 
 fn observation_generation_matches(previous: &PeerRecord, current: &PeerRecord) -> bool {

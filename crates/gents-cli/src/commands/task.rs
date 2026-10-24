@@ -9,6 +9,16 @@ use crate::commands::config::task_run::{config_task_run, resolve_task_id_for};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TaskCommandError {
+    #[error("no Task with task_id = {task_id}")]
+    NotFound { task_id: String },
+    #[error("{context} failed: {errors}")]
+    GraphqlErrors { context: String, errors: String },
+    #[error(transparent)]
+    Config(#[from] gents::config_client::ConfigClientError),
+}
+
 const TASK_FIELDS: &str = "task_id node_did display_name description agent_id prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
 const BEHAVIOR_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
 const TRIGGER_FIELDS: &str = "trigger_id node_did display_name description task_id source session_id_template enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
@@ -44,7 +54,7 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let inventory = load_task_inventory(&access, Some(&task_id)).await?;
     let Some(task) = inventory.tasks.first() else {
-        anyhow::bail!("no Task with task_id = {task_id}");
+        return Err(TaskCommandError::NotFound { task_id }.into());
     };
     print_json(&inventory.task_detail(task))?;
     Ok(())
@@ -144,7 +154,7 @@ impl TaskInventory {
 async fn load_task_inventory(
     access: &ConfigAccess,
     task_id_filter: Option<&str>,
-) -> Result<TaskInventory> {
+) -> Result<TaskInventory, TaskCommandError> {
     let query = task_inventory_query(task_id_filter);
     let response = access.execute(&query).await?;
     ensure_no_graphql_errors(&response, "query task inventory")?;
@@ -216,13 +226,16 @@ fn task_inventory_query(task_id_filter: Option<&str>) -> String {
     )
 }
 
-fn ensure_no_graphql_errors(response: &Value, context: &str) -> Result<()> {
+fn ensure_no_graphql_errors(response: &Value, context: &str) -> Result<(), TaskCommandError> {
     if let Some(errors) = response
         .get("errors")
         .and_then(Value::as_array)
         .filter(|errors| !errors.is_empty())
     {
-        anyhow::bail!("{context} failed: {errors:?}");
+        return Err(TaskCommandError::GraphqlErrors {
+            context: context.to_owned(),
+            errors: format!("{errors:?}"),
+        });
     }
     Ok(())
 }

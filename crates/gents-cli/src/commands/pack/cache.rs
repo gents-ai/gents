@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -11,6 +11,16 @@ use gents::pack::{HomePackInstall, PackKind};
 
 use crate::cli::PackPruneArgs;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum CacheReleaseError {
+    #[error("removing {}", path.display())]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 pub(super) struct PreparedCacheRelease {
     root: std::path::PathBuf,
     disposition: CacheRelease,
@@ -18,11 +28,15 @@ pub(super) struct PreparedCacheRelease {
 }
 
 impl PreparedCacheRelease {
-    pub(super) fn finish(self) -> Result<CacheRelease> {
+    pub(super) fn finish(self) -> Result<CacheRelease, CacheReleaseError> {
         match self.disposition {
             CacheRelease::Removed => {
-                std::fs::remove_dir_all(&self.root)
-                    .with_context(|| format!("removing {}", self.root.display()))?;
+                std::fs::remove_dir_all(&self.root).map_err(|source| {
+                    CacheReleaseError::Remove {
+                        path: self.root.clone(),
+                        source,
+                    }
+                })?;
                 Ok(CacheRelease::Removed)
             }
             CacheRelease::Retained(reason) => Ok(CacheRelease::Retained(reason)),

@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
-use anyhow::{Context, Result};
+use super::error::{P2pCommandError, Result};
+use anyhow::Context;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -38,7 +39,7 @@ struct PeerPairingAppliedRow {
     replicator_addresses: Vec<String>,
 }
 
-pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
+pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> anyhow::Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let rows = graphql_rows(&access, "PeerPairingDesired", pairings_list_query())
@@ -63,7 +64,7 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
             "pairings": pairings,
             "count": count,
         }))?),
-        OutputFormat::Table => print_pairings_table(&pairings),
+        OutputFormat::Table => Ok(print_pairings_table(&pairings)?),
         _ => unreachable!("ensure_supported restricts p2p pairings list output formats"),
     }
 }
@@ -324,7 +325,9 @@ fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
     for row in &table_rows {
         print_table_row(&mut stdout, row, &widths)?;
     }
-    stdout.flush().context("flushing p2p pairings table")?;
+    stdout
+        .flush()
+        .map_err(P2pCommandError::PairingsTableFlush)?;
     Ok(())
 }
 
@@ -343,7 +346,7 @@ fn print_table_row<const N: usize>(
         .map(|(cell, width)| format!("{cell:<width$}"))
         .collect::<Vec<_>>()
         .join("  ");
-    writeln!(writer, "{line}").context("writing p2p pairings table row")
+    writeln!(writer, "{line}").map_err(P2pCommandError::PairingsTableRow)
 }
 
 #[cfg(test)]

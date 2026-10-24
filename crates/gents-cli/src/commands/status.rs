@@ -2,7 +2,6 @@ use gents::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
@@ -16,6 +15,36 @@ use crate::{
     post_graphql, print_json, read_runtime_state, resolve_graphql_endpoint, resolve_home_dir,
     resolve_node_did,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum StatusError {
+    #[error(transparent)]
+    HomeState(#[from] crate::home_state::HomeStateError),
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    RequestHelpers(#[from] crate::request_helpers::RequestHelpersError),
+    #[error("parsing GraphQL endpoint URL")]
+    ParseEndpoint(#[source] url::ParseError),
+    #[error("building runtime status client")]
+    HttpClient(#[source] reqwest::Error),
+    #[error("reading runtime status from {url}")]
+    ReadStatus {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("decoding runtime status from {url}")]
+    DecodeStatus {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("decoding node readiness row")]
+    DecodeNodeReadiness(#[source] serde_json::Error),
+}
+
+type Result<T, E = StatusError> = std::result::Result<T, E>;
 
 pub(crate) async fn status(args: StatusArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
@@ -204,20 +233,26 @@ pub(crate) async fn fetch_runtime_status(
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()
-        .context("building runtime status client")?;
+        .map_err(StatusError::HttpClient)?;
     client
         .get(&status_url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .with_context(|| format!("reading runtime status from {status_url}"))?
+        .map_err(|source| StatusError::ReadStatus {
+            url: status_url.clone(),
+            source,
+        })?
         .json()
         .await
-        .with_context(|| format!("decoding runtime status from {status_url}"))
+        .map_err(|source| StatusError::DecodeStatus {
+            url: status_url.clone(),
+            source,
+        })
 }
 
 fn runtime_status_url(graphql: &GraphqlEndpoint) -> Result<String> {
-    let mut url = reqwest::Url::parse(graphql.url()).context("parsing GraphQL endpoint URL")?;
+    let mut url = reqwest::Url::parse(graphql.url()).map_err(StatusError::ParseEndpoint)?;
     url.set_path("/status");
     url.set_query(None);
     url.set_fragment(None);
@@ -252,6 +287,6 @@ pub(crate) async fn load_node_readiness(
         .await?
         .into_iter()
         .next()
-        .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
+        .map(|row| serde_json::from_value(row).map_err(StatusError::DecodeNodeReadiness))
         .transpose()
 }

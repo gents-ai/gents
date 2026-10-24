@@ -438,13 +438,13 @@ async fn gc_jobs(
 pub(crate) fn job_dir_in_this_home(
     ctx: &EvalContext,
     job: &gents::optimization::JobRecord,
-) -> Result<PathBuf> {
+) -> Result<PathBuf, EvalCommandError> {
     let home_jobs = std::fs::canonicalize(ctx.jobs_dir()).ok();
-    anyhow::ensure!(
-        home_jobs.is_some() && std::fs::canonicalize(&job.origin.jobs_dir).ok() == home_jobs,
-        "job {}: its directory is not under this home",
-        job.job_id
-    );
+    if home_jobs.is_none() || std::fs::canonicalize(&job.origin.jobs_dir).ok() != home_jobs {
+        return Err(EvalCommandError::JobOutsideHome {
+            job_id: job.job_id.clone(),
+        });
+    }
     Ok(gents::optimization::job_dir(
         &job.origin.jobs_dir,
         &job.job_id,

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use super::error::{P2pCommandError, Result};
 use gents::agent::p2p_reconcile::templates::{
     combine_filters, equality_filter, to_replication_filters, PairingFilters,
 };
@@ -15,7 +15,7 @@ use super::output::{
 use super::p2p_http_client;
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum ReplicatorFilterError {
+pub(crate) enum ReplicatorFilterError {
     #[error(
         "invalid --filter {raw:?}: expected format `<collection>:<field>=<value>` (missing ':')"
     )]
@@ -53,12 +53,13 @@ pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
 
 pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()> {
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    let filters = parse_replicator_filters(&args.filters)
-        .context("parsing --filter arguments for p2p admin replicators add")?;
+    let filters =
+        parse_replicator_filters(&args.filters).map_err(P2pCommandError::ReplicatorFilter)?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    let wire_filters = to_replication_filters(&filters).map_err(anyhow::Error::msg)?;
+    let wire_filters = to_replication_filters(&filters)
+        .map_err(|message| P2pCommandError::ReplicationFilters { message })?;
     let request = P2pReplicatorRequest {
         collections: collections.clone(),
         addresses: vec![args.peer.clone()],

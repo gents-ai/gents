@@ -6,6 +6,17 @@ use afterburner::cli::compile::lang::SourceLang;
 use afterburner_cloud::pkg;
 use anyhow::{Context, Result};
 
+#[derive(Debug, thiserror::Error)]
+enum AfterburnerBuildError {
+    #[error("flushing standard output")]
+    Flush(#[source] std::io::Error),
+    #[cfg(unix)]
+    #[error("could not save standard output")]
+    Save,
+    #[error("could not send compiler output to standard error")]
+    Redirect,
+}
+
 pub(crate) fn describe_source(path: &Path) -> String {
     if !path.exists() {
         "which is missing".to_owned()
@@ -75,20 +86,22 @@ struct StdoutToStderr {
 }
 
 impl StdoutToStderr {
-    fn start() -> Result<Self> {
+    fn start() -> Result<Self, AfterburnerBuildError> {
         use std::io::Write;
         std::io::stdout()
             .flush()
-            .context("flushing standard output")?;
+            .map_err(AfterburnerBuildError::Flush)?;
         #[cfg(unix)]
         {
             // SAFETY: dup/dup2 on the process's own standard descriptors; each
             // result is checked before it is used.
             let saved = unsafe { libc::dup(libc::STDOUT_FILENO) };
-            anyhow::ensure!(saved >= 0, "could not save standard output");
+            if saved < 0 {
+                return Err(AfterburnerBuildError::Save);
+            }
             if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
                 unsafe { libc::close(saved) };
-                anyhow::bail!("could not send compiler output to standard error");
+                return Err(AfterburnerBuildError::Redirect);
             }
             Ok(Self { saved })
         }
@@ -100,10 +113,9 @@ impl StdoutToStderr {
             // SAFETY: reads and swaps the process's standard handles; restored on drop.
             unsafe {
                 let saved = GetStdHandle(STD_OUTPUT_HANDLE);
-                anyhow::ensure!(
-                    SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE)) != 0,
-                    "could not send compiler output to standard error"
-                );
+                if SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE)) == 0 {
+                    return Err(AfterburnerBuildError::Redirect);
+                }
                 Ok(Self { saved })
             }
         }

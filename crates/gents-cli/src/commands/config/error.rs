@@ -27,6 +27,16 @@ pub(crate) enum ConfigCommandError {
     AccountWithoutBackend { label: String },
     #[error("account {label:?} runs several backends: {backends}; name one as backend_id in the profile file")]
     AccountRunsSeveralBackends { label: String, backends: String },
+    #[error("{message}")]
+    ManifestRoot { message: String },
+    #[error("--path must be valid UTF-8 to be stored as a root_path, got {}", path.display())]
+    PathNotUtf8 { path: PathBuf },
+    #[error("expected one WorkspaceRoot for {id:?}, found {found}")]
+    WorkspaceRootNotUnique { id: String, found: usize },
+    #[error("no WorkspaceRoot document with root_path {root_path:?}")]
+    WorkspaceRootMissing { root_path: String },
+    #[error("desired-state manifest validation failed")]
+    ManifestValidationFailed,
     #[error("node deletion is not a config document removal")]
     NodeRemovalNotDocument,
     #[error("--path must be an absolute path, got {}; the workspace root does not need to exist yet, but its path must be absolute", path.display())]

@@ -12,6 +12,8 @@ use gents::pack::{
 };
 use serde_json::Value;
 
+use super::error::EvalInitError;
+
 pub(crate) struct Dossier {
     pub(crate) pack_name: String,
     pub(crate) pack_version: String,
@@ -277,17 +279,28 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     })
 }
 
-pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
+pub(super) fn read_pack(
+    pack_dir: &Path,
+) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>), EvalInitError> {
     let manifest_path = pack_dir.join("manifest.json");
-    let manifest: PackManifest = serde_json::from_slice(
-        &std::fs::read(&manifest_path)
-            .with_context(|| format!("reading {}", manifest_path.display()))?,
-    )
-    .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    let manifest: PackManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path).map_err(|source| {
+            EvalInitError::ReadPath {
+                path: manifest_path.clone(),
+                source,
+            }
+        })?)
+        .map_err(|source| EvalInitError::ParsePath {
+            path: manifest_path.clone(),
+            source,
+        })?;
     let mut assets = BTreeMap::new();
     for path in declared_paths(&manifest) {
         let file = pack_dir.join(&path);
-        let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+        let bytes = std::fs::read(&file).map_err(|source| EvalInitError::ReadPath {
+            path: file.clone(),
+            source,
+        })?;
         assets.insert(path, bytes);
     }
     Ok((manifest, assets))

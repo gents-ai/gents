@@ -296,7 +296,7 @@ pub struct ClientSyncStateSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum P2PSupervisorCommand {
+pub(crate) enum P2PSupervisorCommand {
     RepairNow,
 }
 
@@ -362,10 +362,9 @@ impl ClientCore {
 
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, node_did: &str) -> Result<()> {
-        anyhow::ensure!(
-            !self.options.install_replicators_on_bootstrap,
-            "a simulated peer route requires ClientCoreOptions::local_simulated_route()"
-        );
+        if self.options.install_replicators_on_bootstrap {
+            return Err(ClientCoreError::SimulatedRouteRequiresLocalOptions.into());
+        }
         self.add_local_standard_peer_route_for_test(
             "Test Local Runtime",
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
@@ -457,18 +456,18 @@ impl ClientCore {
         Ok(())
     }
 
-    async fn send_p2p_command(&self, command: P2PSupervisorCommand) -> Result<()> {
+    async fn send_p2p_command(&self, command: P2PSupervisorCommand) -> Result<(), ClientCoreError> {
         let sender = self
             .p2p_control
             .lock()
             .await
             .as_ref()
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("desktop P2P supervisor is shutting down"))?;
+            .ok_or(ClientCoreError::P2pSupervisorShuttingDown)?;
         sender
             .send(command)
             .await
-            .context("queueing desktop P2P supervisor command")
+            .map_err(|source| ClientCoreError::QueueP2pSupervisorCommand { source })
     }
 
     pub fn set_selected_node_did(&self, node_did: Option<String>) {
@@ -515,7 +514,9 @@ impl ClientCore {
     }
 
     pub async fn request_p2p_repair(&self) -> Result<()> {
-        self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
+        Ok(self
+            .send_p2p_command(P2PSupervisorCommand::RepairNow)
+            .await?)
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {

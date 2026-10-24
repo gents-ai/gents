@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
@@ -50,11 +50,13 @@ pub(super) async fn workspace_root_show(args: ConfigShowArgs) -> Result<()> {
         escape_graphql_string(&id)
     );
     let mut rows = crate::graphql_rows(&access, "WorkspaceRoot", &query).await?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "expected one WorkspaceRoot for {id:?}, found {}",
-        rows.len()
-    );
+    if rows.len() != 1 {
+        return Err(ConfigCommandError::WorkspaceRootNotUnique {
+            id: id.to_owned(),
+            found: rows.len(),
+        }
+        .into());
+    }
     Ok(print_json(&rows.remove(0))?)
 }
 
@@ -84,12 +86,7 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
     let path = canonicalize_workspace_root_path(&args.path)?;
     let root_path = path
         .to_str()
-        .with_context(|| {
-            format!(
-                "--path must be valid UTF-8 to be stored as a root_path, got {}",
-                path.display()
-            )
-        })?
+        .ok_or_else(|| ConfigCommandError::PathNotUtf8 { path: path.clone() })?
         .to_owned();
     let enabled = !args.disabled;
     let updated_at = chrono::Utc::now().to_rfc3339();
@@ -153,7 +150,10 @@ pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {
         .map(|rows| rows.len())
         .unwrap_or(0);
     if deleted == 0 {
-        anyhow::bail!("no WorkspaceRoot document with root_path {:?}", root_path);
+        return Err(ConfigCommandError::WorkspaceRootMissing {
+            root_path: root_path.to_owned(),
+        }
+        .into());
     }
     print_json(&json!({ "deleted": deleted, "root_path": root_path }))?;
     Ok(())

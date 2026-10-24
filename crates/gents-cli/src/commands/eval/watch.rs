@@ -1,4 +1,4 @@
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use std::future::Future;
 use std::io::Write;
 use std::path::Path;
@@ -24,9 +24,8 @@ pub(crate) enum Documents<'a> {
 /// Whether `error` is the store refusing a second opener: another process
 /// (or this one) holds it. The texts are regolith's (`env/db_lock.rs`);
 /// they arrive only as text through the node builder's error.
-pub(crate) fn store_locked(error: &anyhow::Error) -> bool {
-    if error
-        .downcast_ref::<gents::home::HomeError>()
+pub(crate) fn store_locked(error: &(dyn std::error::Error + 'static)) -> bool {
+    if find_source::<gents::home::HomeError>(error)
         .and_then(gents::home::HomeError::lock_held)
         .is_some()
     {
@@ -36,7 +35,7 @@ pub(crate) fn store_locked(error: &anyhow::Error) -> bool {
         "database directory is already locked for read-write access",
         "database directory is already open in this process",
     ];
-    let text = format!("{}", ErrorChain(error.as_ref()));
+    let text = format!("{}", ErrorChain(error));
     LOCKED.iter().any(|locked| text.contains(locked))
 }
 
@@ -47,7 +46,7 @@ where
 {
     match resolve().await {
         Ok(ctx) => Ok(Documents::Reopened(ctx)),
-        Err(error) if store_locked(&error) => {
+        Err(error) if store_locked(error.as_ref()) => {
             Ok(Documents::Locked(format!("{}", ErrorChain(error.as_ref()))))
         }
         Err(error) => Err(error),

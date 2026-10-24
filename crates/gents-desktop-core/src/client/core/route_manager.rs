@@ -24,8 +24,8 @@ use super::enrollment::current_local_endpoint;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
 use super::sync_state::ClientSyncStateOwner;
 use super::{
-    ClientPeerStatus, ClientRouteStatus, PairingCollectionStatus, BOOTSTRAP_OPERATION_BACKOFF,
-    P2P_OPERATION_TIMEOUT, PEER_ADD_OPERATION_TIMEOUT,
+    ClientCoreError, ClientPeerStatus, ClientRouteStatus, PairingCollectionStatus,
+    BOOTSTRAP_OPERATION_BACKOFF, P2P_OPERATION_TIMEOUT, PEER_ADD_OPERATION_TIMEOUT,
 };
 use crate::remote_admin::{classify_remote_admin_error, HttpRemoteP2pAdmin};
 
@@ -716,7 +716,7 @@ impl ClientRouteLifecycle<'_> {
 pub(super) async fn cleanup_saved_peer_p2p(
     p2p: &Arc<dyn P2POps>,
     record: &PeerRecord,
-) -> Result<()> {
+) -> Result<(), ClientCoreError> {
     let mut replicator_errors = Vec::new();
     if let Err(error) = p2p_remove_replicator(
         p2p,
@@ -745,9 +745,9 @@ pub(super) async fn cleanup_saved_peer_p2p(
     let replicator_result = if replicator_errors.is_empty() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!(replicator_errors.join("; ")))
+        Err(replicator_errors.join("; "))
     };
-    let disconnect_result = async {
+    let disconnect_result: Result<(), ClientCoreError> = async {
         p2p_disconnect_peer(p2p, &record.addr).await?;
         let Some(expected_peer_id) = parse_public_peer_addr(&record.addr)
             .ok()
@@ -761,7 +761,9 @@ pub(super) async fn cleanup_saved_peer_p2p(
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                anyhow::bail!("timed out waiting for peer {expected_peer_id} to disconnect");
+                return Err(ClientCoreError::DisconnectTimedOut {
+                    peer_id: expected_peer_id,
+                });
             }
             sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
         }
@@ -769,25 +771,24 @@ pub(super) async fn cleanup_saved_peer_p2p(
     .await;
     match (replicator_result, disconnect_result) {
         (Ok(()), Ok(())) => Ok(()),
-        (Err(replicator_error), Ok(())) => anyhow::bail!(
-            "transport disconnected but replicator cleanup failed for {} at {}: {}",
-            record.label,
-            record.addr,
-            replicator_error
-        ),
-        (Ok(()), Err(disconnect_error)) => anyhow::bail!(
-            "replicator removed but transport disconnect failed for {} at {}: {}",
-            record.label,
-            record.addr,
-            disconnect_error
-        ),
-        (Err(replicator_error), Err(disconnect_error)) => anyhow::bail!(
-            "replicator cleanup failed for {} at {}: {}; transport disconnect also failed: {}",
-            record.label,
-            record.addr,
+        (Err(replicator_error), Ok(())) => Err(ClientCoreError::ReplicatorCleanupAfterDisconnect {
+            label: record.label.clone(),
+            addr: record.addr.clone(),
             replicator_error,
-            disconnect_error
-        ),
+        }),
+        (Ok(()), Err(disconnect_error)) => Err(ClientCoreError::DisconnectAfterReplicatorRemoval {
+            label: record.label.clone(),
+            addr: record.addr.clone(),
+            disconnect_error: Box::new(disconnect_error),
+        }),
+        (Err(replicator_error), Err(disconnect_error)) => {
+            Err(ClientCoreError::ReplicatorAndDisconnectFailed {
+                label: record.label.clone(),
+                addr: record.addr.clone(),
+                replicator_error,
+                disconnect_error: Box::new(disconnect_error),
+            })
+        }
     }
 }
 

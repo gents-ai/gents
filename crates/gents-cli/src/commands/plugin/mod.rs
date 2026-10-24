@@ -20,8 +20,8 @@ pub(crate) async fn dispatch(command: PluginCommand) -> Result<()> {
         PluginCommand::Remove(args) => remove(args).await,
         PluginCommand::Run(args) => run::run(args).await,
         PluginCommand::Bind(args) => bind::bind(args).await,
-        PluginCommand::Unbind(args) => bind::unbind(args),
-        PluginCommand::Dirs { command } => dirs::dispatch(command),
+        PluginCommand::Unbind(args) => Ok(bind::unbind(args)?),
+        PluginCommand::Dirs { command } => Ok(dirs::dispatch(command)?),
     }
 }
 

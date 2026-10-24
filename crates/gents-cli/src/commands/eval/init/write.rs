@@ -17,6 +17,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::dossier::{read_pack, Dossier};
+use super::error::EvalInitError;
 use super::validate::Assembled;
 
 mod recovery;
@@ -49,7 +50,8 @@ pub(crate) async fn stage(
     pilot: Option<&PilotNote>,
 ) -> Result<Staged, Vec<String>> {
     let definition = &assembled.definition;
-    let pack_name = pack_name(&definition.definition_id).map_err(|message| vec![message])?;
+    let pack_name =
+        pack_name(&definition.definition_id).map_err(|error| vec![error.to_string()])?;
     let dir = tempfile::Builder::new()
         .prefix("gents-eval-init-")
         .tempdir()
@@ -133,7 +135,7 @@ pub(crate) fn commit(
                             .unwrap_or(extra)
                             .display()
                     )),
-                    Err(error) => Some(error),
+                    Err(error) => Some(error.into()),
                 }
             };
             if let Some(error) = changed {
@@ -189,18 +191,21 @@ fn replaceable_destination(out: &Path, force: bool, gents_home: &Path) -> Result
     replaceable_out(out, user_home.as_deref(), gents_home, &cwd).map(Some)
 }
 
-fn restore(existing: &Path, holder: TempDir, old_pack: &Path, why: &str) -> Result<()> {
-    std::fs::rename(old_pack, existing).map_err(|error| {
-        let kept = holder.keep();
-        anyhow::Error::new(error).context(format!(
-            "restoring {} after {why}; the old pack is kept at {}",
-            existing.display(),
-            kept.join("pack").display()
-        ))
+fn restore(
+    existing: &Path,
+    holder: TempDir,
+    old_pack: &Path,
+    why: &'static str,
+) -> Result<(), EvalInitError> {
+    std::fs::rename(old_pack, existing).map_err(|source| EvalInitError::Restore {
+        existing: existing.to_path_buf(),
+        why,
+        kept: holder.keep().join("pack"),
+        source,
     })
 }
 
-fn private_sibling(path: &Path, step: &str) -> Result<TempDir> {
+fn private_sibling(path: &Path, step: &str) -> Result<TempDir, EvalInitError> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -209,7 +214,10 @@ fn private_sibling(path: &Path, step: &str) -> Result<TempDir> {
     tempfile::Builder::new()
         .prefix(&prefix)
         .tempdir_in(parent)
-        .with_context(|| format!("creating a directory beside {}", path.display()))
+        .map_err(|source| EvalInitError::PrivateSibling {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 fn replaceable_out(
@@ -258,11 +266,11 @@ fn replaceable_out(
     Ok(resolved)
 }
 
-fn undeclared_entry(dir: &Path) -> Result<Option<PathBuf>> {
+fn undeclared_entry(dir: &Path) -> Result<Option<PathBuf>, EvalInitError> {
     let manifest: PackManifest = serde_json::from_slice(
-        &std::fs::read(dir.join("manifest.json")).context("reading the pack manifest")?,
+        &std::fs::read(dir.join("manifest.json")).map_err(EvalInitError::ManifestRead)?,
     )
-    .context("parsing the pack manifest")?;
+    .map_err(EvalInitError::ManifestParse)?;
     let declared: std::collections::BTreeSet<PathBuf> = gents::pack::declared_paths(&manifest)
         .into_iter()
         .map(PathBuf::from)
@@ -270,9 +278,11 @@ fn undeclared_entry(dir: &Path) -> Result<Option<PathBuf>> {
     let mut pending = vec![PathBuf::new()];
     while let Some(relative) = pending.pop() {
         let listed = dir.join(&relative);
-        for entry in
-            std::fs::read_dir(&listed).with_context(|| format!("listing {}", listed.display()))?
-        {
+        let entries = std::fs::read_dir(&listed).map_err(|source| EvalInitError::ListPath {
+            path: listed.clone(),
+            source,
+        })?;
+        for entry in entries {
             let entry = entry?;
             let path = relative.join(entry.file_name());
             let file_type = entry.file_type()?;
@@ -311,18 +321,24 @@ fn is_generated_eval_pack(dir: &Path) -> bool {
         .is_ok_and(|config| !config.eval_definitions.is_empty())
 }
 
-pub(crate) fn refuse_subject_overlap(out: &Path, subject_dir: &Path) -> Result<()> {
+pub(crate) fn refuse_subject_overlap(out: &Path, subject_dir: &Path) -> Result<(), EvalInitError> {
     let subject = subject_dir
         .canonicalize()
-        .with_context(|| format!("resolving the subject directory {}", subject_dir.display()))?;
-    let out_resolved = resolve_through_existing_ancestor(out)
-        .with_context(|| format!("resolving --out {}", out.display()))?;
-    anyhow::ensure!(
-        !out_resolved.starts_with(&subject) && !subject.starts_with(&out_resolved),
-        "--out {} overlaps the subject pack at {}; write the eval pack somewhere outside the subject",
-        out.display(),
-        subject.display()
-    );
+        .map_err(|source| EvalInitError::ResolveSubject {
+            path: subject_dir.to_path_buf(),
+            source,
+        })?;
+    let out_resolved =
+        resolve_through_existing_ancestor(out).map_err(|source| EvalInitError::ResolveOut {
+            path: out.to_path_buf(),
+            source,
+        })?;
+    if out_resolved.starts_with(&subject) || subject.starts_with(&out_resolved) {
+        return Err(EvalInitError::SubjectOverlap {
+            out: out.to_path_buf(),
+            subject,
+        });
+    }
     Ok(())
 }
 
@@ -445,23 +461,23 @@ pub(crate) fn rewrite_readme(
     interview_summary: &str,
     subject: &Dossier,
     pilot: &PilotNote,
-) -> Result<()> {
+) -> Result<(), EvalInitError> {
     let path = out.join(README);
     std::fs::write(
         &path,
         readme(assembled, interview_summary, subject, Some(pilot)),
     )
-    .with_context(|| format!("writing {}", path.display()))
+    .map_err(|source| EvalInitError::WriteFile { path, source })
 }
 
-fn pack_name(definition_id: &str) -> Result<String, String> {
+fn pack_name(definition_id: &str) -> Result<String, EvalInitError> {
     let name = definition_id.replace('-', "_");
     if is_valid_pack_name(&name) {
         Ok(name)
     } else {
-        Err(format!(
-            "definition_id {definition_id:?} does not name a pack: with `-` read as `_`, it must be a lowercase letter followed by lowercase letters, digits and underscores"
-        ))
+        Err(EvalInitError::NotPackName {
+            definition_id: definition_id.to_owned(),
+        })
     }
 }
 

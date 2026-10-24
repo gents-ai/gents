@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use anyhow::{Context, Result};
+use super::error::{P2pCommandError, Result};
 use gents::agent::p2p_reconcile::templates::{builtin_templates, Delivery, Scope};
 use serde::Serialize;
 use serde_json::json;
@@ -91,7 +91,9 @@ fn print_templates_table(rows: &[TemplateRow]) -> Result<()> {
     for row in &table_rows {
         print_table_row(&mut stdout, row, &widths)?;
     }
-    stdout.flush().context("flushing p2p templates table")?;
+    stdout
+        .flush()
+        .map_err(P2pCommandError::TemplatesTableFlush)?;
     Ok(())
 }
 
@@ -106,5 +108,5 @@ fn print_table_row<const N: usize>(
         .map(|(cell, width)| format!("{cell:<width$}"))
         .collect::<Vec<_>>()
         .join("  ");
-    writeln!(writer, "{line}").context("writing p2p templates table row")
+    writeln!(writer, "{line}").map_err(P2pCommandError::TemplatesTableRow)
 }

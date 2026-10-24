@@ -85,24 +85,46 @@ pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<()> 
     Ok(())
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum PrepareError {
+    #[error("prepare plugin {plugin} output has no value at {pointer:?}")]
+    OutputMissing { plugin: String, pointer: String },
+    #[error(
+        "prepare plugin {plugin} field {field} at {pointer:?} must be a string, number, or bool; got {value}"
+    )]
+    FieldNotScalar {
+        plugin: String,
+        field: String,
+        pointer: String,
+        value: String,
+    },
+}
+
 pub(super) fn prepare_seed_fields(
     plugin: &str,
     output: &Value,
     seed_fields: &BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, String>, PrepareError> {
     let mut fields = BTreeMap::new();
     for (field, pointer) in seed_fields {
-        let value = output.pointer(pointer).with_context(|| {
-            format!("prepare plugin {plugin} output has no value at {pointer:?}")
-        })?;
+        let value = output
+            .pointer(pointer)
+            .ok_or_else(|| PrepareError::OutputMissing {
+                plugin: plugin.to_owned(),
+                pointer: pointer.clone(),
+            })?;
         let rendered = match value {
             Value::String(text) => text.clone(),
             Value::Number(number) => number.to_string(),
             Value::Bool(boolean) => boolean.to_string(),
-            other => bail!(
-                "prepare plugin {plugin} field {field} at {pointer:?} must be a string, number, \
-                 or bool; got {other}"
-            ),
+            other => {
+                return Err(PrepareError::FieldNotScalar {
+                    plugin: plugin.to_owned(),
+                    field: field.clone(),
+                    pointer: pointer.clone(),
+                    value: other.to_string(),
+                })
+            }
         };
         fields.insert(field.clone(), rendered);
     }

@@ -26,6 +26,58 @@ mod prepare;
 
 use prepare::ScenarioPrepareStep;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ScenarioError {
+    #[error("source pack path must be lexically normalized")]
+    SourcePackPathNotNormalized,
+    #[error("source pack path needs a UTF-8 directory name")]
+    SourcePackPathNotUtf8,
+    #[error("source pack directory name must be snake_case")]
+    SourcePackNameNotSnakeCase,
+    #[error("scenario canonical configuration was not loaded")]
+    ConfigNotLoaded,
+    #[error("Task {task_id} sets goal_token_budget without goal_objective_template")]
+    GoalBudgetWithoutObjective { task_id: String },
+    #[error("Task {task_id} goal_objective_template must be non-empty")]
+    GoalObjectiveEmpty { task_id: String },
+    #[error("Task {task_id} goal_token_budget must be positive")]
+    GoalBudgetNotPositive { task_id: String },
+    #[error("Task {task_id} references a missing agent")]
+    TaskAgentMissing { task_id: String },
+    #[error("Task {task_id} agent has no context")]
+    TaskAgentWithoutContext { task_id: String },
+    #[error("Task {task_id} context has no tools")]
+    TaskContextWithoutTools { task_id: String },
+    #[error(
+        "Task {task_id} declares a durable goal but Tools {tools_id} does not enable goal tools"
+    )]
+    GoalToolsDisabled { task_id: String, tools_id: String },
+    #[error("Task {task_id} declares a controller-provisioned durable goal but Tools {tools_id} enables model goal creation")]
+    GoalCreationEnabled { task_id: String, tools_id: String },
+    #[error("missing Trigger {trigger_id}")]
+    TriggerMissing { trigger_id: String },
+    #[error("scenario Trigger {trigger_id} must use an event source")]
+    TriggerNotEventSource { trigger_id: String },
+    #[error("missing EventSource {event_source_id}")]
+    EventSourceMissing { event_source_id: String },
+    #[error(
+        "expect.trigger_ids entry {trigger_id} uses EventSource {event_source_id} without a \
+         correlation_field, so its requests can never match the scenario run"
+    )]
+    TriggerWithoutCorrelationField {
+        trigger_id: String,
+        event_source_id: String,
+    },
+    #[error("unknown init.tool_package {package}")]
+    UnknownToolPackage { package: String },
+    #[error("source edge trigger {trigger_id} produced no stage")]
+    SourceEdgeStageMissing { trigger_id: String },
+    #[error("source edge trigger {trigger_id} produced multiple stages")]
+    SourceEdgeStageAmbiguous { trigger_id: String },
+    #[error("status output has no integer {pointer}")]
+    StatusIntegerMissing { pointer: String },
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScenarioManifest {
@@ -281,22 +333,22 @@ struct SourceEdgeExpectation {
     source_collection: String,
 }
 
-fn validate_source_pack_path(path: &Path) -> Result<()> {
-    anyhow::ensure!(
-        !path.components().any(|component| matches!(
+fn validate_source_pack_path(path: &Path) -> Result<(), ScenarioError> {
+    if path.components().any(|component| {
+        matches!(
             component,
             std::path::Component::CurDir | std::path::Component::ParentDir
-        )),
-        "source pack path must be lexically normalized"
-    );
+        )
+    }) {
+        return Err(ScenarioError::SourcePackPathNotNormalized);
+    }
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .context("source pack path needs a UTF-8 directory name")?;
-    anyhow::ensure!(
-        gents::pack::is_valid_pack_name(name),
-        "source pack directory name must be snake_case"
-    );
+        .ok_or(ScenarioError::SourcePackPathNotUtf8)?;
+    if !gents::pack::is_valid_pack_name(name) {
+        return Err(ScenarioError::SourcePackNameNotSnakeCase);
+    }
     Ok(())
 }
 
@@ -418,34 +470,36 @@ fn read_pack_sidecar(pack: &Path, reference: &str) -> Result<String> {
         .with_context(|| format!("reading pack sidecar {relative}"))
 }
 
-fn scenario_config(manifest: &ScenarioManifest) -> Result<&gents::document_config::PackConfig> {
+fn scenario_config(
+    manifest: &ScenarioManifest,
+) -> Result<&gents::document_config::PackConfig, ScenarioError> {
     manifest
         .config
         .as_ref()
-        .context("scenario canonical configuration was not loaded")
+        .ok_or(ScenarioError::ConfigNotLoaded)
 }
 
-fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
+fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<(), ScenarioError> {
     let config = scenario_config(manifest)?;
     for task in &config.tasks {
         let Some(objective) = task.goal_objective_template.as_deref() else {
             if task.goal_token_budget.is_some() {
-                bail!(
-                    "Task {} sets goal_token_budget without goal_objective_template",
-                    task.task_id
-                );
+                return Err(ScenarioError::GoalBudgetWithoutObjective {
+                    task_id: task.task_id.clone(),
+                });
             }
             continue;
         };
         if objective.trim().is_empty() {
-            bail!(
-                "Task {} goal_objective_template must be non-empty",
-                task.task_id
-            );
+            return Err(ScenarioError::GoalObjectiveEmpty {
+                task_id: task.task_id.clone(),
+            });
         }
         if let Some(budget) = task.goal_token_budget {
             if budget <= 0 {
-                bail!("Task {} goal_token_budget must be positive", task.task_id);
+                return Err(ScenarioError::GoalBudgetNotPositive {
+                    task_id: task.task_id.clone(),
+                });
             }
         }
 
@@ -453,7 +507,9 @@ fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
             .agents
             .iter()
             .find(|agent| agent.agent_id == task.agent_id)
-            .with_context(|| format!("Task {} references a missing agent", task.task_id))?;
+            .ok_or_else(|| ScenarioError::TaskAgentMissing {
+                task_id: task.task_id.clone(),
+            })?;
         let context = agent
             .context_id
             .as_deref()
@@ -463,23 +519,26 @@ fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
                     .iter()
                     .find(|context| context.context_id == id)
             })
-            .with_context(|| format!("Task {} agent has no context", task.task_id))?;
+            .ok_or_else(|| ScenarioError::TaskAgentWithoutContext {
+                task_id: task.task_id.clone(),
+            })?;
         let tools = context
             .tools_id
             .as_deref()
             .and_then(|id| config.tools.iter().find(|tools| tools.tools_id == id))
-            .with_context(|| format!("Task {} context has no tools", task.task_id))?;
+            .ok_or_else(|| ScenarioError::TaskContextWithoutTools {
+                task_id: task.task_id.clone(),
+            })?;
         let goal_tools_enabled = tools
             .built_ins
             .as_ref()
             .and_then(|built_ins| built_ins.enable_goal_tools)
             .unwrap_or(false);
         if !goal_tools_enabled {
-            bail!(
-                "Task {} declares a durable goal but Tools {} does not enable goal tools",
-                task.task_id,
-                tools.tools_id
-            );
+            return Err(ScenarioError::GoalToolsDisabled {
+                task_id: task.task_id.clone(),
+                tools_id: tools.tools_id.clone(),
+            });
         }
         if tools
             .built_ins
@@ -487,11 +546,10 @@ fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
             .and_then(|built_ins| built_ins.enable_goal_creation)
             .unwrap_or(false)
         {
-            bail!(
-                "Task {} declares a controller-provisioned durable goal but Tools {} enables model goal creation",
-                task.task_id,
-                tools.tools_id
-            );
+            return Err(ScenarioError::GoalCreationEnabled {
+                task_id: task.task_id.clone(),
+                tools_id: tools.tools_id.clone(),
+            });
         }
     }
     Ok(())
@@ -684,26 +742,34 @@ fn trigger_source_collections(
 fn scenario_event_source<'a>(
     config: &'a gents::document_config::PackConfig,
     trigger_id: &str,
-) -> Result<&'a gents::document_config::EventSource> {
+) -> Result<&'a gents::document_config::EventSource, ScenarioError> {
     let trigger = config
         .triggers
         .iter()
         .find(|trigger| trigger.trigger_id == trigger_id)
-        .with_context(|| format!("missing Trigger {trigger_id}"))?;
+        .ok_or_else(|| ScenarioError::TriggerMissing {
+            trigger_id: trigger_id.to_owned(),
+        })?;
     let event_source_id = match &trigger.source {
         gents::document_config::TriggerSource::Event { event_source_id } => event_source_id,
         gents::document_config::TriggerSource::Schedule { .. } => {
-            bail!("scenario Trigger {trigger_id} must use an event source")
+            return Err(ScenarioError::TriggerNotEventSource {
+                trigger_id: trigger_id.to_owned(),
+            })
         }
     };
     config
         .event_sources
         .iter()
         .find(|source| source.event_source_id == *event_source_id)
-        .with_context(|| format!("missing EventSource {event_source_id}"))
+        .ok_or_else(|| ScenarioError::EventSourceMissing {
+            event_source_id: event_source_id.clone(),
+        })
 }
 
-fn validate_expected_trigger_correlations(manifest: &ScenarioManifest) -> Result<()> {
+fn validate_expected_trigger_correlations(
+    manifest: &ScenarioManifest,
+) -> Result<(), ScenarioError> {
     let config = scenario_config(manifest)?;
     for trigger_id in &manifest.expect.trigger_ids {
         let source = scenario_event_source(config, trigger_id)?;
@@ -712,11 +778,10 @@ fn validate_expected_trigger_correlations(manifest: &ScenarioManifest) -> Result
             .as_deref()
             .is_none_or(|field| field.trim().is_empty())
         {
-            bail!(
-                "expect.trigger_ids entry {trigger_id} uses EventSource {} without a \
-                 correlation_field, so its requests can never match the scenario run",
-                source.event_source_id
-            );
+            return Err(ScenarioError::TriggerWithoutCorrelationField {
+                trigger_id: trigger_id.clone(),
+                event_source_id: source.event_source_id.clone(),
+            });
         }
     }
     Ok(())
@@ -973,10 +1038,12 @@ fn pre_store_with_packs(home: &Path, with_pack: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-fn validate_tool_package(package: &str) -> Result<()> {
+fn validate_tool_package(package: &str) -> Result<(), ScenarioError> {
     match package {
         "minimal" | "introspection" | "readonly" | "write" | "yolo" => Ok(()),
-        other => bail!("unknown init.tool_package {other}"),
+        other => Err(ScenarioError::UnknownToolPackage {
+            package: other.to_owned(),
+        }),
     }
 }
 
@@ -1915,13 +1982,20 @@ fn created_doc_reference<'a>(result: &'a str, collection: &str) -> Option<&'a st
     parts.next().is_none().then_some(doc_id)
 }
 
-fn stage_for_trigger<'a>(stages: &'a [StageResult], trigger_id: &str) -> Result<&'a StageResult> {
+fn stage_for_trigger<'a>(
+    stages: &'a [StageResult],
+    trigger_id: &str,
+) -> Result<&'a StageResult, ScenarioError> {
     let mut matching = stages.iter().filter(|stage| stage.trigger_id == trigger_id);
     let stage = matching
         .next()
-        .with_context(|| format!("source edge trigger {trigger_id} produced no stage"))?;
+        .ok_or_else(|| ScenarioError::SourceEdgeStageMissing {
+            trigger_id: trigger_id.to_owned(),
+        })?;
     if matching.next().is_some() {
-        bail!("source edge trigger {trigger_id} produced multiple stages");
+        return Err(ScenarioError::SourceEdgeStageAmbiguous {
+            trigger_id: trigger_id.to_owned(),
+        });
     }
     Ok(stage)
 }
@@ -2890,12 +2964,14 @@ async fn token_totals(graphql: &GraphqlEndpoint) -> (u64, u64) {
     })
 }
 
-fn usize_field(value: &Value, pointer: &str) -> Result<usize> {
+fn usize_field(value: &Value, pointer: &str) -> Result<usize, ScenarioError> {
     value
         .pointer(pointer)
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
-        .with_context(|| format!("status output has no integer {pointer}"))
+        .ok_or_else(|| ScenarioError::StatusIntegerMissing {
+            pointer: pointer.to_owned(),
+        })
 }
 
 async fn load_background_completion_evidence(

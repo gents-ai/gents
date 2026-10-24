@@ -17,6 +17,8 @@ use super::supervisor::{probe_p2p_health, repair_saved_peer, saved_peer_needs_re
 use super::*;
 use crate::client::{PeerDirectory, PeerRecord};
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[derive(Default)]
 struct RecordingP2P {
     collection_batches: StdRwLock<Vec<Vec<String>>>,
@@ -1393,7 +1395,7 @@ async fn bootstrap_connect_waits_for_the_peer_connection_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> anyhow::Result<()> {
+async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> TestResult {
     use gents::NodeIdentity;
     use wiremock::{
         matchers::{body_string_contains, method, path},
@@ -1620,7 +1622,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
 }
 
 #[tokio::test]
-async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Result<()> {
+async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
@@ -1687,7 +1689,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> anyhow::Result<()> {
+async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> TestResult {
     use gents::NodeIdentity;
     use wiremock::{
         matchers::{body_string_contains, method, path},

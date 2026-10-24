@@ -3,6 +3,8 @@ use anyhow::Result;
 use crate::cli::*;
 use crate::print_json;
 
+use super::ConfigCommandError;
+
 pub(super) async fn config_validate(args: ConfigValidateArgs) -> Result<()> {
     let load = super::binding::load_bound_manifest(super::binding::ManifestBindingOptions {
         root: &args.root,
@@ -18,6 +20,6 @@ pub(super) async fn config_validate(args: ConfigValidateArgs) -> Result<()> {
     if report.is_ok() {
         Ok(())
     } else {
-        anyhow::bail!("desired-state manifest validation failed")
+        Err(ConfigCommandError::ManifestValidationFailed.into())
     }
 }

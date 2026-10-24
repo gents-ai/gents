@@ -1388,10 +1388,12 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
         if let Some(handle) = grok_shim_handle.as_mut() {
             if let Err(error) = handle.shutdown().await {
                 if runtime_result.is_ok() {
-                    grok_shutdown_error = Some(error.context("shutting down the Grok shim leader"));
+                    grok_shutdown_error = Some(
+                        anyhow::Error::new(error).context("shutting down the Grok shim leader"),
+                    );
                 } else {
                     tracing::warn!(
-                        error = %ErrorChain(error.as_ref()),
+                        error = %ErrorChain(&error),
                         "Grok shim leader shutdown also failed while the server was exiting with an error"
                     );
                 }

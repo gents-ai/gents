@@ -37,7 +37,7 @@ use tokio::time::timeout;
 use super::super::principal_identity::PrincipalIdentity;
 use super::route_manager::ClientRouteManager;
 use super::sync_state::{ClientSyncStateOwner, RuntimeSchemaObservation};
-use super::{ClientCore, P2P_OPERATION_TIMEOUT};
+use super::{ClientCore, ClientCoreError, P2P_OPERATION_TIMEOUT};
 use crate::client::peer_directory::RemovalCause;
 
 pub(super) async fn current_local_endpoint(
@@ -1395,7 +1395,7 @@ async fn assemble_durable_enrollment_documents(
     for row in request_rows {
         let candidate = match row.to_record() {
             Ok(candidate) => candidate,
-            Err(error) if row.server_peer == request.server_peer => return Err(error),
+            Err(error) if row.server_peer == request.server_peer => return Err(error.into()),
             Err(_) => continue,
         };
         let verified = principal
@@ -1517,7 +1517,7 @@ struct EnrollmentRequestRow {
 }
 
 impl EnrollmentRequestRow {
-    fn to_record(&self) -> Result<EnrollmentRequestRecord> {
+    fn to_record(&self) -> Result<EnrollmentRequestRecord, ClientCoreError> {
         Ok(EnrollmentRequestRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             request_id: self.request_id.clone(),
@@ -1561,7 +1561,7 @@ struct EnrollmentDecisionRow {
 }
 
 impl EnrollmentDecisionRow {
-    fn to_record(&self) -> Result<EnrollmentDecisionRecord> {
+    fn to_record(&self) -> Result<EnrollmentDecisionRecord, ClientCoreError> {
         Ok(EnrollmentDecisionRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             decision_id: self.decision_id.clone(),
@@ -1575,10 +1575,14 @@ impl EnrollmentDecisionRow {
             decision: match self.decision.as_str() {
                 "approved" => EnrollmentDecisionKind::Approved,
                 "denied" => EnrollmentDecisionKind::Denied,
-                other => anyhow::bail!("unknown enrollment decision {other:?}"),
+                other => {
+                    return Err(ClientCoreError::UnknownEnrollmentDecision {
+                        decision: other.to_owned(),
+                    })
+                }
             },
             authorization_sequence: u64::try_from(self.authorization_sequence)
-                .context("negative enrollment decision sequence")?,
+                .map_err(|source| ClientCoreError::NegativeEnrollmentDecisionSequence { source })?,
             authorization_expires_at: self.authorization_expires_at.clone(),
             decided_at: self.decided_at.clone(),
             signer_did: self.signer_did.clone(),
@@ -1627,7 +1631,7 @@ struct EnrollmentRouteReceiptRow {
 }
 
 impl EnrollmentRouteReceiptRow {
-    fn to_record(&self) -> Result<EnrollmentRouteReceiptRecord> {
+    fn to_record(&self) -> Result<EnrollmentRouteReceiptRecord, ClientCoreError> {
         Ok(EnrollmentRouteReceiptRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             receipt_id: self.receipt_id.clone(),
@@ -1639,12 +1643,17 @@ impl EnrollmentRouteReceiptRow {
             member_peer: self.member_peer.clone(),
             server_peer: self.server_peer.clone(),
             owner_agent: self.owner_agent.clone(),
-            authorization_sequence: u64::try_from(self.authorization_sequence)
-                .context("negative enrollment route receipt sequence")?,
+            authorization_sequence: u64::try_from(self.authorization_sequence).map_err(
+                |source| ClientCoreError::NegativeEnrollmentRouteReceiptSequence { source },
+            )?,
             authorization_expires_at: self.authorization_expires_at.clone(),
             direction: match self.direction.as_str() {
                 "client_to_server" => EnrollmentRouteReceiptDirection::ClientToServer,
-                other => anyhow::bail!("unknown enrollment route receipt direction {other:?}"),
+                other => {
+                    return Err(ClientCoreError::UnknownEnrollmentRouteReceiptDirection {
+                        direction: other.to_owned(),
+                    })
+                }
             },
             applied_at: self.applied_at.clone(),
             signer_did: self.signer_did.clone(),
@@ -1654,7 +1663,7 @@ impl EnrollmentRouteReceiptRow {
 }
 
 impl EnrollmentRevisionRow {
-    fn to_record(&self) -> Result<AuthorizationRevisionRecord> {
+    fn to_record(&self) -> Result<AuthorizationRevisionRecord, ClientCoreError> {
         Ok(AuthorizationRevisionRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             revision_id: self.revision_id.clone(),
@@ -1666,12 +1675,16 @@ impl EnrollmentRevisionRow {
             member_peer: self.member_peer.clone(),
             owner_agent: self.owner_agent.clone(),
             sequence: u64::try_from(self.sequence)
-                .context("negative enrollment revision sequence")?,
+                .map_err(|source| ClientCoreError::NegativeEnrollmentRevisionSequence { source })?,
             authorization_expires_at: self.authorization_expires_at.clone(),
             kind: match self.kind.as_str() {
                 "active" => AuthorizationRevisionKind::Active,
                 "revoked" => AuthorizationRevisionKind::Revoked,
-                other => anyhow::bail!("unknown enrollment revision kind {other:?}"),
+                other => {
+                    return Err(ClientCoreError::UnknownEnrollmentRevisionKind {
+                        kind: other.to_owned(),
+                    })
+                }
             },
             issued_at: self.issued_at.clone(),
             signer_did: self.signer_did.clone(),
@@ -1799,20 +1812,27 @@ fn to_pure_receipt(receipt: &EnrollmentRouteReceiptRecord, verified: bool) -> Pu
     }
 }
 
-fn enrollment_version(value: i64) -> Result<u8> {
-    let value = u8::try_from(value).context("invalid enrollment protocol version")?;
-    anyhow::ensure!(
-        value == ENROLLMENT_PROTOCOL_VERSION,
-        "unsupported enrollment protocol version {value}"
-    );
+fn enrollment_version(value: i64) -> Result<u8, ClientCoreError> {
+    let value = u8::try_from(value)
+        .map_err(|source| ClientCoreError::InvalidEnrollmentProtocolVersion { source })?;
+    if value != ENROLLMENT_PROTOCOL_VERSION {
+        return Err(ClientCoreError::UnsupportedEnrollmentProtocolVersion { version: value });
+    }
     Ok(value)
 }
 
-fn enrollment_signature(kind: &str, value: &str) -> Result<Vec<u8>> {
-    let signature = bs58::decode(value)
-        .into_vec()
-        .with_context(|| format!("decode enrollment {kind} signature"))?;
-    anyhow::ensure!(signature.len() == 64, "invalid enrollment {kind} signature");
+fn enrollment_signature(kind: &str, value: &str) -> Result<Vec<u8>, ClientCoreError> {
+    let signature = bs58::decode(value).into_vec().map_err(|source| {
+        ClientCoreError::DecodeEnrollmentSignature {
+            kind: kind.to_owned(),
+            source,
+        }
+    })?;
+    if signature.len() != 64 {
+        return Err(ClientCoreError::InvalidEnrollmentSignature {
+            kind: kind.to_owned(),
+        });
+    }
     Ok(signature)
 }
 

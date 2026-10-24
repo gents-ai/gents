@@ -28,7 +28,7 @@ use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
-use super::ClientCore;
+use super::{ClientCore, ClientCoreError};
 mod pending_submissions;
 
 #[cfg(test)]
@@ -235,7 +235,7 @@ pub(super) fn find_request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
-) -> Result<Option<AgentRequestRow>> {
+) -> Result<Option<AgentRequestRow>, ClientCoreError> {
     let mut matches = rows.iter().filter(|row| {
         row.request_id == request_id
             && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
@@ -243,10 +243,11 @@ pub(super) fn find_request_in_scope(
     let Some(row) = matches.next() else {
         return Ok(None);
     };
-    anyhow::ensure!(
-        matches.next().is_none(),
-        "request {request_id} is ambiguous across node scopes"
-    );
+    if matches.next().is_some() {
+        return Err(ClientCoreError::RequestAmbiguousAcrossNodeScopes {
+            request_id: request_id.to_owned(),
+        });
+    }
     Ok(Some(row.clone()))
 }
 
@@ -254,9 +255,12 @@ fn request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
-) -> Result<AgentRequestRow> {
-    find_request_in_scope(rows, request_id, node_did)?
-        .with_context(|| format!("request {request_id} not found"))
+) -> Result<AgentRequestRow, ClientCoreError> {
+    find_request_in_scope(rows, request_id, node_did)?.ok_or_else(|| {
+        ClientCoreError::RequestNotFound {
+            request_id: request_id.to_owned(),
+        }
+    })
 }
 
 fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
@@ -390,7 +394,8 @@ impl ClientCore {
         graphql: &str,
         node_home: &str,
     ) -> Result<PeerRecord> {
-        self.sync_state
+        Ok(self
+            .sync_state
             .upsert_local_standard_peer(
                 normalize_required("label", label)?,
                 normalize_required("addr", addr)?,
@@ -398,7 +403,7 @@ impl ClientCore {
                 normalize_required("graphql", graphql)?,
                 normalize_required("node_home", node_home)?,
             )
-            .await
+            .await?)
     }
 
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
@@ -1459,7 +1464,11 @@ impl ClientCore {
         request_id: &str,
         node_did: Option<&str>,
     ) -> Result<AgentRequestRow> {
-        request_in_scope(&self.store.snapshot().requests, request_id, node_did)
+        Ok(request_in_scope(
+            &self.store.snapshot().requests,
+            request_id,
+            node_did,
+        )?)
     }
 
     pub async fn resend_request_in_scope(

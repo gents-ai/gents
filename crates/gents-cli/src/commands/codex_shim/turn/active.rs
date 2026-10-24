@@ -484,7 +484,7 @@ async fn load_thread_request_rows(
                 }}
             }}"#)).await?;
             let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).ok_or(CodexShimError::ActiveRequestRowsOmitted)?;
-            let rows=values.iter().cloned().map(decode_request_row).collect::<Result<Vec<_>>>()?;
+            let rows=values.iter().cloned().map(decode_request_row).collect::<std::result::Result<Vec<_>, CodexShimError>>()?;
             let mut labels=BTreeSet::new();
             for row in &rows {
                 if !labels.insert(row.request_id.clone()) {
@@ -496,7 +496,7 @@ async fn load_thread_request_rows(
     }).await
 }
 
-fn decode_request_row(row: Value) -> Result<AgentRequestRow> {
+fn decode_request_row(row: Value) -> std::result::Result<AgentRequestRow, CodexShimError> {
     let request: AgentRequestRow =
         serde_json::from_value(row).map_err(CodexShimError::DecodeAgentRequestRow)?;
     request

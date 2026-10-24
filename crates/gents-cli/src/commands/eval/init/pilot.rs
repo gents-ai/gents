@@ -73,7 +73,7 @@ pub(crate) async fn pilot(
                 Ok(()) => Err(error),
                 Err(readme) => Err(error.context(format!(
                     "the README could not record the pilot runs either: {}",
-                    ErrorChain(readme.as_ref())
+                    ErrorChain(&readme)
                 ))),
             };
         }

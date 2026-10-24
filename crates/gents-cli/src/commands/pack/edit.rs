@@ -1,11 +1,81 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde_json::{json, Map, Value};
 
 use crate::cli::{PackAddArgs, PackAddCommand, PackFmtArgs, PackPart, PackRemovePartArgs};
 
 const CONFIG: &str = "pack_config.json";
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum PackEditError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing {}", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("writing {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("removing {}", path.display())]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("pack_config.json is not a JSON object")]
+    ConfigNotObject,
+    #[error("manifest.json is not a JSON object")]
+    ManifestNotObject,
+    #[error("a {kind} pack carries no configuration")]
+    NoConfiguration { kind: String },
+    #[error("{key} already has {id:?}")]
+    AlreadyHas { key: String, id: String },
+    #[error("{path} already exists")]
+    AlreadyExists { path: String },
+    #[error("file has no parent")]
+    NoParent,
+    #[error("{key} has no {id:?}")]
+    NoRow { key: String, id: String },
+    #[error("{key} is not a list")]
+    NotAList { key: String },
+    #[error("{id:?} is not a valid id; use lowercase letters, digits and dashes")]
+    InvalidId { id: String },
+    #[error("an inference slot is not an object")]
+    SlotNotObject,
+    #[error("a graph intent is not an object")]
+    GraphIntentNotObject,
+    #[error("the pack has no graph {graph:?}; add it first")]
+    NoGraph { graph: String },
+    #[error("graph {graph:?} already has a stage {node:?}")]
+    StageExists { graph: String, node: String },
+    #[error("graph {graph:?} already has an entry; name the upstream stage with --from node.port")]
+    GraphHasEntry { graph: String },
+    #[error("--from is node.port, for example scan.output")]
+    FromSyntax,
+    #[error("a task still runs agent {id:?}; remove it first")]
+    AgentInUse { id: String },
+    #[error("the pack has no schema {id:?}")]
+    NoSchema { id: String },
+    #[error("the pack has no plugin {id:?}")]
+    PluginNotFound { id: String },
+}
+
+type Result<T, E = PackEditError> = std::result::Result<T, E>;
 
 pub(super) struct PackEdit {
     pub(super) dir: PathBuf,
@@ -44,11 +114,11 @@ impl PackEdit {
 
     pub(super) fn config(&mut self) -> Result<&mut Map<String, Value>> {
         if self.config.is_none() {
-            anyhow::ensure!(
-                matches!(self.kind(), "assets" | "documents" | "graph"),
-                "a {} pack carries no configuration",
-                self.kind()
-            );
+            if !matches!(self.kind(), "assets" | "documents" | "graph") {
+                return Err(PackEditError::NoConfiguration {
+                    kind: self.kind().to_owned(),
+                });
+            }
             self.manifest["kind"] = json!(if self.kind() == "graph" {
                 "graph"
             } else {
@@ -61,7 +131,7 @@ impl PackEdit {
         self.config
             .as_mut()
             .and_then(Value::as_object_mut)
-            .context("pack_config.json is not a JSON object")
+            .ok_or(PackEditError::ConfigNotObject)
     }
 
     pub(super) fn list(&mut self, key: &str) -> Result<&mut Vec<Value>> {
@@ -72,7 +142,7 @@ impl PackEdit {
         list_in(
             self.manifest
                 .as_object_mut()
-                .context("manifest.json is not a JSON object")?,
+                .ok_or(PackEditError::ManifestNotObject)?,
             key,
         )
     }
@@ -86,7 +156,12 @@ impl PackEdit {
     }
 
     fn require_new(&self, key: &str, field: &str, id: &str) -> Result<()> {
-        anyhow::ensure!(!self.has(key, field, id), "{key} already has {id:?}");
+        if self.has(key, field, id) {
+            return Err(PackEditError::AlreadyHas {
+                key: key.to_owned(),
+                id: id.to_owned(),
+            });
+        }
         Ok(())
     }
 
@@ -106,16 +181,26 @@ impl PackEdit {
         }
         let file = self.dir.join(path);
         if file.is_file() {
-            std::fs::remove_file(&file).with_context(|| format!("removing {}", file.display()))?;
+            std::fs::remove_file(&file).map_err(|source| PackEditError::Remove {
+                path: file.to_path_buf(),
+                source,
+            })?;
         }
         Ok(())
     }
 
     pub(super) fn create_file(&mut self, path: &str, contents: impl AsRef<[u8]>) -> Result<()> {
         let target = self.dir.join(path);
-        anyhow::ensure!(!target.exists(), "{path} already exists");
-        std::fs::create_dir_all(target.parent().context("file has no parent")?)?;
-        std::fs::write(&target, contents).with_context(|| format!("writing {path}"))?;
+        if target.exists() {
+            return Err(PackEditError::AlreadyExists {
+                path: path.to_owned(),
+            });
+        }
+        std::fs::create_dir_all(target.parent().ok_or(PackEditError::NoParent)?)?;
+        std::fs::write(&target, contents).map_err(|source| PackEditError::Write {
+            path: PathBuf::from(path),
+            source,
+        })?;
         self.add_asset(path);
         Ok(())
     }
@@ -125,7 +210,10 @@ impl PackEdit {
         let index = rows
             .iter()
             .position(|row| row[field] == id)
-            .with_context(|| format!("{key} has no {id:?}"))?;
+            .ok_or_else(|| PackEditError::NoRow {
+                key: key.to_owned(),
+                id: id.to_owned(),
+            })?;
         Ok(rows.remove(index))
     }
 }
@@ -135,17 +223,29 @@ fn list_in<'a>(object: &'a mut Map<String, Value>, key: &str) -> Result<&'a mut 
         .entry(key)
         .or_insert_with(|| json!([]))
         .as_array_mut()
-        .with_context(|| format!("{key} is not a list"))
+        .ok_or_else(|| PackEditError::NotAList {
+            key: key.to_owned(),
+        })
 }
 
 fn read_json(path: &Path) -> Result<Value> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    let bytes = std::fs::read(path).map_err(|source| PackEditError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| PackEditError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn write_json(path: &Path, value: &Value) -> Result<()> {
-    std::fs::write(path, serde_json::to_string_pretty(value)? + "\n")
-        .with_context(|| format!("writing {}", path.display()))
+    std::fs::write(path, serde_json::to_string_pretty(value)? + "\n").map_err(|source| {
+        PackEditError::Write {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
 }
 
 fn snake(id: &str) -> String {
@@ -167,14 +267,14 @@ fn title(id: &str) -> String {
 }
 
 fn check_id(id: &str) -> Result<()> {
-    anyhow::ensure!(
-        !id.is_empty()
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            && id.as_bytes()[0].is_ascii_lowercase(),
-        "{id:?} is not a valid id; use lowercase letters, digits and dashes"
-    );
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        || !id.as_bytes()[0].is_ascii_lowercase()
+    {
+        return Err(PackEditError::InvalidId { id: id.to_owned() });
+    }
     Ok(())
 }
 
@@ -183,16 +283,16 @@ pub(crate) fn fmt(args: PackFmtArgs) -> Result<()> {
     PackEdit::load(&dir)?.save()
 }
 
-pub(crate) fn add(args: PackAddArgs) -> Result<()> {
+pub(crate) fn add(args: PackAddArgs) -> anyhow::Result<()> {
     let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
     let mut pack = PackEdit::load(&dir)?;
     apply_add(&mut pack, args.command)?;
-    pack.save()
+    Ok(pack.save()?)
 }
 
-pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<()> {
+pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> anyhow::Result<()> {
     match command {
-        PackAddCommand::Agent { id, slot } => add_agent(pack, &id, slot.as_deref()),
+        PackAddCommand::Agent { id, slot } => Ok(add_agent(pack, &id, slot.as_deref())?),
         PackAddCommand::Task { id, agent } => {
             check_id(&id)?;
             pack.require_new("tasks", "task_id", &id)?;
@@ -319,7 +419,7 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
                 }
                 (None, None) => anyhow::bail!("name the stage's --task or --plugin"),
             };
-            add_stage(
+            Ok(add_stage(
                 pack,
                 &node,
                 &graph,
@@ -327,7 +427,7 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
                 &input,
                 &output,
                 from.as_deref(),
-            )
+            )?)
         }
     }
 }
@@ -368,9 +468,7 @@ fn add_agent(pack: &mut PackEdit, id: &str, slot: Option<&str>) -> Result<()> {
     let slots = pack.manifest_list("inference_slots")?;
     match slots.iter_mut().find(|entry| entry["name"] == slot) {
         Some(entry) => list_in(
-            entry
-                .as_object_mut()
-                .context("an inference slot is not an object")?,
+            entry.as_object_mut().ok_or(PackEditError::SlotNotObject)?,
             "agents",
         )?
         .push(json!(id)),
@@ -388,7 +486,7 @@ fn add_plugin(
     name: &str,
     language: Option<&str>,
     prebuilt: Option<&Path>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         name.bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
@@ -472,25 +570,31 @@ fn add_stage(
     let intent = intents
         .iter_mut()
         .find(|intent| intent["graph_id"] == graph)
-        .with_context(|| format!("the pack has no graph {graph:?}; add it first"))?;
+        .ok_or_else(|| PackEditError::NoGraph {
+            graph: graph.to_owned(),
+        })?;
     let intent = intent
         .as_object_mut()
-        .context("a graph intent is not an object")?;
-    anyhow::ensure!(
-        !list_in(intent, "nodes")?
-            .iter()
-            .any(|existing| existing["node_id"] == node),
-        "graph {graph:?} already has a stage {node:?}"
-    );
+        .ok_or(PackEditError::GraphIntentNotObject)?;
+    if list_in(intent, "nodes")?
+        .iter()
+        .any(|existing| existing["node_id"] == node)
+    {
+        return Err(PackEditError::StageExists {
+            graph: graph.to_owned(),
+            node: node.to_owned(),
+        });
+    }
     list_in(intent, "nodes")?.push(json!({
         "node_id": node, "capability_id": capability, "capability_revision": "v1",
     }));
     match from {
         None => {
-            anyhow::ensure!(
-                list_in(intent, "entries")?.is_empty(),
-                "graph {graph:?} already has an entry; name the upstream stage with --from node.port"
-            );
+            if !list_in(intent, "entries")?.is_empty() {
+                return Err(PackEditError::GraphHasEntry {
+                    graph: graph.to_owned(),
+                });
+            }
             list_in(intent, "entries")?.push(json!({
                 "name": "start", "collection": input, "schema": format!("{input}/v1"),
                 "input_contract": format!("{graph}-input/v1"),
@@ -498,9 +602,7 @@ fn add_stage(
             }));
         }
         Some(from) => {
-            let (from_node, from_port) = from
-                .split_once('.')
-                .context("--from is node.port, for example scan.output")?;
+            let (from_node, from_port) = from.split_once('.').ok_or(PackEditError::FromSyntax)?;
             list_in(intent, "edges")?.push(json!({
                 "from": {"node_id": from_node, "port": from_port},
                 "to": {"node_id": node, "port": "input"},
@@ -528,12 +630,13 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
     match args.part {
         PackPart::Agent => {
             let agent = pack.remove_row("agents", "agent_id", id)?;
-            anyhow::ensure!(
-                !pack.config.as_ref().is_some_and(|config| config["tasks"]
+            if pack.config.as_ref().is_some_and(|config| {
+                config["tasks"]
                     .as_array()
-                    .is_some_and(|tasks| tasks.iter().any(|task| task["agent_id"] == id))),
-                "a task still runs agent {id:?}; remove it first"
-            );
+                    .is_some_and(|tasks| tasks.iter().any(|task| task["agent_id"] == id))
+            }) {
+                return Err(PackEditError::AgentInUse { id: id.to_owned() });
+            }
             if let Some(context_id) = agent["context_id"].as_str() {
                 let context = pack.remove_row("contexts", "context_id", context_id)?;
                 if let Some(tools_id) = context["tools_id"].as_str() {
@@ -574,12 +677,12 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
         }
         PackPart::Schema => {
             let path = format!("schemas/{}.graphql", super_snake(id));
-            anyhow::ensure!(
-                pack.manifest["assets"]
-                    .as_array()
-                    .is_some_and(|assets| assets.iter().any(|asset| asset == &json!(path))),
-                "the pack has no schema {id:?}"
-            );
+            if !pack.manifest["assets"]
+                .as_array()
+                .is_some_and(|assets| assets.iter().any(|asset| asset == &json!(path)))
+            {
+                return Err(PackEditError::NoSchema { id: id.to_owned() });
+            }
             pack.remove_asset(&path)?;
         }
         PackPart::Plugin => {
@@ -587,7 +690,7 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
             let index = plugins
                 .iter()
                 .position(|plugin| plugin["name"] == id)
-                .with_context(|| format!("the pack has no plugin {id:?}"))?;
+                .ok_or_else(|| PackEditError::PluginNotFound { id: id.to_owned() })?;
             let plugin = plugins.remove(index);
             if let Some(artifact) = plugin["artifact"].as_str() {
                 pack.remove_asset(artifact)?;
@@ -596,8 +699,10 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
                 pack.remove_asset(instructions)?;
                 let path = pack.dir.join(instructions);
                 if path.is_file() {
-                    std::fs::remove_file(&path)
-                        .with_context(|| format!("removing {}", path.display()))?;
+                    std::fs::remove_file(&path).map_err(|source| PackEditError::Remove {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
                 }
                 if let Some(dir) = path.parent() {
                     let _ = std::fs::remove_dir(dir);
@@ -606,8 +711,12 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
             if let Some(source) = plugin["source"].as_str() {
                 let source = pack.dir.join(source);
                 if source.is_dir() {
-                    std::fs::remove_dir_all(&source)
-                        .with_context(|| format!("removing {}", source.display()))?;
+                    std::fs::remove_dir_all(&source).map_err(|source_error| {
+                        PackEditError::Remove {
+                            path: source.to_path_buf(),
+                            source: source_error,
+                        }
+                    })?;
                 }
             }
         }

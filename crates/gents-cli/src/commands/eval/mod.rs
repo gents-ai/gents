@@ -89,6 +89,8 @@ pub(crate) enum EvalCommandError {
     },
     #[error("{note}")]
     Stopped { note: String },
+    #[error("job {job_id}: its directory is not under this home")]
+    JobOutsideHome { job_id: String },
 }
 
 pub(crate) struct EvalContext {
@@ -276,7 +278,7 @@ async fn watch_while_held(
                 )
                 .await
             }
-            Err(error) if watch::store_locked(&error) => {
+            Err(error) if watch::store_locked(error.as_ref()) => {
                 tracing::debug!(
                     error = %format!("{}", ErrorChain(error.as_ref())),
                     "node held, reading runner files"

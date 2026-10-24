@@ -190,7 +190,7 @@ pub(super) enum PromptSender {
 impl PromptSender {
     pub(super) async fn send_line(&self, line: String) -> Result<()> {
         match self {
-            PromptSender::Live { outbound } => outbound.send(line).await,
+            PromptSender::Live { outbound } => Ok(outbound.send(line).await?),
             PromptSender::Replay { inner } => {
                 let mut value: Value = serde_json::from_str(&line)?;
                 value["params"]["_meta"]["isReplay"] = Value::Bool(true);

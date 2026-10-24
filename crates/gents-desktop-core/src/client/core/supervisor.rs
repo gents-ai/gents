@@ -349,7 +349,7 @@ async fn persist_pairing_readiness(
     sync_state: &ClientSyncStateOwner,
     expected: &PeerRecord,
     ready: bool,
-) -> anyhow::Result<Option<PeerRecord>> {
+) -> Result<Option<PeerRecord>, ClientCoreError> {
     sync_state.set_pairing_ready(expected, ready).await
 }
 

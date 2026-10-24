@@ -4,12 +4,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use super::super::error::EvalInitError;
 use super::{is_generated_eval_pack, replaceable_out, resolve_through_existing_ancestor};
 
-pub(super) fn sibling_name(out: &Path, suffix: &str) -> Result<OsString> {
-    let name = out
-        .file_name()
-        .context("eval output must name a directory")?;
+pub(super) fn sibling_name(out: &Path, suffix: &str) -> Result<OsString, EvalInitError> {
+    let name = out.file_name().ok_or(EvalInitError::OutputUnnamed)?;
     let mut sibling = OsString::from(".");
     sibling.push(name);
     sibling.push(suffix);
@@ -18,19 +17,21 @@ pub(super) fn sibling_name(out: &Path, suffix: &str) -> Result<OsString> {
 
 /// The lock file remains named after release: unlinking it would let two
 /// writers lock different inodes for the same destination.
-pub(super) fn lock_output(out: &Path) -> Result<File> {
+pub(super) fn lock_output(out: &Path) -> Result<File, EvalInitError> {
     let parent = out
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let lock = parent.join(sibling_name(out, ".eval-init.lock")?);
-    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    if let Ok(metadata) = lock.symlink_metadata() {
-        anyhow::ensure!(
-            metadata.is_file(),
-            "eval output lock must be a regular file: {}",
-            lock.display()
-        );
+    std::fs::create_dir_all(parent).map_err(|source| EvalInitError::CreateDir {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    if lock
+        .symlink_metadata()
+        .is_ok_and(|metadata| !metadata.is_file())
+    {
+        return Err(EvalInitError::LockNotRegular { path: lock });
     }
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -41,12 +42,13 @@ pub(super) fn lock_output(out: &Path) -> Result<File> {
     }
     let file = options
         .open(&lock)
-        .with_context(|| format!("opening eval output lock {}", lock.display()))?;
-    file.try_lock().with_context(|| {
-        format!(
-            "locking {}; another eval init may be publishing or recovering it; retry after it finishes",
-            out.display()
-        )
+        .map_err(|source| EvalInitError::OpenLock {
+            path: lock.clone(),
+            source,
+        })?;
+    file.try_lock().map_err(|source| EvalInitError::LockBusy {
+        out: out.to_path_buf(),
+        source,
     })?;
     Ok(file)
 }

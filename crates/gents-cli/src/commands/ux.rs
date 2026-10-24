@@ -4,15 +4,31 @@
 //! exactly what the webview will receive; `lint` runs the static lint on
 //! one file before it is ever in a pack.
 
-use anyhow::{Context, Result};
+use std::path::PathBuf;
+
+use anyhow::Result;
 
 use crate::cli::args::{UxCommand, UxLintArgs, UxListArgs, UxModuleArgs};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum UxLintError {
+    #[error("reading {}", .path.display())]
+    ReadFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    RequestHelpers(#[from] crate::request_helpers::RequestHelpersError),
+    #[error("{} is refused by the static lint:\n{}", .path.display(), .findings)]
+    Refused { path: PathBuf, findings: String },
+}
 
 pub(crate) async fn dispatch(command: UxCommand) -> Result<()> {
     match command {
         UxCommand::List(args) => list(args),
         UxCommand::Module(args) => module(args).await,
-        UxCommand::Lint(args) => lint(args),
+        UxCommand::Lint(args) => Ok(lint(args)?),
     }
 }
 
@@ -30,20 +46,22 @@ async fn module(args: UxModuleArgs) -> Result<()> {
     Ok(crate::print_json(&serde_json::to_value(module)?)?)
 }
 
-fn lint(args: UxLintArgs) -> Result<()> {
-    let source = std::fs::read_to_string(&args.file)
-        .with_context(|| format!("reading {}", args.file.display()))?;
+fn lint(args: UxLintArgs) -> Result<(), UxLintError> {
+    let source = std::fs::read_to_string(&args.file).map_err(|source| UxLintError::ReadFile {
+        path: args.file.clone(),
+        source,
+    })?;
     let findings = gents::ux_plugin::lint::lint(&source);
     crate::print_json(&serde_json::json!({
         "file": args.file,
         "admitted": findings.is_empty(),
         "findings": findings,
     }))?;
-    anyhow::ensure!(
-        findings.is_empty(),
-        "{} is refused by the static lint:\n{}",
-        args.file.display(),
-        gents::ux_plugin::lint::describe(&findings)
-    );
+    if !findings.is_empty() {
+        return Err(UxLintError::Refused {
+            path: args.file,
+            findings: gents::ux_plugin::lint::describe(&findings),
+        });
+    }
     Ok(())
 }

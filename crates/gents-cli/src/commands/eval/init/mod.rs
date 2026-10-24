@@ -17,6 +17,7 @@ use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
 mod contract;
 pub(crate) mod dossier;
 pub(crate) mod draft;
+mod error;
 mod pilot;
 mod readiness;
 pub(crate) mod turn;

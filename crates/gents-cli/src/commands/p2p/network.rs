@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
-use anyhow::{Context, Result};
+use super::error::{P2pCommandError, Result};
+use anyhow::Context;
 use chrono::{SecondsFormat, Utc};
 use gents::agent::p2p_reconcile::registry::{
     registry_upsert_mutation, validate_offered_templates, RegistryEntry, UpsertKind,
@@ -34,7 +35,7 @@ struct PeerRegistryRow {
     paired: bool,
 }
 
-pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result<()> {
+pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> anyhow::Result<()> {
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -116,7 +117,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
     Ok(())
 }
 
-pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
+pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> anyhow::Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
@@ -156,12 +157,12 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
             "peers": peers,
             "count": count,
         }))?),
-        OutputFormat::Table => print_network_table(&peers),
+        OutputFormat::Table => Ok(print_network_table(&peers)?),
         _ => unreachable!("ensure_supported restricts p2p network list output formats"),
     }
 }
 
-pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
+pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> anyhow::Result<()> {
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -360,7 +361,7 @@ fn print_network_table(rows: &[PeerRegistryRow]) -> Result<()> {
     for row in &table_rows {
         print_table_row(&mut stdout, row, &widths)?;
     }
-    stdout.flush().context("flushing p2p network table")?;
+    stdout.flush().map_err(P2pCommandError::NetworkTableFlush)?;
     Ok(())
 }
 
@@ -379,7 +380,7 @@ fn print_table_row<const N: usize>(
         .map(|(cell, width)| format!("{cell:<width$}"))
         .collect::<Vec<_>>()
         .join("  ");
-    writeln!(writer, "{line}").context("writing p2p network table row")
+    writeln!(writer, "{line}").map_err(P2pCommandError::NetworkTableRow)
 }
 
 #[cfg(test)]

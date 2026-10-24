@@ -1,3 +1,4 @@
+use super::error::P2pCommandError;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use gents_protocol::enrollment::{
@@ -14,13 +15,10 @@ use crate::{
 
 pub(crate) fn resolve_home_identity(
     home: Option<&std::path::Path>,
-) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+) -> Result<std::sync::Arc<dyn gents::NodeIdentity>, P2pCommandError> {
     let home_dir = resolve_home_dir(home);
-    let config = read_init_config(&home_dir)?.with_context(|| {
-        format!(
-            "no init config found in {}; run `gents init` first",
-            home_dir.display()
-        )
+    let config = read_init_config(&home_dir)?.ok_or_else(|| P2pCommandError::NoInitConfig {
+        home_dir: home_dir.clone(),
     })?;
     Ok(load_initialized_home_identity(&home_dir, &config)?)
 }

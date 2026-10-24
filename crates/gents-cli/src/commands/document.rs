@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use gents::defra_query::{unknown_collection_message, CollectionScope};
 use gents::graphql::validate_collection_identifier;
 use gents_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
@@ -6,6 +6,24 @@ use serde_json::{json, Value};
 
 use crate::cli::args::{DocumentCommand, DocumentCreateArgs};
 use crate::{print_json, resolve_config_access};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DocumentCommandError {
+    #[error("collection {collection:?} is canonical configuration; use its configuration command or pack install")]
+    CanonicalConfiguration { collection: String },
+    #[error("parsing --json as JSON")]
+    ParseJson(#[source] serde_json::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("--json must be a non-empty JSON object of document fields")]
+    NotAnObject,
+    #[error("--json must not contain an empty array; omit the field instead")]
+    EmptyArray,
+    #[error("--json integer is outside the exact i64/u64 range; encode it as a string")]
+    IntegerOutOfRange,
+    #[error("collection {collection:?} has no field {key:?}; check the field name")]
+    UnknownField { collection: String, key: String },
+}
 
 pub(crate) async fn dispatch(command: DocumentCommand) -> Result<()> {
     match command {
@@ -20,22 +38,25 @@ fn parse_fields(collection: &str, fields: &str) -> Result<Value> {
         .iter()
         .any(|owner| owner.graphql_type() == collection)
     {
-        bail!("collection {collection:?} is canonical configuration; use its configuration command or pack install");
+        return Err(DocumentCommandError::CanonicalConfiguration {
+            collection: collection.to_owned(),
+        }
+        .into());
     }
     let raw: Box<serde_json::value::RawValue> =
-        serde_json::from_str(fields).context("parsing --json as JSON")?;
+        serde_json::from_str(fields).map_err(DocumentCommandError::ParseJson)?;
     ensure_exact_integers(&raw)?;
-    let fields: Value = serde_json::from_str(raw.get()).context("parsing --json as JSON")?;
+    let fields: Value = serde_json::from_str(raw.get()).map_err(DocumentCommandError::ParseJson)?;
     if !fields.as_object().is_some_and(|object| !object.is_empty()) {
-        bail!("--json must be a non-empty JSON object of document fields");
+        return Err(DocumentCommandError::NotAnObject.into());
     }
     if contains_empty_array(&fields) {
-        bail!("--json must not contain an empty array; omit the field instead");
+        return Err(DocumentCommandError::EmptyArray.into());
     }
     Ok(fields)
 }
 
-fn ensure_exact_integers(raw: &serde_json::value::RawValue) -> Result<()> {
+fn ensure_exact_integers(raw: &serde_json::value::RawValue) -> Result<(), DocumentCommandError> {
     let text = raw.get();
     match text.as_bytes().first() {
         Some(b'{') => {
@@ -56,21 +77,28 @@ fn ensure_exact_integers(raw: &serde_json::value::RawValue) -> Result<()> {
                 && text.parse::<i64>().is_err()
                 && text.parse::<u64>().is_err() =>
         {
-            bail!("--json integer is outside the exact i64/u64 range; encode it as a string");
+            return Err(DocumentCommandError::IntegerOutOfRange);
         }
         _ => {}
     }
     Ok(())
 }
 
-fn ensure_known_fields(collection: &str, fields: &Value, input_fields: &[String]) -> Result<()> {
+fn ensure_known_fields(
+    collection: &str,
+    fields: &Value,
+    input_fields: &[String],
+) -> Result<(), DocumentCommandError> {
     let unknown = fields
         .as_object()
         .into_iter()
         .flat_map(|object| object.keys())
         .find(|key| !input_fields.contains(key));
     match unknown {
-        Some(key) => bail!("collection {collection:?} has no field {key:?}; check the field name"),
+        Some(key) => Err(DocumentCommandError::UnknownField {
+            collection: collection.to_owned(),
+            key: key.clone(),
+        }),
         None => Ok(()),
     }
 }

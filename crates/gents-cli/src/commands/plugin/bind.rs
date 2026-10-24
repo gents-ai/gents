@@ -5,6 +5,15 @@ use serde_json::json;
 
 use super::store;
 use crate::cli::args::{PluginBindArgs, PluginUnbindArgs};
+use crate::request_helpers::RequestHelpersError;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PluginBindError {
+    #[error(transparent)]
+    Install(#[from] gents::plugin::install::PluginInstallError),
+    #[error(transparent)]
+    Print(#[from] RequestHelpersError),
+}
 
 pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
     anyhow::ensure!(
@@ -35,7 +44,7 @@ pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
     )?)
 }
 
-pub(super) fn unbind(args: PluginUnbindArgs) -> Result<()> {
+pub(super) fn unbind(args: PluginUnbindArgs) -> Result<(), PluginBindError> {
     let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
@@ -112,11 +121,9 @@ mod tests {
         install_record(home.path(), None, false);
         let error = unbind(unbind_args(home.path())).unwrap_err();
         assert!(
-            ErrorChain(error.as_ref())
-                .to_string()
-                .contains("no slot to bind"),
+            ErrorChain(&error).to_string().contains("no slot to bind"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let error = bind(PluginBindArgs {
             name: "team/ocr".to_owned(),
