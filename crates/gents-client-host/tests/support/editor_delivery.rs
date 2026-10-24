@@ -50,6 +50,13 @@ pub async fn verify(
 ) -> Result<(Value, Value)> {
     let marker: Value =
         serde_json::from_slice(&std::fs::read(root.join("editor-reply-loss.json"))?)?;
+    let boundary = std::env::var("GENTS_VSCODE_DELIVERY_BOUNDARY")
+        .unwrap_or_else(|_| "after-reply".to_owned());
+    ensure!(
+        matches!(boundary.as_str(), "before-call" | "after-reply")
+            && marker["boundary"] == boundary,
+        "the installed journey did not interrupt the selected delivery boundary"
+    );
     let request_id = marker["requestId"]
         .as_str()
         .context("missing retained caller identity in dropped reply")?;
@@ -184,7 +191,7 @@ pub async fn verify(
         "the recovered child changed its copied prefix or edited input: {users:?}"
     );
     Ok((
-        rows,
+        json!({"lossBoundary": boundary, "records": rows}),
         json!({"binding":marker["fork"].clone(),"childDocId":child.doc_id,"records":fork_rows,"canonicalUsers":users}),
     ))
 }
