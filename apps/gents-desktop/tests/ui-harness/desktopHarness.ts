@@ -723,6 +723,7 @@ export function createDesktopUiHarness(
             ],
       },
       client: {
+        clientDid: "did:key:desktop-harness",
         localPeerId: "peer-bombadil-local",
         listenAddresses: ["/ip4/127.0.0.1/tcp/9292"],
         p2pHealth: health,
@@ -863,6 +864,12 @@ export function createDesktopUiHarness(
     },
     async controlGoal() {
       throw new Error("Goal controls are unavailable in this fixture.");
+    },
+    async recoverChatSubmission() {
+      throw new Error("Submission recovery is unavailable in this fixture.");
+    },
+    async acknowledgeChatSubmission() {
+      throw new Error("Submission acknowledgement is unavailable in this fixture.");
     },
     async steerPendingMessage() {
       throw new Error("Steering is unavailable in this fixture.");

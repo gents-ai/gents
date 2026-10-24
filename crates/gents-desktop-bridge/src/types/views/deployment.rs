@@ -388,6 +388,7 @@ pub struct DeploymentView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopRuntimeSnapshot {
+    pub client_did: String,
     pub local_peer_id: String,
     pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,

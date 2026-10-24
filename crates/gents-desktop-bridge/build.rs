@@ -59,6 +59,8 @@ const COMMANDS: &[&str] = &[
     "desktop_request_timeline",
     "desktop_tool_surface_explain",
     "desktop_chat_send",
+    "desktop_chat_submission_recover",
+    "desktop_chat_submission_acknowledge",
     "desktop_attachment_read",
     "desktop_request_attachments",
     "desktop_pending_queue_edit",

@@ -7,7 +7,8 @@
 
 use anyhow::Result;
 use gents_desktop_core::client::{
-    ClientCore, DeliveryUnconfirmed, SubmissionOutcomeUnknown, SubmittedRequest,
+    ClientCore, DeliveryUnconfirmed, SubmissionNotDelivered, SubmissionOutcomeUnknown,
+    SubmittedRequest,
 };
 
 use crate::types::{ChatSendOutcome, ChatSendRequest, ChatSendResult};
@@ -25,6 +26,15 @@ pub(super) fn resolve_target(request: &ChatSendRequest) -> Option<&str> {
 pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult> {
     let error = match submitted {
         Ok(receipt) => return Ok(receipt.into()),
+        Err(error) => error,
+    };
+    let error = match error.downcast::<SubmissionNotDelivered>() {
+        Ok(rejected) => {
+            return Ok(ChatSendResult::with_outcome(
+                rejected.request,
+                ChatSendOutcome::NotDelivered,
+            ))
+        }
         Err(error) => error,
     };
     let error = match error.downcast::<SubmissionOutcomeUnknown>() {

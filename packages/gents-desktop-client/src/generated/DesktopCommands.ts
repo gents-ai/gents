@@ -8,6 +8,9 @@ import type { BackendSaveRequest } from "./BackendSaveRequest.js";
 import type { BackendUsageView } from "./BackendUsageView.js";
 import type { ChatSendRequest } from "./ChatSendRequest.js";
 import type { ChatSendResult } from "./ChatSendResult.js";
+import type { ChatSubmissionQuery } from "./ChatSubmissionQuery.js";
+import type { ChatSubmissionReceipt } from "./ChatSubmissionReceipt.js";
+import type { ChatSubmissionRecovery } from "./ChatSubmissionRecovery.js";
 import type { ClaudeLoginRequest } from "./ClaudeLoginRequest.js";
 import type { ClaudeLoginResult } from "./ClaudeLoginResult.js";
 import type { CodexLoginRequest } from "./CodexLoginRequest.js";
@@ -140,6 +143,8 @@ export type DesktopCommands = {
   desktop_background_tool: { args: { request: DesktopBackgroundToolRequest }; result: boolean };
   desktop_bootstrap_summary: { args: Record<string, never>; result: DesktopBootstrapSummary };
   desktop_chat_send: { args: { request: ChatSendRequest }; result: ChatSendResult };
+  desktop_chat_submission_acknowledge: { args: { receipt: ChatSubmissionReceipt }; result: void };
+  desktop_chat_submission_recover: { args: { query: ChatSubmissionQuery }; result: ChatSubmissionRecovery };
   desktop_claude_login: { args: { request: ClaudeLoginRequest }; result: ClaudeLoginResult };
   desktop_claude_login_cancel: { args: Record<string, never>; result: void };
   desktop_client_shutdown: { args: Record<string, never>; result: DesktopClientSnapshot };

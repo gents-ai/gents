@@ -2518,6 +2518,9 @@ def caseCoverage : List CoverageEntry :=
       "session::fork::tests::generated_edit_anchors_select_exact_canonical_user_messages")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"
+      "session::fork::tests::generated_edit_fork_bindings_control_destination_reuse")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"
       "session::tests::editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "session_document_cases" "SessionDocumentCases"
