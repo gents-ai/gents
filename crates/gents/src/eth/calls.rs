@@ -492,14 +492,14 @@ fn parse_u256(value: &str) -> Result<U256> {
         .or_else(|_| U256::from_str_radix(value.trim_start_matches("0x"), 16))
         .map_err(|source| EthError::UintBound {
             value: value.to_string(),
-            source: Box::new(source),
+            source,
         })
 }
 
 fn parse_i256(value: &str) -> Result<I256> {
     value.parse::<I256>().map_err(|source| EthError::IntBound {
         value: value.to_string(),
-        source: Box::new(source),
+        source,
     })
 }
 

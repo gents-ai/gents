@@ -25,12 +25,19 @@ pub enum CompletionFactoryError {
     NegativeTokenLimit,
     #[error("budget rehydration requires the physical request document ID")]
     MissingRequestDocId,
-    #[error("InferenceCall usage payload is not a row array: {error}")]
-    UsagePayload { error: serde_json::Error },
-    #[error("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")]
-    UsageDecode {
+    #[error(
+        "decoding InferenceCall usage for request_doc_id={request_doc_id}: usage payload is not a row array"
+    )]
+    UsagePayload {
         request_doc_id: String,
-        error: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("decoding InferenceCall usage for request_doc_id={request_doc_id}")]
+    ProviderUsage {
+        request_doc_id: String,
+        #[source]
+        source: provider_usage::ProviderUsageError,
     },
 }
 
@@ -289,26 +296,27 @@ async fn load_prior_charged_tokens(
             .as_ref()
             .and_then(|data| data.get("InferenceCall")),
     )
-    .map_err(|error| CompletionFactoryError::UsageDecode {
+    .map_err(|source| CompletionFactoryError::UsagePayload {
         request_doc_id: request_doc_id.to_owned(),
-        error: error.to_string(),
+        source,
     })?;
     let charged = provider_usage::sum_charged_from_persisted_parts(
         rows.into_iter()
             .map(|row| (row.prompt_tokens, row.completion_tokens)),
     )
-    .map_err(|error| CompletionFactoryError::UsageDecode {
+    .map_err(|source| CompletionFactoryError::ProviderUsage {
         request_doc_id: request_doc_id.to_owned(),
-        error: error.to_string(),
+        source,
     })?;
     Ok(charged)
 }
 
-fn prior_usage_rows_from_response(value: Option<&serde_json::Value>) -> Result<Vec<PriorUsageRow>> {
+fn prior_usage_rows_from_response(
+    value: Option<&serde_json::Value>,
+) -> serde_json::Result<Vec<PriorUsageRow>> {
     match value {
         None | Some(serde_json::Value::Null) => Ok(Vec::new()),
-        Some(value) => serde_json::from_value(value.clone())
-            .map_err(|error| CompletionFactoryError::UsagePayload { error }),
+        Some(value) => serde_json::from_value(value.clone()),
     }
 }
 

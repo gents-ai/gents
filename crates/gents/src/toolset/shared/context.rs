@@ -9,7 +9,6 @@ use crate::toolset::file_tools::FileToolError;
 use crate::toolset::goal::GoalToolError;
 use crate::toolset::lsp::LspToolError;
 use crate::toolset::native_runner::NativeRunnerError;
-use crate::toolset::session_message::SessionMessageError;
 use crate::toolset::shared::command::CommandError;
 use crate::toolset::CommandPolicyDenial;
 
@@ -72,7 +71,6 @@ pub(crate) enum ToolError {
     NativeRunner(NativeRunnerError),
     PolicyDenial(CommandPolicyDenial),
     ReportedFailure { class: FailureClass, text: String },
-    SessionMessage(SessionMessageError),
     ToolOutput(crate::tool_output::ToolOutputError),
 }
 
@@ -111,7 +109,6 @@ impl ToolError {
             | Self::Lsp(_)
             | Self::LiveOutput(_)
             | Self::NativeRunner(_)
-            | Self::SessionMessage(_)
             | Self::ToolOutput(_)
             | Self::ReportedFailure { .. } => None,
         }
@@ -140,7 +137,6 @@ impl std::fmt::Display for ToolError {
             Self::Lsp(error) => write!(f, "{}", ErrorChain(error)),
             Self::LiveOutput(error) => write!(f, "{}", ErrorChain(error)),
             Self::NativeRunner(error) => write!(f, "{}", ErrorChain(error)),
-            Self::SessionMessage(error) => write!(f, "{}", ErrorChain(error)),
             Self::ToolOutput(error) => write!(f, "{}", ErrorChain(error)),
             Self::PolicyDenial(denial) => write!(f, "{}", denial.tool_error_payload()),
             Self::ReportedFailure { text, .. } => f.write_str(text),
@@ -160,7 +156,6 @@ impl std::error::Error for ToolError {
             Self::Lsp(error) => Some(root_cause(error)),
             Self::LiveOutput(error) => Some(root_cause(error)),
             Self::NativeRunner(error) => Some(root_cause(error)),
-            Self::SessionMessage(error) => Some(root_cause(error)),
             Self::ToolOutput(error) => Some(root_cause(error)),
             Self::PolicyDenial(_) | Self::ReportedFailure { .. } => None,
         }
@@ -200,12 +195,6 @@ impl From<FileToolError> for ToolError {
 impl From<LspToolError> for ToolError {
     fn from(error: LspToolError) -> Self {
         Self::Lsp(error)
-    }
-}
-
-impl From<SessionMessageError> for ToolError {
-    fn from(error: SessionMessageError) -> Self {
-        Self::SessionMessage(error)
     }
 }
 

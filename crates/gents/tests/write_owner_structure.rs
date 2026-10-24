@@ -2317,27 +2317,33 @@ impl<'ast> Visit<'ast> for AnyhowVisitor {
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
         let tokens = syn::buffer::TokenBuffer::new2(invocation.tokens.clone());
-        if macro_names_anyhow(tokens.begin()) {
+        if tokens_name_anyhow(tokens.begin()) {
             self.sites += 1;
         }
         visit::visit_macro(self, invocation);
     }
+
+    fn visit_meta_list(&mut self, list: &'ast syn::MetaList) {
+        let tokens = syn::buffer::TokenBuffer::new2(list.tokens.clone());
+        if tokens_name_anyhow(tokens.begin()) {
+            self.sites += 1;
+        }
+        visit::visit_meta_list(self, list);
+    }
 }
 
-fn macro_names_anyhow(mut cursor: syn::buffer::Cursor) -> bool {
+/// Macro and attribute tokens are not parsed, so any `anyhow` identifier in
+/// them counts: `use anyhow as e;` inside a macro would otherwise hide every
+/// later use behind the alias.
+fn tokens_name_anyhow(mut cursor: syn::buffer::Cursor) -> bool {
     while !cursor.eof() {
         if let Some((inside, _, _, next)) = cursor.any_group() {
-            if macro_names_anyhow(inside) {
+            if tokens_name_anyhow(inside) {
                 return true;
             }
             cursor = next;
         } else if let Some((ident, next)) = cursor.ident() {
-            let invoked = next.punct().is_some_and(|(punct, after)| {
-                punct.as_char() == '!'
-                    || (punct.as_char() == ':'
-                        && after.punct().is_some_and(|(p, _)| p.as_char() == ':'))
-            });
-            if ident == "anyhow" && invoked {
+            if ident == "anyhow" {
                 return true;
             }
             cursor = next;
@@ -2481,6 +2487,13 @@ fn thiserror_fence_counts_anyhow_names() {
             0,
         ),
         ("fn f() { let anyhow = 1; }", 0),
+        ("macro_rules! m { () => { use anyhow as eh; } }", 1),
+        ("macro_rules! m { () => { extern crate anyhow; } }", 1),
+        (
+            "fn f() { tokio::select! { _ = g() => { use anyhow as eh; } } }",
+            1,
+        ),
+        ("#[attr(anyhow::Error)] fn f() {}", 1),
     ] {
         let syntax = syn::parse_file(source).expect("parse snippet");
         assert_eq!(anyhow_sites(&syntax), sites, "{source}");

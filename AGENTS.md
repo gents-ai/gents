@@ -218,7 +218,8 @@ metadata.
 - Trait bounds live in where clauses, never inline in generic parameter lists;
   `trait_bounds_live_in_where_clauses` ratchets this.
 - Errors are thiserror enums owned by the module that originates them; never
-  anyhow. `errors_use_thiserror` ratchets this and its allowlist only shrinks.
+  anyhow. `errors_use_thiserror` (sources) and `anyhow_dependencies_only_shrink`
+  (manifests) ratchet this and their allowlists only shrink.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are
   cloned efficiently. In agent worktrees build and test with

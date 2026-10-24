@@ -62,6 +62,8 @@ pub enum PluginError {
     #[error(transparent)]
     Allowed(#[from] crate::plugin::allowed::PluginAllowedError),
     #[error(transparent)]
+    Bound(#[from] bound::BoundDirError),
+    #[error(transparent)]
     Encode(#[from] serde_json::Error),
 }
 

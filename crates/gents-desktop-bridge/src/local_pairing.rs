@@ -1,5 +1,6 @@
 use gents_desktop_core::client::{ClientCore, EnrollmentRequestResult};
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::serve_lifecycle::{outdated_runtime_message, ObservedServeLifecycle};
 use std::future::Future;
 use std::sync::Arc;
@@ -152,7 +153,7 @@ pub(crate) async fn fetch_managed_runtime_status(
     loop {
         let fetched = tokio::select! {
             fetched = fetch_runtime_connection_payload(status_url.as_str()) => {
-                fetched.map_err(|error| format!("{error:#}"))
+                fetched.map_err(|error| ErrorChain(&error).to_string())
             }
             () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
         };

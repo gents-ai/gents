@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use super::allowed::PluginAllowedError;
+use super::approval::PluginApprovalError;
 use crate::pack::BindAccess;
 
-type Result<T, E = PluginAllowedError> = std::result::Result<T, E>;
+type Result<T, E = BoundDirError> = std::result::Result<T, E>;
 
 const PRIVATE_ROOT: &str = ".gents-bind";
 
@@ -24,26 +24,24 @@ pub struct BoundDir {
 
 impl BoundDir {
     pub fn new(requested: &Path, within: Option<&Path>) -> Result<Self> {
-        let canonical =
-            requested
-                .canonicalize()
-                .map_err(|source| PluginAllowedError::Unreadable {
-                    path: requested.to_path_buf(),
-                    source,
-                })?;
+        let canonical = requested
+            .canonicalize()
+            .map_err(|source| BoundDirError::Unreadable {
+                path: requested.to_path_buf(),
+                source,
+            })?;
         if !canonical.is_dir() {
-            return Err(PluginAllowedError::NotDirectory { path: canonical });
+            return Err(BoundDirError::NotDirectory { path: canonical });
         }
         if let Some(within) = within {
-            let within =
-                within
-                    .canonicalize()
-                    .map_err(|source| PluginAllowedError::Unreadable {
-                        path: within.to_path_buf(),
-                        source,
-                    })?;
+            let within = within
+                .canonicalize()
+                .map_err(|source| BoundDirError::Unreadable {
+                    path: within.to_path_buf(),
+                    source,
+                })?;
             if !canonical.starts_with(&within) {
-                return Err(PluginAllowedError::OutsideBindRoot {
+                return Err(BoundDirError::OutsideBindRoot {
                     path: canonical,
                     within,
                 });
@@ -72,7 +70,7 @@ impl BoundDir {
     }
 
     pub(crate) fn beside(file: &Path, access: BindAccess) -> Result<Self> {
-        let dir = file.parent().ok_or_else(|| PluginAllowedError::NoFolder {
+        let dir = file.parent().ok_or_else(|| BoundDirError::NoFolder {
             path: file.to_path_buf(),
         })?;
         let mut bound = Self::folder(dir, access)?;
@@ -82,11 +80,9 @@ impl BoundDir {
     }
 
     pub(crate) fn for_file(file: &Path, access: BindAccess) -> Result<Self> {
-        let name = file
-            .file_name()
-            .ok_or_else(|| PluginAllowedError::NoFileName {
-                path: file.to_path_buf(),
-            })?;
+        let name = file.file_name().ok_or_else(|| BoundDirError::NoFileName {
+            path: file.to_path_buf(),
+        })?;
         let identity = pin(file, PinKind::File)?;
         let mut last = None;
         for root in link_roots(file) {
@@ -102,7 +98,7 @@ impl BoundDir {
             match std::fs::hard_link(file, &link) {
                 Ok(()) => {
                     if identity != identity_of(&link) {
-                        return Err(PluginAllowedError::ChangedWhileShared {
+                        return Err(BoundDirError::ChangedWhileShared {
                             path: file.to_path_buf(),
                         });
                     }
@@ -134,19 +130,19 @@ impl BoundDir {
         for path in [&self.dir, &self.target] {
             let now = path
                 .canonicalize()
-                .map_err(|source| PluginAllowedError::NoLongerExists {
+                .map_err(|source| BoundDirError::NoLongerExists {
                     path: path.to_path_buf(),
                     source,
                 })?;
             if &now != path {
-                return Err(PluginAllowedError::BoundPathChanged {
+                return Err(BoundDirError::BoundPathChanged {
                     path: path.to_path_buf(),
                     now,
                 });
             }
         }
         if super::allowed::is_protected(&self.original) {
-            return Err(PluginAllowedError::Protected);
+            return Err(BoundDirError::Protected);
         }
         Ok(())
     }
@@ -185,6 +181,74 @@ impl BoundDir {
 
     pub fn access(&self) -> BindAccess {
         self.access
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BoundDirError {
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} does not exist or cannot be read", path.display())]
+    Unreadable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    NotLinkable(#[from] NotLinkable),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{} is not a directory", path.display())]
+    NotDirectory { path: PathBuf },
+    #[error("{} is outside {}, the only directory this call may bind", path.display(), within.display())]
+    OutsideBindRoot { path: PathBuf, within: PathBuf },
+    #[error("{} cannot be read", path.display())]
+    CannotRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not a file", path.display())]
+    NotFile { path: PathBuf },
+    #[error("{} is not a folder", path.display())]
+    NotFolder { path: PathBuf },
+    #[error("{} now resolves to {}; the path changed after it was validated", path.display(), resolved.display())]
+    PathResolvesElsewhere { path: PathBuf, resolved: PathBuf },
+    #[error("{} has no folder", path.display())]
+    NoFolder { path: PathBuf },
+    #[error("{} has no file name", path.display())]
+    NoFileName { path: PathBuf },
+    #[error("{} changed while it was being shared", path.display())]
+    ChangedWhileShared { path: PathBuf },
+    #[error("{} no longer exists or cannot be read", path.display())]
+    NoLongerExists {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} now resolves to {}; the bound path changed after it was validated", path.display(), now.display())]
+    BoundPathChanged { path: PathBuf, now: PathBuf },
+    #[error("Runtime permission files cannot be shared with a plugin.")]
+    Protected,
+    #[error("{} is not owned by this user", path.display())]
+    NotOwned { path: PathBuf },
+    #[error("creating a private folder in {}", path.display())]
+    PrivateFolder {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Approval(Box<PluginApprovalError>),
+}
+
+impl From<PluginApprovalError> for BoundDirError {
+    fn from(error: PluginApprovalError) -> Self {
+        Self::Approval(Box::new(error))
     }
 }
 
@@ -259,24 +323,24 @@ fn pin(path: &Path, kind: PinKind) -> Result<Identity> {
     }
     let handle = options
         .open(path)
-        .map_err(|source| PluginAllowedError::CannotRead {
+        .map_err(|source| BoundDirError::CannotRead {
             path: path.to_path_buf(),
             source,
         })?;
     let meta = handle
         .metadata()
-        .map_err(|source| PluginAllowedError::CannotRead {
+        .map_err(|source| BoundDirError::CannotRead {
             path: path.to_path_buf(),
             source,
         })?;
     match kind {
         PinKind::File if !meta.is_file() => {
-            return Err(PluginAllowedError::NotFile {
+            return Err(BoundDirError::NotFile {
                 path: path.to_path_buf(),
             });
         }
         PinKind::Folder if !meta.is_dir() => {
-            return Err(PluginAllowedError::NotFolder {
+            return Err(BoundDirError::NotFolder {
                 path: path.to_path_buf(),
             });
         }
@@ -285,7 +349,7 @@ fn pin(path: &Path, kind: PinKind) -> Result<Identity> {
     let identity = handle_identity(&handle);
     if let Some(opened) = opened_path(&handle) {
         if opened != path && !named_in_pinned_folder(path, identity) {
-            return Err(PluginAllowedError::PathResolvesElsewhere {
+            return Err(BoundDirError::PathResolvesElsewhere {
                 path: path.to_path_buf(),
                 resolved: opened,
             });
@@ -364,7 +428,7 @@ fn private_folder(root: &Path) -> Result<tempfile::TempDir> {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(source) => {
-            return Err(PluginAllowedError::CreateDir {
+            return Err(BoundDirError::CreateDir {
                 path: shared,
                 source,
             });
@@ -377,14 +441,14 @@ fn private_folder(root: &Path) -> Result<tempfile::TempDir> {
         // SAFETY: geteuid has no preconditions and cannot fail.
         let me = unsafe { libc::geteuid() };
         if !(meta.is_dir() && meta.uid() == me) {
-            return Err(PluginAllowedError::NotOwned { path: shared });
+            return Err(BoundDirError::NotOwned { path: shared });
         }
     }
     sweep(&shared);
     tempfile::Builder::new()
         .prefix("b-")
         .tempdir_in(&shared)
-        .map_err(|source| PluginAllowedError::PrivateFolder {
+        .map_err(|source| BoundDirError::PrivateFolder {
             path: shared,
             source,
         })

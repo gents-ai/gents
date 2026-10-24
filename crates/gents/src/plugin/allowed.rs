@@ -4,7 +4,7 @@ use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 
 use super::approval::PluginApprovalError;
-use super::bound::NotLinkable;
+use super::bound::BoundDirError;
 use super::BoundDir;
 use crate::pack::BindAccess;
 
@@ -70,41 +70,9 @@ pub enum PluginAllowedError {
     #[error("The requested path changed or is unavailable: {}. Retry the action with its current path.", path.display())]
     PathChanged { path: PathBuf },
     #[error(transparent)]
-    NotLinkable(#[from] NotLinkable),
-    #[error(transparent)]
     Approval(Box<PluginApprovalError>),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("{} is not a directory", path.display())]
-    NotDirectory { path: PathBuf },
-    #[error("{} is outside {}, the only directory this call may bind", path.display(), within.display())]
-    OutsideBindRoot { path: PathBuf, within: PathBuf },
-    #[error("{} cannot be read", path.display())]
-    CannotRead {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("{} is not a file", path.display())]
-    NotFile { path: PathBuf },
-    #[error("{} is not a folder", path.display())]
-    NotFolder { path: PathBuf },
-    #[error("{} now resolves to {}; the path changed after it was validated", path.display(), resolved.display())]
-    PathResolvesElsewhere { path: PathBuf, resolved: PathBuf },
-    #[error("{} has no folder", path.display())]
-    NoFolder { path: PathBuf },
-    #[error("{} has no file name", path.display())]
-    NoFileName { path: PathBuf },
-    #[error("{} changed while it was being shared", path.display())]
-    ChangedWhileShared { path: PathBuf },
-    #[error("{} no longer exists or cannot be read", path.display())]
-    NoLongerExists {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("{} now resolves to {}; the bound path changed after it was validated", path.display(), now.display())]
-    BoundPathChanged { path: PathBuf, now: PathBuf },
     #[error("Runtime permission files cannot be shared with a plugin.")]
     Protected,
     #[error("Command isolation for runtime permissions is unavailable. Use native file tools or a runtime with supported command isolation.")]
@@ -113,14 +81,6 @@ pub enum PluginAllowedError {
     PermissionHomeChanged,
     #[error("A runtime permission file has a hard-link alias. Remove the alias outside this session, then retry the command.")]
     PermissionFileAliased,
-    #[error("{} is not owned by this user", path.display())]
-    NotOwned { path: PathBuf },
-    #[error("creating a private folder in {}", path.display())]
-    PrivateFolder {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
     #[error("creating permission staging directory")]
     StagingDir(#[source] std::io::Error),
     #[error("staging runtime permissions")]
@@ -457,7 +417,7 @@ pub fn bind(
     access: BindAccess,
     folder_allowed: bool,
 ) -> Result<BoundDir, String> {
-    let failed = |error: PluginAllowedError| ErrorChain(&error).to_string();
+    let failed = |error: BoundDirError| ErrorChain(&error).to_string();
     if resolved.is_dir {
         return BoundDir::folder(&resolved.target, access).map_err(failed);
     }
@@ -468,10 +428,10 @@ pub fn bind(
         ));
     }
     match BoundDir::for_file(&resolved.target, access) {
-        Err(PluginAllowedError::NotLinkable(_)) if folder_allowed && access == BindAccess::Read => {
+        Err(BoundDirError::NotLinkable(_)) if folder_allowed && access == BindAccess::Read => {
             BoundDir::beside(&resolved.target, access).map_err(failed)
         }
-        Err(error @ PluginAllowedError::NotLinkable(_)) => Err(format!(
+        Err(error @ BoundDirError::NotLinkable(_)) => Err(format!(
             "{}; allow its folder with `gents plugin dirs add {}`",
             ErrorChain(&error),
             resolved.folder().display()

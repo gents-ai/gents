@@ -614,7 +614,7 @@ pub fn compile_graph(
                     &mut diagnostics,
                     DiagnosticCode::InvalidInputSchema,
                     format!("{path}/input_schema"),
-                    format!("{error:#}"),
+                    gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 );
             }
         }

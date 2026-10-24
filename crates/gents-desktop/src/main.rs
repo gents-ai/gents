@@ -5,10 +5,10 @@ use std::process::{Command as ProcessCommand, ExitCode};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use gents_desktop_core::client::DesktopPaths;
+use gents_desktop_core::client::{DesktopPaths, PathsError};
 use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, default_node_home, init_standard_local_runtime,
-    render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
+    render_human_summary, reset_desktop_runtime_state, DesktopInitOptions, LocalRuntimeError,
 };
 use gents_protocol::error_chain::ErrorChain;
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -86,24 +86,36 @@ enum LauncherError {
     TauriBinaryNotFound { binary: &'static str },
 }
 
+#[derive(Debug, thiserror::Error)]
+enum CommandError {
+    #[error(transparent)]
+    Runtime(#[from] std::io::Error),
+    #[error(transparent)]
+    Paths(#[from] PathsError),
+    #[error(transparent)]
+    LocalRuntime(#[from] LocalRuntimeError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
 /// Prints the error with its source chain to stderr and exits non-zero.
 fn main() -> ExitCode {
     init_tracing();
     let cli = Cli::parse();
     let result = match cli.command {
-        Some(command) => run_command(command),
-        None => launch_desktop().map_err(Into::into),
+        Some(command) => run_command(command).map_err(|error| ErrorChain(&error).to_string()),
+        None => launch_desktop().map_err(|error| ErrorChain(&error).to_string()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("Error: {}", ErrorChain(&*error));
+            eprintln!("Error: {error}");
             ExitCode::FAILURE
         }
     }
 }
 
-fn run_command(command: Command) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn run_command(command: Command) -> Result<(), CommandError> {
     match command {
         Command::Init(args) => {
             let runtime = tokio::runtime::Builder::new_current_thread()

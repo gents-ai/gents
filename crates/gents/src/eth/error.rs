@@ -5,7 +5,9 @@ use serde_json::Value;
 
 use super::rpc::{ETH_GET_LOGS_MAX_RANGE, ETH_USER_AGENT};
 
-type BoxedSource = Box<dyn std::error::Error + Send + Sync>;
+type AddressParseError = <alloy_primitives::Address as std::str::FromStr>::Err;
+type UintParseError = <alloy_primitives::U256 as std::str::FromStr>::Err;
+type IntParseError = <alloy_primitives::I256 as std::str::FromStr>::Err;
 
 pub(crate) type Result<T, E = EthError> = std::result::Result<T, E>;
 
@@ -254,13 +256,13 @@ pub enum EthError {
     UintBound {
         value: String,
         #[source]
-        source: BoxedSource,
+        source: UintParseError,
     },
     #[error("invalid signed integer bound {value:?}")]
     IntBound {
         value: String,
         #[source]
-        source: BoxedSource,
+        source: IntParseError,
     },
     #[error("call tool_name is empty")]
     ToolNameEmpty,
@@ -351,7 +353,7 @@ pub enum EthError {
     #[error("address {text}: {error}")]
     AddressParse {
         text: String,
-        error: <alloy_primitives::Address as std::str::FromStr>::Err,
+        error: AddressParseError,
     },
     #[error("bool expected")]
     BoolExpected,
@@ -386,15 +388,9 @@ pub enum EthError {
     #[error("uint expected string or integer, got {got}")]
     UintExpected { got: Value },
     #[error("uint {text}: {error}")]
-    UintParse {
-        text: String,
-        error: <alloy_primitives::U256 as std::str::FromStr>::Err,
-    },
+    UintParse { text: String, error: UintParseError },
     #[error("int {text}: {error}")]
-    IntParse {
-        text: String,
-        error: <alloy_primitives::I256 as std::str::FromStr>::Err,
-    },
+    IntParse { text: String, error: IntParseError },
     #[error("int {n} is not an integer")]
     IntNotInteger { n: serde_json::Number },
     #[error("int expected string or integer, got {got}")]
@@ -420,14 +416,14 @@ pub enum EthError {
     #[error("invalid submit from address")]
     SubmitFromInvalid {
         #[source]
-        source: BoxedSource,
+        source: AddressParseError,
     },
     #[error("eth submit from address must not be zero")]
     SubmitFromZero,
     #[error("invalid submit to address")]
     SubmitToInvalid {
         #[source]
-        source: BoxedSource,
+        source: AddressParseError,
     },
     #[error("chain_id exceeds DefraDB Int")]
     ChainIdExceedsInt {
@@ -527,6 +523,6 @@ pub enum EthError {
     #[error("parsing tx to")]
     ParseTo {
         #[source]
-        source: BoxedSource,
+        source: AddressParseError,
     },
 }

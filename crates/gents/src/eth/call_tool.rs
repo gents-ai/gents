@@ -573,7 +573,7 @@ async fn execute_write(
     .await;
     let receipt = receipt.map_err(|error| {
         let message = error.to_string();
-        let class = if super::submit::is_gas_or_fee_cap_error(&message) {
+        let class = if super::submit::is_gas_or_fee_cap_error(error.as_ref()) {
             FailureClass::PolicyDenied
         } else {
             FailureClass::External

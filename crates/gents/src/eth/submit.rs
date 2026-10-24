@@ -223,16 +223,14 @@ fn validate_request(request: &SubmitRequest) -> Result<()> {
     let from: Address = request
         .from
         .parse()
-        .map_err(|source| EthError::SubmitFromInvalid {
-            source: Box::new(source),
-        })?;
+        .map_err(|source| EthError::SubmitFromInvalid { source })?;
     if from == Address::ZERO {
         return Err(EthError::SubmitFromZero);
     }
     if let Some(to) = request.to.as_deref() {
-        let _: Address = to.parse().map_err(|source| EthError::SubmitToInvalid {
-            source: Box::new(source),
-        })?;
+        let _: Address = to
+            .parse()
+            .map_err(|source| EthError::SubmitToInvalid { source })?;
     }
     Ok(())
 }
@@ -737,9 +735,7 @@ pub(crate) fn sign_eip1559(
         .map(|value| {
             value
                 .parse::<Address>()
-                .map_err(|source| EthError::ParseTo {
-                    source: Box::new(source),
-                })
+                .map_err(|source| EthError::ParseTo { source })
         })
         .transpose()?;
     let unsigned_fields = vec![
@@ -852,8 +848,18 @@ fn decode_hex(value: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-pub(crate) fn is_gas_or_fee_cap_error(message: &str) -> bool {
-    message.contains("exceeds max_gas") || message.contains("exceeds cap")
+pub(crate) fn is_gas_or_fee_cap_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if matches!(
+            error.downcast_ref::<EthError>(),
+            Some(EthError::GasLimitExceedsCap { .. } | EthError::MaxFeeExceedsCap { .. })
+        ) {
+            return true;
+        }
+        current = error.source();
+    }
+    false
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -1367,7 +1373,7 @@ mod tests {
         capped.caps.max_fee_per_gas = Some(100);
         let error = gas_fees(&client, &capped).await.expect_err("cap");
         assert!(
-            error.to_string().contains("exceeds cap"),
+            matches!(error, EthError::MaxFeeExceedsCap { .. }) && is_gas_or_fee_cap_error(&error),
             "{}",
             ErrorChain(&error)
         );
