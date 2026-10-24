@@ -198,7 +198,15 @@ def comparisonCases : List (String × Snapshot × ClosureInput × String × Stri
       { segment with coordinate := ⟨tool.request, .authored 11⟩ }) ++ terminalRecords secondTool }
   let receiptSnapshot := { capturedSnapshot with ordering := (capturedSnapshot.tools.map fun fact =>
       window capturedSnapshot receiptClosure fact.tool) }
-  [ ("background_receipt_resource", receiptSnapshot, receiptClosure, "node", "workspace", "file.rs")
+  let notifiedHeaders := sequentialHeaders.map fun message =>
+    if message.header.id == 11 then
+      { message with header := { message.header with request := some 702 }, blocks := [.text ⟨⟨4000 + tool.id, 0⟩, .full⟩] }
+    else message
+  let notifiedClosure := input notifiedHeaders
+  let notifiedSnapshot := { capturedSnapshot with ordering := (capturedSnapshot.tools.map fun fact =>
+      window capturedSnapshot notifiedClosure fact.tool) }
+  [ ("background_completion_reference", notifiedSnapshot, notifiedClosure, "node", "workspace", "file.rs")
+  , ("background_receipt_resource", receiptSnapshot, receiptClosure, "node", "workspace", "file.rs")
   , ("sequential_resource", capturedSnapshot, input sequentialHeaders, "node", "workspace", "file.rs")
   , ("other_resource", capturedSnapshot, input sequentialHeaders, "node", "workspace", "other.rs")
   , ("other_source", capturedSnapshot, input sequentialHeaders, "other-node", "workspace", "file.rs")

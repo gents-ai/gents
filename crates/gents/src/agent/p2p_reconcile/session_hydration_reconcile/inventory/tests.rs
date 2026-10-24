@@ -612,15 +612,20 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
 
 #[tokio::test]
 async fn canonical_terminal_publications_order_real_inventory_rows() {
-    check_real_inventory_chronology(false).await;
+    check_real_inventory_chronology(false, false).await;
 }
 
 #[tokio::test]
 async fn background_receipt_cannot_order_real_inventory_rows() {
-    check_real_inventory_chronology(true).await;
+    check_real_inventory_chronology(true, false).await;
 }
 
-async fn check_real_inventory_chronology(background: bool) {
+#[tokio::test]
+async fn completion_notification_orders_real_inventory_rows() {
+    check_real_inventory_chronology(true, true).await;
+}
+
+async fn check_real_inventory_chronology(background: bool, notify: bool) {
     use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     let contracts: serde_json::Value = tokio::task::spawn_blocking(
         gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
@@ -634,7 +639,9 @@ async fn check_real_inventory_chronology(background: bool) {
         .iter()
         .find(|case| {
             case["name"]
-                == if background {
+                == if notify {
+                    "background_completion_reference"
+                } else if background {
                     "background_receipt_resource"
                 } else {
                     "sequential_resource"
@@ -663,6 +670,21 @@ async fn check_real_inventory_chronology(background: bool) {
             .unwrap());
     }
     first.complete("first retained output").await.unwrap();
+    if notify {
+        crate::background_completion::append_background_tool_completion(
+            &node,
+            first.session_id(),
+            &request.request().request_id,
+            first.doc_id().unwrap(),
+            "write_file",
+            "completed",
+            "first retained output",
+            None,
+            crate::lifecycle::RequestHopCause::Continuation,
+        )
+        .await
+        .unwrap();
+    }
     retain_fork_fixture_capture(&node, &first, "repeated.rs").await;
     let mut second = publish_accepted_on_claimed_request(
         node.clone(),

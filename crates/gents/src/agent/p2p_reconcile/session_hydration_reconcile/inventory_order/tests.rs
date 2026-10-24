@@ -134,6 +134,22 @@ fn message(value: &Value, selected: &Value) -> TranscriptMessageRow {
                     })
                     .collect(),
             },
+            "text" => {
+                let payload = &block["payload"];
+                MessageBlock::Text {
+                    text: gents_protocol::output::PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id: document(&payload["reference"]["close_id"]),
+                            stream: payload["reference"]["stream"]
+                                .as_u64()
+                                .unwrap()
+                                .try_into()
+                                .unwrap(),
+                        },
+                        presentation: gents_protocol::output::PayloadPresentation::Full,
+                    },
+                }
+            }
             other => panic!("unknown modeled block {other}"),
         })
         .collect();
@@ -444,6 +460,6 @@ fn generated_orders_use_canonical_publication_observations() {
             .as_array()
             .unwrap()
             .len(),
-        5
+        6
     );
 }
