@@ -613,6 +613,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "native")]
     #[test]
     fn typed_chat_and_missing_final_usage_follow_the_executable_model() {
         let snapshot: serde_json::Value =
