@@ -57,6 +57,12 @@ where
         agent_connection_fingerprint(agent_config),
         &agent_config.model_name,
         agent_config.profile_id.as_deref(),
+        agent_config.openai_wire_api == OpenAiWireApi::ChatCompletions
+            && (agent_config.backend_provider_kind == BackendProviderKind::XaiGrokOAuth
+                || (agent_config.backend_provider_kind == BackendProviderKind::OpenAiCompatible
+                    && crate::inference_setup::is_xai_api_endpoint(
+                        &agent_config.backend_endpoint,
+                    ))),
     )
 }
 

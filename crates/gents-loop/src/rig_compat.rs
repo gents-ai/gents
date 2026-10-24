@@ -615,6 +615,36 @@ mod tests {
 
     #[cfg(feature = "native")]
     #[test]
+    fn typed_responses_usage_preserves_missing_and_optional_details() {
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+        for (name, wire) in [
+            (
+                "wire_chat",
+                serde_json::json!({"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":64},"output_tokens_details":{"reasoning_tokens":5}}}),
+            ),
+            (
+                "wire_responses_no_details",
+                serde_json::json!({"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}),
+            ),
+            ("wire_missing_final", serde_json::json!({"usage":null})),
+        ] {
+            let case = snapshot["provider_usage_cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            let expected: gents_protocol::usage::TokenUsage =
+                serde_json::from_value(case["observations"][0].clone()).unwrap();
+            let raw: rig::providers::openai::responses_api::streaming::StreamingCompletionResponse =
+                serde_json::from_value(wire).unwrap();
+            assert_eq!(super::observed_token_usage(&raw), expected, "{name}");
+        }
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
     fn typed_chat_and_missing_final_usage_follow_the_executable_model() {
         let snapshot: serde_json::Value =
             serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
