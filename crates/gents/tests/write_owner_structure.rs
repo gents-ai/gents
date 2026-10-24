@@ -1573,7 +1573,6 @@ fn ambient_context_counts_statics_outside_test_items() {
 const ANYHOW_ALLOWLIST: &[&str] = &[
     "apps/gents-desktop/src-tauri/src/bin/bridge_runner.rs",
     "apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs",
-    "apps/gents-desktop/src-tauri/src/bridge/windows.rs",
     "apps/gents-desktop/src-tauri/src/runner/live_fixture.rs",
     "apps/gents-desktop/src-tauri/src/runner/live_fixture/agent.rs",
     "apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs",

@@ -15,6 +15,16 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
 const TABBING_IDENTIFIER: &str = "com.source-inc.gents.views";
 static NEXT_WINDOW: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum WindowsBridgeError {
+    #[error(transparent)]
+    Tauri(#[from] tauri::Error),
+    #[error("finish setup before opening another view")]
+    SetupIncomplete,
+}
+
+type Result<T, E = WindowsBridgeError> = std::result::Result<T, E>;
+
 struct NativeWindowState {
     setup_complete: AtomicBool,
     new_tab: MenuItem<tauri::Wry>,
@@ -139,14 +149,16 @@ fn focused_window(app: &AppHandle) -> Option<WebviewWindow> {
         .find(|window| window.is_focused().unwrap_or(false))
 }
 
-pub fn handle_menu(app: &AppHandle, action: &str) -> tauri::Result<()> {
+pub fn handle_menu(app: &AppHandle, action: &str) -> Result<()> {
     if matches!(action, "new-tab" | "new-window") {
         create_window(app, action == "new-tab")?;
     } else if let Some(window) = focused_window(app) {
         // the page owns its zoom, so it is remembered with the viewer's
         // other preferences and reaches the other windows from there
         if let Some(step) = action.strip_prefix("zoom-") {
-            return app.emit_to(window.label(), "zoom", step);
+            return app
+                .emit_to(window.label(), "zoom", step)
+                .map_err(WindowsBridgeError::from);
         }
         with_native_window(&window, |native| match action {
             "detach-tab" => native.moveTabToNewWindow(None),
@@ -159,15 +171,13 @@ pub fn handle_menu(app: &AppHandle, action: &str) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn create_window(app: &AppHandle, tab: bool) -> tauri::Result<WebviewWindow> {
+pub fn create_window(app: &AppHandle, tab: bool) -> Result<WebviewWindow> {
     if !app
         .state::<NativeWindowState>()
         .setup_complete
         .load(Ordering::Acquire)
     {
-        return Err(tauri::Error::Anyhow(anyhow::anyhow!(
-            "finish setup before opening another view"
-        )));
+        return Err(WindowsBridgeError::SetupIncomplete);
     }
     let parent = focused_window(app);
     let mut config = app.config().app.windows[0].clone();
@@ -200,14 +210,11 @@ pub fn create_window(app: &AppHandle, tab: bool) -> tauri::Result<WebviewWindow>
     Ok(window)
 }
 
-pub fn detach(window: &WebviewWindow) -> tauri::Result<()> {
+pub fn detach(window: &WebviewWindow) -> Result<()> {
     with_native_window(window, |native| native.moveTabToNewWindow(None))
 }
 
-fn with_native_window<T>(
-    window: &WebviewWindow,
-    action: impl FnOnce(&NSWindow) -> T,
-) -> tauri::Result<T> {
+fn with_native_window<T>(window: &WebviewWindow, action: impl FnOnce(&NSWindow) -> T) -> Result<T> {
     // Native callbacks only; the Tauri window retains its NSWindow.
     assert!(objc2::MainThreadMarker::new().is_some());
     let pointer = window.ns_window()?;

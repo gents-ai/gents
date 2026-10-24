@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents::config_client::ConfigAccess;
+use gents::config_client::{ConfigAccess, ConfigClientError};
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
 use gents_desktop_core::local_runtime::DesktopInitSummary;
@@ -35,6 +35,24 @@ use self::workspace::seed_runner_node_home;
 
 const DEFAULT_DEPLOYMENT_LABEL: &str = "Fleet E2E Agent";
 const DEFAULT_NODE_NAME: &str = "fleet-e2e-agent";
+
+#[derive(Debug, thiserror::Error)]
+enum LiveFixtureError {
+    #[error("live operator GraphQL {endpoint} did not expose node {node_did}: {response}")]
+    OperatorNodeMissing {
+        endpoint: String,
+        node_did: String,
+        response: serde_json::Value,
+    },
+    #[error(
+        "live operator GraphQL {endpoint} was not ready: {}",
+        ErrorChain(error)
+    )]
+    OperatorUnavailable {
+        endpoint: String,
+        error: ConfigClientError,
+    },
+}
 
 pub(crate) struct LiveBridgeFixture {
     tempdir: Mutex<Option<tempfile::TempDir>>,
@@ -459,7 +477,10 @@ where
         .block_on(future))
 }
 
-async fn wait_for_operator_graphql(endpoint: &str, node_did: &str) -> Result<()> {
+async fn wait_for_operator_graphql(
+    endpoint: &str,
+    node_did: &str,
+) -> std::result::Result<(), LiveFixtureError> {
     let access = ConfigAccess::graphql(endpoint);
     let escaped_did = escape_graphql_string(node_did);
     let query =
@@ -479,15 +500,17 @@ async fn wait_for_operator_graphql(endpoint: &str, node_did: &str) -> Result<()>
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
             Ok(response) => {
-                anyhow::bail!(
-                    "live operator GraphQL {endpoint} did not expose node {node_did}: {response}"
-                );
+                return Err(LiveFixtureError::OperatorNodeMissing {
+                    endpoint: endpoint.to_owned(),
+                    node_did: node_did.to_owned(),
+                    response,
+                });
             }
             Err(error) => {
-                anyhow::bail!(
-                    "live operator GraphQL {endpoint} was not ready: {}",
-                    ErrorChain(&error)
-                );
+                return Err(LiveFixtureError::OperatorUnavailable {
+                    endpoint: endpoint.to_owned(),
+                    error,
+                });
             }
         }
     }

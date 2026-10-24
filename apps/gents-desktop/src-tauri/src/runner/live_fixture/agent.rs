@@ -27,6 +27,14 @@ pub(super) enum AgentError {
     CredentialSource,
     #[error(transparent)]
     Backend(#[from] gents::backend_registry::BackendRegistryError),
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error("timed out waiting for NodeReadiness {node_did} to reach process_state={expected_process_state}; last={last:?}")]
+    ProcessStateTimeout {
+        node_did: String,
+        expected_process_state: String,
+        last: Option<gents_protocol::node_readiness::NodeReadinessProcessState>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -255,7 +263,7 @@ async fn wait_for_runtime_process_state(
     node: &gents::defra_node::EmbeddedNode,
     node_did: &str,
     expected_process_state: &str,
-) -> Result<()> {
+) -> std::result::Result<(), AgentError> {
     let escaped_node_did = escape_graphql_string(node_did);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -286,9 +294,11 @@ async fn wait_for_runtime_process_state(
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "timed out waiting for NodeReadiness {node_did} to reach process_state={expected_process_state}; last={process_state:?}"
-            );
+            return Err(AgentError::ProcessStateTimeout {
+                node_did: node_did.to_owned(),
+                expected_process_state: expected_process_state.to_owned(),
+                last: process_state,
+            });
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

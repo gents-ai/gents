@@ -1,10 +1,11 @@
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::ExitStatus;
+use std::process::{ExitCode, ExitStatus};
 
 use anyhow::Result;
 use clap::Parser;
 use gents_desktop_core::client::DesktopPaths;
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Parser)]
 #[command(version)]
@@ -51,8 +52,19 @@ pub(crate) enum ClientHostError {
     HostExited { status: ExitStatus },
 }
 
+/// Prints the error with its source chain to stderr and exits non-zero.
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {}", ErrorChain(error.as_ref()));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let args = Args::parse();
     if args.describe {
         use gents_desktop_bridge::host::protocol;

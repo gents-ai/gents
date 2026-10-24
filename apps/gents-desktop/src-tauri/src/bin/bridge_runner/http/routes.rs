@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
@@ -144,6 +144,26 @@ enum RouteError {
     RequestIdRequired,
     #[error("{message}")]
     DesktopCommand { message: String },
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    CanonicalRows(#[from] gents::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+    #[error("retained reasoning request lookup returned no rows")]
+    RetainedRequestMissing,
+    #[error("expected one exact physical request")]
+    RetainedRequestNotExact,
+    #[error("request omitted physical _docID")]
+    RequestDocIdMissing,
+    #[error("retained reasoning segment lookup returned no rows")]
+    RetainedSegmentsMissing,
+    #[error("provider source lacks one exact closure")]
+    ProviderSourceClosure,
+    #[error("AgentToolCall query returned no data")]
+    AgentToolCallNoData,
+    #[error("failed to query AgentToolCall: {}", ErrorChain(error.as_ref()))]
+    AgentToolCallQuery { error: Box<RouteError> },
 }
 
 pub(super) async fn handle_request(
@@ -811,7 +831,7 @@ async fn retained_provider_reasoning(
     node_did: &str,
     session_id: &str,
     request_id: &str,
-) -> Result<RetainedProviderReasoning> {
+) -> std::result::Result<RetainedProviderReasoning, RouteError> {
     use gents::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::{
         reconstruction::{reconstruct_stream, ObservedSegment},
@@ -835,12 +855,14 @@ async fn retained_provider_reasoning(
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
         .and_then(serde_json::Value::as_array)
-        .context("retained reasoning request lookup returned no rows")?;
-    anyhow::ensure!(requests.len() == 1, "expected one exact physical request");
+        .ok_or(RouteError::RetainedRequestMissing)?;
+    if requests.len() != 1 {
+        return Err(RouteError::RetainedRequestNotExact);
+    }
     let request_doc_id = requests[0]
         .get("_docID")
         .and_then(serde_json::Value::as_str)
-        .context("request omitted physical _docID")?
+        .ok_or(RouteError::RequestDocIdMissing)?
         .to_owned();
     let physical = gents::graphql::escape_graphql_string(&request_doc_id);
     let segment_query = format!(
@@ -857,7 +879,7 @@ async fn retained_provider_reasoning(
         .as_ref()
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
-        .context("retained reasoning segment lookup returned no rows")?;
+        .ok_or(RouteError::RetainedSegmentsMissing)?;
     let rows = values
         .iter()
         .map(decode_output_segment_row)
@@ -881,7 +903,9 @@ async fn retained_provider_reasoning(
             .iter()
             .filter(|row| row.segment.close.is_some())
             .collect::<Vec<_>>();
-        anyhow::ensure!(closes.len() == 1, "provider source lacks one exact closure");
+        if closes.len() != 1 {
+            return Err(RouteError::ProviderSourceClosure);
+        }
         let SourceClose::Closed { stream_bytes, .. } = closes[0].segment.close.as_ref().unwrap()
         else {
             continue;
@@ -922,7 +946,7 @@ async fn retained_provider_reasoning(
 async fn operations_snapshot_response(
     core: Arc<ClientCore>,
     request: DesktopOperationsSnapshotRequest,
-) -> Result<DesktopOperationsSnapshot> {
+) -> std::result::Result<DesktopOperationsSnapshot, RouteError> {
     let native_executors = gents::native_executor_status::active_native_executors()
         .into_iter()
         .map(|executor| NativeExecutorStatusView {
@@ -934,9 +958,11 @@ async fn operations_snapshot_response(
             age_ms: executor.age_ms,
         })
         .collect();
-    let tool_call_rows = fetch_background_tool_calls(&core)
-        .await
-        .map_err(|error| anyhow::anyhow!("failed to query AgentToolCall: {error}"))?;
+    let tool_call_rows = fetch_background_tool_calls(&core).await.map_err(|error| {
+        RouteError::AgentToolCallQuery {
+            error: Box::new(error),
+        }
+    })?;
     let liveness = RuntimeLivenessView {
         expired_processing_count: 0,
         requests: Vec::new(),
@@ -957,7 +983,9 @@ async fn operations_snapshot_response(
     })
 }
 
-async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolCallRow>, String> {
+async fn fetch_background_tool_calls(
+    core: &Arc<ClientCore>,
+) -> std::result::Result<Vec<ToolCallRow>, RouteError> {
     let query = r#"
         query {
             AgentToolCall(
@@ -980,12 +1008,9 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
 
     let response =
         gents::graphql::graphql_with_transaction_retry(core.node(), query, "AgentToolCall query")
-            .await
-            .map_err(|error| ErrorChain(&error).to_string())?;
+            .await?;
 
-    let data = response
-        .data
-        .ok_or_else(|| "AgentToolCall query returned no data".to_string())?;
+    let data = response.data.ok_or(RouteError::AgentToolCallNoData)?;
     let rows = data
         .get("AgentToolCall")
         .and_then(|value| value.as_array())
