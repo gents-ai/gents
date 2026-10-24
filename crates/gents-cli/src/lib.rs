@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use clap::Parser;
 use gents::defra_node::NodeBuilder;
 use serde::de::DeserializeOwned;
@@ -54,6 +54,82 @@ use graphql_access::*;
 use home_state::*;
 use request_helpers::*;
 use resolve_helpers::*;
+
+type Result<T, E = CliError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CliError {
+    #[error("resolving current directory")]
+    CurrentDir(#[source] std::io::Error),
+    #[error("resolving the gents executable")]
+    CurrentExe(#[source] std::io::Error),
+    #[error(transparent)]
+    NativeService(#[from] native_service::NativeServiceError),
+    #[error(transparent)]
+    NetworkSettings(#[from] network_settings::NetworkSettingsError),
+    #[error("provide at least one {flag}")]
+    NoFlagValues { flag: String },
+    #[error("--{field} must not be empty")]
+    EmptyField { field: String },
+    #[error("building HTTP request")]
+    BuildRequest(#[source] reqwest::Error),
+    #[error("sending {method} request to {url}")]
+    SendRequest {
+        method: reqwest::Method,
+        url: Box<reqwest::Url>,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("reading {method} response body from {url}")]
+    ReadBody {
+        method: reqwest::Method,
+        url: Box<reqwest::Url>,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("{method} {url} failed with {status}: {body}")]
+    HttpStatus {
+        method: reqwest::Method,
+        url: Box<reqwest::Url>,
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("decoding JSON response from {url}")]
+    DecodeJson {
+        url: Box<reqwest::Url>,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("dangerously overwriting {}", home.display())]
+    OverwriteHome {
+        home: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("refusing to dangerously overwrite an empty home path")]
+    EmptyHomePath,
+    #[error("resolving {}", home.display())]
+    ResolveHome {
+        home: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("refusing to dangerously overwrite {} (the filesystem root)", home.display())]
+    FilesystemRoot { home: PathBuf },
+    #[error("refusing to dangerously overwrite {}: the user home directory cannot be determined, so it cannot be shown not to be inside the home", home.display())]
+    UserHomeUndetermined { home: PathBuf },
+    #[error("refusing to dangerously overwrite {}: the user home directory {} cannot be resolved, so it cannot be shown not to be inside the home", home.display(), user_home.display())]
+    UserHomeUnresolved {
+        home: PathBuf,
+        user_home: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("refusing to dangerously overwrite {}: it resolves to {}, which is or contains the user home directory; pass a dedicated gents home instead", home.display(), resolved.display())]
+    ContainsUserHome { home: PathBuf, resolved: PathBuf },
+    #[error("{} is not a directory", home.display())]
+    NotDirectory { home: PathBuf },
+}
 
 const DEFAULT_NODE_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
@@ -393,7 +469,7 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 ];
 pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
-pub fn run_cli() -> Result<()> {
+pub fn run_cli() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_WORKER_STACK_SIZE)
@@ -402,7 +478,7 @@ pub fn run_cli() -> Result<()> {
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
-async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
+async fn async_main(runtime: tokio::runtime::Handle) -> anyhow::Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
         Command::NativeFsRunner(args) => {
@@ -434,9 +510,11 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args, runtime).await,
         Command::Service { command } => {
-            tokio::task::spawn_blocking(move || service_command(command))
-                .await
-                .context("running the service command")?
+            Ok(
+                tokio::task::spawn_blocking(move || service_command(command))
+                    .await
+                    .context("running the service command")??,
+            )
         }
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
@@ -489,7 +567,7 @@ fn service_command(command: ServiceCommand) -> Result<()> {
     let home = absolutize(resolve_home_dir(home.as_deref()))?;
     let executable = match executable {
         Some(path) => absolutize(path)?,
-        None => std::env::current_exe().context("resolving the gents executable")?,
+        None => std::env::current_exe().map_err(CliError::CurrentExe)?,
     };
     let config = NativeServiceConfig::new(home, executable)?;
     let home = config.home.clone();
@@ -520,7 +598,7 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
         Ok(path)
     } else {
         Ok(std::env::current_dir()
-            .context("resolving current directory")?
+            .map_err(CliError::CurrentDir)?
             .join(path))
     }
 }
@@ -534,7 +612,9 @@ pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Resu
         .collect::<BTreeSet<_>>();
 
     if values.is_empty() {
-        anyhow::bail!("provide at least one {flag_name}");
+        return Err(CliError::NoFlagValues {
+            flag: flag_name.to_owned(),
+        });
     }
 
     Ok(values.into_iter().collect())
@@ -545,7 +625,10 @@ where
     T: DeserializeOwned,
 {
     let (url, body) = http_send_bytes(request).await?;
-    serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
+    serde_json::from_slice(&body).map_err(|source| CliError::DecodeJson {
+        url: Box::new(url),
+        source,
+    })
 }
 
 pub(crate) async fn http_send(request: reqwest::RequestBuilder) -> Result<()> {
@@ -554,23 +637,33 @@ pub(crate) async fn http_send(request: reqwest::RequestBuilder) -> Result<()> {
 
 async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::Url, Vec<u8>)> {
     let (client, request) = request.build_split();
-    let request = request.context("building HTTP request")?;
+    let request = request.map_err(CliError::BuildRequest)?;
     let method = request.method().clone();
     let url = request.url().clone();
     let response = client
         .execute(request)
         .await
-        .with_context(|| format!("sending {method} request to {url}"))?;
+        .map_err(|source| CliError::SendRequest {
+            method: method.clone(),
+            url: Box::new(url.clone()),
+            source,
+        })?;
     let status = response.status();
     let body = response
         .bytes()
         .await
-        .with_context(|| format!("reading {method} response body from {url}"))?;
+        .map_err(|source| CliError::ReadBody {
+            method: method.clone(),
+            url: Box::new(url.clone()),
+            source,
+        })?;
     if !status.is_success() {
-        anyhow::bail!(
-            "{method} {url} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
+        return Err(CliError::HttpStatus {
+            method,
+            url: Box::new(url),
+            status,
+            body: String::from_utf8_lossy(&body).into_owned(),
+        });
     }
     Ok((url, body.to_vec()))
 }
@@ -578,7 +671,7 @@ async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::U
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
-) -> Result<(ConfigAccess, PathBuf)> {
+) -> anyhow::Result<(ConfigAccess, PathBuf)> {
     let home_dir = resolve_home_dir(home);
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
@@ -619,7 +712,7 @@ pub(crate) async fn resolve_config_access(
 pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
-) -> Result<NodeBuilder> {
+) -> anyhow::Result<NodeBuilder> {
     gents::storage_backend::reject_legacy_store(data_dir)?;
     let key = gents::store_key::open_home_store_key(home_dir, data_dir).await?;
     Ok(gents::store_key::persistent_builder(data_dir, &key)?)
@@ -628,7 +721,7 @@ pub(crate) async fn persistent_node_builder(
 pub(crate) async fn persistent_node_builder_with_stored_identity(
     home_dir: &Path,
     data_dir: &Path,
-) -> Result<NodeBuilder> {
+) -> anyhow::Result<NodeBuilder> {
     let config = read_init_config(home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
             "gents home {} is not initialized; run `gents init --home {}` first",
@@ -645,7 +738,9 @@ pub(crate) async fn persistent_node_builder_with_stored_identity(
 pub(crate) fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        anyhow::bail!("--{field} must not be empty");
+        return Err(CliError::EmptyField {
+            field: field.to_owned(),
+        });
     }
     Ok(trimmed)
 }
@@ -660,8 +755,10 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
 /// `home` must come from [`overwritable_home`]; the held store lock is kept so
 /// a runtime cannot take the store while it is wiped.
 pub(crate) fn dangerously_overwrite_home(home: &Path, keep: &Path) -> Result<()> {
-    remove_tree_except(home, keep)
-        .with_context(|| format!("dangerously overwriting {}", home.display()))
+    remove_tree_except(home, keep).map_err(|source| CliError::OverwriteHome {
+        home: home.to_path_buf(),
+        source,
+    })
 }
 
 pub(crate) fn overwritable_home(
@@ -669,48 +766,48 @@ pub(crate) fn overwritable_home(
     user_home: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
     if home_dir.as_os_str().is_empty() {
-        anyhow::bail!("refusing to dangerously overwrite an empty home path");
+        return Err(CliError::EmptyHomePath);
     }
     let home = match fs::canonicalize(home_dir) {
         Ok(home) => home,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("resolving {}", home_dir.display()))
+        Err(source) => {
+            return Err(CliError::ResolveHome {
+                home: home_dir.to_path_buf(),
+                source,
+            })
         }
     };
     if home.parent().is_none() {
-        anyhow::bail!(
-            "refusing to dangerously overwrite {} (the filesystem root)",
-            home_dir.display()
-        );
+        return Err(CliError::FilesystemRoot {
+            home: home_dir.to_path_buf(),
+        });
     }
     let Some(user_home) = user_home.filter(|path| !path.as_os_str().is_empty()) else {
-        anyhow::bail!(
-            "refusing to dangerously overwrite {}: the user home directory cannot be determined, so it cannot be shown not to be inside the home",
-            home_dir.display()
-        );
+        return Err(CliError::UserHomeUndetermined {
+            home: home_dir.to_path_buf(),
+        });
     };
-    let user_home = fs::canonicalize(user_home).with_context(|| {
-        format!(
-            "refusing to dangerously overwrite {}: the user home directory {} cannot be resolved, so it cannot be shown not to be inside the home",
-            home_dir.display(),
-            user_home.display()
-        )
+    let user_home = fs::canonicalize(user_home).map_err(|source| CliError::UserHomeUnresolved {
+        home: home_dir.to_path_buf(),
+        user_home: user_home.to_path_buf(),
+        source,
     })?;
     if user_home.starts_with(&home) {
-        anyhow::bail!(
-            "refusing to dangerously overwrite {}: it resolves to {}, which is or contains the user home directory; pass a dedicated gents home instead",
-            home_dir.display(),
-            home.display()
-        );
+        return Err(CliError::ContainsUserHome {
+            home: home_dir.to_path_buf(),
+            resolved: home,
+        });
     }
     if !home.is_dir() {
-        anyhow::bail!("{} is not a directory", home_dir.display());
+        return Err(CliError::NotDirectory {
+            home: home_dir.to_path_buf(),
+        });
     }
     Ok(Some(home))
 }
 
-fn remove_tree_except(dir: &Path, keep: &Path) -> Result<()> {
+fn remove_tree_except(dir: &Path, keep: &Path) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();

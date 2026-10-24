@@ -1,7 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use gents_desktop_core::client::ClientCore;
 
 use super::super::types::MailboxItemView;
+use super::util::BridgeCommandError;
 
 pub fn list_mailbox(core: &ClientCore) -> Vec<MailboxItemView> {
     let requester = core.node_identity().did();
@@ -14,22 +15,25 @@ pub fn list_mailbox(core: &ClientCore) -> Vec<MailboxItemView> {
         .collect()
 }
 
-pub fn start_mailbox_request(core: &ClientCore, item_id: &str) -> Result<MailboxItemView> {
+pub fn start_mailbox_request(
+    core: &ClientCore,
+    item_id: &str,
+) -> Result<MailboxItemView, BridgeCommandError> {
     let requester = core.node_identity().did();
     let snapshot = core.store().snapshot();
     let row = snapshot
         .mailbox_items
         .iter()
         .find(|row| row.doc_id == item_id)
-        .context("MailboxItem not found")?;
+        .ok_or(BridgeCommandError::MailboxItemNotFound)?;
     if row.requester_did != requester {
-        bail!("only requester_did may act on a MailboxItem");
+        return Err(BridgeCommandError::MailboxRequesterMismatch);
     }
     if row.status != "open" {
-        bail!("MailboxItem is no longer open");
+        return Err(BridgeCommandError::MailboxItemClosed);
     }
     if !matches!(row.action.as_str(), "start_request" | "write_document") {
-        bail!("MailboxItem action does not open a compose surface");
+        return Err(BridgeCommandError::MailboxActionNotComposable);
     }
     Ok(MailboxItemView::from(row))
 }
@@ -40,11 +44,11 @@ pub(crate) fn question_reply_content(
     session_id: Option<&str>,
     node_did: &str,
     answer: &gents_protocol::mailbox_question::MailboxQuestionAnswer,
-) -> Result<String> {
+) -> Result<String, BridgeCommandError> {
     let item_id = item_id
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .context("an answer requires causedBySourceDocId")?;
+        .ok_or(BridgeCommandError::AnswerRequiresItem)?;
     let item = start_mailbox_request(core, item_id)?;
     question_reply_for_item(&item, session_id, node_did, answer)
 }
@@ -54,15 +58,15 @@ fn question_reply_for_item(
     session_id: Option<&str>,
     node_did: &str,
     answer: &gents_protocol::mailbox_question::MailboxQuestionAnswer,
-) -> Result<String> {
+) -> Result<String, BridgeCommandError> {
     if item.kind != "ask" || item.action != "start_request" {
-        bail!("MailboxItem is not a question");
+        return Err(BridgeCommandError::MailboxItemNotQuestion);
     }
     if item.session_id.is_none() || item.session_id.as_deref() != session_id.map(str::trim) {
-        bail!("an answer must be sent to the question's session");
+        return Err(BridgeCommandError::AnswerSessionMismatch);
     }
     if item.target_node_did != node_did {
-        bail!("an answer must be sent to the agent that asked");
+        return Err(BridgeCommandError::AnswerAgentMismatch);
     }
     let question = gents_protocol::mailbox_question::MailboxQuestion::from_payload(
         item.payload.as_deref().unwrap_or_default(),

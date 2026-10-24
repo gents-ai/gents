@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -19,11 +19,25 @@ use super::protocol::{
 };
 use super::ClientHost;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ConnectionError {
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("client attachment stopped")]
+    Stopped,
+    #[error("client output closed")]
+    OutputClosed(#[source] tokio::sync::mpsc::error::SendError<HostMessage>),
+    #[error("client notification exceeds the transport limit")]
+    NotificationTooLarge,
+}
+
+type Result<T, E = ConnectionError> = std::result::Result<T, E>;
+
 pub(super) async fn serve<S>(
     host: Arc<ClientHost>,
     stream: S,
     stop: CancellationToken,
-) -> Result<()>
+) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -70,7 +84,7 @@ where
     let writer_stop = local_stop.clone();
     let (out, mut replies) = mpsc::channel::<HostMessage>(MAX_PENDING_CALLS);
     let writer = tokio::spawn(async move {
-        let result: Result<()> = async {
+        let result: anyhow::Result<()> = async {
             while let Some(message) = replies.recv().await {
                 tokio::time::timeout(Duration::from_secs(30), sink.send(pack(message)?))
                     .await
@@ -87,7 +101,7 @@ where
     let mut sequence = 0_u64;
     let approvals = Arc::new(super::approvals::AttachmentApprovals::default());
     let mut approval_changes = approvals.changes();
-    let result: Result<()> = async {
+    let result: anyhow::Result<()> = async {
         loop {
             tokio::select! {
                 _ = local_stop.cancelled() => break,
@@ -199,8 +213,8 @@ async fn publish(
     message: HostMessage,
 ) -> Result<()> {
     tokio::select! {
-        _ = stop.cancelled() => bail!("client attachment stopped"),
-        sent = out.send(message) => sent.context("client output closed"),
+        _ = stop.cancelled() => Err(ConnectionError::Stopped),
+        sent = out.send(message) => sent.map_err(ConnectionError::OutputClosed),
     }
 }
 
@@ -218,7 +232,7 @@ fn pack(message: HostMessage) -> Result<Bytes> {
             )),
         ))?
         .into()),
-        _ => bail!("client notification exceeds the transport limit"),
+        _ => Err(ConnectionError::NotificationTooLarge),
     }
 }
 

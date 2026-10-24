@@ -1202,7 +1202,7 @@ fn launch_reset_helper_with_timeout(
 ) -> Result<(), BridgeError> {
     use std::io::Read;
     use std::process::{Command, Stdio};
-    let launch = || -> anyhow::Result<()> {
+    let launch = || -> Result<(), ResetHelperError> {
         let mut command = Command::new(executable);
         command
             .args(["desktop", "reset", "--home"])
@@ -1213,7 +1213,7 @@ fn launch_reset_helper_with_timeout(
             .arg("--desktop-pid")
             .arg(std::process::id().to_string())
             .arg("--desktop-executable")
-            .arg(std::env::current_exe()?)
+            .arg(std::env::current_exe().map_err(ResetHelperError::CurrentExecutable)?)
             .env("GENTS_DESKTOP_HOME", desktop)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1221,7 +1221,7 @@ fn launch_reset_helper_with_timeout(
         if disposition == HomeResetDisposition::Delete {
             command.arg("--delete");
         }
-        let mut child = command.spawn()?;
+        let mut child = command.spawn().map_err(ResetHelperError::Spawn)?;
         let mut stdout = child.stdout.take().expect("piped reset stdout");
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
@@ -1232,11 +1232,26 @@ fn launch_reset_helper_with_timeout(
         if receive.recv_timeout(timeout) != Ok(true) {
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!("The reset helper could not prepare; your local state has not been retired. Run gents desktop reset to review and retry.");
+            return Err(ResetHelperError::NotPrepared);
         }
         Ok(())
     };
-    launch().map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
+    launch().map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        )
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ResetHelperError {
+    #[error(transparent)]
+    CurrentExecutable(std::io::Error),
+    #[error(transparent)]
+    Spawn(std::io::Error),
+    #[error("The reset helper could not prepare; your local state has not been retired. Run gents desktop reset to review and retry.")]
+    NotPrepared,
 }
 
 async fn ensure_home_not_served(home: &Path) -> Result<(), BridgeError> {

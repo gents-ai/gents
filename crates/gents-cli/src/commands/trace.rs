@@ -363,6 +363,7 @@ fn optional_scope_arg(field: &str, value: Option<String>) -> Result<Option<Strin
     value
         .map(|value| crate::require_non_empty(field, &value).map(ToOwned::to_owned))
         .transpose()
+        .map_err(anyhow::Error::from)
 }
 
 fn adapter_projection_kind(arg: TraceProjectionArg) -> AdapterProjectionKind {

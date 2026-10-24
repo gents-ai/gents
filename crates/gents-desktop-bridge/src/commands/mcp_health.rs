@@ -12,6 +12,7 @@ use gents_protocol::row::ToolServiceHealthStateRow;
 use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
+use super::util::BridgeCommandError;
 
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = core.selected_node_did() else {
@@ -64,22 +65,24 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<_, _>>()
-        .map_err(|error| anyhow!("parsing ToolServiceHealthState rows: {error}"))?;
+        .map_err(|error| BridgeCommandError::ParseHealthRows { error })?;
     // Twins of one service are not schema-unique; the order puts the
     // health checker's chosen row first.
     rows.dedup_by(|later, first| later.service_id == first.service_id);
 
-    rows.into_iter().map(view_from_row).collect()
+    Ok(rows
+        .into_iter()
+        .map(view_from_row)
+        .collect::<std::result::Result<_, _>>()?)
 }
 
-pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPServiceHealthView> {
+pub(crate) fn view_from_row(
+    row: ToolServiceHealthStateRow,
+) -> Result<MCPServiceHealthView, BridgeCommandError> {
     let display_state = ToolServiceHealthState::parse_opt(row.status.as_deref())
-        .ok_or_else(|| {
-            anyhow!(
-                "ToolServiceHealthState row for service_id={:?} has missing/unrecognized status {:?}",
-                row.service_id,
-                row.status
-            )
+        .ok_or_else(|| BridgeCommandError::HealthStatusUnrecognized {
+            service_id: row.service_id.clone(),
+            status: row.status.clone(),
         })?
         .project()
         .as_str()

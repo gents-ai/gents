@@ -21,6 +21,14 @@ use super::backend::LiveBackendConfig;
 use super::workspace::seed_repo_workspace;
 use super::DEFAULT_DEPLOYMENT_LABEL;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum AgentError {
+    #[error("live backend must select one credential source")]
+    CredentialSource,
+    #[error(transparent)]
+    Backend(#[from] gents::backend_registry::BackendRegistryError),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LiveAgentDocs {
     pub(crate) agent_id: String,
@@ -205,10 +213,10 @@ fn live_backend_candidate(
     node_did: &str,
     backend_id: &str,
     backend: &LiveBackendConfig,
-) -> Result<InferenceBackend> {
+) -> std::result::Result<InferenceBackend, AgentError> {
     use gents::document_config::BackendAuth;
     let auth = match (&backend.api_key, &backend.api_key_env_var) {
-        (Some(_), Some(_)) => anyhow::bail!("live backend must select one credential source"),
+        (Some(_), Some(_)) => return Err(AgentError::CredentialSource),
         (Some(key), None) => BackendAuth::ApiKey { key: key.clone() },
         (None, Some(variable)) => BackendAuth::Environment {
             variable: variable.clone(),

@@ -9,7 +9,7 @@ mod http;
 use std::io::Write;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
@@ -45,6 +45,12 @@ struct RunnerArgs {
     agent_target_api_key: Option<String>,
     #[arg(long)]
     agent_target_api_key_env_var: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum BridgeRunnerError {
+    #[error("reading bridge runner stdin")]
+    ReadStdin(#[source] std::io::Error),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,10 +110,10 @@ async fn run(args: RunnerArgs) -> Result<()> {
     let result = wait_for_shutdown_signal().await;
     server.stop().await;
     fixture.shutdown().await?;
-    result
+    Ok(result?)
 }
 
-async fn wait_for_shutdown_signal() -> Result<()> {
+async fn wait_for_shutdown_signal() -> Result<(), BridgeRunnerError> {
     let mut stdin = tokio::io::stdin();
     let mut buffer = [0_u8; 1];
     loop {
@@ -115,7 +121,7 @@ async fn wait_for_shutdown_signal() -> Result<()> {
             Ok(0) => return Ok(()),
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error).context("reading bridge runner stdin"),
+            Err(error) => return Err(BridgeRunnerError::ReadStdin(error)),
         }
     }
 }

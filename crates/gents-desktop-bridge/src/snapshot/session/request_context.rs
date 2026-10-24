@@ -1,5 +1,21 @@
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum SnapshotSessionError {
+    #[error("session InferenceCall response omitted its result array")]
+    SessionRowsMissing,
+    #[error("page {collection} response omitted its result array")]
+    PageRowsMissing { collection: &'static str },
+    #[error("page AgentMessage row has no request anchor")]
+    MessageWithoutAnchor,
+    #[error("InferenceCall request identity does not match its scoped AgentRequest")]
+    RequestIdentityMismatch,
+    #[error("InferenceCall accounting row has no {field}")]
+    MissingAccountingField { field: &'static str },
+    #[error("decoding context_accounting_json: {error}")]
+    DecodeAccounting { error: serde_json::Error },
+}
+
 pub(super) async fn load_latest_session_request_context(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
@@ -44,15 +60,23 @@ pub(super) async fn load_latest_session_request_context(
         node_did = gents::graphql::escape_graphql_string(node_did),
     );
     let data = access.execute(&query).await?;
+    Ok(decode_latest_session_request_context(
+        &data,
+        &request_bindings,
+    )?)
+}
+
+fn decode_latest_session_request_context(
+    data: &serde_json::Value,
+    request_bindings: &std::collections::BTreeMap<String, String>,
+) -> Result<Option<LoadedRequestContext>, SnapshotSessionError> {
     let rows = data
         .pointer("/data/InferenceCall")
         .and_then(serde_json::Value::as_array)
         .map(Vec::as_slice)
-        .ok_or_else(|| {
-            anyhow::anyhow!("session InferenceCall response omitted its result array")
-        })?;
+        .ok_or(SnapshotSessionError::SessionRowsMissing)?;
     for row in rows {
-        validated_call_request_identity(row, &request_bindings)?;
+        validated_call_request_identity(row, request_bindings)?;
     }
     decode_latest_request_context(rows)
 }
@@ -99,10 +123,16 @@ pub(super) async fn load_session_request_context_history(
         session_id = gents::graphql::escape_graphql_string(session_id),
     );
     let data = access.execute(&query).await?;
-    let result = |collection: &str| {
+    Ok(decode_request_context_history(&data)?)
+}
+
+fn decode_request_context_history(
+    data: &serde_json::Value,
+) -> Result<Vec<LoadedRequestContext>, SnapshotSessionError> {
+    let result = |collection: &'static str| {
         data.pointer(&format!("/data/{collection}"))
             .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| anyhow::anyhow!("page {collection} response omitted its result array"))
+            .ok_or(SnapshotSessionError::PageRowsMissing { collection })
     };
     let mut anchors = std::collections::BTreeMap::<&str, i64>::new();
     for row in result("AgentMessage")? {
@@ -111,7 +141,7 @@ pub(super) async fn load_session_request_context_history(
                 .and_then(serde_json::Value::as_str),
             row.get("sequence").and_then(serde_json::Value::as_i64),
         ) else {
-            anyhow::bail!("page AgentMessage row has no request anchor");
+            return Err(SnapshotSessionError::MessageWithoutAnchor);
         };
         anchors
             .entry(doc_id)
@@ -127,7 +157,7 @@ pub(super) async fn load_session_request_context_history(
                 .request_doc_id
                 .as_deref()
                 .and_then(|doc_id| anchors.get(doc_id).copied());
-            Ok(context)
+            Ok::<_, SnapshotSessionError>(context)
         })
         .collect()
 }
@@ -135,20 +165,19 @@ pub(super) async fn load_session_request_context_history(
 fn validated_call_request_identity(
     row: &serde_json::Value,
     request_bindings: &std::collections::BTreeMap<String, String>,
-) -> anyhow::Result<(String, String)> {
-    let required = |field: &str| {
+) -> Result<(String, String), SnapshotSessionError> {
+    let required = |field: &'static str| {
         row.get(field)
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .map(str::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no {field}"))
+            .ok_or(SnapshotSessionError::MissingAccountingField { field })
     };
     let request_doc_id = required("request_doc_id")?;
     let request_id = required("request_id")?;
-    anyhow::ensure!(
-        request_bindings.get(&request_doc_id) == Some(&request_id),
-        "InferenceCall request identity does not match its scoped AgentRequest"
-    );
+    if request_bindings.get(&request_doc_id) != Some(&request_id) {
+        return Err(SnapshotSessionError::RequestIdentityMismatch);
+    }
     Ok((request_doc_id, request_id))
 }
 
@@ -160,7 +189,7 @@ fn has_context_accounting(row: &serde_json::Value) -> bool {
 
 pub(super) fn decode_latest_request_context(
     rows: &[serde_json::Value],
-) -> anyhow::Result<Option<LoadedRequestContext>> {
+) -> Result<Option<LoadedRequestContext>, SnapshotSessionError> {
     rows.iter()
         .filter(|row| has_context_accounting(row))
         .max_by(|left, right| {
@@ -200,13 +229,15 @@ pub(super) fn decode_latest_request_context(
         .transpose()
 }
 
-fn decode_request_context_row(row: &serde_json::Value) -> anyhow::Result<LoadedRequestContext> {
-    let required_string = |field: &str| {
+fn decode_request_context_row(
+    row: &serde_json::Value,
+) -> Result<LoadedRequestContext, SnapshotSessionError> {
+    let required_string = |field: &'static str| {
         row.get(field)
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .map(str::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no {field}"))
+            .ok_or(SnapshotSessionError::MissingAccountingField { field })
     };
     let encoded = required_string("context_accounting_json")?;
     Ok(LoadedRequestContext {
@@ -217,13 +248,13 @@ fn decode_request_context_row(row: &serde_json::Value) -> anyhow::Result<LoadedR
         call_sequence: row
             .get("call_seq")
             .and_then(serde_json::Value::as_i64)
-            .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no call_seq"))?,
+            .ok_or(SnapshotSessionError::MissingAccountingField { field: "call_seq" })?,
         queued_at: row
             .get("queued_at")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
         accounting: serde_json::from_str(&encoded)
-            .map_err(|error| anyhow::anyhow!("decoding context_accounting_json: {error}"))?,
+            .map_err(|error| SnapshotSessionError::DecodeAccounting { error })?,
     })
 }
 

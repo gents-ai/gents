@@ -1,8 +1,29 @@
-use anyhow::{Context, Result};
 use gents::config::ReasoningEffort;
-use gents::document_config::{InferenceExecution, InferenceProfile, InferenceSampling};
+use gents::document_config::{
+    DocumentConfigError, InferenceExecution, InferenceProfile, InferenceSampling,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+type Result<T, E = InferenceError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum InferenceError {
+    #[error("reading GENTS_DESKTOP_LIVE_INFERENCE")]
+    ReadEnv(#[source] std::env::VarError),
+    #[error("parsing GENTS_DESKTOP_LIVE_INFERENCE")]
+    Parse(#[source] serde_json::Error),
+    #[error("GENTS_DESKTOP_LIVE_INFERENCE must be a JSON object")]
+    NotObject,
+    #[error("decoding GENTS_DESKTOP_LIVE_INFERENCE")]
+    Decode(#[source] serde_json::Error),
+    #[error("GENTS_DESKTOP_LIVE_INFERENCE sampling")]
+    Sampling(#[source] Box<DocumentConfigError>),
+    #[error("GENTS_DESKTOP_LIVE_INFERENCE profile")]
+    Profile(#[source] Box<DocumentConfigError>),
+    #[error("GENTS_DESKTOP_LIVE_INFERENCE execution")]
+    Execution(#[source] Box<DocumentConfigError>),
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -31,20 +52,18 @@ impl LiveInferenceSettings {
         match std::env::var("GENTS_DESKTOP_LIVE_INFERENCE") {
             Ok(raw) => Self::parse(Some(&raw)),
             Err(std::env::VarError::NotPresent) => Self::parse(None),
-            Err(error) => Err(error).context("reading GENTS_DESKTOP_LIVE_INFERENCE"),
+            Err(error) => Err(InferenceError::ReadEnv(error)),
         }
     }
 
     fn parse(raw: Option<&str>) -> Result<Self> {
         let settings: Self = match raw {
             Some(raw) => {
-                let value: Value =
-                    serde_json::from_str(raw).context("parsing GENTS_DESKTOP_LIVE_INFERENCE")?;
-                anyhow::ensure!(
-                    value.is_object(),
-                    "GENTS_DESKTOP_LIVE_INFERENCE must be a JSON object"
-                );
-                serde_json::from_value(value).context("decoding GENTS_DESKTOP_LIVE_INFERENCE")?
+                let value: Value = serde_json::from_str(raw).map_err(InferenceError::Parse)?;
+                if !value.is_object() {
+                    return Err(InferenceError::NotObject);
+                }
+                serde_json::from_value(value).map_err(InferenceError::Decode)?
             }
             None => Self::default(),
         };
@@ -54,20 +73,20 @@ impl LiveInferenceSettings {
             ..Default::default()
         }
         .validate()
-        .context("GENTS_DESKTOP_LIVE_INFERENCE sampling")?;
+        .map_err(|error| InferenceError::Sampling(Box::new(error)))?;
         InferenceProfile {
             reasoning_effort: settings.reasoning_effort,
             max_output_tokens: Some(settings.max_output_tokens),
             ..Default::default()
         }
         .validate()
-        .context("GENTS_DESKTOP_LIVE_INFERENCE profile")?;
+        .map_err(|error| InferenceError::Profile(Box::new(error)))?;
         InferenceExecution {
             max_turns: Some(settings.max_turns),
             ..Default::default()
         }
         .validate()
-        .context("GENTS_DESKTOP_LIVE_INFERENCE execution")?;
+        .map_err(|error| InferenceError::Execution(Box::new(error)))?;
         Ok(settings)
     }
 

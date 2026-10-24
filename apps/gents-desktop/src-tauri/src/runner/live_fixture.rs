@@ -445,7 +445,7 @@ fn non_empty_clone(value: &str) -> Option<String> {
 
 /// Drives a live fixture to completion on the runtime it owns. Callers are
 /// synchronous process or test entry points outside any runtime.
-pub(crate) fn run_on_live_runtime<F>(future: F) -> Result<F::Output>
+pub(crate) fn run_on_live_runtime<F>(future: F) -> std::io::Result<F::Output>
 where
     F: std::future::Future,
 {
@@ -524,7 +524,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use anyhow::{bail, Context, Result};
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
     use axum::extract::State;
     use axum::http::{header, StatusCode};
     use axum::response::{IntoResponse, Response};
@@ -546,7 +546,7 @@ mod tests {
     const MODEL_NAME: &str = "desktop-live-skill-mock";
 
     #[test]
-    fn live_fixture_replicates_skill_create_delete_to_node() -> Result<()> {
+    fn live_fixture_replicates_skill_create_delete_to_node() -> TestResult<()> {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start(MODEL_NAME, "ok").await?;
@@ -559,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> Result<()> {
+    fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> TestResult<()> {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded").await?;
@@ -571,7 +571,7 @@ mod tests {
         })?
     }
 
-    async fn skill_create_delete_case(fixture: &LiveBridgeFixture) -> Result<()> {
+    async fn skill_create_delete_case(fixture: &LiveBridgeFixture) -> TestResult<()> {
         let node_did = fixture.node_did().to_string();
         let skill_id = "desktop-crud-skill";
         let skill_body = "CRUD skill body should replicate to the node.";
@@ -583,7 +583,9 @@ mod tests {
         .await?;
         wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id)
             .await
-            .context("skill did not replicate to the node after create")?;
+            .map_err(|error| {
+                format!("skill did not replicate to the node after create: {error}")
+            })?;
 
         delete_skill_config(
             fixture.desktop_core().as_ref(),
@@ -595,14 +597,16 @@ mod tests {
         .await?;
         wait_for_remote_skill_absent(fixture.remote_core().as_ref(), skill_id)
             .await
-            .context("skill remained queryable on the node after delete")?;
+            .map_err(|error| {
+                format!("skill remained queryable on the node after delete: {error}")
+            })?;
         Ok(())
     }
 
     async fn slash_skill_chat_case(
         fixture: &LiveBridgeFixture,
         mock: &MockChatEndpoint,
-    ) -> Result<()> {
+    ) -> TestResult<()> {
         let node_did = fixture.node_did().to_string();
         let agent_id = default_agent_id_for_node(&node_did);
         let skill_id = "desktop-review";
@@ -618,7 +622,7 @@ mod tests {
         let generation_before_bind =
             wait_for_remote_runtime_generation(fixture.remote_core().as_ref(), &node_did)
                 .await
-                .context("runtime status missing before skill binding")?;
+                .map_err(|error| format!("runtime status missing before skill binding: {error}"))?;
         bind_skill_to_agent_context(fixture, &node_did, &agent_id, skill_id).await?;
         wait_for_remote_context_skill_ids(fixture.remote_core().as_ref(), &agent_id, &[skill_id])
             .await?;
@@ -628,7 +632,9 @@ mod tests {
             generation_before_bind,
         )
         .await
-        .context("node runtime did not reconcile the skill binding before chat submit")?;
+        .map_err(|error| {
+            format!("node runtime did not reconcile the skill binding before chat submit: {error}")
+        })?;
 
         let release = HeldResponseRelease(mock.held_response.clone());
         let initial = send_chat_message(
@@ -743,7 +749,7 @@ mod tests {
             None,
         )
         .await
-        .context("desktop session snapshot missing after skill chat submit")?;
+        .ok_or("desktop session snapshot missing after skill chat submit")?;
         assert_eq!(
             session.latest_request_id.as_deref(),
             Some(initial.request_id.as_str()),
@@ -767,7 +773,7 @@ mod tests {
             .queued_turns
             .iter()
             .find(|turn| turn.request_id == submitted.request_id)
-            .context("desktop session snapshot did not expose the queued turn")?;
+            .ok_or("desktop session snapshot did not expose the queued turn")?;
         assert_eq!(queued_turn.content, task);
         assert_eq!(queued_turn.selected_skill_ids, vec![skill_id.to_string()]);
         drop(release);
@@ -782,7 +788,7 @@ mod tests {
         let input = request
             .input
             .as_ref()
-            .context("replicated request is missing canonical input")?;
+            .ok_or("replicated request is missing canonical input")?;
         assert_eq!(input.selected_skill_ids, vec![skill_id.to_string()]);
         assert_eq!(
             input
@@ -837,7 +843,8 @@ mod tests {
         node_did: &str,
         agent_id: &str,
         skill_id: &str,
-    ) -> Result<()> {
+    ) -> TestResult<()> {
+        use anyhow::Context;
         use gents::collection::Collection;
         use gents::config_client::{
             apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
@@ -888,7 +895,7 @@ mod tests {
         core: &ClientCore,
         agent_id: &str,
         expected_skill_ids: &[&str],
-    ) -> Result<()> {
+    ) -> TestResult<()> {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             core.refresh_store().await?;
@@ -915,15 +922,16 @@ mod tests {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                bail!(
+                return Err(format!(
                     "remote context for agent {agent_id} has skill IDs {observed:?}, expected {expected_skill_ids:?}"
-                );
+                )
+                .into());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
-    async fn wait_for_remote_skill(core: &ClientCore, skill_id: &str) -> Result<()> {
+    async fn wait_for_remote_skill(core: &ClientCore, skill_id: &str) -> TestResult<()> {
         wait_for_condition("remote Skill create", Duration::from_secs(60), || async {
             core.refresh_store().await?;
             Ok(core
@@ -936,7 +944,7 @@ mod tests {
         .await
     }
 
-    async fn wait_for_remote_skill_absent(core: &ClientCore, skill_id: &str) -> Result<()> {
+    async fn wait_for_remote_skill_absent(core: &ClientCore, skill_id: &str) -> TestResult<()> {
         wait_for_condition("remote Skill delete", Duration::from_secs(60), || async {
             core.refresh_store().await?;
             Ok(!core
@@ -952,7 +960,7 @@ mod tests {
     async fn wait_for_remote_request(
         core: &ClientCore,
         request_id: &str,
-    ) -> Result<AgentRequestRow> {
+    ) -> TestResult<AgentRequestRow> {
         wait_for_row("remote AgentRequest", Duration::from_secs(60), || async {
             core.refresh_store().await?;
             Ok(core
@@ -976,14 +984,14 @@ mod tests {
     async fn query_runtime_observation(
         core: &ClientCore,
         node_did: &str,
-    ) -> Result<Option<RemoteRuntimeObservation>> {
+    ) -> TestResult<Option<RemoteRuntimeObservation>> {
         core.refresh_store().await?;
         let store = core.store().snapshot();
         let Some(readiness_row) = store.node_readiness(node_did) else {
             return Ok(None);
         };
         let readiness = decode_node_readiness_snapshot(readiness_row, node_did)
-            .map_err(|reason| anyhow::anyhow!("invalid node readiness: {reason:?}"))?;
+            .map_err(|reason| format!("invalid node readiness: {reason:?}"))?;
         let Some(runtime) = store.latest_runtime(node_did) else {
             return Ok(None);
         };
@@ -995,7 +1003,10 @@ mod tests {
         }))
     }
 
-    async fn wait_for_remote_runtime_generation(core: &ClientCore, node_did: &str) -> Result<u64> {
+    async fn wait_for_remote_runtime_generation(
+        core: &ClientCore,
+        node_did: &str,
+    ) -> TestResult<u64> {
         wait_for_row(
             "remote authoritative runtime generation",
             Duration::from_secs(60),
@@ -1009,7 +1020,7 @@ mod tests {
         core: &ClientCore,
         node_did: &str,
         previous_generation: u64,
-    ) -> Result<()> {
+    ) -> TestResult<()> {
         wait_for_condition(
             "remote authoritative runtime generation advance",
             Duration::from_secs(90),
@@ -1018,13 +1029,14 @@ mod tests {
                     return Ok(false);
                 };
                 if observation.last_reconcile_result.as_deref() == Some("error") {
-                    bail!(
+                    return Err(format!(
                         "runtime reconcile failed while waiting for skill binding: {}",
                         observation
                             .last_reconcile_error
                             .as_deref()
                             .unwrap_or("unknown error")
-                    );
+                    )
+                    .into());
                 }
                 Ok(observation.active_generation > previous_generation
                     && observation.reconcile_phase.as_deref() == Some("idle"))
@@ -1048,7 +1060,7 @@ mod tests {
     async fn wait_for_captured_chat_request(
         mock: &MockChatEndpoint,
         needle: &str,
-    ) -> Result<Value> {
+    ) -> TestResult<Value> {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
             let captured = mock.captured_chat_requests();
@@ -1059,9 +1071,10 @@ mod tests {
                 return Ok(request.clone());
             }
             if Instant::now() >= deadline {
-                bail!(
+                return Err(format!(
                     "timed out waiting for mock chat request containing {needle:?}; captured={captured:?}"
-                );
+                )
+                .into());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1071,10 +1084,10 @@ mod tests {
         label: &'static str,
         timeout: Duration,
         mut check: F,
-    ) -> Result<T>
+    ) -> TestResult<T>
     where
         F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<Option<T>>>,
+        Fut: std::future::Future<Output = TestResult<Option<T>>>,
     {
         let deadline = Instant::now() + timeout;
         loop {
@@ -1082,7 +1095,7 @@ mod tests {
                 return Ok(row);
             }
             if Instant::now() >= deadline {
-                bail!("timed out waiting for {label}");
+                return Err(format!("timed out waiting for {label}").into());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1092,10 +1105,10 @@ mod tests {
         label: &'static str,
         timeout: Duration,
         mut check: F,
-    ) -> Result<()>
+    ) -> TestResult<()>
     where
         F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<bool>>,
+        Fut: std::future::Future<Output = TestResult<bool>>,
     {
         let deadline = Instant::now() + timeout;
         loop {
@@ -1103,7 +1116,7 @@ mod tests {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                bail!("timed out waiting for {label}");
+                return Err(format!("timed out waiting for {label}").into());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1149,11 +1162,11 @@ mod tests {
     }
 
     impl MockChatEndpoint {
-        async fn start(model_name: &str, final_text: &str) -> Result<Self> {
+        async fn start(model_name: &str, final_text: &str) -> TestResult<Self> {
             Self::start_inner(model_name, final_text, None).await
         }
 
-        async fn start_with_held_prompt(model_name: &str, final_text: &str) -> Result<Self> {
+        async fn start_with_held_prompt(model_name: &str, final_text: &str) -> TestResult<Self> {
             Self::start_inner(
                 model_name,
                 final_text,
@@ -1166,7 +1179,7 @@ mod tests {
             model_name: &str,
             final_text: &str,
             held_response: Option<Arc<tokio::sync::Semaphore>>,
-        ) -> Result<Self> {
+        ) -> TestResult<Self> {
             let captured = Arc::new(Mutex::new(Vec::new()));
             let state = Arc::new(MockState {
                 model_name: model_name.to_string(),
@@ -1176,7 +1189,7 @@ mod tests {
             });
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
                 .await
-                .context("mock chat endpoint failed to bind a port")?;
+                .map_err(|error| format!("mock chat endpoint failed to bind a port: {error}"))?;
             let port = listener.local_addr()?.port();
             let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
             let app = Router::new()

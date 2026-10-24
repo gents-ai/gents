@@ -217,7 +217,12 @@ fn replaceable_out(
         out.display()
     );
     let resolved = crate::overwritable_home(out, user_home)
-        .map_err(|error| anyhow::anyhow!("refusing to replace --out: {error:#}"))?
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "refusing to replace --out: {}",
+                gents_protocol::error_chain::ErrorChain(&error)
+            )
+        })?
         .with_context(|| format!("{} does not exist", out.display()))?;
     let contains =
         |path: &Path| std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved));

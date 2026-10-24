@@ -6,6 +6,24 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+#[derive(Debug, thiserror::Error)]
+enum MaintenanceError {
+    #[error("missing browser clear receipt path")]
+    MissingClearReceipt,
+    #[error("missing browser check receipt path")]
+    MissingCheckReceipt,
+    #[error("unexpected browser clear argument")]
+    UnexpectedClearArgument,
+    #[cfg(all(target_os = "macos", feature = "native-e2e", debug_assertions))]
+    #[error("missing fixture receipt path")]
+    MissingFixtureReceipt,
+    #[cfg(all(target_os = "macos", feature = "native-e2e", debug_assertions))]
+    #[error("unexpected fixture argument")]
+    UnexpectedFixtureArgument,
+    #[error(transparent)]
+    BrowserData(#[from] gents_desktop_tauri_lib::browser_data::BrowserDataError),
+}
+
 fn main() {
     let mut args = std::env::args();
     let _program = args.next();
@@ -22,23 +40,22 @@ fn main() {
         let _ = tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .try_init();
-        let result = (|| -> anyhow::Result<()> {
-            let mut receipt = args
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("missing browser clear receipt path"))?;
+        let result = (|| -> Result<(), MaintenanceError> {
+            let mut receipt = args.next().ok_or(MaintenanceError::MissingClearReceipt)?;
             let check = receipt == "--check";
             if check {
-                receipt = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("missing browser check receipt path"))?;
+                receipt = args.next().ok_or(MaintenanceError::MissingCheckReceipt)?;
             }
-            anyhow::ensure!(args.next().is_none(), "unexpected browser clear argument");
+            if args.next().is_some() {
+                return Err(MaintenanceError::UnexpectedClearArgument);
+            }
             let receipt = std::path::Path::new(&receipt);
-            if check {
+            let result = if check {
                 gents_desktop_tauri_lib::browser_data::check_to_receipt(receipt)
             } else {
                 gents_desktop_tauri_lib::browser_data::clear_to_receipt(receipt)
-            }
+            };
+            Ok(result?)
         })();
         if let Err(error) = result {
             tracing::error!(%error, "browser data reset failed");
@@ -52,14 +69,15 @@ fn main() {
         let _ = tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .try_init();
-        let result = (|| -> anyhow::Result<()> {
-            let receipt = args
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("missing fixture receipt path"))?;
-            anyhow::ensure!(args.next().is_none(), "unexpected fixture argument");
-            gents_desktop_tauri_lib::browser_data::verify_isolated_clear(std::path::Path::new(
-                &receipt,
-            ))
+        let result = (|| -> Result<(), MaintenanceError> {
+            let receipt = args.next().ok_or(MaintenanceError::MissingFixtureReceipt)?;
+            if args.next().is_some() {
+                return Err(MaintenanceError::UnexpectedFixtureArgument);
+            }
+            let result = gents_desktop_tauri_lib::browser_data::verify_isolated_clear(
+                std::path::Path::new(&receipt),
+            );
+            Ok(result?)
         })();
         if let Err(error) = result {
             tracing::error!(%error, "isolated browser data fixture failed");
