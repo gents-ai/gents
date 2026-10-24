@@ -27,7 +27,7 @@ pub(crate) async fn load(
     let escaped = escape_graphql_string(request_id);
     let response = graphql_with_transaction_retry(
         node,
-        &format!("{{ PendingChatSubmission(filter: {{request_id: {{_eq: \"{escaped}\"}}}}, limit: 1) {{payload}} }}"),
+        &format!("{{ PendingChatSubmission(filter: {{request_id: {{_eq: \"{escaped}\"}}}}, limit: 2) {{payload}} }}"),
         "desktop.chat.load_submission",
     )
     .await?;
@@ -37,6 +37,7 @@ pub(crate) async fn load(
         .and_then(|data| data.get("PendingChatSubmission"))
         .and_then(serde_json::Value::as_array)
         .context("pending submission query omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "retained submission identity is ambiguous");
     rows.first()
         .map(|row| {
             let payload = row
@@ -45,21 +46,7 @@ pub(crate) async fn load(
                 .context("pending submission has no payload")?;
             let pending: UnresolvedSubmission =
                 serde_json::from_str(payload).context("decoding retained submission")?;
-            anyhow::ensure!(
-                pending.request_id == request_id
-                    && pending.request_id == pending.create.request_id
-                    && pending.node_did == pending.create.node_did
-                    && pending.session_id == pending.create.session_id
-                    && pending.result.request_id == pending.request_id
-                    && pending.result.node_did == pending.node_did
-                    && pending.result.session_id == pending.session_id
-                    && pending.mutation
-                        == pending
-                            .create
-                            .graphql_mutation()
-                            .map_err(anyhow::Error::msg)?,
-                "retained submission is inconsistent with its signed request"
-            );
+            pending.validate_binding(request_id)?;
             Ok(pending)
         })
         .transpose()
