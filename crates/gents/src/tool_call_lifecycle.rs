@@ -256,7 +256,7 @@ pub struct ToolCallLifecycle {
     /// Data writes a plugin tool returned beside its output; committed with a
     /// Completed terminal and discarded by any other.
     plugin_writes: Option<delivery::PluginToolWrites>,
-    file_changes: Option<crate::toolset::FileChanges>,
+    file_capture: Option<file_inventory::FileCapture>,
     /// Immutable physical provenance for dispatch, recovery, and completion routing.
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
@@ -353,7 +353,7 @@ impl ToolCallLifecycle {
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             plugin_writes: None,
-            file_changes: None,
+            file_capture: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: Some(accepted.tool_call_doc_id),
@@ -385,7 +385,15 @@ impl ToolCallLifecycle {
                 self.plugin_writes = Some(pending.clone());
             }
             if let Some(changes) = writes.downcast_ref::<crate::toolset::FileChanges>() {
-                self.file_changes = Some(changes.clone());
+                self.file_capture = Some(file_inventory::FileCapture::Images(changes.clone()));
+            }
+            if writes
+                .downcast_ref::<crate::toolset::VerifiedUnchanged>()
+                .is_some()
+            {
+                self.file_capture = Some(file_inventory::FileCapture::Unchanged {
+                    tool_call_doc_id: self.doc_id.clone(),
+                });
             }
         }
     }
@@ -423,7 +431,7 @@ impl ToolCallLifecycle {
             execution_generation: None,
             plugin_receipt: None,
             plugin_writes: None,
-            file_changes: None,
+            file_capture: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,
@@ -492,7 +500,7 @@ impl ToolCallLifecycle {
             execution_generation: None,
             plugin_receipt: None,
             plugin_writes: None,
-            file_changes: None,
+            file_capture: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,

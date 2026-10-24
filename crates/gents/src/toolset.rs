@@ -11,7 +11,7 @@ mod cli_tool;
 mod context_budget;
 pub mod edit_match;
 mod file_tools;
-pub(crate) use file_tools::change_capture::FileChanges;
+pub(crate) use file_tools::change_capture::{FileChanges, VerifiedUnchanged};
 mod goal;
 pub(crate) mod lsp;
 #[cfg(feature = "agent-memory")]

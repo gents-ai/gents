@@ -683,3 +683,73 @@ fn changed_inode_metadata_is_detected_with_unchanged_modification_time() {
     let after = file.metadata().unwrap();
     assert!(!image_metadata_unchanged(&before, &after).unwrap());
 }
+
+#[tokio::test]
+async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
+    use crate::toolset::file_tools::ReadFileTool;
+    use gents_loop::tool_call_lifecycle::runtime::{call_tool_managed, ToolOutcome};
+
+    let admission = published_admission(PublishedAdmissionOptions {
+        name: "readonly-capture-terminal".into(),
+        real_identity: true,
+        tool_name: Some("read_file".into()),
+        paired_client: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut call = admission.tool;
+    let doc_id = call.doc_id().unwrap().to_owned();
+    let root = tempfile::tempdir().unwrap();
+    let root_path = std::fs::canonicalize(root.path()).unwrap();
+    let path = root_path.join("source.txt");
+    std::fs::write(&path, "unchanged bytes\n").unwrap();
+    let tool = ReadFileTool::new(ToolContext::new(root_path, false).unwrap(), 4096);
+    let registry = LiveToolOutputRegistry::default();
+    let writer = registry.writer_for(doc_id.clone()).await;
+    let outcome = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
+        Default::default(), false,
+        call_tool_managed(&tool, serde_json::json!({"path": "source.txt", "raw_json": true}).to_string()),
+    ).await;
+    let ToolOutcome::Completed(output) = outcome else {
+        panic!("read failed: {outcome:?}")
+    };
+    assert!(!output.contains("verified_unchanged"));
+    call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
+    let mut replay = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        admission.node.clone(),
+        &doc_id,
+        &admission.node_did,
+        call.session_id(),
+        call.requester_did(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    replay.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
+    crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
+    crate::tool_call_lifecycle::file_inventory::fail_next_publication(&doc_id);
+    call.complete(&output).await.unwrap();
+    replay.complete(&output).await.unwrap();
+    let row = ConfigAccess::local(admission.node.clone()).execute(&format!(
+        "{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID }} ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID observation_doc_id request_doc_id verified_unchanged changes }} }}",
+        escape_graphql_string(&doc_id), escape_graphql_string(&doc_id),
+    )).await.unwrap()["data"].clone();
+    assert!(row["ToolFileChange"].as_array().unwrap().is_empty());
+    let rows = row["ToolFileInventory"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "retry and replay must retain one witness");
+    assert_eq!(rows[0]["verified_unchanged"], true);
+    assert_eq!(rows[0]["request_doc_id"], call.request_doc_id().unwrap());
+    assert!(rows[0]["observation_doc_id"].is_null());
+    assert!(rows[0]["changes"].is_null());
+    assert_eq!(std::fs::read(&path).unwrap(), b"unchanged bytes\n");
+
+    let failed = gents_loop::tool::ToolDyn::call_with_receipt(
+        &tool,
+        serde_json::json!({"path": "missing.txt"}).to_string(),
+    )
+    .await;
+    assert!(failed.result.is_err());
+    assert!(failed.deferred_writes.is_none());
+}

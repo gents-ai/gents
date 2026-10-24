@@ -103,7 +103,10 @@ async fn retain_file_changes(
     };
     super::file_inventory::retain_inventory(
         txn,
-        &observation_doc_id,
+        super::file_inventory::Metadata::Images {
+            observation_doc_id: &observation_doc_id,
+            changes,
+        },
         tool_call_doc_id,
         request_doc_id,
         &crate::session_origin::SessionScope {
@@ -111,7 +114,6 @@ async fn retain_file_changes(
             session_id: session_id.to_owned(),
             requester_did: requester_did.map(str::to_owned),
         },
-        changes,
     )
     .await?;
     Ok(())
@@ -1038,10 +1040,10 @@ impl ToolCallLifecycle {
             operation,
             fixture_now,
         } = options;
-        if self.file_changes.is_some() {
+        if self.file_capture.is_some() {
             anyhow::ensure!(
                 self.node.node_identity_did() == Some(self.node_did.as_str()),
-                "retaining file images requires the configured node identity"
+                "retaining file capture requires the configured node identity"
             );
         }
         let doc_id = self
@@ -1091,7 +1093,7 @@ impl ToolCallLifecycle {
             .clone()
             .filter(|_| fields.state == ToolCallState::Completed);
 
-        let file_changes = self.file_changes.clone();
+        let file_capture = self.file_capture.clone();
         let published = ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
@@ -1114,7 +1116,7 @@ impl ToolCallLifecycle {
                 let plugin_effect = plugin_effect.clone();
                 let presentation = presentation.clone();
                 let plugin_writes = plugin_writes.clone();
-                let file_changes = file_changes.clone();
+                let file_capture = file_capture.clone();
                 Box::pin(async move {
                     if tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME {
                         txn.contend_with_request_siblings();
@@ -1172,17 +1174,39 @@ impl ToolCallLifecycle {
                         .await
                         .map_err(plugin_writes_failed)?;
                     }
-                    if let (true, Some(changes)) = (published, &file_changes) {
-                        retain_file_changes(
-                            txn,
-                            &doc_id,
-                            &request_doc_id,
-                            &node_did,
-                            &session_id,
-                            requester_did.as_deref(),
-                            changes,
-                        )
-                        .await?;
+                    if let (true, Some(changes)) = (published, &file_capture) {
+                        match changes {
+                            super::file_inventory::FileCapture::Images(images) => {
+                                retain_file_changes(
+                                    txn,
+                                    &doc_id,
+                                    &request_doc_id,
+                                    &node_did,
+                                    &session_id,
+                                    requester_did.as_deref(),
+                                    images,
+                                )
+                                .await?
+                            }
+                            super::file_inventory::FileCapture::Unchanged { tool_call_doc_id } => {
+                                anyhow::ensure!(
+                                    tool_call_doc_id.as_deref() == Some(doc_id.as_str()),
+                                    "unchanged capture belongs to another physical tool"
+                                );
+                                super::file_inventory::retain_inventory(
+                                    txn,
+                                    super::file_inventory::Metadata::Unchanged,
+                                    &doc_id,
+                                    &request_doc_id,
+                                    &crate::session_origin::SessionScope {
+                                        node_did: node_did.clone(),
+                                        session_id: session_id.clone(),
+                                        requester_did: requester_did.clone(),
+                                    },
+                                )
+                                .await?;
+                            }
+                        }
                     }
                     Ok(published)
                 })

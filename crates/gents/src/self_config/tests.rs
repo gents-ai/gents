@@ -4620,9 +4620,20 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
 
 #[tokio::test]
 async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tools() {
-    let node = build_agent_node().await;
     let identity = node_identity("descendant-root-self-config");
     let owner = identity.did().to_string();
+    let storage = tempfile::tempdir().expect("node storage");
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .data_path(storage.path().join("data"))
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .expect("identity-bound node"),
+    );
+    crate::ensure_runtime_schemas(&node)
+        .await
+        .expect("runtime schemas");
     let seed_agent = "beh-test";
     crate::test_support::install_test_agent(&node, &owner, seed_agent).await;
     crate::upsert_node(&node, &owner, None, Some(seed_agent), true, None)
