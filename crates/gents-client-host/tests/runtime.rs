@@ -32,6 +32,8 @@ mod editor_goal_removal;
 mod editor_goal_replacement;
 #[path = "support/editor_history.rs"]
 mod editor_history;
+#[path = "support/editor_inventory.rs"]
+mod editor_inventory;
 #[path = "support/editor_related_work.rs"]
 mod editor_related_work;
 #[path = "support/editor_retry.rs"]
@@ -77,6 +79,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReviewPermissions,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorInventory,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWork,
@@ -97,6 +101,7 @@ impl Journey {
             Self::EditorRetry => Some("retry"),
             Self::EditorReview => Some("review"),
             Self::EditorReviewPermissions => Some("review-permissions"),
+            Self::EditorInventory => Some("review-inventory"),
             Self::EditorWorkspace => Some("workspace"),
             Self::EditorRelatedWork => Some("related-work"),
             Self::EditorRelatedWorkFailure => Some("related-work-failure"),
@@ -262,6 +267,32 @@ async fn editor_reviews_retained_file_images_without_reading_the_working_copy() 
             .join("\n")
         })?;
     copy_editor_evidence(temp.path(), "editor-review-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_pages_real_file_captures_across_reload_and_new_activity() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    if let Err(error) = exercise(temp.path(), Journey::EditorInventory).await {
+        let mut logs = Vec::new();
+        for name in [
+            "runtime.log",
+            "runtime.err",
+            "client-host.log",
+            "editor.log",
+        ] {
+            let contents = tokio::fs::read_to_string(temp.path().join(name))
+                .await
+                .unwrap_or_default();
+            logs.push(format!("{name}:\n{contents}"));
+        }
+        return Err(error.context(logs.join("\n")));
+    }
+    let root = temp.path().to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        copy_editor_evidence(&root, "editor-inventory-canonical.json")
+    })
+    .await?
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -486,6 +517,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             }
             if matches!(journey, Journey::EditorGoalRecovery) {
                 if let Some(action) = provider_goal_recovery.reply(request, &emitted) {
+                    return action;
+                }
+            }
+            if matches!(journey, Journey::EditorInventory) {
+                if let Some(action) = editor_inventory::reply(request) {
                     return action;
                 }
             }
@@ -1483,6 +1519,43 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
+    if matches!(journey, Journey::EditorInventory) {
+        editor_inventory::prepare(root).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        ensure!(
+            client
+                .call(id, "client_runtime_is_local", json!({"nodeDid":node_did}))
+                .await
+                == false,
+            "inventory acceptance must use the enrolled runtime"
+        );
+        id += 1;
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "review-inventory",
+        )
+        .await?;
+        let evidence = editor_inventory::verify(
+            &mut client,
+            &mut id,
+            &access,
+            root,
+            node_did,
+            session,
+            &client_did,
+            &identity,
+        )
+        .await?;
+        tokio::fs::write(
+            root.join("editor-inventory-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )
+        .await?;
+    }
     if matches!(
         journey,
         Journey::EditorReview | Journey::EditorReviewPermissions
@@ -1925,7 +1998,7 @@ async fn run_editor_journey(
         .arg(script)
         .arg(root)
         .arg(paths.root())
-        .arg(&host_binary)
+        .arg(host_binary)
         .arg(session)
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log))

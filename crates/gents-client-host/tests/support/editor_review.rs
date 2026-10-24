@@ -522,7 +522,7 @@ async fn wait_enrollment_arrival(access: &ConfigAccess, request: &str) -> Result
     .context("runtime did not observe reenrollment")?
 }
 
-async fn verify_model_receipt(
+pub(super) async fn verify_model_receipt(
     verifier: &dyn gents::NodeIdentity,
     row: &Value,
     demand: &gents_protocol::file_image_hydration::FileImageDemand,

@@ -4828,6 +4828,7 @@ dependencies = [
  "gents-protocol",
  "libc",
  "portable-pty",
+ "rapidhash",
  "serde",
  "serde_json",
  "tempfile",

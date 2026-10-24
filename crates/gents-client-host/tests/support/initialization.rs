@@ -124,6 +124,10 @@ mod tests {
         let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
         if role == "parent" {
             let mut holder = command(&root, "holder");
+            #[expect(
+                clippy::zombie_processes,
+                reason = "the probe parent must exit while its descendant retains output handles; the harness releases that descendant through a marker"
+            )]
             let _child = holder
                 .as_std_mut()
                 .stdin(Stdio::null())
