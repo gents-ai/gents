@@ -175,4 +175,27 @@ example : editCut editHistory "origin-1" = some 0 := by decide
 example : editCut editHistory "origin-4" = some 3 := by decide
 example : editCut editHistory "origin-3" = none := by decide
 
+structure EditForkCase where
+  name : String
+  requested : EditForkBinding
+  retained : ExistingEditFork
+
+def editForkBinding : EditForkBinding := ⟨scope, child, "origin-4"⟩
+
+def editForkCases : List EditForkCase :=
+  [ ⟨"new_destination", editForkBinding, .missing⟩
+  , ⟨"lost_reply_reuses_child", editForkBinding, .bound editForkBinding⟩
+  , ⟨"preexisting_unbound_child", editForkBinding, .unbound⟩
+  , ⟨"changed_anchor", { editForkBinding with messageKey := "origin-1" },
+      .bound editForkBinding⟩
+  , ⟨"changed_source", { editForkBinding with parent := { scope with session := 99 } },
+      .bound editForkBinding⟩
+  , ⟨"changed_child", { editForkBinding with child := { child with session := 99 } },
+      .bound editForkBinding⟩
+  , ⟨"foreign_requester", { editForkBinding with child := { child with requester := none } },
+      .missing⟩
+  , ⟨"foreign_node", { editForkBinding with child := { child with node := 99 } }, .missing⟩
+  , ⟨"same_source_and_child", { editForkBinding with child := scope }, .missing⟩
+  , ⟨"empty_anchor", { editForkBinding with messageKey := "" }, .missing⟩ ]
+
 end Conformance.SessionDocuments

@@ -188,6 +188,19 @@ private def forkJson (name : String) (source : SessionFork.History)
    ("published", (SessionFork.publish source scope target remap childKey cut authorization idle coherent).map
       historyJson |>.getD Json.null)]
 
+private def editForkBindingJson (binding : SessionFork.EditForkBinding) : Json := Json.mkObj
+  [("parent", scopeJson binding.parent), ("child", scopeJson binding.child),
+   ("message_key", toJson binding.messageKey)]
+
+private def editForkJson (witness : EditForkCase) : Json := Json.mkObj
+  [("name", toJson witness.name), ("requested", editForkBindingJson witness.requested),
+   ("retained_kind", toJson (match witness.retained with
+      | .missing => "missing" | .unbound => "unbound" | .bound _ => "bound")),
+   ("retained", match witness.retained with
+      | .bound binding => editForkBindingJson binding | _ => Json.null),
+   ("decision", toJson (match SessionFork.decideEditFork witness.requested witness.retained with
+      | .create => "create" | .reuse => "reuse" | .refuse => "refuse"))]
+
 private def editBlockName {α : Type} : CanonicalOutput.MessageBlock α → String
   | .text _ => "text"
   | .reasoning _ _ => "reasoning"
@@ -251,6 +264,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       selectionJson "foreign_agent" [old] 9 10 none,
       selectionJson "foreign_session" [old] 1 9 none]),
    ("edit_anchors", toJson (editAnchorCases.map editAnchorJson)),
+   ("edit_fork_bindings", toJson (editForkCases.map editForkJson)),
    ("fork", toJson [
       forkJson "exact_copy" history child 1 true true true,
       forkJson "empty_prefix" history child 0 true true true,

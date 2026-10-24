@@ -251,4 +251,68 @@ theorem copied_origin_message_is_retained (history : History) (message : Message
     exact ⟨message, hmessage, horigin⟩
   simpa [canDeleteOriginMessage, retentionDependencies, List.contains_eq_mem] using hmem
 
+/-- The caller saves the child identity before requesting an edit fork. The
+existing AgentSession owner persists its exact source-message binding with the
+child, in the same transaction as prefix publication. This is a creation fact,
+not an authorization grant or a second operation journal. -/
+structure EditForkBinding where
+  parent : AgentSession.Scope
+  child : AgentSession.Scope
+  messageKey : String
+  deriving DecidableEq, Repr
+
+def validEditForkBinding (binding : EditForkBinding) : Bool :=
+  decide (binding.parent.node = binding.child.node ∧
+    binding.parent.requester = binding.child.requester ∧
+    binding.parent.session ≠ binding.child.session) && !binding.messageKey.isEmpty
+
+inductive EditForkDecision where
+  | create | reuse | refuse
+  deriving DecidableEq, Repr
+
+inductive ExistingEditFork where
+  | missing | unbound | bound (binding : EditForkBinding)
+  deriving DecidableEq, Repr
+
+/-- The retained fact is read through the child's existing DID/ACP and exact
+scope owner. Only `create` may proceed to `editCut` and `publish`, retaining all
+their source authorization, coherence and idleness checks. Reuse does not read
+today's source transcript or repeat prefix copying: it returns the previously
+committed child. An unbound pre-existing child is never supplied as absence. -/
+def decideEditFork (requested : EditForkBinding)
+    (retained : ExistingEditFork) : EditForkDecision :=
+  if validEditForkBinding requested then
+    match retained with
+    | .missing => .create
+    | .unbound => .refuse
+    | .bound committed => if committed = requested then .reuse else .refuse
+  else .refuse
+
+theorem exact_retained_edit_reuses_child (requested : EditForkBinding)
+    (valid : validEditForkBinding requested = true) :
+    decideEditFork requested (.bound requested) = .reuse := by
+  simp [decideEditFork, valid]
+
+theorem conflicting_edit_binding_is_refused (requested committed : EditForkBinding)
+    (different : committed ≠ requested) :
+    decideEditFork requested (.bound committed) = .refuse := by
+  simp [decideEditFork, different]
+
+theorem retained_edit_never_copies_again (requested committed : EditForkBinding) :
+    decideEditFork requested (.bound committed) ≠ .create := by
+  simp only [decideEditFork]
+  split
+  · split <;> simp
+  · simp
+
+theorem invalid_edit_scope_is_refused (requested : EditForkBinding)
+    (retained : ExistingEditFork)
+    (invalid : validEditForkBinding requested = false) :
+    decideEditFork requested retained = .refuse := by
+  simp [decideEditFork, invalid]
+
+theorem unbound_child_is_not_replaced (requested : EditForkBinding) :
+    decideEditFork requested .unbound = .refuse := by
+  simp [decideEditFork]
+
 end SessionFork

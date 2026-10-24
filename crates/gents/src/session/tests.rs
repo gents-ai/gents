@@ -853,6 +853,90 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
 }
 
 #[tokio::test]
+async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
+    use crate::NodeIdentity as _;
+    const NODE: &str = "did:test:retained-edit-fork";
+    const SOURCE: &str = "retained-source";
+    const CHILD: &str = "retained-child";
+    let directory = tempfile::tempdir().unwrap();
+    let identity =
+        crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    let builder = || {
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .data_path(directory.path().join("data"))
+    };
+    let node = std::sync::Arc::new(builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_agent(&node, NODE, "retained-fork").await;
+    create_session_with_agent_id(&node, SOURCE, NODE, "retained-fork")
+        .await
+        .unwrap();
+    for sequence in 1..=3 {
+        let key = format!("retained-{sequence}");
+        import_history_observation(&node, &key, SOURCE, NODE, None, &key, &key, sequence, None)
+            .await;
+    }
+    let params = ForkParams {
+        source_session_id: SOURCE,
+        boundary: ForkBoundary::BeforeMessageKey("retained-3"),
+        caller_node_did: NODE,
+        caller_requester_did: None,
+        target_agent_id: None,
+    };
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    drop(fork_edit_on(&access, params.clone(), CHILD).await.unwrap());
+    crate::config_client::ConfigAccess::write_local(&node, "test.disable_fork_agent",
+        r#"mutation { update_Agent(filter: {node_did: {_eq: "did:test:retained-edit-fork"}, agent_id: {_eq: "retained-fork"}}, input: {enabled: false}) { _docID } }"#).await.unwrap();
+    let before = session_rewrite_rows(&node).await;
+    let history = load_history(&node, CHILD, NODE, None).await.unwrap();
+    assert_eq!(history.len(), 2);
+    drop(access);
+    node.shutdown().await;
+    drop(node);
+
+    let node = std::sync::Arc::new(builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    assert_eq!(
+        fork_edit_on(&access, params.clone(), CHILD).await.unwrap(),
+        CHILD
+    );
+    assert_eq!(session_rewrite_rows(&node).await, before);
+    assert_eq!(
+        load_history(&node, CHILD, NODE, None).await.unwrap(),
+        history
+    );
+    for changed in [
+        ForkParams {
+            boundary: ForkBoundary::BeforeMessageKey("retained-2"),
+            ..params.clone()
+        },
+        ForkParams {
+            source_session_id: "another-source",
+            ..params.clone()
+        },
+        ForkParams {
+            caller_requester_did: Some("did:test:foreign"),
+            ..params.clone()
+        },
+    ] {
+        assert!(fork_edit_on(&access, changed, CHILD).await.is_err());
+        assert_eq!(session_rewrite_rows(&node).await, before);
+    }
+    create_session_with_agent_id(&node, "unbound-child", NODE, "retained-fork")
+        .await
+        .unwrap();
+    let unbound_before = session_rewrite_rows(&node).await;
+    assert!(fork_edit_on(&access, params, "unbound-child")
+        .await
+        .is_err());
+    assert_eq!(session_rewrite_rows(&node).await, unbound_before);
+    drop(access);
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn fork_rolls_back_at_every_mutation_position() {
     const AGENT: &str = "did:test:fork-rollback";
     const SOURCE: &str = "fork-rollback-source";

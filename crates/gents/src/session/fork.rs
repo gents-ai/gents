@@ -16,8 +16,46 @@ use super::compaction_entries::{
 use super::history::sequence_message_key;
 use super::output::load_canonical_message_in_txn;
 use super::query::session_scope_filter;
-use super::sessions::{ensure_session_in_txn, load_agent_session_row_in_txn};
+use super::sessions::{
+    ensure_session_in_txn, load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
+};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::session_origin::SessionScope;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditForkBinding {
+    parent: SessionScope,
+    child: SessionScope,
+    message_key: String,
+}
+
+enum ExistingEditFork {
+    Missing,
+    Unbound,
+    Bound(EditForkBinding),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditForkDecision {
+    Create,
+    Reuse,
+    Refuse,
+}
+
+fn decide_edit_fork(requested: &EditForkBinding, retained: &ExistingEditFork) -> EditForkDecision {
+    if requested.parent.node_did != requested.child.node_did
+        || requested.parent.requester_did != requested.child.requester_did
+        || requested.parent.session_id == requested.child.session_id
+        || requested.message_key.is_empty()
+    {
+        return EditForkDecision::Refuse;
+    }
+    match retained {
+        ExistingEditFork::Missing => EditForkDecision::Create,
+        ExistingEditFork::Bound(committed) if committed == requested => EditForkDecision::Reuse,
+        ExistingEditFork::Unbound | ExistingEditFork::Bound(_) => EditForkDecision::Refuse,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum ForkBoundary<'a> {
@@ -92,6 +130,92 @@ pub async fn fork_on(
             let child = child.clone();
             let params = params.clone();
             Box::pin(async move { fork_in_txn(txn, &params, &child).await })
+        })
+        .await
+        .map_err(fork_error)
+}
+
+/// The caller retains `child` before this call. Prefix publication and its exact
+/// source binding commit together; a lost reply can therefore be recovered
+/// without copying the prefix again or requiring the source to remain idle.
+pub async fn fork_edit_on(
+    access: &ConfigAccess,
+    params: ForkParams<'_>,
+    child: &str,
+) -> Result<String, ForkError> {
+    let ForkBoundary::BeforeMessageKey(message_key) = params.boundary else {
+        return Err(fork_error(anyhow::anyhow!(
+            "an edit fork requires a canonical message key"
+        )));
+    };
+    if child.trim().is_empty() || params.target_agent_id.is_some() {
+        return Err(fork_error(anyhow::anyhow!(
+            "an edit fork requires a retained destination and the source agent"
+        )));
+    }
+    let child = child.to_owned();
+    let parent = SessionScope {
+        node_did: params.caller_node_did.to_owned(),
+        requester_did: params.caller_requester_did.map(str::to_owned),
+        session_id: params.source_session_id.to_owned(),
+    };
+    let requested = EditForkBinding {
+        child: SessionScope {
+            session_id: child.clone(),
+            ..parent.clone()
+        },
+        parent,
+        message_key: message_key.to_owned(),
+    };
+    access
+        .transact_write("session.edit_fork", |txn| {
+            let requested = requested.clone();
+            let params = params.clone();
+            let child = child.clone();
+            Box::pin(async move {
+                let retained =
+                    match load_agent_session_owner_in_txn(txn, params.caller_node_did, &child)
+                        .await?
+                    {
+                        None => ExistingEditFork::Missing,
+                        Some(row) => {
+                            let session = row.session;
+                            match session
+                                .provenance
+                                .and_then(|provenance| provenance.fork)
+                                .and_then(|fork| {
+                                    fork.before_message_key
+                                        .map(|key| (fork.source_session_id, key))
+                                }) {
+                                None => ExistingEditFork::Unbound,
+                                Some((source, key)) => {
+                                    let scope = SessionScope {
+                                        node_did: session.node_did,
+                                        session_id: session.session_id,
+                                        requester_did: session.requester_did,
+                                    };
+                                    ExistingEditFork::Bound(EditForkBinding {
+                                        parent: SessionScope {
+                                            session_id: source,
+                                            ..scope.clone()
+                                        },
+                                        child: scope,
+                                        message_key: key,
+                                    })
+                                }
+                            }
+                        }
+                    };
+                match decide_edit_fork(&requested, &retained) {
+                    EditForkDecision::Create => {
+                        Ok(fork_in_txn(txn, &params, &child).await?.session_id)
+                    }
+                    EditForkDecision::Reuse => Ok(child),
+                    EditForkDecision::Refuse => {
+                        anyhow::bail!("the retained fork destination has another source binding")
+                    }
+                }
+            })
         })
         .await
         .map_err(fork_error)
@@ -416,6 +540,10 @@ async fn fork_in_txn(
                 fork: Some(gents_protocol::session::SessionFork {
                     source_session_id: params.source_session_id.to_owned(),
                     at_user_turn,
+                    before_message_key: match params.boundary {
+                        ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
+                        ForkBoundary::UserTurn(_) => None,
+                    },
                 }),
                 ..Default::default()
             }),
@@ -500,6 +628,42 @@ mod tests {
                 expected,
                 "{case}"
             );
+        }
+    }
+
+    #[test]
+    fn generated_edit_fork_bindings_control_destination_reuse() {
+        fn scope(value: &Value) -> SessionScope {
+            SessionScope {
+                node_did: value["node"].as_u64().unwrap().to_string(),
+                session_id: value["session"].as_u64().unwrap().to_string(),
+                requester_did: value["requester"].as_u64().map(|id| id.to_string()),
+            }
+        }
+        fn binding(value: &Value) -> EditForkBinding {
+            EditForkBinding {
+                parent: scope(&value["parent"]),
+                child: scope(&value["child"]),
+                message_key: value["message_key"].as_str().unwrap().to_owned(),
+            }
+        }
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+            .session_document_cases
+            .edit_fork_bindings;
+        assert!(!cases.is_empty());
+        for case in cases {
+            let retained = match case["retained_kind"].as_str().unwrap() {
+                "missing" => ExistingEditFork::Missing,
+                "unbound" => ExistingEditFork::Unbound,
+                "bound" => ExistingEditFork::Bound(binding(&case["retained"])),
+                other => panic!("untranslated retained fork {other}"),
+            };
+            let actual = match decide_edit_fork(&binding(&case["requested"]), &retained) {
+                EditForkDecision::Create => "create",
+                EditForkDecision::Reuse => "reuse",
+                EditForkDecision::Refuse => "refuse",
+            };
+            assert_eq!(actual, case["decision"].as_str().unwrap(), "{case}");
         }
     }
 }
