@@ -2364,6 +2364,58 @@ Denies the desktop_provider_accounts_list command without any pre-configured sco
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-provider-recovery-apply`
+
+</td>
+<td>
+
+Enables the desktop_provider_recovery_apply command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-recovery-apply`
+
+</td>
+<td>
+
+Denies the desktop_provider_recovery_apply command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-provider-recovery-plan`
+
+</td>
+<td>
+
+Enables the desktop_provider_recovery_plan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-recovery-plan`
+
+</td>
+<td>
+
+Denies the desktop_provider_recovery_plan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-provider-usage-read`
 
 </td>

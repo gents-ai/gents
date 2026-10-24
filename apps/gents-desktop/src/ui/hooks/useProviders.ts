@@ -2,7 +2,7 @@ import { useCallback, useEffect } from "react";
 import { useStore } from "zustand";
 
 import type {
-  BackendUsageView,
+  AccountUsageView,
   InferenceProviderOption,
   ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
@@ -11,7 +11,7 @@ import { useApp } from "../app/AppContext";
 import { setupErrorMessage } from "../../lib/setupErrors";
 
 const NO_ACCOUNTS: readonly ProviderAccountView[] = [];
-const NO_USAGE: readonly BackendUsageView[] = [];
+const NO_USAGE: readonly AccountUsageView[] = [];
 const NO_PROVIDERS: readonly InferenceProviderOption[] = [];
 
 export function useAccounts(nodeDid: string) {

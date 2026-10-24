@@ -2239,6 +2239,32 @@ pub async fn set_goal_from_access(
         .await
 }
 
+/// An operator reset preference belongs to the observed Goal, including when
+/// another assignment replaces the session's Goal before the write arrives.
+pub async fn set_goal_auto_resume_from_access(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    expected_goal_id: &str,
+    enabled: bool,
+) -> Result<()> {
+    access
+        .transact_write("goal.set_auto_resume", |txn| {
+            Box::pin(async move {
+                let goal = load_canonical_goal_in_txn(txn, node_did, session_id)
+                    .await?
+                    .context("Goal no longer exists")?;
+                anyhow::ensure!(
+                    goal.goal_id == expected_goal_id,
+                    "Goal changed before its reset preference was saved"
+                );
+                set_goal_in_txn(txn, node_did, session_id, None, None, None, Some(enabled)).await?;
+                Ok(())
+            })
+        })
+        .await
+}
+
 pub async fn load_canonical_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,

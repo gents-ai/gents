@@ -295,7 +295,7 @@ async fn stopped_in_txn(
     node_did: &str,
     request: AgentRequestRow,
 ) -> Result<(ConfigReferences, AgentRequestRow, Option<FailedCall>)> {
-    let call = last_failed_call_in_txn(txn, &request.request_id).await?;
+    let call = last_failed_call_in_txn(txn, node_did, &request.request_id).await?;
     let references = ConfigReferences::load_in_txn(txn, node_did).await?;
     Ok((references, request, call))
 }
@@ -304,13 +304,15 @@ async fn stopped_in_txn(
 /// higher `attempt` can end before a later compaction call that stopped it.
 pub(crate) async fn last_failed_call_in_txn(
     txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
     request_id: &str,
 ) -> Result<Option<FailedCall>> {
     let request_id = escape_graphql_string(request_id);
+    let node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             InferenceCall(
-                filter: {{ request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "failed" }} }},
+                filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "failed" }} }},
                 order: [{{ ended_at: DESC }}, {{ attempt: DESC }}],
                 limit: 1
             ) {{ backend_id agent_id call_kind failure_reason queued_at started_at }}

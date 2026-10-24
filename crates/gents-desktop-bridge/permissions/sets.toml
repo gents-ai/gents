@@ -223,6 +223,8 @@ permissions = [
   "allow-desktop-provider-account-rename",
   "allow-desktop-provider-account-remove",
   "allow-desktop-provider-usage-read",
+  "allow-desktop-provider-recovery-plan",
+  "allow-desktop-provider-recovery-apply",
 ]
 
 [[set]]

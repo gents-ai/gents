@@ -6,7 +6,7 @@ import { newestWins } from "../../../lib/reads";
 import type {
   BackendProviderKind,
   BackendSaveRequest,
-  BackendUsageView,
+  AccountUsageView,
   InferenceBackend,
   InferenceBackendView,
   OpenAiWireApi,
@@ -89,7 +89,7 @@ export function BackendEditor({
   backend: InferenceBackendView;
   accounts: readonly ProviderAccountView[];
   usage?: {
-    view?: BackendUsageView;
+    view?: AccountUsageView;
     refresh: (provider: string | null) => Promise<void>;
   };
   embedded?: boolean;

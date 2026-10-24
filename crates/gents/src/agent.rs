@@ -361,7 +361,7 @@ impl Gents {
             self.node_did(),
             trigger,
             provider,
-            &Default::default(),
+            self.usage_cache.endpoints(),
             chrono::Utc::now(),
         )
         .await

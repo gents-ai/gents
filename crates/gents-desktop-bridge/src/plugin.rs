@@ -215,6 +215,8 @@ where
             tauri_commands::inference_setup::desktop_provider_account_rename,
             tauri_commands::inference_setup::desktop_provider_account_remove,
             tauri_commands::inference_setup::desktop_provider_usage_read,
+            tauri_commands::inference_setup::desktop_provider_recovery_plan,
+            tauri_commands::inference_setup::desktop_provider_recovery_apply,
             tauri_commands::tasks::desktop_task_save,
             tauri_commands::tasks::desktop_schedule_save,
             tauri_commands::tasks::desktop_schedule_run,

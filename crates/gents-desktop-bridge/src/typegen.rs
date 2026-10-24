@@ -9,7 +9,7 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
-    BackendUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
+    AccountUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
     CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
     InferenceBackendRecommendationRequest, InferenceDiscoveryFailure, InferenceDiscoveryRequest,
     InferenceDiscoveryResult, InferenceProbeRequest, InferenceProbeResult,
@@ -153,6 +153,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
         source_root.join("contract.rs"),
         source_root.join("host/protocol.rs"),
         source_root.join("inference_setup.rs"),
+        source_root.join("provider_recovery.rs"),
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
@@ -362,7 +363,14 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::allowed_dirs::AllowedFoldersView,
         crate::tauri_commands::allowed_dirs::PluginApprovalsView,
         SignInView,
-        BackendUsageView,
+        AccountUsageView,
+        crate::provider_recovery::ProviderRecoveryRequest,
+        crate::provider_recovery::ProviderRecoveryCandidate,
+        crate::provider_recovery::ProviderRecoveryGoal,
+        crate::provider_recovery::ProviderRecoveryPlan,
+        crate::provider_recovery::ProviderRecoveryAction,
+        crate::provider_recovery::ProviderRecoveryApply,
+        crate::provider_recovery::ProviderRecoveryResult,
         UsageWindowView,
         gents_protocol::job::JobProgress,
         gents_protocol::job::CatalogEntry,
@@ -496,6 +504,13 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     assert!(
         error.contains("retryable"),
         "BridgeError fields; got:\n{error}"
+    );
+
+    let recovery = std::fs::read_to_string(tmp.path().join("ProviderRecoveryAction.ts"))
+        .expect("ProviderRecoveryAction.ts");
+    assert!(
+        recovery.contains("\"kind\": \"move_profile\""),
+        "recovery commands must preserve the serde tag: {recovery}"
     );
 
     assert!(

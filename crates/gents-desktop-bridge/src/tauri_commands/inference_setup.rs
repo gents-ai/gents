@@ -332,8 +332,10 @@ pub(crate) struct ProviderUsageReadRequest {
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BackendUsageView {
-    pub backend_id: String,
+pub(crate) struct AccountUsageView {
+    pub label: String,
+    pub provider: String,
+    pub backend_ids: Vec<String>,
     pub windows: Vec<UsageWindowView>,
     pub plan: Option<String>,
     pub note: Option<String>,
@@ -404,17 +406,15 @@ where
     Ok(())
 }
 
-async fn backend_usage_views(
+async fn account_usage_views(
     access: &gents::ConfigAccess,
     node_did: &str,
     reads: Option<&gents_server::accounts::UsageReads>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> anyhow::Result<Vec<BackendUsageView>> {
-    use gents::backend_provider::BackendProviderOauthExt as _;
+) -> anyhow::Result<Vec<AccountUsageView>> {
     use gents::usage_observation::{account_usage::UsageSource, UsageRead};
 
     let backends = access
-        .transact_write("desktop.usage_views", |txn| {
+        .transact_readonly("desktop.usage_views", |txn| {
             Box::pin(async move {
                 gents::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
@@ -424,56 +424,50 @@ async fn backend_usage_views(
         .filter(|reads| reads.node_did == node_did)
         .map_or(&[][..], |reads| reads.reads.as_slice());
     let time = |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339();
-    let mut views = Vec::with_capacity(backends.len());
-    for backend in backends {
-        let account = match (backend.provider_kind.oauth_provider(), &backend.auth) {
-            (Some(provider), gents::document_config::BackendAuth::NodeOAuth { account_ref }) => {
-                Some((provider, account_ref))
+    let views = reads
+        .iter()
+        .map(|read| {
+            let usage = read.usage.as_ref();
+            AccountUsageView {
+                label: read.label.clone(),
+                provider: read.provider.clone(),
+                backend_ids: backends
+                    .iter()
+                    .filter(|backend| read.matches_backend(backend))
+                    .map(|backend| backend.backend_id.clone())
+                    .collect(),
+                windows: usage
+                    .into_iter()
+                    .flat_map(|usage| &usage.windows)
+                    .map(|window| UsageWindowView {
+                        label: window.label.clone(),
+                        window_minutes: window.window_minutes,
+                        used_pct: window.used_pct,
+                        resets_at: window.resets_at.map(time),
+                        source: match window.source {
+                            UsageSource::Header => "header",
+                            UsageSource::Endpoint => "endpoint",
+                            UsageSource::Error => "error",
+                        }
+                        .into(),
+                        observed_at: time(window.observed_at),
+                        last_known: window.last_known,
+                    })
+                    .collect(),
+                plan: usage.and_then(|usage| usage.plan.clone()),
+                note: usage.map_or_else(|| Some("unknown".into()), |usage| usage.note.clone()),
+                read_at: usage.and_then(|usage| usage.read_at.map(time)),
+                read_error: usage.and_then(|usage| usage.read_error.clone()),
+                read: Some(match &read.outcome {
+                    UsageRead::Read => "read".into(),
+                    UsageRead::SkippedRecent => "skipped_recent".into(),
+                    UsageRead::NotReported => "not_reported".into(),
+                    UsageRead::Disabled => "disabled".into(),
+                    UsageRead::Unavailable(reason) => format!("unavailable: {reason}"),
+                }),
             }
-            _ => None,
-        };
-        let read = reads.iter().find(|read| match &read.backend_id {
-            Some(backend_id) => *backend_id == backend.backend_id,
-            None => account.is_some_and(|(provider, account_ref)| {
-                read.provider == provider && read.account_ref == *account_ref
-            }),
-        });
-        let usage = read.and_then(|read| read.usage.clone()).unwrap_or_else(|| {
-            gents::usage_observation::usage_view(None, backend.provider_kind, now)
-        });
-        views.push(BackendUsageView {
-            backend_id: backend.backend_id,
-            windows: usage
-                .windows
-                .into_iter()
-                .map(|window| UsageWindowView {
-                    label: window.label,
-                    window_minutes: window.window_minutes,
-                    used_pct: window.used_pct,
-                    resets_at: window.resets_at.map(time),
-                    source: match window.source {
-                        UsageSource::Header => "header",
-                        UsageSource::Endpoint => "endpoint",
-                        UsageSource::Error => "error",
-                    }
-                    .to_string(),
-                    observed_at: time(window.observed_at),
-                    last_known: window.last_known,
-                })
-                .collect(),
-            plan: usage.plan,
-            note: usage.note,
-            read_at: usage.read_at.map(time),
-            read_error: usage.read_error,
-            read: read.map(|read| match &read.outcome {
-                UsageRead::Read => "read".to_string(),
-                UsageRead::SkippedRecent => "skipped_recent".to_string(),
-                UsageRead::NotReported => "not_reported".to_string(),
-                UsageRead::Disabled => "disabled".to_string(),
-                UsageRead::Unavailable(reason) => format!("unavailable: {reason}"),
-            }),
-        });
-    }
+        })
+        .collect();
     Ok(views)
 }
 
@@ -481,7 +475,7 @@ async fn backend_usage_views(
 pub(crate) async fn desktop_provider_usage_read(
     request: ProviderUsageReadRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<Vec<BackendUsageView>, BridgeError> {
+) -> Result<Vec<AccountUsageView>, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let node_did = request.node_did.trim();
@@ -519,7 +513,7 @@ pub(crate) async fn desktop_provider_usage_read(
         }
         Err(error) => return Err(BridgeError::untyped(error.to_string())),
     };
-    backend_usage_views(&access, node_did, reads.as_ref(), chrono::Utc::now())
+    account_usage_views(&access, node_did, reads.as_ref())
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
@@ -1716,6 +1710,25 @@ mod provider_account_tests {
             UsageRead::Read
         );
 
+        let unbound = gents::oauth_credential::store_sign_in(
+            &access,
+            claude_sign_in(
+                node_did,
+                Some("account-unbound"),
+                "unbound",
+                "SECRET-unbound",
+            ),
+            Some("Unbound"),
+        )
+        .await
+        .unwrap()
+        .credential;
+        let unbound_backend = format!("{}-{}", unbound.provider, unbound.account_ref.unwrap());
+        access.write("test.remove_unbound_backend", &format!(
+            "mutation {{ delete_InferenceBackend(filter: {{ node_did: {{ _eq: \"{}\" }}, backend_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+            gents::graphql::escape_graphql_string(node_did),
+            gents::graphql::escape_graphql_string(&unbound_backend),
+        )).await.unwrap();
         let mut live = read_node_usage(
             &cache,
             node.clone(),
@@ -1735,16 +1748,23 @@ mod provider_account_tests {
             node_did: node_did.into(),
             reads: live,
         };
-        let views = backend_usage_views(&access, node_did, Some(&reads), now)
+        let views = account_usage_views(&access, node_did, Some(&reads))
             .await
             .expect("usage views");
         let view = |backend_id: &str| {
             views
                 .iter()
-                .find(|view| view.backend_id == backend_id)
+                .find(|view| view.backend_ids.iter().any(|id| id == backend_id))
                 .unwrap_or_else(|| panic!("no usage view for {backend_id}: {views:?}"))
         };
 
+        let unbound = views
+            .iter()
+            .find(|view| view.label == "Unbound")
+            .expect("unconfigured account remains visible");
+        assert!(unbound.backend_ids.is_empty());
+        assert!(unbound.windows.is_empty());
+        assert_eq!(unbound.note.as_deref(), Some("unknown"));
         let work = view(&b_backend);
         assert_eq!(work.windows.len(), 2, "{work:?}");
         let window = |label: &str| {
@@ -1943,4 +1963,48 @@ where
     R: Runtime,
 {
     sign_in::cancel(&state, window.label(), InferenceAuthMethod::ClaudeOauth)
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_provider_recovery_plan(
+    request: crate::provider_recovery::ProviderRecoveryRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<crate::provider_recovery::ProviderRecoveryPlan>, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    let access = core
+        .operator_access(&request.node_did)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    crate::provider_recovery::plan(&access, &request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_provider_recovery_apply<R>(
+    app: AppHandle<R>,
+    request: crate::provider_recovery::ProviderRecoveryApply,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::provider_recovery::ProviderRecoveryResult, BridgeError>
+where
+    R: Runtime,
+{
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    let access = core
+        .operator_access(&request.scope.node_did)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let identity = core
+        .operator_signer(&request.scope.node_did)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let result = crate::provider_recovery::apply(&access, identity.as_ref(), &request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    if matches!(
+        &result,
+        crate::provider_recovery::ProviderRecoveryResult::Applied { .. }
+    ) {
+        notify_config_changed(&app, &core).await;
+    }
+    Ok(result)
 }
