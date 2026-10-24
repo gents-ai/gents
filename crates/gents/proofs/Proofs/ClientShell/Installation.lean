@@ -43,7 +43,7 @@ def step (state : State) : Action → Option State
         some { state with phase := .released }
       else none
   | .replace reserved =>
-      if state.phase = .released ∧ reserved = true then
+      if state.phase = .released ∧ state.observation.attachments = 0 ∧ reserved = true then
         some { state with phase := .accepting }
       else none
 
@@ -71,7 +71,7 @@ theorem draining_refuses_new_attachments (state : State) (h : state.phase = .dra
 
 theorem replacement_requires_released_owner (before after : State) (reserved : Bool)
     (h : step before (.replace reserved) = some after) :
-    before.phase = .released ∧ reserved = true := by
+    before.phase = .released ∧ before.observation.attachments = 0 ∧ reserved = true := by
   simp only [step] at h
   split at h <;> simp_all
 
