@@ -124,33 +124,43 @@ impl<'a> Publications<'a> {
                     }
                 }
             }
-            if let (
-                MessageRole::User,
-                MessagePublication::ToolDelivery { tool_call_doc_id },
-                [MessageBlock::ToolResult {
-                    tool_call_doc_id: named,
-                    parts,
-                    ..
-                }],
-            ) = (
-                &message.role,
-                &message.publication,
-                message.blocks.as_slice(),
-            ) {
-                if named == tool_call_doc_id
-                    && parts.iter().any(|part| {
-                        let gents_protocol::output::ToolResultPart::Text { text } = part else {
-                            return false;
-                        };
-                        gents_protocol::output::reconstruction::tool_output_reference_owned(
-                            &segments,
-                            &text.output,
-                            request,
-                            named,
-                        )
-                    })
-                {
-                    observe(&mut result.deliveries, named, request, publication.sequence);
+            if let (MessageRole::User, MessagePublication::ToolDelivery { tool_call_doc_id }) =
+                (&message.role, &message.publication)
+            {
+                let Some(admitted) = result.tools.get(tool_call_doc_id.as_str()) else {
+                    continue;
+                };
+                let references = message.payload_references();
+                for tool in admitted {
+                    let shape = match message.blocks.as_slice() {
+                        [MessageBlock::ToolResult {
+                            tool_call_doc_id: named,
+                            ..
+                        }] => named == tool_call_doc_id && request == &tool.request,
+                        blocks => {
+                            !blocks.is_empty()
+                                && blocks
+                                    .iter()
+                                    .all(|block| matches!(block, MessageBlock::Text { .. }))
+                        }
+                    };
+                    if shape
+                        && references.iter().any(|reference| {
+                            gents_protocol::output::reconstruction::tool_output_reference_owned(
+                                &segments,
+                                reference,
+                                &tool.request,
+                                tool_call_doc_id,
+                            )
+                        })
+                    {
+                        observe(
+                            &mut result.deliveries,
+                            tool_call_doc_id,
+                            &tool.request,
+                            publication.sequence,
+                        );
+                    }
                 }
             }
         }

@@ -239,14 +239,17 @@ private def terminalReference (input : ClosureInput) (tool : Tool)
 
 /-- A background acknowledgement uses an authored receipt source, even when its
 ToolResult shape matches a completed result. Only the existing owned tool-output
-closure establishes that the mutation finished before this publication. -/
+closure establishes that the mutation finished before this publication.
+A text notification may name a different wake request; its retained reference
+still binds the original physical tool/request, without interpreting its text. -/
 private def delivers (input : ClosureInput) (tool : Tool) (message : MessageEnvelope) : Bool :=
-  message.header.request == some tool.request && message.header.role == .user &&
+  message.header.role == .user && message.header.request.isSome &&
     message.header.publication == .toolDelivery tool.id &&
     (match message.blocks with
-      | [.toolResult id _ _ _] => id == tool.id &&
-          (message.blocks.flatMap blockRefs).any (terminalReference input tool)
-      | _ => false)
+      | [.toolResult id _ _ _] => id == tool.id && message.header.request == some tool.request
+      | blocks => !blocks.isEmpty && blocks.all (fun block =>
+          match block with | .text _ => true | _ => false)) &&
+    (message.blocks.flatMap blockRefs).any (terminalReference input tool)
 
 private def uniquePosition (input : ClosureInput) (messages : List MessageEnvelope)
     (predicate : MessageEnvelope → Bool) : Option Nat :=
