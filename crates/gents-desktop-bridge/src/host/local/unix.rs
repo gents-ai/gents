@@ -22,7 +22,11 @@ pub enum UnixLocalError {
     EndpointOccupied,
     #[error("client home is too long for a local socket; select a shorter client home")]
     EndpointTooLong,
+    #[error(transparent)]
+    Paths(#[from] gents_desktop_core::client::PathsError),
 }
+
+pub(super) use UnixLocalError as PlatformError;
 
 type Result<T, E = UnixLocalError> = std::result::Result<T, E>;
 
@@ -50,7 +54,7 @@ pub async fn connect(paths: &DesktopPaths) -> Result<UnixStream, UnixLocalError>
     Ok(stream)
 }
 
-pub(super) async fn prepare_home(paths: &DesktopPaths) -> anyhow::Result<()> {
+pub(super) async fn prepare_home(paths: &DesktopPaths) -> Result<()> {
     paths.ensure_root_dirs().await?;
     owned_home(paths)?;
     std::fs::set_permissions(paths.root(), std::fs::Permissions::from_mode(0o700))?;

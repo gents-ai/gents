@@ -1756,8 +1756,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents-desktop-bridge/src/host.rs",
     "crates/gents-desktop-bridge/src/host/connection.rs",
     "crates/gents-desktop-bridge/src/host/local.rs",
-    "crates/gents-desktop-bridge/src/host/local/unix.rs",
-    "crates/gents-desktop-bridge/src/host/local/windows.rs",
     "crates/gents-desktop-bridge/src/host/service.rs",
     "crates/gents-desktop-bridge/src/host/speech.rs",
     "crates/gents-desktop-bridge/src/provenance.rs",

@@ -43,7 +43,11 @@ pub enum WindowsLocalError {
     LockReparsePoint,
     #[error("reserving the private client pipe")]
     ReservePipe(#[source] Box<WindowsLocalError>),
+    #[error(transparent)]
+    Paths(#[from] gents_desktop_core::client::PathsError),
 }
+
+pub(super) use WindowsLocalError as PlatformError;
 
 type Result<T, E = WindowsLocalError> = std::result::Result<T, E>;
 
@@ -79,7 +83,7 @@ pub async fn connect(paths: &DesktopPaths) -> Result<NamedPipeClient> {
     Ok(stream)
 }
 
-pub(super) async fn prepare_home(paths: &DesktopPaths) -> anyhow::Result<()> {
+pub(super) async fn prepare_home(paths: &DesktopPaths) -> Result<()> {
     paths.ensure_root_dirs().await?;
     private_directory(paths.root())?;
     let mut directories = vec![paths.root().to_owned()];
@@ -350,7 +354,7 @@ mod tests {
             assert!(
                 error.to_string().contains("grant access"),
                 "{}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
             assert_eq!(std::fs::read(&record).unwrap(), b"keep");
         }

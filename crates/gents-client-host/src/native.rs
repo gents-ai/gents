@@ -59,7 +59,7 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
         Ok(listener) => listener,
         Err(error) => {
             core.shutdown().await?;
-            return Err(error);
+            return Err(error.into());
         }
     };
     if let Some(provider) = &provider {
