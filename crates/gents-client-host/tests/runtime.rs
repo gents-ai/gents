@@ -120,14 +120,19 @@ async fn native_client_submits_signed_input_and_observes_live_and_durable_output
     let temp = tempfile::tempdir()?;
     let result = exercise(temp.path(), Journey::Conversation).await;
     result.with_context(|| {
-        ["runtime.log", "runtime.err", "client-host.log"]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+        [
+            "runtime.log",
+            "runtime.err",
+            "client-host.log",
+            "client-host-restart.log",
+        ]
+        .map(|name| {
+            format!(
+                "{name}:\n{}",
+                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+            )
+        })
+        .join("\n")
     })
 }
 
@@ -742,32 +747,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     let mut id = 2;
-    let mut last_snapshot = Value::Null;
-    let deployment = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let snapshot = client.snapshot(id).await;
-            id += 1;
-            last_snapshot = snapshot.clone();
-            if let Some(deployment) = snapshot["client"]["deployments"]
-                .as_array()
-                .and_then(|values| values.iter().find(|value| value["nodeDid"] == node_did))
-                .filter(|value| {
-                    value["chatSafe"] == true
-                        && value["nodeReadiness"]["source"]["state"] == "current"
-                        && value["agents"].as_array().is_some_and(|agents| {
-                            agents.iter().any(|agent| agent["isDefault"] == true)
-                        })
-                })
-            {
-                return deployment.clone();
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .with_context(|| {
-        format!("client did not observe its authorized runtime route: {last_snapshot}")
-    })?;
+    let deployment = wait_chat_deployment(&mut client, &mut id, node_did).await?;
     let agent_id = deployment["agents"]
         .as_array()
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
@@ -1886,14 +1866,20 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await?;
     }
     if matches!(journey, Journey::Conversation | Journey::Editor) {
-        exercise_message_edit(
-            &mut client,
+        client = exercise_message_edit(
+            client,
             &mut id,
             node_did,
             session,
             agent_id,
-            &paths,
-            &access,
+            &mut EditRecoveryHost {
+                process: &mut host,
+                binary: &host_binary,
+                root,
+                paths: &paths,
+                access: &access,
+                editor_store: journey.editor_scenario().is_some(),
+            },
         )
         .await?;
     }
@@ -1907,16 +1893,117 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     Ok(())
 }
 
-async fn exercise_message_edit(
+async fn wait_chat_deployment(
     client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+) -> Result<Value> {
+    let mut last_snapshot = Value::Null;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let snapshot = client.snapshot(*id).await;
+            *id += 1;
+            last_snapshot = snapshot.clone();
+            if let Some(deployment) = snapshot["client"]["deployments"]
+                .as_array()
+                .and_then(|values| values.iter().find(|value| value["nodeDid"] == node_did))
+                .filter(|value| {
+                    value["chatSafe"] == true
+                        && value["nodeReadiness"]["source"]["state"] == "current"
+                        && value["agents"].as_array().is_some_and(|agents| {
+                            agents.iter().any(|agent| agent["isDefault"] == true)
+                        })
+                })
+            {
+                return deployment.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .with_context(|| {
+        format!("client did not observe its authorized runtime route: {last_snapshot}")
+    })
+}
+
+struct EditRecoveryHost<'a> {
+    process: &'a mut Child,
+    binary: &'a Path,
+    root: &'a Path,
+    paths: &'a DesktopPaths,
+    access: &'a gents::ConfigAccess,
+    editor_store: bool,
+}
+
+impl EditRecoveryHost<'_> {
+    async fn restart(&mut self) -> Result<()> {
+        stop(self.process)
+            .await
+            .context("stopping the retained-history helper")?;
+        let mut command = Command::new(self.binary);
+        command.args(["--serve", "--home"]).arg(self.paths.root());
+        if self.editor_store {
+            command.arg("--editor-store");
+        }
+        #[cfg(unix)]
+        let restarted = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(self.root.join("client-host-restart.log"))?,
+            ))
+            .kill_on_drop(true)
+            .spawn()?;
+        #[cfg(windows)]
+        let restarted = console::ConsoleChild::spawn(
+            command.as_std(),
+            &self.root.join("client-host-restart.log"),
+        )?;
+        *self.process = restarted;
+        wait_listener(self.process, self.paths).await
+    }
+}
+
+async fn discard_successful_reply(
+    client: &mut Attachment,
+    id: u32,
+    name: &str,
+    args: Value,
+) -> Result<()> {
+    client
+        .send(json!({"kind":"call", "id":id, "command":{"name":name, "args":args}}))
+        .await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let response = client.next().await;
+            if response["kind"] == "response" && response["id"] == id {
+                ensure!(
+                    response["error"].is_null(),
+                    "{name} failed before reply interception: {}",
+                    response["error"]
+                );
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await
+    .context("intercepting the committed reply")?
+}
+
+async fn exercise_message_edit(
+    mut client: Attachment,
     id: &mut u32,
     node_did: &str,
     source: &str,
     agent: &str,
-    paths: &DesktopPaths,
-    access: &gents::ConfigAccess,
-) -> Result<()> {
-    let before = read_session(client, id, node_did, source).await?;
+    recovery: &mut EditRecoveryHost<'_>,
+) -> Result<Attachment> {
+    let access = recovery.access;
+    let paths = recovery.paths;
+    let before = read_session(&mut client, id, node_did, source).await?;
     let snapshot = client.call(*id, "desktop_client_snapshot", json!({})).await;
     *id += 1;
     let client_did = snapshot["client"]["clientDid"]
@@ -1952,31 +2039,22 @@ async fn exercise_message_edit(
         "nodeDid": node_did, "sessionId": source, "messageKey": message["itemKey"],
         "clientDid": client_did, "childSessionId": child_session_id
     }});
-    client.send(json!({"kind":"call", "id":*id, "command":{"name":"desktop_session_fork_before_message", "args":args}})).await;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let response = client.next().await;
-            if response["kind"] == "response" && response["id"] == *id {
-                ensure!(
-                    response["error"].is_null(),
-                    "fork failed before reply interception: {}",
-                    response["error"]
-                );
-                drop(response);
-                break;
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
-    .context("intercepting the committed fork reply")??;
+    discard_successful_reply(
+        &mut client,
+        *id,
+        "desktop_session_fork_before_message",
+        args.clone(),
+    )
+    .await?;
     *id += 1;
     let query = format!("{{ AgentSession(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}) {{ _docID session_id provenance }} AgentMessage(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}, order: {{sequence: ASC}}) {{_docID message_key sequence}} }}",
         gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(&child_session_id),
         gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(&child_session_id));
     let committed = access.execute(&query).await?;
-    let previous = std::mem::replace(client, Attachment::start(paths).await);
-    previous.close().await;
+    client.close().await;
+    recovery.restart().await?;
+    client = Attachment::start(paths).await;
+    wait_chat_deployment(&mut client, id, node_did).await?;
     let fork = client
         .call(*id, "desktop_session_fork_before_message", args)
         .await;
@@ -2012,24 +2090,98 @@ async fn exercise_message_edit(
     })
     .await
     .context("the fork's signed goal observation did not reach the client")?;
-    let sent = client
+    let request_id = format!("retained-edit-send-{id}");
+    discard_successful_reply(
+        &mut client,
+        *id,
+        "desktop_chat_send",
+        json!({"request": {
+            "requestId": request_id, "clientDid": client_did,
+            "nodeDid": node_did, "sessionId": child, "agentId": agent,
+            "content": "Return the edited fixture response."
+        }}),
+    )
+    .await?;
+    *id += 1;
+    let request_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id requester_did agent_id content input admission_signer_did admission_signature created_at valid_until}} }}",
+        gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(&request_id));
+    let admitted = access.execute(&request_query).await?;
+    ensure!(
+        admitted["data"]["AgentRequest"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1),
+        "the original send has no unique physical request"
+    );
+    client.close().await;
+    recovery.restart().await?;
+    client = Attachment::start(paths).await;
+    wait_chat_deployment(&mut client, id, node_did).await?;
+    let recovered = client
         .call(
             *id,
-            "desktop_chat_send",
-            json!({"request": {
-                "nodeDid": node_did, "sessionId": child, "agentId": agent,
-                "content": "Return the edited fixture response."
+            "desktop_chat_submission_recover",
+            json!({"query": {
+                "clientDid": client_did, "nodeDid": node_did, "requestId": request_id
+            }}),
+        )
+        .await;
+    ensure!(
+        recovered["kind"] == "prepared",
+        "restart lost the caller receipt: {recovered}"
+    );
+    let sent = &recovered["result"];
+    ensure!(
+        sent["requestId"] == request_id,
+        "recovery replaced the original request"
+    );
+    ensure!(
+        access.execute(&request_query).await? == admitted,
+        "recovery duplicated or changed the signed request"
+    );
+    *id += 1;
+    ensure!(
+        sent["submissionReceipt"]["nodeDid"] == node_did
+            && sent["submissionReceipt"]["requestId"] == request_id
+            && sent["submissionReceipt"]["sessionId"] == child,
+        "the recovered receipt lost its original scope"
+    );
+    discard_successful_reply(
+        &mut client,
+        *id,
+        "desktop_chat_submission_acknowledge",
+        json!({"receipt": sent["submissionReceipt"].clone()}),
+    )
+    .await?;
+    *id += 1;
+    client.close().await;
+    recovery.restart().await?;
+    client = Attachment::start(paths).await;
+    wait_chat_deployment(&mut client, id, node_did).await?;
+    let acknowledged = client
+        .call(
+            *id,
+            "desktop_chat_submission_recover",
+            json!({"query": {
+                "clientDid": client_did, "nodeDid": node_did, "requestId": request_id
             }}),
         )
         .await;
     *id += 1;
+    ensure!(
+        acknowledged["result"] == *sent,
+        "a lost acknowledgement reply changed or retired the recoverable outcome"
+    );
+    ensure!(
+        access.execute(&request_query).await? == admitted,
+        "acknowledgement recovery duplicated or changed the signed request"
+    );
     ensure!(
         sent["sessionId"] == child,
         "edited input was not sent to the branch"
     );
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let branch = read_session(client, id, node_did, child).await?;
+            let branch = read_session(&mut client, id, node_did, child).await?;
             if branch["turnState"] == "completed" {
                 let users = branch["timelineItems"]
                     .as_array()
@@ -2049,12 +2201,12 @@ async fn exercise_message_edit(
     })
     .await
     .context("edited branch did not complete")??;
-    let after = read_session(client, id, node_did, source).await?;
+    let after = read_session(&mut client, id, node_did, source).await?;
     ensure!(
         after["timelineItems"] == before["timelineItems"],
         "editing mutated the original conversation"
     );
-    Ok(())
+    Ok(client)
 }
 
 async fn run_editor_journey(
