@@ -14,8 +14,18 @@ use support::Attachment;
 #[tokio::test]
 async fn standalone_installation_shares_one_store_between_stdio_clients_and_releases_it_on_shutdown(
 ) {
+    check_shared_installation("client").await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn long_history_home_supports_shared_stdio_attachments_and_retains_identity() {
+    check_shared_installation(&"long-editor-history-location-".repeat(5)).await;
+}
+
+async fn check_shared_installation(home: &str) {
     let dir = tempfile::tempdir().unwrap();
-    let paths = DesktopPaths::from_root(dir.path().join("client"));
+    let paths = DesktopPaths::from_root(dir.path().join(home));
     let seed = Arc::new(
         ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
             .await
