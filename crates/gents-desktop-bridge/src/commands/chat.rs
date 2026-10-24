@@ -207,12 +207,82 @@ pub async fn fork_session_before_message(
     request: crate::types::SessionForkBeforeRequest,
 ) -> Result<crate::types::SessionForkResult> {
     let outcome = core
-        .fork_session_before_message(&request.node_did, &request.session_id, &request.message_key)
+        .fork_session_before_message(
+            &request.node_did,
+            &request.session_id,
+            &request.message_key,
+            &request.client_did,
+            &request.child_session_id,
+        )
         .await?;
     Ok(crate::types::SessionForkResult {
         node_did: request.node_did.trim().to_owned(),
-        session_id: outcome.session_id,
+        session_id: outcome,
     })
+}
+
+#[cfg(test)]
+mod edit_fork_tests {
+    use super::*;
+    use gents::config_client::ConfigAccess;
+
+    #[test]
+    fn fork_wire_requires_the_retained_client_and_destination() {
+        let mut request = serde_json::json!({ "nodeDid": "node", "sessionId": "source", "messageKey": "canonical-message" });
+        assert!(
+            serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request.clone())
+                .is_err()
+        );
+        request["clientDid"] = "client".into();
+        assert!(
+            serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request.clone())
+                .is_err()
+        );
+        request["childSessionId"] = "child".into();
+        let decoded =
+            serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request).unwrap();
+        assert_eq!(decoded.child_session_id, "child");
+        assert_eq!(decoded.client_did, "client");
+    }
+
+    #[tokio::test]
+    async fn fork_refuses_foreign_clients_and_changed_destination_bytes_before_routing(
+    ) -> Result<()> {
+        let (core, _home) = crate::tests::support::boot_core().await;
+        let result = async {
+            let mut request = crate::types::SessionForkBeforeRequest {
+                node_did: "unrouted-node".into(),
+                session_id: "source".into(),
+                message_key: "message".into(),
+                client_did: "foreign-client".into(),
+                child_session_id: "child".into(),
+            };
+            let error = fork_session_before_message(&core, request.clone())
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("another native client"),
+                "{error}"
+            );
+            request.client_did = core.node_identity().did().to_owned();
+            request.child_session_id = " child ".into();
+            let error = fork_session_before_message(&core, request)
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("exact canonical identity"),
+                "{error}"
+            );
+            let sessions = ConfigAccess::local(core.node_arc())
+                .execute("{ AgentSession { session_id } }")
+                .await?;
+            assert_eq!(sessions["data"]["AgentSession"], serde_json::json!([]));
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        core.shutdown().await?;
+        result
+    }
 }
 
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {

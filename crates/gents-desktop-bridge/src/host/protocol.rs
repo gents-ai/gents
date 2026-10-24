@@ -11,7 +11,7 @@ use crate::types::{
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
 /// Typed captures require a host that preserves their submitted snapshots.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 /// The private store-key channel completes before ordinary host framing begins.
 /// Its failures use the canonical bridge error contract and never raw causes.
 pub const EDITOR_STORE_BOOTSTRAP_VERSION: u32 = 2;

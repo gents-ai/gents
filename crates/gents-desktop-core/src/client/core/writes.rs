@@ -1063,9 +1063,20 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
         message_key: &str,
-    ) -> Result<gents::session::ForkOutcome> {
+        client_did: &str,
+        child_session_id: &str,
+    ) -> Result<String> {
+        anyhow::ensure!(
+            client_did == self.node_identity.did(),
+            "the saved edit belongs to another native client"
+        );
         let node_did = normalize_required("node_did", node_did)?;
         let session_id = normalize_required("session_id", session_id)?;
+        anyhow::ensure!(
+            child_session_id == child_session_id.trim(),
+            "child_session_id must retain its exact canonical identity"
+        );
+        let child_session_id = normalize_required("child_session_id", child_session_id)?;
         anyhow::ensure!(!message_key.trim().is_empty(), "message_key is required");
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
@@ -1078,7 +1089,7 @@ impl ClientCore {
         let access = self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
             .context("Editing a message requires a direct runtime connection. Reconnect the local runtime and try again.")?;
-        gents::session::fork_on(
+        gents::session::fork_edit_on(
             &access,
             gents::session::ForkParams {
                 source_session_id: session_id,
@@ -1087,6 +1098,7 @@ impl ClientCore {
                 caller_requester_did: Some(&requester),
                 target_agent_id: None,
             },
+            child_session_id,
         )
         .await
         .map_err(Into::into)

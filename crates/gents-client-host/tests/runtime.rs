@@ -1885,7 +1885,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await?;
     }
     if matches!(journey, Journey::Conversation | Journey::Editor) {
-        exercise_message_edit(&mut client, &mut id, node_did, session, agent_id).await?;
+        exercise_message_edit(
+            &mut client,
+            &mut id,
+            node_did,
+            session,
+            agent_id,
+            &paths,
+            &access,
+        )
+        .await?;
     }
     client.close().await;
     stop(&mut host)
@@ -1903,8 +1912,16 @@ async fn exercise_message_edit(
     node_did: &str,
     source: &str,
     agent: &str,
+    paths: &DesktopPaths,
+    access: &gents::ConfigAccess,
 ) -> Result<()> {
     let before = read_session(client, id, node_did, source).await?;
+    let snapshot = client.call(*id, "desktop_client_snapshot", json!({})).await;
+    *id += 1;
+    let client_did = snapshot["client"]["clientDid"]
+        .as_str()
+        .context("missing native client identity")?;
+    let child_session_id = uuid::Uuid::new_v4().to_string();
     let message = before["timelineItems"]
         .as_array()
         .and_then(|items| items.iter().find(|item| item["kind"] == "userMessage"))
@@ -1920,7 +1937,8 @@ async fn exercise_message_edit(
             *id,
             "desktop_session_fork_before_message",
             json!({"request": {
-                "nodeDid": node_did, "sessionId": source, "messageKey": padded
+                "nodeDid": node_did, "sessionId": source, "messageKey": padded,
+                "clientDid": client_did, "childSessionId": child_session_id
             }}),
         )
         .await;
@@ -1929,16 +1947,42 @@ async fn exercise_message_edit(
         invalid.is_err(),
         "message-key whitespace changed canonical identity"
     );
+    let args = json!({"request": {
+        "nodeDid": node_did, "sessionId": source, "messageKey": message["itemKey"],
+        "clientDid": client_did, "childSessionId": child_session_id
+    }});
+    client.send(json!({"kind":"call", "id":*id, "command":{"name":"desktop_session_fork_before_message", "args":args}})).await;
+    loop {
+        let response = client.next().await;
+        if response["kind"] == "response" && response["id"] == *id {
+            ensure!(
+                response["error"].is_null(),
+                "fork failed before reply interception: {}",
+                response["error"]
+            );
+            drop(response);
+            break;
+        }
+    }
+    *id += 1;
+    let query = format!("{{ AgentSession(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}) {{ _docID session_id provenance }} AgentMessage(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}, order: {{sequence: ASC}}) {{_docID message_key sequence}} }}",
+        gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(&child_session_id),
+        gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(&child_session_id));
+    let committed = access.execute(&query).await?;
+    let previous = std::mem::replace(client, Attachment::start(paths).await);
+    previous.close().await;
     let fork = client
-        .call(
-            *id,
-            "desktop_session_fork_before_message",
-            json!({"request": {
-                "nodeDid": node_did, "sessionId": source, "messageKey": message["itemKey"]
-            }}),
-        )
+        .call(*id, "desktop_session_fork_before_message", args)
         .await;
     *id += 1;
+    ensure!(
+        fork["sessionId"] == child_session_id,
+        "fork recovery changed the retained destination"
+    );
+    ensure!(
+        access.execute(&query).await? == committed,
+        "fork recovery rewrote or duplicated the committed child"
+    );
     let child = fork["sessionId"].as_str().context("missing fork receipt")?;
     ensure!(
         child != source && fork["nodeDid"] == node_did,

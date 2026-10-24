@@ -145,6 +145,8 @@ pub struct SessionForkBeforeRequest {
     pub node_did: String,
     pub session_id: String,
     pub message_key: String,
+    pub client_did: String,
+    pub child_session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
