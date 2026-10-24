@@ -606,7 +606,14 @@ pub fn tool_output_reference_owned(
             == (OutputWriter::ToolExecution {
                 tool_call_doc_id: tool_call_doc_id.to_owned(),
             })
-        && reconstruct_extent_streams(records, &[], &[], reference).is_ok()
+        && reconstruct_extent_streams(records, &[], &[], reference).is_ok_and(|streams| {
+            streams.iter().all(|stream| {
+                matches!(
+                    stream.declaration.payload,
+                    StreamPayload::ToolOutput | StreamPayload::Media { .. }
+                )
+            })
+        })
 }
 
 pub fn reconstruct_stream(
