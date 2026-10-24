@@ -18,6 +18,8 @@ pub struct ConsoleChild {
     output: Option<ConsoleOutput>,
 }
 
+/// The drain may borrow input for cursor replies, but must not keep its handle
+/// alive after this owner closes input and starts ConPTY cleanup.
 struct ConsoleOutput {
     writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     master: Option<Box<dyn MasterPty + Send>>,
@@ -41,11 +43,14 @@ impl ConsoleChild {
         let pair = portable_pty::native_pty_system().openpty(PtySize::default())?;
         let mut reader = pair.master.try_clone_reader()?;
         let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
-        let input = Arc::clone(&writer);
+        let input = Arc::downgrade(&writer);
         let drain = std::thread::Builder::new()
             .name("gents-fixture-console".into())
             .spawn(move || {
                 super::console_io::drain(&mut reader, &mut log, || {
+                    let Some(input) = input.upgrade() else {
+                        return Ok(());
+                    };
                     let mut input = input
                         .lock()
                         .map_err(|_| io::Error::other("fixture console input lock poisoned"))?;
@@ -84,16 +89,26 @@ impl ConsoleChild {
         Ok(())
     }
 
-    pub async fn wait(&mut self) -> Result<ExitStatus> {
+    pub async fn wait_for_exit(&mut self) -> Result<ExitStatus> {
         let status = loop {
             if let Some(status) = self.try_wait()? {
                 break status;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
+        Ok(status)
+    }
+
+    pub async fn finish_output(&mut self) -> Result<()> {
         if let Some(mut output) = self.output.take() {
             tokio::task::spawn_blocking(move || output.finish()).await??;
         }
+        Ok(())
+    }
+
+    pub async fn wait(&mut self) -> Result<ExitStatus> {
+        let status = self.wait_for_exit().await?;
+        self.finish_output().await?;
         Ok(status)
     }
 }
