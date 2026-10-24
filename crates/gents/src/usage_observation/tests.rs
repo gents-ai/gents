@@ -517,32 +517,21 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
     let cache = UsageCache::default();
     let node = node().await;
     let now = Utc::now();
-    let (url, handle) = test_support::one_shot_token_server(429, "{}").await;
-    let openrouter = api_key_backend(
-        format!("{}/api/v1", origin(&url)),
-        "backend-usage-recent",
-        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
-    );
-    assert_eq!(
-        read(
-            &cache,
-            &node,
-            A,
-            &openrouter,
-            UsageTrigger::Open,
-            &UsageEndpoints::default(),
-            now
-        )
-        .await,
-        UsageRead::Unavailable("throttled".into())
-    );
-    handle.await.unwrap();
     let (url, handle) = test_support::one_shot_token_server(200, OPENROUTER_KEY_BODY).await;
     let openrouter = api_key_backend(
         format!("{}/api/v1", origin(&url)),
         "backend-usage-recent",
-        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+        json!({"kind":"api_key", "key":"sk-or-TEST"}),
     );
+    write(
+        &cache,
+        &node,
+        &UsageAccount::for_backend(A, &openrouter),
+        UsageReport::default(),
+        Some((now, None)),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         read(
             &cache,
@@ -1308,7 +1297,14 @@ async fn cache_is_runtime_local_and_replacement_sign_ins_reject_late_responses()
         })
         .await
         .unwrap();
-    seed(&node, &credential(A, None, Some("same-provider-account"))).await;
+    let replacement = crate::oauth_credential::store_sign_in(
+        &access,
+        credential(A, None, Some("same-provider-account")),
+        Some("replacement"),
+    )
+    .await
+    .unwrap()
+    .credential;
     record_usage(
         &cache,
         &node,
@@ -1317,10 +1313,6 @@ async fn cache_is_runtime_local_and_replacement_sign_ins_reject_late_responses()
     )
     .await
     .unwrap();
-    let replacement = resolve_oauth_credential(&access, A, CODEX, AccountPick::Reference(None))
-        .await
-        .unwrap()
-        .unwrap();
     assert!(
         load_usage(&cache, &access, &UsageAccount::for_credential(&replacement))
             .await
