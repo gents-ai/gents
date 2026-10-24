@@ -24,7 +24,11 @@ pub(crate) enum Documents<'a> {
 /// (or this one) holds it. The texts are regolith's (`env/db_lock.rs`);
 /// they arrive only as text through the node builder's error.
 pub(crate) fn store_locked(error: &anyhow::Error) -> bool {
-    if error.downcast_ref::<gents::home::StoreLockHeld>().is_some() {
+    if error
+        .downcast_ref::<gents::home::HomeError>()
+        .and_then(gents::home::HomeError::lock_held)
+        .is_some()
+    {
         return true;
     }
     const LOCKED: [&str; 2] = [

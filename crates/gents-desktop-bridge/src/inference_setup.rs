@@ -136,13 +136,11 @@ pub fn inference_backend_recommendation(
     })
 }
 
-fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
-    let http_error = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>());
-    let is_decode = error
-        .chain()
-        .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some());
+fn classify_discovery_failure(
+    error: &gents::backend_provider::BackendProviderError,
+) -> (&'static str, bool, bool) {
+    let http_error = error.model_discovery_http();
+    let is_decode = gents_protocol::error_chain::find_source::<serde_json::Error>(error).is_some();
     if let Some(error) = http_error {
         if error.is_auth() {
             ("authentication", true, false)
@@ -258,7 +256,7 @@ pub async fn discover_inference_models_for_core(
                         model,
                     )
                 })
-                .collect::<anyhow::Result<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
             (true, models, None, false)
         }
@@ -269,7 +267,7 @@ pub async fn discover_inference_models_for_core(
                 Vec::new(),
                 Some(InferenceDiscoveryFailure {
                     kind: kind.into(),
-                    message: format!("{error:#}"),
+                    message: gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 }),
                 manual_entry_allowed,
             )

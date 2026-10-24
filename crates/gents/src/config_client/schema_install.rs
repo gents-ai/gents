@@ -13,6 +13,14 @@ pub(crate) struct SchemaInstallMismatch {
     pub collection: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaInstallPlanError {
+    #[error("declared schema collections are not published")]
+    NotPublished,
+    #[error("collection {collection:?} is missing declared fields {pending}")]
+    MissingFields { collection: String, pending: String },
+}
+
 /// Schema publication is node-wide and does not grant document read/write ACP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SchemaInstallPlan {
@@ -23,17 +31,17 @@ pub struct SchemaInstallPlan {
 }
 
 impl SchemaInstallPlan {
-    pub fn require_satisfied(&self) -> Result<()> {
-        ensure!(
-            !self.requires_publication,
-            "declared schema collections are not published"
-        );
+    pub fn require_satisfied(&self) -> Result<(), SchemaInstallPlanError> {
+        if self.requires_publication {
+            return Err(SchemaInstallPlanError::NotPublished);
+        }
         for (collection, delta) in &self.field_deltas {
-            ensure!(
-                delta.pending.is_empty(),
-                "collection {collection:?} is missing declared fields {:?}",
-                delta.pending
-            );
+            if !delta.pending.is_empty() {
+                return Err(SchemaInstallPlanError::MissingFields {
+                    collection: collection.clone(),
+                    pending: format!("{:?}", delta.pending),
+                });
+            }
         }
         Ok(())
     }

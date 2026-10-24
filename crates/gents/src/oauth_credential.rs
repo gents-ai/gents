@@ -10,6 +10,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+#[derive(Debug, thiserror::Error)]
+pub enum OAuthCredentialError {
+    #[error("decoding OAuthCredential row")]
+    DecodeRow(#[source] serde_json::Error),
+    #[error("OAuthCredential missing {field}")]
+    MissingField { field: &'static str },
+    #[error("parsing OAuthCredential {field} timestamp {value}")]
+    Timestamp {
+        field: &'static str,
+        value: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("account {credential_id:?} not found for this node")]
+    AccountNotFound { credential_id: String },
+    #[error("an account label cannot be empty")]
+    EmptyLabel,
+    #[error("an account label is at most {MAX_ACCOUNT_LABEL_CHARS} characters")]
+    LabelTooLong,
+    #[error("an account label cannot contain control characters")]
+    LabelControlCharacters,
+    #[error("the label {label:?} is already used by another account of this provider")]
+    LabelTaken { label: String },
+}
+
 const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id node_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key label";
 const OAUTH_PICK_FIELDS: &str =
     "_docID credential_id node_did provider enabled account_ref connected_at provider_account_key";
@@ -357,13 +382,13 @@ pub(crate) async fn resolve_oauth_credential_in_txn(
     let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "OAuthCredential")
         .into_iter()
         .map(pick_row_from_value)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     Ok(pick_oauth_credential(&rows, node_did, provider, pick).cloned())
 }
 
-fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
+fn pick_row_from_value(value: Value) -> Result<OAuthCredential, OAuthCredentialError> {
     let row: OAuthCredentialRow =
-        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+        serde_json::from_value(value).map_err(OAuthCredentialError::DecodeRow)?;
     Ok(OAuthCredential {
         doc_id: row.doc_id,
         credential_id: row.credential_id,
@@ -393,7 +418,7 @@ fn pick_from_response(
 ) -> Result<Option<OAuthCredential>> {
     let rows = oauth_credentials_from_response(response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     Ok(pick_oauth_credential(&rows, node_did, provider, pick).cloned())
 }
 
@@ -408,10 +433,10 @@ pub async fn lookup_oauth_credential_by_id(
     )
     .await?;
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
-    oauth_credentials_from_response(&response)
+    Ok(oauth_credentials_from_response(&response)
         .into_iter()
         .next()
-        .transpose()
+        .transpose()?)
 }
 
 pub fn oauth_credentials_for_node_query(node_did: &str) -> String {
@@ -447,9 +472,9 @@ pub async fn list_oauth_credentials(
     )
     .await?;
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
-    oauth_credentials_from_response(&response)
+    Ok(oauth_credentials_from_response(&response)
         .into_iter()
-        .collect()
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?)
 }
 
 pub async fn list_oauth_credentials_on(
@@ -461,7 +486,7 @@ pub async fn list_oauth_credentials_on(
         .await?;
     let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     rows.sort_by(resolver_order);
     Ok(rows)
 }
@@ -477,10 +502,10 @@ pub async fn lookup_oauth_credential_by_doc_id(
     )
     .await?;
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
-    oauth_credentials_from_response(&response)
+    Ok(oauth_credentials_from_response(&response)
         .into_iter()
         .next()
-        .transpose()
+        .transpose()?)
 }
 
 pub async fn upsert_oauth_credential(
@@ -585,7 +610,7 @@ async fn provider_rows_in_txn(
         .await?;
     let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     rows.sort_by(resolver_order);
     Ok(rows)
 }
@@ -683,17 +708,17 @@ async fn sync_account_backend(
 
 const MAX_ACCOUNT_LABEL_CHARS: usize = 64;
 
-pub fn validate_account_label(label: &str) -> Result<String> {
+pub fn validate_account_label(label: &str) -> Result<String, OAuthCredentialError> {
     let label = label.trim();
-    anyhow::ensure!(!label.is_empty(), "an account label cannot be empty");
-    anyhow::ensure!(
-        label.chars().count() <= MAX_ACCOUNT_LABEL_CHARS,
-        "an account label is at most {MAX_ACCOUNT_LABEL_CHARS} characters"
-    );
-    anyhow::ensure!(
-        !label.chars().any(char::is_control),
-        "an account label cannot contain control characters"
-    );
+    if label.is_empty() {
+        return Err(OAuthCredentialError::EmptyLabel);
+    }
+    if label.chars().count() > MAX_ACCOUNT_LABEL_CHARS {
+        return Err(OAuthCredentialError::LabelTooLong);
+    }
+    if label.chars().any(char::is_control) {
+        return Err(OAuthCredentialError::LabelControlCharacters);
+    }
     Ok(label.to_owned())
 }
 
@@ -705,13 +730,15 @@ pub fn effective_account_label(credential: &OAuthCredential) -> String {
     })
 }
 
-fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<()> {
-    anyhow::ensure!(
-        !others
-            .iter()
-            .any(|row| effective_account_label(row) == label),
-        "the label {label:?} is already used by another account of this provider"
-    );
+fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<(), OAuthCredentialError> {
+    if others
+        .iter()
+        .any(|row| effective_account_label(row) == label)
+    {
+        return Err(OAuthCredentialError::LabelTaken {
+            label: label.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -1076,10 +1103,6 @@ fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
     )
 }
 
-fn account_not_found(credential_id: &str) -> anyhow::Error {
-    anyhow::anyhow!("account {credential_id:?} not found for this node")
-}
-
 pub async fn list_accounts(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -1092,7 +1115,7 @@ pub async fn list_accounts(
         .await?;
     let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, OAuthCredentialError>>()?;
     rows.sort_by(resolver_order);
     let defaults: Vec<_> = ACCOUNT_PROVIDERS
         .iter()
@@ -1138,7 +1161,9 @@ pub async fn set_account_label(
                 let row = oauth_credentials_from_response(&response)
                     .into_iter()
                     .next()
-                    .ok_or_else(|| account_not_found(credential_id))??;
+                    .ok_or_else(|| OAuthCredentialError::AccountNotFound {
+                        credential_id: credential_id.to_owned(),
+                    })??;
                 let rows = provider_rows_in_txn(txn, node_did, &row.provider).await?;
                 let others: Vec<_> = rows
                     .iter()
@@ -1199,7 +1224,9 @@ pub async fn remove_account_in_txn(
     let row = oauth_credentials_from_response(&response)
         .into_iter()
         .next()
-        .ok_or_else(|| account_not_found(credential_id))??;
+        .ok_or_else(|| OAuthCredentialError::AccountNotFound {
+            credential_id: credential_id.to_owned(),
+        })??;
     let response = txn
         .execute(&format!(
             "mutation {{ delete_OAuthCredential(filter: {filter}) {{ _docID }} }}"
@@ -1230,11 +1257,16 @@ fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<
     {
         Ok(())
     } else {
-        Err(account_not_found(credential_id))
+        Err(OAuthCredentialError::AccountNotFound {
+            credential_id: credential_id.to_owned(),
+        }
+        .into())
     }
 }
 
-pub fn oauth_credentials_from_response(response: &Value) -> Vec<Result<OAuthCredential>> {
+pub fn oauth_credentials_from_response(
+    response: &Value,
+) -> Vec<Result<OAuthCredential, OAuthCredentialError>> {
     gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
         .into_iter()
         .map(oauth_credential_from_value)
@@ -1349,9 +1381,11 @@ fn render_oauth_input(fields: &[(&'static str, String)], exclude: &[&str]) -> St
         .join(",\n                    ")
 }
 
-pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredential> {
+pub(crate) fn oauth_credential_from_value(
+    value: Value,
+) -> Result<OAuthCredential, OAuthCredentialError> {
     let row: OAuthCredentialRow =
-        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+        serde_json::from_value(value).map_err(OAuthCredentialError::DecodeRow)?;
     let access_token = required(row.access_token, "access_token")?;
     let refresh_token = required(row.refresh_token, "refresh_token")?;
     Ok(OAuthCredential {
@@ -1378,8 +1412,8 @@ pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredentia
     })
 }
 
-fn required(value: Option<String>, field: &str) -> Result<String> {
-    clean_optional(value).ok_or_else(|| anyhow::anyhow!("OAuthCredential missing {field}"))
+fn required(value: Option<String>, field: &'static str) -> Result<String, OAuthCredentialError> {
+    clean_optional(value).ok_or(OAuthCredentialError::MissingField { field })
 }
 
 fn clean_optional(value: Option<String>) -> Option<String> {
@@ -1389,17 +1423,26 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     })
 }
 
-fn parse_required_datetime(value: Option<String>, field: &str) -> Result<DateTime<Utc>> {
-    parse_optional_datetime(value, field)?
-        .ok_or_else(|| anyhow::anyhow!("OAuthCredential missing {field}"))
+fn parse_required_datetime(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<DateTime<Utc>, OAuthCredentialError> {
+    parse_optional_datetime(value, field)?.ok_or(OAuthCredentialError::MissingField { field })
 }
 
-fn parse_optional_datetime(value: Option<String>, field: &str) -> Result<Option<DateTime<Utc>>> {
+fn parse_optional_datetime(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<Option<DateTime<Utc>>, OAuthCredentialError> {
     value
-        .map(|value| {
-            DateTime::parse_from_rfc3339(&value)
-                .map(|value| value.with_timezone(&Utc))
-                .with_context(|| format!("parsing OAuthCredential {field} timestamp {value}"))
+        .map(|raw| {
+            DateTime::parse_from_rfc3339(&raw)
+                .map(|parsed| parsed.with_timezone(&Utc))
+                .map_err(|source| OAuthCredentialError::Timestamp {
+                    field,
+                    value: raw,
+                    source,
+                })
         })
         .transpose()
 }

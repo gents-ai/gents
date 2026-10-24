@@ -84,7 +84,13 @@ pub fn grok_client_version_gate_guidance() -> String {
     )
 }
 
-pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
+#[derive(Debug, thiserror::Error)]
+pub enum XaiGrokHeaderError {
+    #[error("Grok client version could not be encoded as an HTTP header")]
+    ClientVersion(#[source] reqwest::header::InvalidHeaderValue),
+}
+
+pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap, XaiGrokHeaderError> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Accept",
@@ -101,8 +107,7 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
     );
     headers.insert(
         "x-grok-client-version",
-        HeaderValue::from_str(&grok_client_version())
-            .context("Grok client version could not be encoded as an HTTP header")?,
+        HeaderValue::from_str(&grok_client_version()).map_err(XaiGrokHeaderError::ClientVersion)?,
     );
     headers.insert("User-Agent", HeaderValue::from_static("xai-grok-cli"));
     Ok(headers)

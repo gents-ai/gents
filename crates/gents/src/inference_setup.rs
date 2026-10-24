@@ -1,10 +1,21 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::backend_provider::BackendProviderKind;
 use crate::config::ReasoningEffort;
 use crate::document_config::AdvertisedModel;
 use crate::openai_wire::OpenAiWireApi;
+
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceSetupError {
+    #[error("the Anthropic API endpoint is fixed at {fixed}")]
+    AnthropicEndpointFixed { fixed: &'static str },
+    #[error("authentication method is incompatible with the selected provider")]
+    IncompatibleAuthentication,
+    #[error("endpoint is required")]
+    EndpointRequired,
+}
+
+type Result<T, E = InferenceSetupError> = std::result::Result<T, E>;
 
 pub const INFERENCE_SETUP_CONTRACT_VERSION: u32 = 1;
 pub const INFERENCE_DEFAULTS_VERSION: &str = "2026-09-25.1";
@@ -308,10 +319,9 @@ pub fn connection_spec(
         },
         (Anthropic, ApiKey) => {
             let fixed = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
-            anyhow::ensure!(
-                requested.is_empty() || requested.trim_end_matches('/') == fixed,
-                "the Anthropic API endpoint is fixed at {fixed}"
-            );
+            if !(requested.is_empty() || requested.trim_end_matches('/') == fixed) {
+                return Err(InferenceSetupError::AnthropicEndpointFixed { fixed });
+            }
             InferenceConnectionSpec {
                 backend_name: "Anthropic API",
                 provider_kind: BackendProviderKind::AnthropicApiKey,
@@ -373,9 +383,11 @@ pub fn connection_spec(
             oauth_provider: None,
             api_key_required: true,
         },
-        _ => anyhow::bail!("authentication method is incompatible with the selected provider"),
+        _ => return Err(InferenceSetupError::IncompatibleAuthentication),
     };
-    anyhow::ensure!(!spec.endpoint.trim().is_empty(), "endpoint is required");
+    if spec.endpoint.trim().is_empty() {
+        return Err(InferenceSetupError::EndpointRequired);
+    }
     Ok(spec)
 }
 

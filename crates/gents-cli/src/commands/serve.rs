@@ -1772,7 +1772,7 @@ mod grok_shim_tests {
             Ok(_) => panic!("an insecure key must not load"),
             Err(error) => error,
         };
-        let store = gents::storage_backend::incompatible_store(&error, Path::new(""))
+        let store = gents::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
             .expect("typed refusal");
         assert_eq!(
             store.kind,

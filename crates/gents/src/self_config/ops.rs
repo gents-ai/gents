@@ -1036,6 +1036,7 @@ pub(crate) async fn guard_backend_choice_in_txn(
             .await?
             .map(|(_, doc)| crate::InferenceBackend::from_value(&Value::Object(doc)))
             .transpose()
+            .map_err(anyhow::Error::from)
     };
     let current = match current_backend_id {
         Some(id) => backend(id.to_owned()).await?,
@@ -1140,7 +1141,7 @@ pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<(
         crate::toolset::lsp::LspConfigDocument::parse_self_config(lsp.config.as_deref())
             .map_err(anyhow::Error::msg)?;
     }
-    tools.validate()
+    Ok(tools.validate()?)
 }
 pub(crate) async fn read_owned_doc(
     txn: &ConfigApplyTxn<'_>,

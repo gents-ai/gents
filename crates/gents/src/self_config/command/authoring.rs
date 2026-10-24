@@ -180,7 +180,7 @@ impl ConfigCommandTool {
         let dir = admit_scaffold_dir(&context, name)?;
         let report = scaffold(&dir, name, input)?;
         let relative = context.display_path(&report.dir);
-        ordered! {
+        Ok(ordered! {
             "completed": true,
             "pack": report.pack,
             "namespace": report.namespace,
@@ -191,7 +191,7 @@ impl ConfigCommandTool {
             "next_call": json!({"argv":["pack","check",relative]}),
             "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then build plugin artifacts with `gents pack build` from the operator CLI before installing.",
         }
-        .pretty()
+        .pretty()?)
     }
 
     async fn check(&self, dir: Option<&str>) -> Result<String> {
@@ -199,7 +199,7 @@ impl ConfigCommandTool {
         let dir = context.resolve_existing_dir(dir)?;
         let report = check_dir(&dir).await;
         let (validated, note) = check_outcome_fields(&report);
-        ordered! {
+        Ok(ordered! {
             "pack": report.pack,
             "dir": context.display_path(&report.dir),
             "digest": report.digest,
@@ -209,7 +209,7 @@ impl ConfigCommandTool {
             "validated": validated,
             "note": note,
         }
-        .pretty()
+        .pretty()?)
     }
 
     async fn verify(&self, pack: &str) -> Result<String> {
@@ -223,13 +223,13 @@ impl ConfigCommandTool {
         );
         let header = verify_pack_file(&path)?;
         let resolved = context.display_path(&path);
-        ordered! {
+        Ok(ordered! {
             "verified": true,
             "header": serde_json::to_value(&header)?,
             "next_call": json!({"argv":["pack","preview","install",resolved]}),
             "note": "Verified the archive in place; nothing was stored or installed.",
         }
-        .pretty()
+        .pretty()?)
     }
 }
 

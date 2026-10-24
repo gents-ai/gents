@@ -9,7 +9,6 @@
 use rapidhash::RapidHashMap;
 use std::future::Future;
 
-use anyhow::{Context, Result};
 use bytes::Bytes;
 use reqwest::header::HeaderName;
 use rig::http_client::{
@@ -19,6 +18,16 @@ use rig::http_client::{
 use rig::wasm_compat::WasmCompatSend;
 
 const SESSION_ID_HEADER: &str = "x-session-id";
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InferenceHttpError {
+    #[error("building OpenAI Responses client")]
+    ResponsesClient(#[source] http_client::Error),
+    #[error("building OpenAI Chat Completions client")]
+    ChatCompletionsClient(#[source] http_client::Error),
+}
+
+type Result<T, E = InferenceHttpError> = std::result::Result<T, E>;
 
 pub(crate) fn build_openai_responses_client<H>(
     api_key: &str,
@@ -35,7 +44,7 @@ where
         .http_headers(http_headers)
         .http_client(http_client)
         .build()
-        .context("building OpenAI Responses client")
+        .map_err(InferenceHttpError::ResponsesClient)
 }
 
 pub(crate) fn build_openai_chat_completions_client<H>(
@@ -51,7 +60,7 @@ where
         .base_url(base_url)
         .http_client(http_client)
         .build()
-        .context("building OpenAI Chat Completions client")
+        .map_err(InferenceHttpError::ChatCompletionsClient)
 }
 
 #[derive(Clone, Debug, Default)]

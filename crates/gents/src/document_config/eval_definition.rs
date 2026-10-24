@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
+
+use super::error::DocumentConfigError;
 
 pub const LLM_JUDGE_CHECK: &str = "llm_judge";
 
@@ -286,171 +287,271 @@ pub struct EvalDefinition {
 }
 
 impl EvalDefinition {
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         let id = &self.definition_id;
-        ensure!(
-            !id.trim().is_empty(),
-            "eval definition requires a definition_id"
-        );
-        ensure!(
-            self.comparability_version >= 1,
-            "eval definition {id} comparability_version must be at least 1"
-        );
-        ensure!(
-            !self.cases.is_empty(),
-            "eval definition {id} requires at least one case"
-        );
+        if id.trim().is_empty() {
+            return Err(DocumentConfigError::EvalDefinitionIdBlank);
+        }
+        if self.comparability_version < 1 {
+            return Err(DocumentConfigError::EvalComparabilityVersion { id: id.clone() });
+        }
+        if self.cases.is_empty() {
+            return Err(DocumentConfigError::EvalNoCases { id: id.clone() });
+        }
         validate_fixture_files(self.fixtures.as_ref(), &format!("eval definition {id}"))?;
         let mut case_ids = BTreeSet::new();
         for case in &self.cases {
             let case_id = &case.case_id;
-            ensure!(
-                !case_id.trim().is_empty(),
-                "eval definition {id} has a case with no case_id"
-            );
-            ensure!(
-                case_ids.insert(case_id),
-                "eval definition {id} has duplicate case_id {case_id}"
-            );
+            if case_id.trim().is_empty() {
+                return Err(DocumentConfigError::EvalCaseIdBlank { id: id.clone() });
+            }
+            if !case_ids.insert(case_id) {
+                return Err(DocumentConfigError::EvalDuplicateCase {
+                    id: id.clone(),
+                    case_id: case_id.clone(),
+                });
+            }
             validate_fixture_files(
                 case.fixtures.as_ref(),
                 &format!("eval definition {id} case {case_id}"),
             )?;
-            ensure!(
-                !case.stages.is_empty(),
-                "eval definition {id} case {case_id} requires at least one stage"
-            );
-            ensure!(
-                case.goal
-                    .keys()
-                    .all(|collection| !collection.trim().is_empty()),
-                "eval definition {id} case {case_id} has a goal with an empty collection name"
-            );
+            if case.stages.is_empty() {
+                return Err(DocumentConfigError::EvalCaseNoStages {
+                    id: id.clone(),
+                    case_id: case_id.clone(),
+                });
+            }
+            if !case
+                .goal
+                .keys()
+                .all(|collection| !collection.trim().is_empty())
+            {
+                return Err(DocumentConfigError::EvalGoalCollectionBlank {
+                    id: id.clone(),
+                    case_id: case_id.clone(),
+                });
+            }
             let mut stage_ids = BTreeSet::new();
             let mut acceptance = 0usize;
             for (stage_index, stage) in case.stages.iter().enumerate() {
                 let stage_id = &stage.stage_id;
-                ensure!(
-                    !stage_id.trim().is_empty(),
-                    "eval definition {id} case {case_id} has a stage with no stage_id"
-                );
-                ensure!(
-                    stage_ids.insert(stage_id),
-                    "eval definition {id} case {case_id} has duplicate stage_id {stage_id}"
-                );
-                ensure!(
-                    stage.deadline_secs > 0,
-                    "eval definition {id} case {case_id} stage {stage_id} deadline_secs must be positive"
-                );
-                ensure!(
-                    stage.seed.is_some() != !stage.prompt.trim().is_empty(),
-                    "eval definition {id} case {case_id} stage {stage_id} needs exactly one of seed or prompt"
-                );
-                ensure!(
-                    !stage.review_previous || (stage_index > 0 && stage.seed.is_none()
-                        && !case.stages[stage_index - 1].checks.is_empty()),
-                    "eval definition {id} case {case_id} stage {stage_id} review_previous requires a prompt and a preceding checked stage"
-                );
+                if stage_id.trim().is_empty() {
+                    return Err(DocumentConfigError::EvalStageIdBlank {
+                        id: id.clone(),
+                        case_id: case_id.clone(),
+                    });
+                }
+                let stage_error = |build: fn(String, String, String) -> DocumentConfigError| {
+                    build(id.clone(), case_id.clone(), stage_id.clone())
+                };
+                if !stage_ids.insert(stage_id) {
+                    return Err(DocumentConfigError::EvalDuplicateStage {
+                        id: id.clone(),
+                        case_id: case_id.clone(),
+                        stage_id: stage_id.clone(),
+                    });
+                }
+                if !(stage.deadline_secs > 0) {
+                    return Err(stage_error(|id, case_id, stage_id| {
+                        DocumentConfigError::EvalStageDeadline {
+                            id,
+                            case_id,
+                            stage_id,
+                        }
+                    }));
+                }
+                if stage.seed.is_some() == !stage.prompt.trim().is_empty() {
+                    return Err(stage_error(|id, case_id, stage_id| {
+                        DocumentConfigError::EvalStageSeedOrPrompt {
+                            id,
+                            case_id,
+                            stage_id,
+                        }
+                    }));
+                }
+                if stage.review_previous
+                    && !(stage_index > 0
+                        && stage.seed.is_none()
+                        && !case.stages[stage_index - 1].checks.is_empty())
+                {
+                    return Err(stage_error(|id, case_id, stage_id| {
+                        DocumentConfigError::EvalReviewPrevious {
+                            id,
+                            case_id,
+                            stage_id,
+                        }
+                    }));
+                }
                 if let Some(seed) = &stage.seed {
-                    ensure!(
-                        !seed.collection.trim().is_empty(),
-                        "eval definition {id} case {case_id} stage {stage_id} seed collection must be named"
-                    );
+                    if seed.collection.trim().is_empty() {
+                        return Err(stage_error(|id, case_id, stage_id| {
+                            DocumentConfigError::EvalSeedCollection {
+                                id,
+                                case_id,
+                                stage_id,
+                            }
+                        }));
+                    }
                 }
                 if let Some(continuation) = &stage.continuation {
-                    ensure!(
-                        stage.settle,
-                        "eval definition {id} case {case_id} stage {stage_id} continuation requires settle"
-                    );
-                    ensure!(
-                        !continuation.prompt.trim().is_empty() && continuation.max >= 1,
-                        "eval definition {id} case {case_id} stage {stage_id} continuation needs a prompt and a max of at least 1"
-                    );
-                    ensure!(
-                        stage.capture.iter().any(|capture| matches!(
+                    if !stage.settle {
+                        return Err(stage_error(|id, case_id, stage_id| {
+                            DocumentConfigError::EvalContinuationRequiresSettle {
+                                id,
+                                case_id,
+                                stage_id,
+                            }
+                        }));
+                    }
+                    if continuation.prompt.trim().is_empty() || continuation.max < 1 {
+                        return Err(stage_error(|id, case_id, stage_id| {
+                            DocumentConfigError::EvalContinuationInvalid {
+                                id,
+                                case_id,
+                                stage_id,
+                            }
+                        }));
+                    }
+                    if !stage.capture.iter().any(|capture| {
+                        matches!(
                             capture,
                             EvalCapture::Documents { name, .. } if name == &continuation.until
-                        )),
-                        "eval definition {id} case {case_id} stage {stage_id} continuation until names no documents capture {:?}",
-                        continuation.until
-                    );
+                        )
+                    }) {
+                        return Err(DocumentConfigError::EvalContinuationUntil {
+                            id: id.clone(),
+                            case_id: case_id.clone(),
+                            stage_id: stage_id.clone(),
+                            until: continuation.until.clone(),
+                        });
+                    }
                 }
                 let mut check_names = BTreeSet::new();
                 for check in &stage.checks {
-                    ensure!(
-                        !check.check.trim().is_empty(),
-                        "eval definition {id} case {case_id} stage {stage_id} has an empty check name"
-                    );
-                    ensure!(
-                        check_names.insert(check.check.as_str()),
-                        "eval definition {id} case {case_id} stage {stage_id} has duplicate check {}",
-                        check.check
-                    );
-                    ensure!(
-                        check.weight >= 1,
-                        "eval definition {id} case {case_id} check {} weight must be at least 1",
-                        check.check
-                    );
+                    if check.check.trim().is_empty() {
+                        return Err(stage_error(|id, case_id, stage_id| {
+                            DocumentConfigError::EvalCheckNameBlank {
+                                id,
+                                case_id,
+                                stage_id,
+                            }
+                        }));
+                    }
+                    if !check_names.insert(check.check.as_str()) {
+                        return Err(DocumentConfigError::EvalDuplicateCheck {
+                            id: id.clone(),
+                            case_id: case_id.clone(),
+                            stage_id: stage_id.clone(),
+                            check: check.check.clone(),
+                        });
+                    }
+                    if !(check.weight >= 1) {
+                        return Err(DocumentConfigError::EvalCheckWeight {
+                            id: id.clone(),
+                            case_id: case_id.clone(),
+                            check: check.check.clone(),
+                        });
+                    }
                     if check.tier == EvalTier::Acceptance {
-                        ensure!(
-                            check.check != LLM_JUDGE_CHECK,
-                            "eval definition {id} case {case_id}: {LLM_JUDGE_CHECK} is development-tier only"
-                        );
+                        if check.check == LLM_JUDGE_CHECK {
+                            return Err(DocumentConfigError::EvalJudgeAcceptance {
+                                id: id.clone(),
+                                case_id: case_id.clone(),
+                            });
+                        }
                         acceptance += 1;
                     }
                 }
                 let mut capture_names = BTreeSet::new();
                 for capture in &stage.capture {
                     let name = capture.name();
-                    ensure!(
-                        !name.trim().is_empty(),
-                        "eval definition {id} case {case_id} stage {stage_id} has an empty capture name"
-                    );
-                    ensure!(
-                        capture_names.insert(name),
-                        "eval definition {id} case {case_id} stage {stage_id} has duplicate capture name {name}"
-                    );
+                    if name.trim().is_empty() {
+                        return Err(stage_error(|id, case_id, stage_id| {
+                            DocumentConfigError::EvalCaptureNameBlank {
+                                id,
+                                case_id,
+                                stage_id,
+                            }
+                        }));
+                    }
+                    if !capture_names.insert(name) {
+                        return Err(DocumentConfigError::EvalDuplicateCapture {
+                            id: id.clone(),
+                            case_id: case_id.clone(),
+                            stage_id: stage_id.clone(),
+                            name: name.to_owned(),
+                        });
+                    }
                     match capture {
                         EvalCapture::Schema { collections, .. } => {
-                            ensure!(!collections.is_empty(), "schema capture {name} needs collection names");
+                            if collections.is_empty() {
+                                return Err(DocumentConfigError::EvalSchemaCaptureEmpty {
+                                    name: name.to_owned(),
+                                });
+                            }
                             let mut names = BTreeSet::new();
                             for collection in collections {
                                 crate::graphql::validate_collection_identifier(collection)?;
-                                ensure!(names.insert(collection), "schema capture {name} repeats {collection}");
+                                if !names.insert(collection) {
+                                    return Err(DocumentConfigError::EvalSchemaCaptureRepeats {
+                                        name: name.to_owned(),
+                                        collection: collection.clone(),
+                                    });
+                                }
                             }
-                        },
-                        EvalCapture::Documents { collection, .. } => ensure!(
-                            !collection.trim().is_empty(),
-                            "eval definition {id} case {case_id} stage {stage_id} capture {name} has an empty collection"
-                        ),
-                        EvalCapture::File { glob, .. } => ensure!(
-                            !glob.trim().is_empty(),
-                            "eval definition {id} case {case_id} stage {stage_id} capture {name} has an empty glob"
-                        ),
+                        }
+                        EvalCapture::Documents { collection, .. } => {
+                            if collection.trim().is_empty() {
+                                return Err(DocumentConfigError::EvalDocumentsCaptureBlank {
+                                    id: id.clone(),
+                                    case_id: case_id.clone(),
+                                    stage_id: stage_id.clone(),
+                                    name: name.to_owned(),
+                                });
+                            }
+                        }
+                        EvalCapture::File { glob, .. } => {
+                            if glob.trim().is_empty() {
+                                return Err(DocumentConfigError::EvalFileCaptureBlank {
+                                    id: id.clone(),
+                                    case_id: case_id.clone(),
+                                    stage_id: stage_id.clone(),
+                                    name: name.to_owned(),
+                                });
+                            }
+                        }
                     }
                 }
             }
-            ensure!(
-                acceptance > 0,
-                "eval definition {id} case {case_id} requires at least one acceptance-tier check"
-            );
+            if acceptance == 0 {
+                return Err(DocumentConfigError::EvalAcceptanceRequired {
+                    id: id.clone(),
+                    case_id: case_id.clone(),
+                });
+            }
         }
         Ok(())
     }
 }
 
-fn validate_fixture_files(fixtures: Option<&EvalFixtures>, owner: &str) -> Result<()> {
+fn validate_fixture_files(
+    fixtures: Option<&EvalFixtures>,
+    owner: &str,
+) -> Result<(), DocumentConfigError> {
     for file in fixtures.map_or(&[][..], |fixtures| &fixtures.files) {
         let path = &file.path;
         let path_ref = std::path::Path::new(path);
-        ensure!(
-            !path.is_empty()
-                && path_ref.is_relative()
-                && path_ref
-                    .components()
-                    .all(|component| matches!(component, std::path::Component::Normal(_))),
-            "{owner} fixture file path {path:?} must be a relative path inside the trial workspace"
-        );
+        if path.is_empty()
+            || !path_ref.is_relative()
+            || !path_ref
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(DocumentConfigError::EvalFixturePath {
+                owner: owner.to_owned(),
+                path: path.clone(),
+            });
+        }
     }
     Ok(())
 }

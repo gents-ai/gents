@@ -88,10 +88,18 @@ pub fn normalize_provider(provider: &str) -> String {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ChatGptCodexHeaderError {
+    #[error("ChatGPT account id could not be encoded as an HTTP header")]
+    AccountId(#[source] reqwest::header::InvalidHeaderValue),
+    #[error("ChatGPT Codex client version could not be encoded as an HTTP header")]
+    ClientVersion(#[source] reqwest::header::InvalidHeaderValue),
+}
+
 pub fn build_chatgpt_codex_headers(
     account_id: Option<&str>,
     is_fedramp: bool,
-) -> Result<HeaderMap> {
+) -> Result<HeaderMap, ChatGptCodexHeaderError> {
     let mut headers = HeaderMap::new();
     headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
     headers.insert(
@@ -103,8 +111,8 @@ pub fn build_chatgpt_codex_headers(
         HeaderValue::from_static("text/event-stream, application/json"),
     );
     if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
-        let account_id = HeaderValue::from_str(account_id)
-            .context("ChatGPT account id could not be encoded as an HTTP header")?;
+        let account_id =
+            HeaderValue::from_str(account_id).map_err(ChatGptCodexHeaderError::AccountId)?;
         headers.insert("ChatGPT-Account-ID", account_id);
     }
     if is_fedramp {
@@ -113,7 +121,7 @@ pub fn build_chatgpt_codex_headers(
     headers.insert(
         "version",
         HeaderValue::from_str(&chatgpt_codex_client_version())
-            .context("ChatGPT Codex client version could not be encoded as an HTTP header")?,
+            .map_err(ChatGptCodexHeaderError::ClientVersion)?,
     );
     Ok(headers)
 }

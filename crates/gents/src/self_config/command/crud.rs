@@ -40,7 +40,7 @@ impl ConfigCommandTool {
                 receipt["effect"] = json!("No documents changed. Use the returned delete call; it rechecks content and references before committing.");
                 receipt["apply_with"] = json!({"argv":[resource,"delete"],"target_id":id,"options":{"digest":receipt["plan_digest"]}});
             }
-            return Ordered::reading_order(
+            return Ok(Ordered::reading_order(
                 receipt,
                 &[
                     "committed",
@@ -53,7 +53,7 @@ impl ConfigCommandTool {
                 ],
             )
             .pretty()
-            .map(Some);
+            .map(Some)?);
         }
         if target == SelfConfigTarget::Agent {
             if verb == "update" {
@@ -424,7 +424,7 @@ impl ConfigCommandTool {
                 }
             }
         }
-        ordered! {"completed":true,"atomic":false,"results":results}.pretty()
+        Ok(ordered! {"completed":true,"atomic":false,"results":results}.pretty()?)
     }
 }
 

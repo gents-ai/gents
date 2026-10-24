@@ -72,9 +72,10 @@ pub(super) async fn agent_preview(
 ) -> Result<String> {
     match agent_apply(node, owner, args, ceiling, true).await {
         Ok(result) => Ok(result),
-        Err(error) => {
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
-        }
+        Err(error) => Ok(
+            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}
+                .pretty()?,
+        ),
     }
 }
 
@@ -141,9 +142,10 @@ pub(super) async fn model_agent_preview(
     .await
     {
         Ok(result) => Ok(result),
-        Err(error) => {
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
-        }
+        Err(error) => Ok(
+            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}
+                .pretty()?,
+        ),
     }
 }
 
@@ -528,5 +530,5 @@ async fn agent_apply_in_txn(
     if !preview {
         apply_desired_state_plan(txn, &plan).await?;
     }
-    ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_id":id,"agent":doc,"make_default":args.make_default}.pretty()
+    Ok(ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_id":id,"agent":doc,"make_default":args.make_default}.pretty()?)
 }

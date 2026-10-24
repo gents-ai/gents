@@ -39,7 +39,9 @@ pub fn desktop_allowed_dirs_add(
     state: State<'_, DesktopAppState>,
 ) -> Result<AllowedFoldersView, BridgeError> {
     let home = home(&state)?;
-    let access: BindAccess = access.parse().map_err(failed)?;
+    let access: BindAccess = access
+        .parse()
+        .map_err(|error: gents::pack::PackError| failed(error.into()))?;
     allowed::add(&home, std::path::Path::new(&path), access).map_err(failed)?;
     view(&home)
 }

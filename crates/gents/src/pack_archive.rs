@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::Result;
 
 use crate::pack::{is_distributable_asset_path, PackManifest, PackPlugin};
 
@@ -13,6 +13,44 @@ pub use format::{
 };
 
 pub const DEFAULT_NAMESPACE: &str = "gents";
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackArchiveError {
+    #[error("refusing to read pack asset {path:?}")]
+    UnpackedRefused { path: String },
+    #[error("the unpacked pack is missing {path}")]
+    UnpackedMissing {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Metadata(std::io::Error),
+    #[error("mapping {}", path.display())]
+    Map {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("this pack ships no plugin called {name:?}")]
+    NoPlugin { name: String },
+    #[error("this pack carries no asset {path:?}")]
+    NoAsset { path: String },
+    #[error("refusing to write pack asset {path:?}")]
+    WriteRefused { path: String },
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 pub const MAX_PACK_BYTES: usize = 1024 * 1024 * 1024;
 
@@ -77,25 +115,34 @@ impl PackArchive {
         })
     }
 
-    pub fn from_unpacked(dir: &Path, header: PackHeader, manifest: PackManifest) -> Result<Self> {
+    pub fn from_unpacked(
+        dir: &Path,
+        header: PackHeader,
+        manifest: PackManifest,
+    ) -> Result<Self, PackArchiveError> {
         let mut assets = BTreeMap::new();
         for path in crate::pack::declared_paths(&manifest) {
-            ensure!(
-                is_distributable_asset_path(&path),
-                "refusing to read pack asset {path:?}"
-            );
-            let file = std::fs::File::open(dir.join(&path))
-                .with_context(|| format!("the unpacked pack is missing {path}"))?;
-            let bytes = if file.metadata()?.len() == 0 {
+            if !is_distributable_asset_path(&path) {
+                return Err(PackArchiveError::UnpackedRefused { path });
+            }
+            let file = std::fs::File::open(dir.join(&path)).map_err(|source| {
+                PackArchiveError::UnpackedMissing {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            let bytes = if file.metadata().map_err(PackArchiveError::Metadata)?.len() == 0 {
                 AssetBytes::Empty
             } else {
                 // SAFETY: the store writes an unpacked pack once, into a staging
                 // directory renamed into place under its digest, and never
                 // writes to it again, so the mapped file does not change.
-                AssetBytes::Mapped(
-                    unsafe { memmap2::Mmap::map(&file) }
-                        .with_context(|| format!("mapping {}", dir.join(&path).display()))?,
-                )
+                AssetBytes::Mapped(unsafe { memmap2::Mmap::map(&file) }.map_err(|source| {
+                    PackArchiveError::Map {
+                        path: dir.join(&path),
+                        source,
+                    }
+                })?)
             };
             assets.insert(path, bytes);
         }
@@ -118,44 +165,53 @@ impl PackArchive {
         &self.manifest.metadata.plugins
     }
 
-    pub fn plugin(&self, name: &str) -> Result<&PackPlugin> {
+    pub fn plugin(&self, name: &str) -> Result<&PackPlugin, PackArchiveError> {
         self.manifest
             .metadata
             .plugins
             .iter()
             .find(|plugin| plugin.name == name)
-            .with_context(|| format!("this pack ships no plugin called {name:?}"))
+            .ok_or_else(|| PackArchiveError::NoPlugin {
+                name: name.to_owned(),
+            })
     }
 
-    pub fn plugin_artifact(&self, name: &str) -> Result<&[u8]> {
+    pub fn plugin_artifact(&self, name: &str) -> Result<&[u8], PackArchiveError> {
         let plugin = self.plugin(name)?;
         self.asset(&plugin.artifact)
     }
 
-    pub fn asset(&self, path: &str) -> Result<&[u8]> {
+    pub fn asset(&self, path: &str) -> Result<&[u8], PackArchiveError> {
         self.assets
             .get(path)
             .map(AssetBytes::as_slice)
-            .with_context(|| format!("this pack carries no asset {path:?}"))
+            .ok_or_else(|| PackArchiveError::NoAsset {
+                path: path.to_owned(),
+            })
     }
 
     pub fn digest(&self) -> &str {
         &self.header.digest
     }
 
-    pub fn write_to(&self, dir: &Path) -> Result<()> {
+    pub fn write_to(&self, dir: &Path) -> Result<(), PackArchiveError> {
         for (path, bytes) in &self.assets {
-            ensure!(
-                is_distributable_asset_path(path),
-                "refusing to write pack asset {path:?}"
-            );
+            if !is_distributable_asset_path(path) {
+                return Err(PackArchiveError::WriteRefused { path: path.clone() });
+            }
             let target = dir.join(path);
             if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
+                std::fs::create_dir_all(parent).map_err(|source| PackArchiveError::CreateDir {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
             }
-            std::fs::write(&target, bytes.as_slice())
-                .with_context(|| format!("writing {}", target.display()))?;
+            std::fs::write(&target, bytes.as_slice()).map_err(|source| {
+                PackArchiveError::Write {
+                    path: target.clone(),
+                    source,
+                }
+            })?;
         }
         Ok(())
     }

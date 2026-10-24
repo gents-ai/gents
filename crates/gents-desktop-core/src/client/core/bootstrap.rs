@@ -559,7 +559,7 @@ async fn client_store_key(
     if let Some(provider) = &options.store_key_provider {
         provider.load(record, key_file, data_path).await
     } else {
-        record.initialize(key_file, data_path)
+        Ok(record.initialize(key_file, data_path)?)
     }
 }
 
@@ -800,7 +800,10 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
+            error
+                .downcast_ref::<gents::home::HomeError>()
+                .and_then(gents::home::HomeError::lock_held)
+                .is_some(),
             "{error:#}"
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);

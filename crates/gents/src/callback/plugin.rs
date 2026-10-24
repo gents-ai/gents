@@ -39,7 +39,9 @@ pub(crate) fn writable_output_collection(collection: &str) -> Result<()> {
         !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection),
         "a plugin cannot write {collection}, which belongs to the runtime"
     );
-    crate::document_config::reject_protected_collection_name(collection)
+    Ok(crate::document_config::reject_protected_collection_name(
+        collection,
+    )?)
 }
 
 pub fn validate_handler(

@@ -41,6 +41,35 @@ pub const DEV_ENTRY: &str = "plugin.js";
 /// The optional stylesheet beside it.
 pub const DEV_CSS: &str = "plugin.css";
 
+#[derive(Debug, thiserror::Error)]
+pub enum UxPluginError {
+    #[error("reading {what} {}", path.display())]
+    Read {
+        what: String,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{what} {} is {len} bytes; the limit is {limit_mib} MiB", path.display())]
+    ModuleTooLarge {
+        what: String,
+        path: PathBuf,
+        len: usize,
+        limit_mib: usize,
+    },
+    #[error("{what} {} is not UTF-8", path.display())]
+    NotUtf8 {
+        what: String,
+        path: PathBuf,
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+    #[error("a ux producer must print one JSON object {{\"module\": \"<esm>\", \"css\": \"<optional>\"}}")]
+    ProducerOutput(#[source] serde_json::Error),
+    #[error("the produced module is {len} bytes; the limit is {limit_mib} MiB")]
+    ProducedModuleTooLarge { len: usize, limit_mib: usize },
+}
+
 /// Largest module the desktop will evaluate: a plugin is a UI, not a
 /// bundle of a whole app, and the webview reads it whole.
 pub const MAX_MODULE_BYTES: usize = 16 * 1024 * 1024;
@@ -222,17 +251,25 @@ pub fn find(home: &Path, id: &str) -> Result<UxListing> {
         .with_context(|| format!("no ux plugin {id:?} under {}", home.display()))
 }
 
-fn read_bounded(path: &Path, what: &str) -> Result<String> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("reading {what} {}", path.display()))?;
-    anyhow::ensure!(
-        bytes.len() <= MAX_MODULE_BYTES,
-        "{what} {} is {} bytes; the limit is {} MiB",
-        path.display(),
-        bytes.len(),
-        MAX_MODULE_BYTES / 1024 / 1024
-    );
-    String::from_utf8(bytes).with_context(|| format!("{what} {} is not UTF-8", path.display()))
+fn read_bounded(path: &Path, what: &str) -> std::result::Result<String, UxPluginError> {
+    let bytes = std::fs::read(path).map_err(|source| UxPluginError::Read {
+        what: what.to_owned(),
+        path: path.to_owned(),
+        source,
+    })?;
+    if bytes.len() > MAX_MODULE_BYTES {
+        return Err(UxPluginError::ModuleTooLarge {
+            what: what.to_owned(),
+            path: path.to_owned(),
+            len: bytes.len(),
+            limit_mib: MAX_MODULE_BYTES / 1024 / 1024,
+        });
+    }
+    String::from_utf8(bytes).map_err(|source| UxPluginError::NotUtf8 {
+        what: what.to_owned(),
+        path: path.to_owned(),
+        source,
+    })
 }
 
 fn digest_of(source: &str) -> String {
@@ -293,16 +330,17 @@ fn declared_css(home: &Path, listing: &UxListing) -> Result<Option<String>> {
 }
 
 /// Parses what a form-C producer printed into a module.
-pub fn module_from_producer_output(output: &serde_json::Value) -> Result<UxModule> {
-    let produced: ProducedModule = serde_json::from_value(output.clone()).context(
-        "a ux producer must print one JSON object {\"module\": \"<esm>\", \"css\": \"<optional>\"}",
-    )?;
-    anyhow::ensure!(
-        produced.module.len() <= MAX_MODULE_BYTES,
-        "the produced module is {} bytes; the limit is {} MiB",
-        produced.module.len(),
-        MAX_MODULE_BYTES / 1024 / 1024
-    );
+pub fn module_from_producer_output(
+    output: &serde_json::Value,
+) -> std::result::Result<UxModule, UxPluginError> {
+    let produced: ProducedModule =
+        serde_json::from_value(output.clone()).map_err(UxPluginError::ProducerOutput)?;
+    if produced.module.len() > MAX_MODULE_BYTES {
+        return Err(UxPluginError::ProducedModuleTooLarge {
+            len: produced.module.len(),
+            limit_mib: MAX_MODULE_BYTES / 1024 / 1024,
+        });
+    }
     Ok(UxModule {
         digest: digest_of(&produced.module),
         source: produced.module,
@@ -349,7 +387,7 @@ where
                 .and_then(|u| u.plugin.clone())
                 .with_context(|| format!("ux plugin {} names no producer", listing.id))?;
             let output = run_afb(namespace.to_owned(), plugin).await?;
-            module_from_producer_output(&output)
+            Ok(module_from_producer_output(&output)?)
         }
     }
 }

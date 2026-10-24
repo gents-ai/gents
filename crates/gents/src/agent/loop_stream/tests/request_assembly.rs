@@ -836,8 +836,7 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
 
         let built = builder
             .build(&conversation, &summaries)
-            .await
-            .expect("build layered prompt");
+            .await;
 
         let mut assembled = skill_reminders
             .into_iter()

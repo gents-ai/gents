@@ -184,7 +184,7 @@ pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::Pack
         &crate::pack::PackInstallOptions {
             node_did: PLACEHOLDER_OWNER.into(),
         },
-        &|path| archive.asset(path).map(Vec::from),
+        &|path| Ok(archive.asset(path).map(Vec::from)?),
         &|_| None,
     )?;
     crate::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;

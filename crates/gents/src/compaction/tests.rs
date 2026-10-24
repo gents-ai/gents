@@ -3010,8 +3010,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
                 .collect::<Vec<_>>(),
             &summaries,
         )
-        .await
-        .unwrap();
+        .await;
 
     if let Message::User { content } = &built.messages[0].message {
         if let UserContent::Text(text) = first_content(content) {

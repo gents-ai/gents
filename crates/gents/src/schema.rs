@@ -27,9 +27,11 @@ pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
         return access
             .run_local_owned(|node| async move {
-                crate::migration::ensure_migrations_borrowed(node.as_ref()).await
+                crate::migration::ensure_migrations_borrowed(node.as_ref())
+                    .await
+                    .map_err(anyhow::Error::from)
             })
             .await;
     }
-    crate::migration::ensure_migrations_borrowed(node).await
+    Ok(crate::migration::ensure_migrations_borrowed(node).await?)
 }

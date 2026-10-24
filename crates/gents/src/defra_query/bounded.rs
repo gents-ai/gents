@@ -109,7 +109,9 @@ impl BoundedQueryTool {
             )),
             "filter field collides with a reserved query argument"
         );
-        crate::document_config::reject_protected_collection_name(&self.decl.collection)
+        Ok(crate::document_config::reject_protected_collection_name(
+            &self.decl.collection,
+        )?)
     }
 
     async fn filter_parameters(&self) -> Result<Map<String, Value>> {

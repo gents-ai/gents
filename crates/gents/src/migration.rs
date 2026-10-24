@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 pub use gents_migration::{
@@ -11,17 +11,28 @@ pub use gents_migration::{
     MigrationStepOwned, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeMigrationError {
+    #[error("ensure_migrations")]
+    EnsureMigrations(#[source] MigrationError),
+}
+
 pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     crate::config_client::ConfigAccess::local(node)
-        .run_local_owned(|node| async move { ensure_migrations_borrowed(node.as_ref()).await })
+        .run_local_owned(|node| async move {
+            ensure_migrations_borrowed(node.as_ref())
+                .await
+                .map_err(anyhow::Error::from)
+        })
         .await?;
     Ok(())
 }
 
-pub(crate) async fn ensure_migrations_borrowed(node: &EmbeddedNode) -> Result<()> {
+pub(crate) async fn ensure_migrations_borrowed(
+    node: &EmbeddedNode,
+) -> Result<(), RuntimeMigrationError> {
     ensure_migrations(node)
         .await
         .map(|_| ())
-        .map_err(|error| anyhow::anyhow!(error))
-        .context("ensure_migrations")
+        .map_err(RuntimeMigrationError::EnsureMigrations)
 }

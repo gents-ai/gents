@@ -270,12 +270,7 @@ where
         Some(&crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
     );
 
-    let history = match prompt_builder.build(&[], &[]).await {
-        Ok(prompt) => prompt.messages,
-        Err(error) => {
-            return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
-        }
-    };
+    let history = prompt_builder.build(&[], &[]).await.messages;
 
     let hook = match DefraSessionHook::resume_with_identity_policy(
         node.clone(),

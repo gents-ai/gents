@@ -39,7 +39,7 @@ fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIde
         plugin_home,
         archive.manifest(),
         archive.digest(),
-        |path| archive.asset(path),
+        |path| Ok(archive.asset(path)?),
         false,
     )
     .unwrap();

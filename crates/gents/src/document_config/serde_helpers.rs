@@ -4,6 +4,8 @@ use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
+use super::error::DocumentConfigError;
+
 pub(crate) fn deserialize_default_on_null<'de, D, T>(
     deserializer: D,
 ) -> std::result::Result<T, D::Error>
@@ -198,28 +200,34 @@ pub(super) fn is_disabled(value: &bool) -> bool {
 pub(super) fn try_rows_with_doc_id<T>(
     data: Option<&Value>,
     field: &str,
-) -> anyhow::Result<Vec<(String, T)>>
+) -> std::result::Result<Vec<(String, T)>, DocumentConfigError>
 where
     T: DeserializeOwned,
 {
-    use anyhow::Context;
     let rows = data
         .and_then(|data| data.get(field))
         .and_then(Value::as_array)
-        .with_context(|| format!("{field} response has no rows array"))?;
+        .ok_or_else(|| DocumentConfigError::RowsArrayMissing {
+            field: field.to_owned(),
+        })?;
     rows.iter()
         .map(|row| {
             let mut payload = row.clone();
             let doc_id = payload
                 .as_object_mut()
-                .context("document row must be an object")?
+                .ok_or(DocumentConfigError::RowNotObject)?
                 .remove("_docID")
                 .and_then(|value| value.as_str().map(str::to_string))
                 .filter(|value| !value.trim().is_empty())
-                .context("document row requires physical ID")?;
+                .ok_or(DocumentConfigError::RowMissingPhysicalId)?;
             Ok((
                 doc_id,
-                serde_json::from_value(payload).with_context(|| format!("invalid {field} row"))?,
+                serde_json::from_value(payload).map_err(|source| {
+                    DocumentConfigError::InvalidRow {
+                        field: field.to_owned(),
+                        source,
+                    }
+                })?,
             ))
         })
         .collect()

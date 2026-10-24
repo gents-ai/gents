@@ -24,14 +24,44 @@ pub struct BackendFields {
     pub backend_auth: BackendAuth,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum BackendRegistryError {
+    #[error("InferenceBackend must be an object")]
+    NotAnObject,
+    #[error("decoding InferenceBackend configuration")]
+    Decode(#[source] serde_json::Error),
+    #[error("{violations}")]
+    Invalid { violations: String },
+    #[error("API key must not be blank")]
+    ApiKeyBlank,
+    #[error("API key environment variable must not be blank")]
+    EnvironmentVariableBlank,
+    #[error("API key environment variable {variable:?} is unavailable")]
+    EnvironmentVariableUnavailable {
+        variable: String,
+        #[source]
+        source: std::env::VarError,
+    },
+    #[error("API key environment variable {variable:?} is blank")]
+    EnvironmentVariableEmpty { variable: String },
+    #[error("node OAuth requires the invoking node's OAuthCredential")]
+    NodeOAuthCredentialRequired,
+    #[error("ambiguous backend catalog authentication scope")]
+    AmbiguousCatalogScope,
+    #[error("backend owner DID must not be blank")]
+    OwnerBlank,
+    #[error("backend ID must not be blank")]
+    BackendIdBlank,
+}
+
 pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 
 impl InferenceBackend {
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+    pub fn from_value(value: &serde_json::Value) -> Result<Self, BackendRegistryError> {
         let mut config = value.clone();
         let object = config
             .as_object_mut()
-            .context("InferenceBackend must be an object")?;
+            .ok_or(BackendRegistryError::NotAnObject)?;
         for field in [
             "_docID",
             "_deleted",
@@ -42,8 +72,7 @@ impl InferenceBackend {
         ] {
             object.remove(field);
         }
-        let backend: Self =
-            serde_json::from_value(config).context("decoding InferenceBackend configuration")?;
+        let backend: Self = serde_json::from_value(config).map_err(BackendRegistryError::Decode)?;
         backend.validate()?;
         Ok(backend)
     }
@@ -120,9 +149,13 @@ impl InferenceBackend {
         violations
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), BackendRegistryError> {
         let violations = self.validation_violations();
-        anyhow::ensure!(violations.is_empty(), "{}", violations.join("; "));
+        if !violations.is_empty() {
+            return Err(BackendRegistryError::Invalid {
+                violations: violations.join("; "),
+            });
+        }
         Ok(())
     }
 
@@ -132,30 +165,33 @@ impl InferenceBackend {
 }
 
 impl BackendAuth {
-    pub fn resolve_api_key(&self) -> Result<Option<String>> {
+    pub fn resolve_api_key(&self) -> Result<Option<String>, BackendRegistryError> {
         match self {
             Self::Unauthenticated => Ok(None),
             Self::ApiKey { key } => {
-                anyhow::ensure!(!key.trim().is_empty(), "API key must not be blank");
+                if key.trim().is_empty() {
+                    return Err(BackendRegistryError::ApiKeyBlank);
+                }
                 Ok(Some(key.clone()))
             }
             Self::Environment { variable } => {
-                anyhow::ensure!(
-                    !variable.trim().is_empty(),
-                    "API key environment variable must not be blank"
-                );
-                let key = std::env::var(variable).with_context(|| {
-                    format!("API key environment variable {variable:?} is unavailable")
+                if variable.trim().is_empty() {
+                    return Err(BackendRegistryError::EnvironmentVariableBlank);
+                }
+                let key = std::env::var(variable).map_err(|source| {
+                    BackendRegistryError::EnvironmentVariableUnavailable {
+                        variable: variable.clone(),
+                        source,
+                    }
                 })?;
-                anyhow::ensure!(
-                    !key.trim().is_empty(),
-                    "API key environment variable {variable:?} is blank"
-                );
+                if key.trim().is_empty() {
+                    return Err(BackendRegistryError::EnvironmentVariableEmpty {
+                        variable: variable.clone(),
+                    });
+                }
                 Ok(Some(key))
             }
-            Self::NodeOAuth { .. } => {
-                anyhow::bail!("node OAuth requires the invoking node's OAuthCredential")
-            }
+            Self::NodeOAuth { .. } => Err(BackendRegistryError::NodeOAuthCredentialRequired),
         }
     }
 }
@@ -168,16 +204,18 @@ impl InferenceBackendObservation {
         )
     }
 
-    pub fn catalog_for(&self, principal: Option<&str>) -> Result<Option<&BackendModelCatalog>> {
+    pub fn catalog_for(
+        &self,
+        principal: Option<&str>,
+    ) -> Result<Option<&BackendModelCatalog>, BackendRegistryError> {
         let mut catalogs = self
             .catalogs
             .iter()
             .filter(|catalog| catalog.node_did.as_deref() == principal);
         let catalog = catalogs.next();
-        anyhow::ensure!(
-            catalogs.next().is_none(),
-            "ambiguous backend catalog authentication scope"
-        );
+        if catalogs.next().is_some() {
+            return Err(BackendRegistryError::AmbiguousCatalogScope);
+        }
         Ok(catalog)
     }
 }
@@ -197,15 +235,13 @@ pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
     }
 }
 
-fn scope_filter(node_did: &str, backend_id: &str) -> Result<String> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "backend owner DID must not be blank"
-    );
-    anyhow::ensure!(
-        !backend_id.trim().is_empty(),
-        "backend ID must not be blank"
-    );
+fn scope_filter(node_did: &str, backend_id: &str) -> Result<String, BackendRegistryError> {
+    if node_did.trim().is_empty() {
+        return Err(BackendRegistryError::OwnerBlank);
+    }
+    if backend_id.trim().is_empty() {
+        return Err(BackendRegistryError::BackendIdBlank);
+    }
     Ok(format!(
         r#"{{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}"#,
         escape_graphql_string(node_did),

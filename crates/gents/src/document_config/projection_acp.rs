@@ -1,5 +1,5 @@
+use super::error::DocumentConfigError;
 use super::ProjectionAcpBinding;
-use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 
 const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
@@ -15,12 +15,12 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
 ];
 
 impl ProjectionAcpBinding {
-    pub fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.policy_id.trim().is_empty(),
-            "projection ACP binding {} must contain a non-empty policy_id",
-            self.binding_id
-        );
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
+        if self.policy_id.trim().is_empty() {
+            return Err(DocumentConfigError::ProjectionAcpPolicyBlank {
+                binding_id: self.binding_id.clone(),
+            });
+        }
         let optional = |value: &Option<String>| {
             value
                 .as_deref()
@@ -31,31 +31,31 @@ impl ProjectionAcpBinding {
         let active = self.policy_id.trim();
         let staged = optional(&self.staged_policy_id);
         let previous = optional(&self.previous_policy_id);
-        anyhow::ensure!(
-            staged.as_deref() != Some(active),
-            "projection ACP binding {} staged_policy_id must differ from active policy_id",
-            self.binding_id
-        );
-        anyhow::ensure!(
-            previous.as_deref() != Some(active),
-            "projection ACP binding {} previous_policy_id must differ from active policy_id",
-            self.binding_id
-        );
-        anyhow::ensure!(
-            staged.is_none() || staged != previous,
-            "projection ACP binding {} staged_policy_id must differ from previous_policy_id",
-            self.binding_id
-        );
+        if staged.as_deref() == Some(active) {
+            return Err(DocumentConfigError::ProjectionAcpStagedIsActive {
+                binding_id: self.binding_id.clone(),
+            });
+        }
+        if previous.as_deref() == Some(active) {
+            return Err(DocumentConfigError::ProjectionAcpPreviousIsActive {
+                binding_id: self.binding_id.clone(),
+            });
+        }
+        if staged.is_some() && staged == previous {
+            return Err(DocumentConfigError::ProjectionAcpStagedIsPrevious {
+                binding_id: self.binding_id.clone(),
+            });
+        }
         if let Some(projection) = optional(&self.projection_id) {
             serde_json::from_value::<crate::adapter_projection::AdapterProjectionKind>(
                 projection.into(),
             )
-            .with_context(|| {
-                format!(
-                    "projection ACP binding {} has invalid projection_id",
-                    self.binding_id
-                )
-            })?;
+            .map_err(
+                |source| DocumentConfigError::ProjectionAcpInvalidProjection {
+                    binding_id: self.binding_id.clone(),
+                    source,
+                },
+            )?;
         }
         parse_projection_resource_map(self.resource_map_json.as_deref())?;
         Ok(())
@@ -64,7 +64,7 @@ impl ProjectionAcpBinding {
 
 pub fn parse_projection_resource_map(
     resource_map_json: Option<&str>,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, String>, DocumentConfigError> {
     let Some(raw) = resource_map_json
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -72,20 +72,20 @@ pub fn parse_projection_resource_map(
         return Ok(BTreeMap::new());
     };
     let raw_map = serde_json::from_str::<BTreeMap<String, String>>(raw)
-        .context("parsing ProjectionAcpBinding.resource_map_json")?;
+        .map_err(|source| DocumentConfigError::ProjectionResourceMapParse { source })?;
     let mut map = BTreeMap::new();
     for (collection, resource_name) in raw_map {
         let collection = collection.trim();
         let resource_name = resource_name.trim();
         if collection.is_empty() || resource_name.is_empty() {
-            anyhow::bail!(
-                "ProjectionAcpBinding.resource_map_json must map non-empty collection names to non-empty ACP resource names"
-            );
+            return Err(DocumentConfigError::ProjectionResourceMapBlankEntry);
         }
         if !PROJECTION_ACP_RUNTIME_COLLECTIONS.contains(&collection) {
-            anyhow::bail!(
-                "ProjectionAcpBinding.resource_map_json contains unknown runtime collection {collection}; expected one of {}",
-                PROJECTION_ACP_RUNTIME_COLLECTIONS.join(", ")
+            return Err(
+                DocumentConfigError::ProjectionResourceMapUnknownCollection {
+                    collection: collection.to_owned(),
+                    expected: PROJECTION_ACP_RUNTIME_COLLECTIONS.join(", "),
+                },
             );
         }
         map.insert(collection.to_string(), resource_name.to_string());

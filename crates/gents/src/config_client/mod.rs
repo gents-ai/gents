@@ -17,6 +17,7 @@
 mod agent_behavior;
 mod common;
 mod desired_state;
+mod error;
 pub(crate) mod event_source_cursor;
 mod graphql;
 mod inference_backend;
@@ -90,6 +91,8 @@ pub(crate) use txn::TransactionOutcome;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess};
 
+pub use error::ConfigClientError;
+
 mod tools;
 
 use std::collections::BTreeSet;
@@ -129,13 +132,12 @@ impl GraphqlEndpoint {
     pub fn with_delegated_authorization(
         url: impl Into<String>,
         authorization: &str,
-    ) -> Result<Self> {
-        anyhow::ensure!(
-            authorization.starts_with("Bearer ") && authorization.len() > 7,
-            "a DefraDB Bearer authorization is required"
-        );
+    ) -> Result<Self, ConfigClientError> {
+        if !(authorization.starts_with("Bearer ") && authorization.len() > 7) {
+            return Err(ConfigClientError::BearerRequired);
+        }
         let mut header = reqwest::header::HeaderValue::from_str(authorization)
-            .context("invalid authorization header")?;
+            .map_err(ConfigClientError::AuthorizationHeader)?;
         header.set_sensitive(true);
         Ok(Self {
             url: url.into(),
@@ -170,7 +172,9 @@ impl GraphqlEndpoint {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
         };
-        crate::identity::defradb_bearer_authorization(did, &audience).map(Some)
+        Ok(Some(crate::identity::defradb_bearer_authorization(
+            did, &audience,
+        )?))
     }
 
     fn authorization_header(&self) -> Result<Option<reqwest::header::HeaderValue>> {
@@ -422,13 +426,13 @@ pub struct ExistingDocumentRef {
     pub deleted: bool,
 }
 
-pub fn graphql_api_base(graphql: &str) -> Result<String> {
+pub fn graphql_api_base(graphql: &str) -> Result<String, ConfigClientError> {
     graphql
         .trim()
         .strip_suffix("/graphql")
         .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            anyhow::anyhow!("expected GraphQL endpoint ending in /graphql, got {graphql}")
+        .ok_or_else(|| ConfigClientError::GraphqlApiBase {
+            graphql: graphql.to_owned(),
         })
 }
 

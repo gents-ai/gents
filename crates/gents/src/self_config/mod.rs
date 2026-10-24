@@ -422,7 +422,7 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
         Box::pin(async move {
             let backend: crate::InferenceBackend = decode_merged("InferenceBackend", &merged)?;
             guard_backend_auth(&stored, &merged)?;
-            backend.validate()
+            Ok(backend.validate()?)
         })
     });
     request.guard = Box::new(|_, _, merged| {
@@ -482,7 +482,7 @@ fn local_backend_create_request(
                 backend.enabled,
                 "a newly created local backend must be enabled for discovery"
             );
-            backend.validate()
+            Ok(backend.validate()?)
         })
     });
     request
@@ -802,7 +802,7 @@ async fn agent_inspect(
         "effective_config",
         &Ordered::reading_order(effective, EFFECTIVE_ORDER),
     ));
-    result.pretty()
+    Ok(result.pretty()?)
 }
 
 async fn guard_agent_profile_choice(
@@ -1235,11 +1235,11 @@ impl PackInstaller {
             distribution.manifest(),
             &scope,
             &|path| {
-                distribution
+                Ok(distribution
                     .0
                     .archive
                     .asset(path)
-                    .map(|asset| asset.to_vec())
+                    .map(|asset| asset.to_vec())?)
             },
             &environment,
         )?;
@@ -1431,14 +1431,14 @@ impl PackInstaller {
             })
             .collect::<Vec<_>>();
         let has_more = response["has_more"].as_bool().unwrap_or(false);
-        ordered! {
+        Ok(ordered! {
             "items": items,
             "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
             "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document, graph and plugins-only packs; search includes other kinds too.",
             "registry": registry,
             "page": page,
             "has_more": has_more,
-        }.pretty()
+        }.pretty()?)
     }
 
     async fn get(&self, package: &str) -> anyhow::Result<String> {
@@ -1532,12 +1532,12 @@ impl PackInstaller {
                 )?;
             }
         }
-        ordered! {
+        Ok(ordered! {
             "pack": coordinate,
             "removed": report,
             "effect": "The package's graph and documents were removed. Package SDL schemas and run history stay.",
         }
-        .pretty()
+        .pretty()?)
     }
 
     fn plugin_install_blockers(&self, manifest: &crate::pack::PackManifest) -> Vec<Value> {
@@ -1589,7 +1589,7 @@ impl PackInstaller {
             home,
             manifest,
             package_digest,
-            |path| distribution.0.archive.asset(path),
+            |path| Ok(distribution.0.archive.asset(path)?),
             false,
             Some(self.core.node_did()),
             bindings,

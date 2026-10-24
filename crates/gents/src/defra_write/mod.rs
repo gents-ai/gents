@@ -314,7 +314,8 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
             &json!({"collection":self.decl.collection, "document_id":doc_id,
                 "document":document}),
             &["document", "document_id", "collection"],
-        )?)
+        )
+        .map_err(anyhow::Error::from)?)
     }
 }
 

@@ -100,7 +100,7 @@ impl ConfigCommandTool {
                 }
             }
         }
-        ordered! {
+        Ok(ordered! {
             "valid": errors.is_empty(),
             "checked_documents": counts.values().sum::<usize>(),
             "collections": counts,
@@ -108,6 +108,6 @@ impl ConfigCommandTool {
             "scope": "Saved configuration for the authenticated node: canonical fields, references, publication checks and selected datastore tools against current collection schemas. Config and schema observations are not one atomic snapshot. Does not test credentials, remote destinations, runtime execution or user intent.",
             "next": if errors.is_empty() { "Inspect agent get to verify selections match the user's request; exercise tools to verify runtime agent. Report what remains untested." } else { "Read the named objects, correct existing objects with resource update (create only missing objects), and run validate again before reporting completion." },
             "committed": false,
-        }.pretty()
+        }.pretty()?)
     }
 }

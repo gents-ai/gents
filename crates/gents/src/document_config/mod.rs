@@ -5,6 +5,7 @@ pub use chain_key_binding::preserve_chain_key_binding_update_fields;
 mod compaction;
 mod context;
 mod datastore_tool_surface;
+mod error;
 mod eth_tool;
 mod eval_definition;
 mod event_trigger;
@@ -41,6 +42,7 @@ pub use callback::{
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
+pub use error::DocumentConfigError;
 pub use eval_definition::{
     EvalCapture, EvalCase, EvalCheckRef, EvalContinuation, EvalDefinition, EvalFixtureDocument,
     EvalFixtureFile, EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind,

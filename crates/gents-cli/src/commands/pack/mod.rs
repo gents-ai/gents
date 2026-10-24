@@ -113,7 +113,7 @@ impl PackSource {
     }
 
     pub(crate) fn asset(&self, path: &str) -> Result<&[u8]> {
-        self.archive.asset(path)
+        Ok(self.archive.asset(path)?)
     }
 
     pub(crate) fn archive(&self) -> &PackArchive {

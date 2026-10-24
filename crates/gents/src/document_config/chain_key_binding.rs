@@ -4,6 +4,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
+use super::error::DocumentConfigError;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -37,38 +38,37 @@ pub struct ChainKeyBindingDocument {
 impl ChainKeyBindingDocument {
     // Intrinsic authoring checks; the signing owner verifies the DID
     // attestation, revocation and key material at execution time.
-    pub fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.binding_id.trim().is_empty(),
-            "ChainKeyBinding requires binding_id"
-        );
-        anyhow::ensure!(
-            !self.node_did.trim().is_empty(),
-            "ChainKeyBinding requires node_did"
-        );
+    pub fn validate(&self) -> std::result::Result<(), DocumentConfigError> {
+        if self.binding_id.trim().is_empty() {
+            return Err(DocumentConfigError::ChainKeyBindingIdBlank);
+        }
+        if self.node_did.trim().is_empty() {
+            return Err(DocumentConfigError::ChainKeyBindingNodeBlank);
+        }
         let address = self.address.trim();
-        anyhow::ensure!(
-            address.len() == 42
-                && address.starts_with("0x")
-                && address[2..].bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "ChainKeyBinding has an invalid Ethereum address"
-        );
-        anyhow::ensure!(
-            self.key_backend.as_deref() == Some(crate::eth::KEY_BACKEND_KEYRING),
-            "ChainKeyBinding has unsupported key_backend"
-        );
-        anyhow::ensure!(
-            self.attestation
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
-            "ChainKeyBinding has no principal attestation"
-        );
-        anyhow::ensure!(
-            self.created_at
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
-            "ChainKeyBinding has no created_at timestamp"
-        );
+        if !(address.len() == 42
+            && address.starts_with("0x")
+            && address[2..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(DocumentConfigError::ChainKeyBindingAddress);
+        }
+        if self.key_backend.as_deref() != Some(crate::eth::KEY_BACKEND_KEYRING) {
+            return Err(DocumentConfigError::ChainKeyBindingKeyBackend);
+        }
+        if !self
+            .attestation
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(DocumentConfigError::ChainKeyBindingAttestation);
+        }
+        if !self
+            .created_at
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(DocumentConfigError::ChainKeyBindingCreatedAt);
+        }
         Ok(())
     }
 }
@@ -113,7 +113,10 @@ pub async fn list_chain_key_binding_records(
         "list ChainKeyBinding",
     )
     .await?;
-    super::serde_helpers::try_rows_with_doc_id(response.data.as_ref(), "ChainKeyBinding")
+    Ok(super::serde_helpers::try_rows_with_doc_id(
+        response.data.as_ref(),
+        "ChainKeyBinding",
+    )?)
 }
 
 pub async fn load_chain_key_binding_by_doc_id(
@@ -137,10 +140,12 @@ pub async fn load_chain_key_binding_by_doc_id(
 
 // An omitted, null, or blank proposal cannot reactivate a binding; explicit
 // nonblank revocations retain the existing update behavior.
-pub fn preserve_chain_key_binding_update_fields(update: &mut serde_json::Value) -> Result<()> {
+pub fn preserve_chain_key_binding_update_fields(
+    update: &mut serde_json::Value,
+) -> std::result::Result<(), DocumentConfigError> {
     let fields = update
         .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("chain key binding update must be an object"))?;
+        .ok_or(DocumentConfigError::ChainKeyBindingUpdateNotObject)?;
     fields.remove("created_at");
     if fields.get("revoked_at").is_none_or(|value| {
         value.is_null() || value.as_str().is_some_and(|value| value.trim().is_empty())

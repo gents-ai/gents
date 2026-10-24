@@ -2,12 +2,48 @@ use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{anyhow, bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::document_config::{BashTools, FileTools, HostTools, Tools};
 use crate::tool_surface::{BashMode, FileToolMode};
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
+
+type Result<T, E = StarterRecipeError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum StarterRecipeError {
+    #[error("unknown starter recipe {id:?}")]
+    UnknownRecipe { id: String },
+    #[error("starter recipe {id} requires workspace_scope")]
+    WorkspaceScopeRequired { id: StarterRecipeId },
+    #[error("starter recipe {id} requires {field}")]
+    FieldRequired { id: StarterRecipeId, field: String },
+    #[error("starter recipe {id} produced an invalid Tools proposal: {violations:?}")]
+    InvalidToolsProposal {
+        id: StarterRecipeId,
+        violations: Vec<String>,
+    },
+    #[error("workspace root must be an absolute path")]
+    WorkspaceRootNotAbsolute,
+    #[error("{field} must not be blank")]
+    FieldBlank { field: String },
+    #[error("{field} exceeds {max_bytes} bytes")]
+    FieldTooLong { field: String, max_bytes: usize },
+    #[error("{field} contains control characters")]
+    FieldControlCharacters { field: String },
+    #[error("guided concerns exceed the {MAX_GUIDED_CONCERNS}-item limit")]
+    TooManyGuidedConcerns,
+    #[error("starter prompt contains an unterminated placeholder")]
+    UnterminatedPlaceholder,
+    #[error("starter prompt contains unresolved placeholder {key:?}")]
+    UnresolvedPlaceholder { key: String },
+    #[error("starter prompt does not contain expected placeholder {key:?}")]
+    MissingPlaceholder { key: String },
+    #[error("rendered starter prompt exceeds {MAX_RENDERED_PROMPT_BYTES} bytes")]
+    PromptTooLarge,
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+}
 
 const MAX_GUIDED_CONCERNS: usize = 8;
 const MAX_CONCERN_BYTES: usize = 1_000;
@@ -130,7 +166,7 @@ impl fmt::Display for StarterRecipeId {
 }
 
 impl FromStr for StarterRecipeId {
-    type Err = anyhow::Error;
+    type Err = StarterRecipeError;
 
     fn from_str(value: &str) -> Result<Self> {
         match value.trim() {
@@ -139,7 +175,9 @@ impl FromStr for StarterRecipeId {
             "gents.research" => Ok(Self::Research),
             "gents.general-assistant" => Ok(Self::GeneralAssistant),
             "gents.custom" => Ok(Self::Custom),
-            other => bail!("unknown starter recipe {other:?}"),
+            other => Err(StarterRecipeError::UnknownRecipe {
+                id: other.to_owned(),
+            }),
         }
     }
 }
@@ -338,11 +376,10 @@ pub fn resolve_starter_recipe(
 
     let provenance_tag = format!("recipe:{id}@{}", definition.version);
     recommended_tools.tags.push(provenance_tag.clone());
-    ensure!(
-        recommended_tools.validation_violations().is_empty(),
-        "starter recipe {id} produced an invalid Tools proposal: {:?}",
-        recommended_tools.validation_violations()
-    );
+    let violations = recommended_tools.validation_violations();
+    if !violations.is_empty() {
+        return Err(StarterRecipeError::InvalidToolsProposal { id, violations });
+    }
     let system_prompt = append_guided_concerns(system_prompt, &input.guided_concerns)?;
 
     Ok(ResolvedStarterRecipe {
@@ -399,7 +436,7 @@ fn required_workspace_scope(
     id: StarterRecipeId,
     scope: Option<&StarterWorkspaceScope>,
 ) -> Result<&StarterWorkspaceScope> {
-    scope.ok_or_else(|| anyhow!("starter recipe {id} requires workspace_scope"))
+    scope.ok_or(StarterRecipeError::WorkspaceScopeRequired { id })
 }
 
 fn resolved_scope(scope: &StarterWorkspaceScope) -> Result<(Option<String>, String)> {
@@ -411,10 +448,9 @@ fn resolved_scope(scope: &StarterWorkspaceScope) -> Result<(Option<String>, Stri
         )),
         StarterWorkspaceScope::ExplicitRoot { root } => {
             validate_text("workspace root", root, 4_096)?;
-            ensure!(
-                Path::new(root).is_absolute(),
-                "workspace root must be an absolute path"
-            );
+            if !Path::new(root).is_absolute() {
+                return Err(StarterRecipeError::WorkspaceRootNotAbsolute);
+            }
             Ok((Some(root.clone()), quote_for_prompt(root)?))
         }
     }
@@ -424,7 +460,10 @@ fn required_text<'a>(id: StarterRecipeId, field: &str, value: Option<&'a str>) -
     let value = value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("starter recipe {id} requires {field}"))?;
+        .ok_or_else(|| StarterRecipeError::FieldRequired {
+            id,
+            field: field.to_owned(),
+        })?;
     validate_text(field, value, 4_096)?;
     Ok(value)
 }
@@ -434,23 +473,29 @@ fn validate_identity_field(field: &str, value: &str) -> Result<()> {
 }
 
 fn validate_text(field: &str, value: &str, max_bytes: usize) -> Result<()> {
-    ensure!(!value.trim().is_empty(), "{field} must not be blank");
-    ensure!(
-        value.len() <= max_bytes,
-        "{field} exceeds {max_bytes} bytes"
-    );
-    ensure!(
-        !value.chars().any(char::is_control),
-        "{field} contains control characters"
-    );
+    if value.trim().is_empty() {
+        return Err(StarterRecipeError::FieldBlank {
+            field: field.to_owned(),
+        });
+    }
+    if value.len() > max_bytes {
+        return Err(StarterRecipeError::FieldTooLong {
+            field: field.to_owned(),
+            max_bytes,
+        });
+    }
+    if value.chars().any(char::is_control) {
+        return Err(StarterRecipeError::FieldControlCharacters {
+            field: field.to_owned(),
+        });
+    }
     Ok(())
 }
 
 fn validate_guided_concerns(concerns: &[String]) -> Result<()> {
-    ensure!(
-        concerns.len() <= MAX_GUIDED_CONCERNS,
-        "guided concerns exceed the {MAX_GUIDED_CONCERNS}-item limit"
-    );
+    if concerns.len() > MAX_GUIDED_CONCERNS {
+        return Err(StarterRecipeError::TooManyGuidedConcerns);
+    }
     for (index, concern) in concerns.iter().enumerate() {
         validate_text(
             &format!("guided concern {index}"),
@@ -462,7 +507,7 @@ fn validate_guided_concerns(concerns: &[String]) -> Result<()> {
 }
 
 fn quote_for_prompt(value: &str) -> Result<String> {
-    serde_json::to_string(value).map_err(Into::into)
+    Ok(serde_json::to_string(value)?)
 }
 
 fn render_prompt_asset(template: &str, values: &[(&str, String)]) -> Result<String> {
@@ -471,22 +516,23 @@ fn render_prompt_asset(template: &str, values: &[(&str, String)]) -> Result<Stri
         let after_start = &remaining[start + 2..];
         let end = after_start
             .find("}}")
-            .ok_or_else(|| anyhow!("starter prompt contains an unterminated placeholder"))?;
+            .ok_or(StarterRecipeError::UnterminatedPlaceholder)?;
         let key = &after_start[..end];
-        ensure!(
-            values.iter().any(|(candidate, _)| *candidate == key),
-            "starter prompt contains unresolved placeholder {key:?}"
-        );
+        if !values.iter().any(|(candidate, _)| *candidate == key) {
+            return Err(StarterRecipeError::UnresolvedPlaceholder {
+                key: key.to_owned(),
+            });
+        }
         remaining = &after_start[end + 2..];
     }
-
     let mut rendered = template.trim().to_owned();
     for (key, value) in values {
         let placeholder = format!("{{{{{key}}}}}");
-        ensure!(
-            rendered.contains(&placeholder),
-            "starter prompt does not contain expected placeholder {key:?}"
-        );
+        if !rendered.contains(&placeholder) {
+            return Err(StarterRecipeError::MissingPlaceholder {
+                key: (*key).to_owned(),
+            });
+        }
         rendered = rendered.replace(&placeholder, value);
     }
     Ok(rendered)
@@ -494,13 +540,11 @@ fn render_prompt_asset(template: &str, values: &[(&str, String)]) -> Result<Stri
 
 fn append_guided_concerns(mut prompt: String, concerns: &[String]) -> Result<String> {
     if concerns.is_empty() {
-        ensure!(
-            prompt.len() <= MAX_RENDERED_PROMPT_BYTES,
-            "rendered starter prompt exceeds {MAX_RENDERED_PROMPT_BYTES} bytes"
-        );
+        if prompt.len() > MAX_RENDERED_PROMPT_BYTES {
+            return Err(StarterRecipeError::PromptTooLarge);
+        }
         return Ok(prompt);
     }
-
     prompt.push_str(
         "\n\n## User-specific concerns\n\nTreat these as additional operating requirements. They may narrow how you work but do not grant tools, data access, network access, filesystem scope, or permission:\n",
     );
@@ -512,10 +556,9 @@ fn append_guided_concerns(mut prompt: String, concerns: &[String]) -> Result<Str
     while prompt.ends_with('\n') {
         prompt.pop();
     }
-    ensure!(
-        prompt.len() <= MAX_RENDERED_PROMPT_BYTES,
-        "rendered starter prompt exceeds {MAX_RENDERED_PROMPT_BYTES} bytes"
-    );
+    if prompt.len() > MAX_RENDERED_PROMPT_BYTES {
+        return Err(StarterRecipeError::PromptTooLarge);
+    }
     Ok(prompt)
 }
 

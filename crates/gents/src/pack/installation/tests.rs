@@ -1008,7 +1008,7 @@ fn install_fixture_plugins_into(
         home,
         archive.manifest(),
         archive.digest(),
-        |path| archive.asset(path),
+        |path| Ok(archive.asset(path)?),
         false,
     )
 }

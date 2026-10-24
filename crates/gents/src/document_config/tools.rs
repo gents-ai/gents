@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::error::DocumentConfigError;
 use crate::tool_surface::{BashMode, FileToolMode};
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
@@ -928,15 +929,15 @@ impl Tools {
         errors
     }
 
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
-        anyhow::ensure!(
-            violations.is_empty(),
-            "Tools {}: {}",
-            self.tools_id,
-            violations.join("; ")
-        );
-        Ok(())
+        if violations.is_empty() {
+            return Ok(());
+        }
+        Err(DocumentConfigError::ToolsViolations {
+            tools_id: self.tools_id.clone(),
+            violations: violations.join("; "),
+        })
     }
 }
 

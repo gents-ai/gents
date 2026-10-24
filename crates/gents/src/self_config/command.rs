@@ -668,7 +668,7 @@ impl ConfigCommandTool {
                 let value = core
                     .read_effective_config(&self.categories, self.no_lockout, self.preview)
                     .await?;
-                Ordered::reading_order(value, EFFECTIVE_ORDER).pretty()
+                Ok(Ordered::reading_order(value, EFFECTIVE_ORDER).pretty()?)
             }
             "agent" => self.agent(&argv[1..]).await,
             "tools" => self.bound_document("tools", &argv[1..]).await,
@@ -844,7 +844,10 @@ impl ConfigCommandTool {
                 let effective = core
                     .read_effective_config(&self.categories, self.no_lockout, self.preview)
                     .await?;
-                ordered! {"resource": "AgentContext", "document": effective.get("context")}.pretty()
+                Ok(
+                    ordered! {"resource": "AgentContext", "document": effective.get("context")}
+                        .pretty()?,
+                )
             }
             "preview" | "edit" => {
                 let parsed = ParsedArgs::parse(&rest)?;
@@ -1026,7 +1029,7 @@ impl ConfigCommandTool {
                 let observation = self
                     .backend_observation_view(backend_id, backend.provider_kind)
                     .await?;
-                return ordered! {
+                return Ok(ordered! {
                     "backend_id": backend_id,
                     "refreshed": false,
                     "observation": observation,
@@ -1035,7 +1038,7 @@ impl ConfigCommandTool {
                     "endpoint": backend.endpoint,
                     "provider_kind": backend.provider_kind,
                 }
-                .pretty();
+                .pretty()?);
             }
             self.execution.enter_mutation();
             let observation =
@@ -1045,7 +1048,7 @@ impl ConfigCommandTool {
                 &self.node_did,
                 backend.provider_kind,
             )?;
-            return ordered! {
+            return Ok(ordered! {
                 "backend_id": backend_id,
                 "refreshed": true,
                 "observation": observation,
@@ -1053,7 +1056,7 @@ impl ConfigCommandTool {
                 "resource": "InferenceBackend",
                 "endpoint": backend.endpoint,
             }
-            .pretty();
+            .pretty()?);
         }
         self.bound_document("backend", argv).await
     }
@@ -1421,7 +1424,7 @@ impl ConfigCommandTool {
             )
             .await?
         };
-        ordered! {
+        Ok(ordered! {
             "committed": !preview,
             "operation": if preview { "preview cleanup" } else { "cleanup" },
             "targets": receipt_targets,
@@ -1437,7 +1440,7 @@ impl ConfigCommandTool {
             "plan_digest": plan_digest,
             "owner": self.node_did,
         }
-        .pretty()
+        .pretty()?)
     }
 
     fn plugin(&self, argv: &[String]) -> Result<String> {
@@ -1476,18 +1479,18 @@ impl ConfigCommandTool {
                             .map(ToOwned::to_owned)
                     })
                     .flatten();
-                ordered! {"items": items, "next_cursor": next_cursor, "next_call": json!({"argv":["plugin","get","<PLUGIN>"]})}.pretty()
+                Ok(ordered! {"items": items, "next_cursor": next_cursor, "next_call": json!({"argv":["plugin","get","<PLUGIN>"]})}.pretty()?)
             }
             Some("get") if argv.len() == 2 => {
                 let (namespace, name) = crate::plugin::store::parse_coordinate(&argv[1])?;
                 let record = crate::plugin::store::read_record(home, namespace, name)?;
-                ordered! {
+                Ok(ordered! {
                     "plugin": argv[1],
                     "selection": json!({"plugin":argv[1],"digest":record.digest}),
                     "next_call": json!({"argv":["tools","get"]}),
                     "guidance": "Read the target Tools document and preserve its other integration settings and plugin entries. Explicitly update integrations.plugins with the pinned selection, then read tools get and effective config get for resolved readback. Start a fresh request to call the tool; installation alone does not expose it to the current request.",
                     "installed": record,
-                }.pretty()
+                }.pretty()?)
             }
             _ => bail!("plugin supports list and get; call [\"help\",\"plugin\"]"),
         }
@@ -1844,12 +1847,12 @@ impl ConfigCommandTool {
         })?;
         if target == SelfConfigTarget::InferenceBackend {
             let observation = self.backend_document_observation(value).await?;
-            return ordered! {"resource": target.collection_name(), "document": value, "observation": observation}.pretty();
+            return Ok(ordered! {"resource": target.collection_name(), "document": value, "observation": observation}.pretty()?);
         }
         if target == SelfConfigTarget::InferenceExecution {
-            return ordered! {"resource": target.collection_name(), "effective": super::read::execution_settings(Some(value))?, "document": value}.pretty();
+            return Ok(ordered! {"resource": target.collection_name(), "effective": super::read::execution_settings(Some(value))?, "document": value}.pretty()?);
         }
-        ordered! {"resource": target.collection_name(), "document": value}.pretty()
+        Ok(ordered! {"resource": target.collection_name(), "document": value}.pretty()?)
     }
 
     async fn backend_observation_view(
@@ -1925,16 +1928,16 @@ impl ConfigCommandTool {
             );
             let document = Value::Object(document);
             let observation = self.backend_document_observation(&document).await?;
-            return ordered! {"resource": target.collection_name(), "document": document, "observation": observation}.pretty();
+            return Ok(ordered! {"resource": target.collection_name(), "document": document, "observation": observation}.pretty()?);
         }
         if target == SelfConfigTarget::AgentTarget {
-            return ordered! {"resource": target.collection_name(), "connection": ops::target_destination(&document, &self.node_did), "document": document}.pretty();
+            return Ok(ordered! {"resource": target.collection_name(), "connection": ops::target_destination(&document, &self.node_did), "document": document}.pretty()?);
         }
         if target == SelfConfigTarget::InferenceExecution {
             let document = Value::Object(document);
-            return ordered! {"resource": target.collection_name(), "effective": super::read::execution_settings(Some(&document))?, "document": document}.pretty();
+            return Ok(ordered! {"resource": target.collection_name(), "effective": super::read::execution_settings(Some(&document))?, "document": document}.pretty()?);
         }
-        ordered! {"resource": target.collection_name(), "document": document}.pretty()
+        Ok(ordered! {"resource": target.collection_name(), "document": document}.pretty()?)
     }
 
     async fn automation_read(
@@ -1960,7 +1963,7 @@ impl ConfigCommandTool {
                     core.agent_id()
                 )
             })?;
-        ordered! {"resource": target.collection_name(), "document": document}.pretty()
+        Ok(ordered! {"resource": target.collection_name(), "document": document}.pretty()?)
     }
 
     /// Store reads only: never contacts a provider or renews a sign-in, and
@@ -2056,12 +2059,12 @@ impl ConfigCommandTool {
                 "usage": usage,
             }));
         }
-        ordered! {
+        Ok(ordered! {
             "resource": "accounts",
             "items": items,
             "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage is the last stored observation; this view contacts no provider.",
         }
-        .pretty()
+        .pretty()?)
     }
 
     async fn inference_inventory(
@@ -2203,7 +2206,7 @@ impl ConfigCommandTool {
                     .map(ToOwned::to_owned)
             })
             .flatten();
-        ordered! {
+        Ok(ordered! {
             "resource": collection,
             "items": selected,
             "page": json!({
@@ -2215,7 +2218,7 @@ impl ConfigCommandTool {
             }),
             "note": "Inventory is read-only and does not rebind any agent. Backend credentials are excluded.",
         }
-        .pretty()
+        .pretty()?)
     }
 }
 

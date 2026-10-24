@@ -245,7 +245,7 @@ impl PackStore {
                 unpacked.display()
             );
         }
-        PackArchive::from_unpacked(&unpacked, header, manifest)
+        Ok(PackArchive::from_unpacked(&unpacked, header, manifest)?)
     }
 
     fn unpacked_root(&self) -> PathBuf {

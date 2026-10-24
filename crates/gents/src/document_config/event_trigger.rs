@@ -1,4 +1,6 @@
 use anyhow::{anyhow, Result};
+
+use super::error::DocumentConfigError;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
@@ -365,12 +367,11 @@ pub enum EventGroupCount {
 }
 
 impl EventSource {
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), DocumentConfigError> {
         crate::graphql::validate_collection_identifier(&self.source_collection)?;
-        anyhow::ensure!(
-            self.event_kind.as_deref().unwrap_or("created") == "created",
-            "event source supports only the created event kind"
-        );
+        if self.event_kind.as_deref().unwrap_or("created") != "created" {
+            return Err(DocumentConfigError::EventSourceEventKind);
+        }
         if let Some(filter) = self
             .filter
             .as_deref()
@@ -388,7 +389,7 @@ impl EventSource {
         self.validate_group()
     }
 
-    pub fn validate_group(&self) -> anyhow::Result<()> {
+    pub fn validate_group(&self) -> std::result::Result<(), DocumentConfigError> {
         use crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
             .correlation_field
@@ -397,26 +398,21 @@ impl EventSource {
         let Some(group) = self.group.as_ref() else {
             return Ok(());
         };
-
         if correlation_field.is_none() {
-            anyhow::bail!("per_group source requires correlation_field");
+            return Err(DocumentConfigError::PerGroupRequiresCorrelation);
         }
-
         let expected_count = match &group.expected_count {
             Some(crate::document_config::EventGroupCount::Fixed(count)) => {
                 let count = usize::try_from(*count)
-                    .map_err(|_| anyhow::anyhow!("expected_count must be a positive count"))?;
+                    .map_err(|_| DocumentConfigError::ExpectedCountNotPositive)?;
                 if !(1..=MAX_EVENT_TRIGGER_GROUP_DOCS).contains(&count) {
-                    anyhow::bail!(
-                        "expected_count {count} exceeds the group bound \
-                     {MAX_EVENT_TRIGGER_GROUP_DOCS}"
-                    );
+                    return Err(DocumentConfigError::ExpectedCountOutOfBounds { count });
                 }
                 Some(count)
             }
             Some(crate::document_config::EventGroupCount::SourceField { source_field }) => {
                 if crate::graphql::validate_graphql_name(source_field).is_err() {
-                    anyhow::bail!("count field is not a GraphQL name");
+                    return Err(DocumentConfigError::CountFieldNotName);
                 }
                 None
             }
@@ -428,50 +424,49 @@ impl EventSource {
             }
             _ => None,
         };
-
         let group_timeout_secs = group
             .timeout_secs
             .map(|value| {
-                anyhow::ensure!(value > 0, "group timeout_secs must be positive");
-                u64::try_from(value)
-                    .map_err(|_| anyhow::anyhow!("group timeout_secs exceeds the supported range"))
+                if value <= 0 {
+                    return Err(DocumentConfigError::GroupTimeoutNotPositive);
+                }
+                u64::try_from(value).map_err(|_| DocumentConfigError::GroupTimeoutOutOfRange)
             })
             .transpose()?;
         let group_min_count = group
             .min_count
             .map(|value| {
-                anyhow::ensure!(value > 0, "group min_count must be positive");
-                usize::try_from(value)
-                    .map_err(|_| anyhow::anyhow!("group min_count exceeds the supported range"))
+                if value <= 0 {
+                    return Err(DocumentConfigError::GroupMinCountNotPositive);
+                }
+                usize::try_from(value).map_err(|_| DocumentConfigError::GroupMinCountOutOfRange)
             })
             .transpose()?;
         if let Some(min_count) = group_min_count {
             if min_count == 0 || min_count > MAX_EVENT_TRIGGER_GROUP_DOCS {
-                anyhow::bail!(
-                    "min_count {min_count} must be within 1..={MAX_EVENT_TRIGGER_GROUP_DOCS}"
-                );
+                return Err(DocumentConfigError::GroupMinCountOutOfBounds { min_count });
             }
             if group_timeout_secs.is_none() {
-                anyhow::bail!("min_count requires a positive group timeout_secs");
+                return Err(DocumentConfigError::MinCountRequiresTimeout);
             }
         }
         if let (Some(expected), Some(min_count)) = (expected_count, group_min_count) {
             if min_count > expected {
-                anyhow::bail!("min_count {min_count} exceeds expected_count {expected}");
+                return Err(DocumentConfigError::MinCountExceedsExpected {
+                    min_count,
+                    expected,
+                });
             }
         }
         match (expected_count, expected_count_field.as_ref()) {
             (Some(_), None) | (None, Some(_)) => {}
             (None, None) => {
                 if group_timeout_secs.is_none() {
-                    anyhow::bail!(
-                        "per_group without a fixed or source-field count requires \
-                     a positive timeout_secs"
-                    );
+                    return Err(DocumentConfigError::PerGroupRequiresCount);
                 }
             }
             (Some(_), Some(_)) => {
-                anyhow::bail!("expected_count cannot combine a fixed count and a source field");
+                return Err(DocumentConfigError::ExpectedCountAndSourceField);
             }
         }
         Ok(())

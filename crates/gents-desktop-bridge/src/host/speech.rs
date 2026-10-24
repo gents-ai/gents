@@ -229,7 +229,9 @@ async fn route(
     let service = services(core, node_did).await?.into_iter().find(|service| service.enabled && service.service_id == service_id)
         .context("The selected speech service is no longer enabled for this runtime. Open Gents voice settings.")?;
     let hostname = hostname::get()?.to_string_lossy().into_owned();
-    gents::registry::resolve_mcp_service(&service, &hostname, None)
+    Ok(gents::registry::resolve_mcp_service(
+        &service, &hostname, None,
+    )?)
 }
 
 fn validate_label(value: Option<&str>) -> Result<()> {

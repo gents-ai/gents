@@ -329,7 +329,11 @@ pub(super) async fn lookup_service(
         .ok_or_else(|| {
             anyhow!("service '{service_id}' is not configured or enabled for this node")
         })?;
-    resolve_service(&entry, &ctx.local_hostname, ctx.local_subnet.as_deref())
+    Ok(resolve_service(
+        &entry,
+        &ctx.local_hostname,
+        ctx.local_subnet.as_deref(),
+    )?)
 }
 
 pub(super) fn extract_text(result: &rmcp::model::CallToolResult) -> String {

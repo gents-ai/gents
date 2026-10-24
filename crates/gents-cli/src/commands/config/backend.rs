@@ -8,6 +8,7 @@ use gents::config_client::{
 };
 use gents::document_config::{BackendAuth, InferenceBackend};
 use gents::{discover_backend_models, BackendProviderKind, Collection};
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 
 fn backend_plan(contents: &[u8]) -> Result<(InferenceBackend, DesiredStateApplyPlan)> {
@@ -101,7 +102,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
                 gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
-            anyhow::bail!("{error:#}\n{guidance}");
+            anyhow::bail!("{}\n{guidance}", ErrorChain(&error));
         }
         Err(error)
             if target.provider_kind == BackendProviderKind::XaiGrokOAuth
@@ -112,14 +113,15 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
                 gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
-            anyhow::bail!("{error:#}\n{guidance}");
+            anyhow::bail!("{}\n{guidance}", ErrorChain(&error));
         }
         Err(error)
             if target.provider_kind == BackendProviderKind::XaiGrokOAuth
                 && discovery_error_is_client_version_gate(&error) =>
         {
             anyhow::bail!(
-                "{error:#}\n{}",
+                "{}\n{}",
+                ErrorChain(&error),
                 gents::xai_grok_oauth::grok_client_version_gate_guidance()
             );
         }
@@ -132,9 +134,9 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
                 gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
-            anyhow::bail!("{error:#}\n{guidance}");
+            anyhow::bail!("{}\n{guidance}", ErrorChain(&error));
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
 
     let catalog_written = if let Some(backend) = stored.as_ref() {
@@ -186,20 +188,18 @@ async fn load_oauth_credential_for_discovery(
     Ok((credential, node_did))
 }
 
-fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
-            .is_some_and(|http| http.is_auth())
-    })
+fn discovery_error_is_auth(error: &gents::backend_provider::BackendProviderError) -> bool {
+    error
+        .model_discovery_http()
+        .is_some_and(|http| http.is_auth())
 }
 
-fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
-            .is_some_and(|http| http.is_client_version_gate())
-    })
+fn discovery_error_is_client_version_gate(
+    error: &gents::backend_provider::BackendProviderError,
+) -> bool {
+    error
+        .model_discovery_http()
+        .is_some_and(|http| http.is_client_version_gate())
 }
 
 fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendConfig> {

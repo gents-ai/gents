@@ -128,7 +128,10 @@ pub(crate) async fn list_eth_tool_records(
         tool_fields()?
     );
     let response = graphql_with_transaction_retry(node, &query, "list EthTool").await?;
-    super::serde_helpers::try_rows_with_doc_id(response.data.as_ref(), "EthTool")
+    Ok(super::serde_helpers::try_rows_with_doc_id(
+        response.data.as_ref(),
+        "EthTool",
+    )?)
 }
 
 pub fn eth_tool_by_id_query(node_did: &str, tool_id: &str) -> Result<String> {

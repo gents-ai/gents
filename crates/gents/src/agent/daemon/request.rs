@@ -388,7 +388,7 @@ where
                             history_messages = history.len(),
                             summary_count = summaries.len(),
                         ))
-                        .await?;
+                        .await;
                     let complete_input_tokens = self
                         .estimate_initial_provider_input(
                             &request,
@@ -563,7 +563,7 @@ where
                                 summary_count = summaries.len(),
                                 compacted = true,
                             ))
-                            .await?;
+                            .await;
                     }
 
                     return Ok::<_, anyhow::Error>((built, replay));

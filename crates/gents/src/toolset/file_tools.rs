@@ -342,7 +342,7 @@ impl Tool for ListFilesTool {
             .await?;
         if args.raw_json {
             crate::tool_output::render_json_text(output, &["entries", "matches"])
-                .map_err(Into::into)
+                .map_err(|error| anyhow::Error::from(error).into())
         } else {
             Ok(output)
         }
@@ -505,7 +505,7 @@ impl Tool for GlobTool {
             .await?;
         if args.raw_json {
             crate::tool_output::render_json_text(output, &["entries", "matches"])
-                .map_err(Into::into)
+                .map_err(|error| anyhow::Error::from(error).into())
         } else {
             Ok(output)
         }
@@ -584,7 +584,7 @@ impl Tool for GrepTool {
             .await?;
         if args.raw_json {
             crate::tool_output::render_json_text(output, &["entries", "matches"])
-                .map_err(Into::into)
+                .map_err(|error| anyhow::Error::from(error).into())
         } else {
             Ok(output)
         }
@@ -1102,10 +1102,10 @@ fn render_tool_output(
     raw_json: bool,
 ) -> Result<String> {
     if raw_json {
-        return crate::tool_output::render(
+        return Ok(crate::tool_output::render(
             raw_value,
             &["content", "entries", "matches", "diff", "status", "ok"],
-        );
+        )?);
     }
 
     let mut out = String::from(OUTPUT_META_PREFIX);

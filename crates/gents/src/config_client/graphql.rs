@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::retry;
 use super::write_telemetry::ConflictSource;
-use super::{graphql_api_base, GraphqlEndpoint};
+use super::{graphql_api_base, ConfigClientError, GraphqlEndpoint};
 
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -135,7 +135,8 @@ pub(super) async fn txn_commit(
     id: &str,
     client: &reqwest::Client,
 ) -> std::result::Result<(), TxnCommitError> {
-    let api_base = graphql_api_base(endpoint.url()).map_err(TxnCommitError::CleanupRequired)?;
+    let api_base = graphql_api_base(endpoint.url())
+        .map_err(|error| TxnCommitError::CleanupRequired(error.into()))?;
     let response = endpoint
         .authorize(client.post(format!("{api_base}/tx/{id}")))
         .map_err(TxnCommitError::CleanupRequired)?
@@ -209,20 +210,20 @@ fn graphql_response_has_errors(response: &Value) -> bool {
     }
 }
 
-pub(super) fn ensure_mutation_document(document: &str) -> Result<()> {
+pub(super) fn ensure_mutation_document(document: &str) -> Result<(), ConfigClientError> {
     if document.trim_start().starts_with("mutation") {
         Ok(())
     } else {
-        anyhow::bail!("ConfigAccess::write requires a GraphQL mutation document")
+        Err(ConfigClientError::MutationDocumentRequired)
     }
 }
 
-pub(crate) fn ensure_query_document(document: &str) -> Result<()> {
+pub(crate) fn ensure_query_document(document: &str) -> Result<(), ConfigClientError> {
     let document = document.trim_start();
     if document.starts_with('{') || document.starts_with("query") {
         Ok(())
     } else {
-        anyhow::bail!("ConfigAccess::execute requires a GraphQL query document")
+        Err(ConfigClientError::QueryDocumentRequired)
     }
 }
 

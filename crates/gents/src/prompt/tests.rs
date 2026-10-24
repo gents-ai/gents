@@ -49,7 +49,7 @@ async fn build_with_summaries_prepends() {
         "what were we discussing?",
     ))];
     let summaries = vec!["We discussed project architecture.".to_string()];
-    let prompt = builder.build(&messages, &summaries).await.unwrap();
+    let prompt = builder.build(&messages, &summaries).await;
 
     assert_eq!(prompt.messages.len(), 2);
 
@@ -109,8 +109,7 @@ async fn build_preserves_each_source_through_summary_prepend_even_with_equal_nat
             &[first.clone(), second.clone()],
             &["earlier conversation".to_string()],
         )
-        .await
-        .unwrap();
+        .await;
 
     assert_eq!(prompt.messages.len(), 3);
     assert!(prompt.messages[0].source.is_none());

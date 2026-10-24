@@ -180,7 +180,7 @@ fn install_pack_plugins_locked<'a>(
             let instructions = plugin
                 .instructions
                 .as_deref()
-                .map(|path| crate::pack::tool_instructions(&plugin.name, asset(path)?))
+                .map(|path| anyhow::Ok(crate::pack::tool_instructions(&plugin.name, asset(path)?)?))
                 .transpose()?;
             let (data_unique_keys, data_collection_fields) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;

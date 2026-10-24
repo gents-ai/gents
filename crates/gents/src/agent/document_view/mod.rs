@@ -100,12 +100,12 @@ pub(crate) fn merge_surface_tools(
     tools: &Tools,
     view: &DocumentRuntimeView,
 ) -> anyhow::Result<crate::document_config::MergedSurfaceTools> {
-    crate::document_config::merge_datastore_tool_surfaces(
+    Ok(crate::document_config::merge_datastore_tool_surfaces(
         tools,
         view.datastore_tool_surfaces
             .values()
             .map(|record| &record.value),
-    )
+    )?)
 }
 
 #[derive(Debug, Default)]

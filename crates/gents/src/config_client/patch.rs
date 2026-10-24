@@ -1,4 +1,3 @@
-use anyhow::{bail, Result};
 use serde_json::{Map, Value};
 
 /// Canonical self-configuration targets; collection metadata belongs to the shared catalog.
@@ -139,7 +138,27 @@ impl SelfConfigTarget {
 /// A self-config patch: field → `Some(value)` to set, `None` to clear. Later entries win.
 pub type SelfConfigPatch = Vec<(String, Option<Value>)>;
 
-pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+pub enum PatchError {
+    #[error("field {field} on {collection} is protected (identity, runtime-owned, secret, or apply-managed) and cannot be patched via self-config{recovery}")]
+    ProtectedField {
+        field: String,
+        collection: &'static str,
+        recovery: &'static str,
+    },
+    #[error("unknown field {field} for {collection}; writable fields: {writable}{recovery}")]
+    UnknownField {
+        field: String,
+        collection: &'static str,
+        writable: String,
+        recovery: &'static str,
+    },
+}
+
+pub fn ensure_admissible(
+    target: SelfConfigTarget,
+    patch: &SelfConfigPatch,
+) -> Result<(), PatchError> {
     for (field, _) in patch {
         if !target.is_writable(field) {
             if target.all_fields().contains(&field.as_str()) {
@@ -150,11 +169,11 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
                 } else {
                     ""
                 };
-                bail!(
-                    "field {field} on {collection} is protected (identity, runtime-owned, \
-                     secret, or apply-managed) and cannot be patched via self-config{recovery}",
-                    collection = target.collection_name(),
-                );
+                return Err(PatchError::ProtectedField {
+                    field: field.clone(),
+                    collection: target.collection_name(),
+                    recovery,
+                });
             }
             let recovery = if target == SelfConfigTarget::Agent
                 && matches!(field.as_str(), "system_prompt" | "instructions")
@@ -183,11 +202,12 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
             } else {
                 ""
             };
-            bail!(
-                "unknown field {field} for {collection}; writable fields: {writable}{recovery}",
-                collection = target.collection_name(),
-                writable = target.writable_fields().join(", "),
-            );
+            return Err(PatchError::UnknownField {
+                field: field.clone(),
+                collection: target.collection_name(),
+                writable: target.writable_fields().join(", "),
+                recovery,
+            });
         }
     }
     Ok(())

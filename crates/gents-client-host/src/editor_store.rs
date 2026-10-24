@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyUnavailable};
+use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyError};
 use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
 use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
 use serde::{Deserialize, Serialize};
@@ -117,14 +117,17 @@ where
 
     pub async fn failed(&self, error: &anyhow::Error) -> Result<()> {
         let (code, message) = if error.downcast_ref::<HistoryUnlockRequired>().is_some()
-            || error.downcast_ref::<StoreKeyUnavailable>().is_some()
+            || error
+                .downcast_ref::<StoreKeyError>()
+                .and_then(StoreKeyError::unavailable)
+                .is_some()
         {
             (
                     BridgeErrorCode::LocalHistoryLocked,
                     "Unlock local history to cache its encryption key in VS Code. Your chats are unchanged.",
                 )
         } else if gents::storage_backend::incompatible_store(
-            error,
+            error.as_ref(),
             DesktopPaths::from_root(&self.home).node_data_dir(),
         )
         .is_some()
@@ -165,7 +168,7 @@ where
             "unsupported editor store encryption version"
         );
         if matches!(record.custody, StoreKeyCustody::File) {
-            return record.initialize(key_file, data_path);
+            return Ok(record.initialize(key_file, data_path)?);
         }
         let mut channel = self.channel.lock().await;
         send(
@@ -180,7 +183,7 @@ where
         let reply: Reply = serde_json::from_slice(&receive(&mut channel).await?)
             .context("invalid editor secret storage response")?;
         match reply {
-            Reply::Use { bytes: Some(bytes) } => return StoreKey::from_host(&bytes),
+            Reply::Use { bytes: Some(bytes) } => return Ok(StoreKey::from_host(&bytes)?),
             Reply::Use { bytes: None } => {}
             Reply::Stored => bail!("editor acknowledged a key before receiving it"),
         }

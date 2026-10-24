@@ -21,17 +21,27 @@ pub(super) fn record_slow_native_phase(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum WriteTelemetryError {
+    #[error("invalid static write operation name")]
+    InvalidOperationName,
+    #[error("invalid write attempt")]
+    InvalidAttempt,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WriteOperation(&'static str);
 
 impl WriteOperation {
-    pub(crate) fn new(name: &'static str) -> anyhow::Result<Self> {
+    pub(crate) fn new(name: &'static str) -> Result<Self, WriteTelemetryError> {
         let valid = !name.is_empty()
             && name.len() <= 64
             && name.bytes().all(|byte| {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'.')
             });
-        anyhow::ensure!(valid, "invalid static write operation name");
+        if !valid {
+            return Err(WriteTelemetryError::InvalidOperationName);
+        }
         Ok(Self(name))
     }
 
@@ -101,11 +111,10 @@ pub(crate) struct WriteAttemptOrdinal {
 }
 
 impl WriteAttemptOrdinal {
-    pub(crate) fn new(attempt: u32, max_attempts: u32) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            attempt > 0 && attempt <= max_attempts,
-            "invalid write attempt"
-        );
+    pub(crate) fn new(attempt: u32, max_attempts: u32) -> Result<Self, WriteTelemetryError> {
+        if attempt == 0 || attempt > max_attempts {
+            return Err(WriteTelemetryError::InvalidAttempt);
+        }
         Ok(Self {
             attempt,
             max_attempts,

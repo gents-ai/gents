@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
+use super::error::DocumentConfigError;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// Complete selectable inference preset; multiple profiles may select different
@@ -74,12 +75,14 @@ impl InferenceProfile {
         violations
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
         if violations.is_empty() {
             Ok(())
         } else {
-            anyhow::bail!(violations.join("; "))
+            Err(DocumentConfigError::InferenceProfileViolations {
+                violations: violations.join("; "),
+            })
         }
     }
 }

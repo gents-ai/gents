@@ -1,5 +1,14 @@
-use anyhow::{anyhow, Result};
 use serde_json::Value;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolOutputError {
+    #[error("serialize result: {error}")]
+    SerializeResult { error: serde_json::Error },
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+}
+
+type Result<T, E = ToolOutputError> = std::result::Result<T, E>;
 
 pub(crate) struct Ordered(
     Vec<(
@@ -83,7 +92,8 @@ impl Ordered {
     }
 
     pub(crate) fn pretty(&self) -> Result<String> {
-        serde_json::to_string_pretty(self).map_err(|error| anyhow!("serialize result: {error}"))
+        serde_json::to_string_pretty(self)
+            .map_err(|error| ToolOutputError::SerializeResult { error })
     }
 }
 

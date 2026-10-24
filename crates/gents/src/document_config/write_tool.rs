@@ -1,3 +1,4 @@
+use super::error::DocumentConfigError;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::toolset::{
@@ -6,7 +7,6 @@ use crate::toolset::{
     READ_PROCESS_TOOL_NAME, SESSION_HISTORY_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
     WAIT_PROCESS_TOOL_NAME,
 };
-use anyhow::Result;
 
 /// `name` is trimmed at deserialization; the field name is interpolated verbatim
 /// as a GraphQL input key, so stray whitespace would otherwise corrupt the
@@ -67,30 +67,25 @@ impl WriteToolFieldFill {
     /// Resolve this fill from the current tool-call runtime context. Shared by
     /// the bounded write and query tools so the correlation / source-field
     /// vocabulary cannot drift.
-    pub fn resolve(&self, field_name: &str) -> Result<String> {
+    pub fn resolve(&self, field_name: &str) -> Result<String, DocumentConfigError> {
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "runtime-filled field `{field_name}` requires an active AgentRequest context"
-                )
+            .ok_or_else(|| DocumentConfigError::RuntimeFieldNeedsRequest {
+                field_name: field_name.to_owned(),
             })?;
         match self {
             Self::Correlation => runtime
                 .correlation
                 .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "runtime-filled field `{field_name}` requires a non-empty correlation"
-                    )
+                .ok_or_else(|| DocumentConfigError::RuntimeFieldNeedsCorrelation {
+                    field_name: field_name.to_owned(),
                 }),
             Self::SourceField(source_field) => runtime
                 .source_fields
                 .get(source_field)
                 .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "runtime-filled field `{field_name}` requires source field `{source_field}` in trigger context"
-                    )
+                .ok_or_else(|| DocumentConfigError::RuntimeFieldNeedsSourceField {
+                    field_name: field_name.to_owned(),
+                    source_field: source_field.clone(),
                 }),
         }
     }
@@ -282,25 +277,30 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
 
 impl WriteToolDecl {
     /// Validate the declaration once for every registration and execution path.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), DocumentConfigError> {
         if self.tool_name.trim().is_empty() {
-            anyhow::bail!("tool_name must be non-empty");
+            return Err(DocumentConfigError::WriteToolNameBlank);
         }
         crate::graphql::validate_collection_identifier(&self.collection).map_err(|error| {
-            anyhow::anyhow!("invalid collection {:?}: {error}", self.collection)
+            DocumentConfigError::WriteToolInvalidCollection {
+                collection: self.collection.clone(),
+                error,
+            }
         })?;
         reject_protected_collection_name(&self.collection)?;
         for (index, field) in self.fields.iter().enumerate() {
             if field.name.trim().is_empty() {
-                anyhow::bail!("invalid field[{index}] name: empty name");
+                return Err(DocumentConfigError::WriteToolFieldNameBlank { index });
             }
             crate::graphql::validate_graphql_name(&field.name).map_err(|error| {
-                anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
+                DocumentConfigError::WriteToolFieldName {
+                    index,
+                    name: field.name.clone(),
+                    error,
+                }
             })?;
             if field.name == "requester_did" && field.fill.is_none() {
-                anyhow::bail!(
-                    "field[{index}] requester_did is node identity and must be runtime-filled"
-                );
+                return Err(DocumentConfigError::WriteToolRequesterDid { index });
             }
         }
         Ok(())
@@ -327,7 +327,7 @@ pub(crate) fn validate_write_tool_declarations(
     decls: &[WriteToolDecl],
     cli_tool_names: &[String],
     additional_tool_names: &[String],
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let cli_tool_names = cli_tool_names
         .iter()
         .map(|name| name.trim())
@@ -455,11 +455,13 @@ pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
 /// Reject a collection a datastore create/query tool may never name. Sits
 /// beside `validate_collection_identifier` rather than inside it: that check
 /// lives in `gents-protocol` and is shared far beyond datastore surfaces.
-pub(crate) fn reject_protected_collection_name(collection: &str) -> Result<()> {
+pub(crate) fn reject_protected_collection_name(
+    collection: &str,
+) -> Result<(), DocumentConfigError> {
     if PROTECTED_DATASTORE_COLLECTIONS.contains(&collection) {
-        anyhow::bail!(
-            "collection {collection:?} is protected and cannot be exposed through a datastore tool"
-        );
+        return Err(DocumentConfigError::ProtectedCollection {
+            collection: collection.to_owned(),
+        });
     }
     Ok(())
 }
@@ -467,28 +469,35 @@ pub(crate) fn reject_protected_collection_name(collection: &str) -> Result<()> {
 /// Reject a declared write/query tool name that collides with a built-in,
 /// a `cli_tool_names` entry, or another runtime-provided tool.
 pub(crate) fn reject_tool_name_surface_collisions(
-    field: &str,
+    field: &'static str,
     index: usize,
     tool_name: &str,
-    role: &str,
+    role: &'static str,
     cli_tool_names: &rapidhash::RapidHashSet<&str>,
     additional_tool_names: &rapidhash::RapidHashSet<&str>,
-) -> Result<()> {
+) -> Result<(), DocumentConfigError> {
     let name = tool_name.trim();
     if is_reserved_builtin_tool_name(tool_name) {
-        return Err(anyhow::anyhow!(
-            "{field}[{index}] tool_name {name:?} collides with a built-in tool; declared {role} must use a unique name"
-        ));
+        return Err(DocumentConfigError::ToolNameBuiltinCollision {
+            field,
+            index,
+            name: name.to_owned(),
+            role,
+        });
     }
     if cli_tool_names.contains(name) {
-        return Err(anyhow::anyhow!(
-            "{field}[{index}] tool_name {name:?} collides with a CLI entry in the same Tools document; each tool must have a unique name"
-        ));
+        return Err(DocumentConfigError::ToolNameCliCollision {
+            field,
+            index,
+            name: name.to_owned(),
+        });
     }
     if additional_tool_names.contains(name) {
-        return Err(anyhow::anyhow!(
-            "{field}[{index}] tool_name {name:?} collides with another runtime-provided tool; each tool must have a unique name"
-        ));
+        return Err(DocumentConfigError::ToolNameRuntimeCollision {
+            field,
+            index,
+            name: name.to_owned(),
+        });
     }
     Ok(())
 }
@@ -547,7 +556,12 @@ mod tests {
     fn eval_and_optimization_collections_are_never_exposed() {
         for name in super::PROTECTED_DATASTORE_COLLECTIONS {
             let error = super::reject_protected_collection_name(name).unwrap_err();
-            assert!(format!("{error:#}").contains("protected"), "{error:#}");
+            assert!(
+                gents_protocol::error_chain::ErrorChain(&error)
+                    .to_string()
+                    .contains("protected"),
+                "{error}"
+            );
         }
         for name in [
             gents_protocol::schemas::EVAL_DEFINITION_NAME,

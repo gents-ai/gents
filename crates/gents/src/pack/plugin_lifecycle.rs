@@ -39,7 +39,7 @@ where
         home,
         manifest,
         archive.digest(),
-        |path| archive.asset(path),
+        |path| Ok(archive.asset(path)?),
         consent,
         install_owner,
         bindings,
