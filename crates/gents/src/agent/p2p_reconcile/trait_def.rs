@@ -20,6 +20,9 @@ pub enum RemoteP2pAdminError {
 
     #[error("local error: {0}")]
     LocalError(String),
+
+    #[error("local error: {0}")]
+    UnsupportedReplicationFilter(#[from] super::templates::UnsupportedReplicationFilter),
 }
 
 pub type RemoteP2pAdminResult<T> = Result<T, RemoteP2pAdminError>;

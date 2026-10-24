@@ -1279,7 +1279,9 @@ mod tests {
                         Ok(ListToolsResult::default())
                     } else {
                         Err(crate::mcp_pool::McpPoolError::ListTools {
-                            error: "synthetic MCP health probe failure".to_owned(),
+                            error: crate::mcp_pool::test_service_error(
+                                "synthetic MCP health probe failure",
+                            ),
                         })
                     }
                 }

@@ -527,6 +527,26 @@ pub enum DocumentConfigError {
     ConfigOwnerMismatch { collection: Collection },
     #[error("configuration requires logical ID")]
     ConfigurationRequiresLogicalId,
+    #[error("configuration requires node_did")]
+    ConfigurationRequiresNodeDid,
+    #[error(transparent)]
+    DesiredState(Box<crate::config_client::DesiredStateError>),
+    #[error("missing canonical projection")]
+    MissingCanonicalProjection,
+    #[error("{} configuration owner does not match {node_did:?}", collection.graphql_type())]
+    ConfigurationOwnerNotNode {
+        collection: Collection,
+        node_did: String,
+    },
+    #[error(
+        "multiple live {} documents share owner {node_did:?} and ID {id:?}",
+        collection.graphql_type()
+    )]
+    DuplicateLiveDocument {
+        collection: Collection,
+        node_did: String,
+        id: String,
+    },
     #[error("{} {id} field {field} has a blank reference ID", collection.graphql_type())]
     BlankReferenceId {
         collection: Collection,

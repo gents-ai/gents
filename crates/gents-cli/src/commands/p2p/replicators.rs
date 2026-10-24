@@ -58,8 +58,7 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    let wire_filters = to_replication_filters(&filters)
-        .map_err(|message| P2pCommandError::ReplicationFilters { message })?;
+    let wire_filters = to_replication_filters(&filters)?;
     let request = P2pReplicatorRequest {
         collections: collections.clone(),
         addresses: vec![args.peer.clone()],

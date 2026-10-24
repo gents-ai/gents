@@ -42,37 +42,41 @@ impl ConfigReferences {
     pub fn from_documents(
         node_did: &str,
         documents: impl IntoIterator<Item = (Collection, Value)>,
-    ) -> Result<Self> {
-        ensure!(
-            !node_did.trim().is_empty(),
-            "configuration requires node_did"
-        );
+    ) -> std::result::Result<Self, DocumentConfigError> {
+        if node_did.trim().is_empty() {
+            return Err(DocumentConfigError::ConfigurationRequiresNodeDid);
+        }
         let mut snapshot = Self {
             node_did: node_did.to_owned(),
             documents: BTreeMap::new(),
         };
         for (collection, value) in documents {
-            let value = config_projection(collection, Some(&value))?
+            let value = config_projection(collection, Some(&value))
+                .map_err(|error| DocumentConfigError::DesiredState(Box::new(error)))?
                 .1
-                .context("missing canonical projection")?;
-            ensure!(
-                value["node_did"].as_str() == Some(node_did),
-                "{} configuration owner does not match {node_did:?}",
-                collection.graphql_type()
-            );
+                .ok_or(DocumentConfigError::MissingCanonicalProjection)?;
+            if value["node_did"].as_str() != Some(node_did) {
+                return Err(DocumentConfigError::ConfigurationOwnerNotNode {
+                    collection,
+                    node_did: node_did.to_owned(),
+                });
+            }
             let id = value[collection.unique_field()]
                 .as_str()
                 .filter(|id| !id.trim().is_empty())
                 .ok_or(DocumentConfigError::ConfigurationRequiresLogicalId)?
                 .to_owned();
-            ensure!(
-                snapshot
-                    .documents
-                    .insert((collection, id.clone()), value)
-                    .is_none(),
-                "multiple live {} documents share owner {node_did:?} and ID {id:?}",
-                collection.graphql_type()
-            );
+            if snapshot
+                .documents
+                .insert((collection, id.clone()), value)
+                .is_some()
+            {
+                return Err(DocumentConfigError::DuplicateLiveDocument {
+                    collection,
+                    node_did: node_did.to_owned(),
+                    id,
+                });
+            }
         }
         Ok(snapshot)
     }
@@ -99,7 +103,7 @@ impl ConfigReferences {
                 .with_context(|| format!("{name} configuration query did not return rows"))?;
             documents.extend(rows.iter().cloned().map(|row| (collection, row)));
         }
-        Self::from_documents(node_did, documents)
+        Ok(Self::from_documents(node_did, documents)?)
     }
 
     pub(crate) fn profile_with_backend(

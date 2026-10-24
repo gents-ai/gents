@@ -27,8 +27,8 @@ pub(crate) enum ConfigCommandError {
     AccountWithoutBackend { label: String },
     #[error("account {label:?} runs several backends: {backends}; name one as backend_id in the profile file")]
     AccountRunsSeveralBackends { label: String, backends: String },
-    #[error("{message}")]
-    ManifestRoot { message: String },
+    #[error(transparent)]
+    ManifestRoot(#[from] crate::desired_state::write::WriteError),
     #[error("--path must be valid UTF-8 to be stored as a root_path, got {}", path.display())]
     PathNotUtf8 { path: PathBuf },
     #[error("expected one WorkspaceRoot for {id:?}, found {found}")]

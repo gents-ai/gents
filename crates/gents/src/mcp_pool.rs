@@ -27,14 +27,14 @@ const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 #[derive(Debug, thiserror::Error)]
 pub enum McpPoolError {
     #[error("list_tools: {error}")]
-    ListTools { error: String },
+    ListTools { error: Box<rmcp::ServiceError> },
     #[error("call_tool: {error}")]
-    CallTool { error: String },
+    CallTool { error: Box<rmcp::ServiceError> },
     #[error("MCP handshake failed for {service_id} ({endpoint}): {error}")]
     Handshake {
         service_id: String,
         endpoint: String,
-        error: String,
+        error: Box<rmcp::service::ClientInitializeError>,
     },
     #[error("invalid node DID header value")]
     NodeDidHeader(#[source] reqwest::header::InvalidHeaderValue),
@@ -129,9 +129,7 @@ where
                 c.peer()
                     .list_tools(None)
                     .await
-                    .map_err(|e| McpPoolError::ListTools {
-                        error: e.to_string(),
-                    })
+                    .map_err(|e| McpPoolError::ListTools { error: Box::new(e) })
             })
         }),
         call_tool_fn: Box::new(move |params| {
@@ -140,12 +138,17 @@ where
                 c.peer()
                     .call_tool(params)
                     .await
-                    .map_err(|e| McpPoolError::CallTool {
-                        error: e.to_string(),
-                    })
+                    .map_err(|e| McpPoolError::CallTool { error: Box::new(e) })
             })
         }),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_service_error(message: &str) -> Box<rmcp::ServiceError> {
+    Box::new(rmcp::ServiceError::McpError(
+        rmcp::ErrorData::internal_error(message.to_owned(), None),
+    ))
 }
 
 fn streamable_http_transport_config(
@@ -202,7 +205,7 @@ async fn connect_mcp_service(
             .map_err(|e| McpPoolError::Handshake {
                 service_id: service_id.to_owned(),
                 endpoint: endpoint.to_owned(),
-                error: e.to_string(),
+                error: Box::new(e),
             })?;
     let mut connection = wrap_connection(endpoint.to_string(), client, resume_policy);
     connection.node_did_header = node_did_header.map(ToOwned::to_owned);
@@ -397,7 +400,7 @@ impl McpPool {
     {
         Self::new_with_tool_handlers(handler, |_| async {
             Err(McpPoolError::CallTool {
-                error: "call_tool was not expected".to_owned(),
+                error: test_service_error("call_tool was not expected"),
             })
         })
     }

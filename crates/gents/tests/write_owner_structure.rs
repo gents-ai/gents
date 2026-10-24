@@ -1731,7 +1731,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents-cli/src/desired_state/prune.rs",
     "crates/gents-cli/src/desired_state/validate/live.rs",
     "crates/gents-cli/src/desired_state/validate/storage.rs",
-    "crates/gents-cli/src/desired_state/write.rs",
     "crates/gents-cli/src/http/enrollment.rs",
     "crates/gents-cli/src/http/mcp_server.rs",
     "crates/gents-cli/src/http/sessions.rs",

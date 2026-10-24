@@ -1153,6 +1153,7 @@ fn default_agent_publication_matches_lean() {
             ),
         ];
         let accepted = ConfigReferences::from_documents(scope, documents)
+            .map_err(anyhow::Error::from)
             .and_then(|refs| refs.validate())
             .is_ok();
         assert_eq!(

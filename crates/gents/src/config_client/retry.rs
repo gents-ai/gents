@@ -65,6 +65,7 @@ fn access_error_in<'a>(
         .downcast_ref::<ConfigClientError>()
         .or_else(|| wrapped::<GraphqlResponseError>(cause))
         .or_else(|| wrapped::<crate::document_config::DocumentConfigError>(cause))
+        .or_else(|| wrapped::<crate::graph_pipeline::GraphPipelineError>(cause))
         .or_else(|| wrapped::<crate::oauth_credential::OAuthCredentialError>(cause))
         .or_else(|| wrapped::<crate::usage_observation::UsageObservationError>(cause))
         .or_else(|| wrapped::<crate::rendered_request::RenderedRequestError>(cause))
@@ -165,6 +166,21 @@ mod tests {
             )),
             None
         );
+    }
+
+    #[test]
+    fn graph_run_callback_failures_keep_their_classification() {
+        let conflict = anyhow::Error::from(crate::graph_pipeline::GraphPipelineError::Config(
+            transaction_conflict(ConflictSource::StructuredCode),
+        ));
+        assert_eq!(
+            classified_transaction_conflict(&conflict),
+            Some(ConflictSource::StructuredCode)
+        );
+        let storage = anyhow::Error::from(crate::graph_pipeline::GraphPipelineError::Config(
+            transaction_storage_failure(ConfigClientError::InjectedReadStorageFailure),
+        ));
+        assert!(is_transaction_storage_failure(&storage));
     }
 
     #[test]

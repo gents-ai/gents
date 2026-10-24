@@ -25,8 +25,8 @@ pub(crate) enum P2pCommandError {
     EmptyShareableAddress,
     #[error("runtime reported a shareable P2P address but no usable peer id")]
     NoUsablePeerId,
-    #[error("{message}")]
-    ReplicationFilters { message: String },
+    #[error(transparent)]
+    ReplicationFilters(#[from] gents::agent::p2p_reconcile::UnsupportedReplicationFilter),
     #[error("parsing --filter arguments for p2p admin replicators add")]
     ReplicatorFilter(#[source] super::replicators::ReplicatorFilterError),
     #[error("no init config found in {}; run `gents init` first", .home_dir.display())]

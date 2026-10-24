@@ -16,7 +16,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             .iter()
             .map(|doc| (doc.collection, doc.add.clone())),
     ) {
-        errors.push(format!("{}", ErrorChain(error.as_ref())));
+        errors.push(format!("{}", ErrorChain(&error)));
         return;
     }
     tooling::validate_surfaces(manifest, errors);

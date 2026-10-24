@@ -264,7 +264,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         let body = AddReplicatorBody {
             collections,
             addresses,
-            filters: to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?,
+            filters: to_replication_filters(filters)?,
         };
         let resp = self
             .json_request(Method::POST, "/p2p/replicators", &body)?

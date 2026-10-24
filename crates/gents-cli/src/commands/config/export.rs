@@ -4,8 +4,6 @@ use crate::cli::*;
 use crate::desired_state;
 use crate::{build_config_export_bundle, resolve_config_access};
 
-use super::ConfigCommandError;
-
 pub(super) async fn config_export(args: ConfigExportArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let node_did = super::binding::resolve_target_node_did(
@@ -18,8 +16,7 @@ pub(super) async fn config_export(args: ConfigExportArgs) -> Result<()> {
     .await?;
     let bundle = build_config_export_bundle(&access, &node_did).await?;
     let manifest = desired_state::manifest_from_export_bundle(&bundle)?;
-    desired_state::write_manifest_root(&args.root, &manifest, args.force)
-        .map_err(|message| ConfigCommandError::ManifestRoot { message })?;
+    desired_state::write_manifest_root(&args.root, &manifest, args.force)?;
     println!("wrote manifest root to {}", args.root.display());
     Ok(())
 }

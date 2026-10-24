@@ -264,8 +264,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     ) -> RemoteP2pAdminResult<()> {
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
-        let defra_filters =
-            to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?;
+        let defra_filters = to_replication_filters(filters)?;
         self.run(
             "add_replicator",
             p2p.add_replicator(collections.to_vec(), addr, defra_filters, Vec::new(), None),

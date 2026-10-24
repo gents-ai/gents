@@ -17,6 +17,7 @@ pub fn classify_remote_admin_error(err: &RemoteP2pAdminError) -> PairingErrorCla
         RemoteP2pAdminError::RpcError(_) => PairingErrorClass::RpcError,
         RemoteP2pAdminError::RemoteNotFound(_) => PairingErrorClass::RemoteNotFound,
         RemoteP2pAdminError::RemoteUnauthorized => PairingErrorClass::RemoteUnauthorized,
-        RemoteP2pAdminError::LocalError(_) => PairingErrorClass::LocalError,
+        RemoteP2pAdminError::LocalError(_)
+        | RemoteP2pAdminError::UnsupportedReplicationFilter(_) => PairingErrorClass::LocalError,
     }
 }

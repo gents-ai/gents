@@ -13,7 +13,9 @@ fn connection_refused() -> McpPoolError {
     McpPoolError::Handshake {
         service_id: String::new(),
         endpoint: String::new(),
-        error: "connection refused".to_owned(),
+        error: Box::new(rmcp::service::ClientInitializeError::ConnectionClosed(
+            "connection refused".to_owned(),
+        )),
     }
 }
 
@@ -47,7 +49,9 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
                             list_calls.fetch_add(1, Ordering::SeqCst);
                             if attempt == 1 {
                                 return Err(McpPoolError::ListTools {
-                                    error: "transport dropped while listing tools".to_owned(),
+                                    error: super::test_service_error(
+                                        "transport dropped while listing tools",
+                                    ),
                                 });
                             }
                             Ok(ListToolsResult::default())
@@ -56,7 +60,7 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
                     call_tool_fn: Box::new(|_params| {
                         Box::pin(async {
                             Err(McpPoolError::CallTool {
-                                error: "call_tool was not expected".to_owned(),
+                                error: super::test_service_error("call_tool was not expected"),
                             })
                         })
                     }),
@@ -102,7 +106,7 @@ async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idem
                     Box::pin(async move {
                         calls.fetch_add(1, Ordering::SeqCst);
                         Err(McpPoolError::CallTool {
-                            error: "transport dropped after dispatch".to_owned(),
+                            error: super::test_service_error("transport dropped after dispatch"),
                         })
                     })
                 }),
@@ -650,7 +654,7 @@ async fn hung_connect_does_not_wedge_other_services() {
                 call_tool_fn: Box::new(|_params| {
                     Box::pin(async {
                         Err(McpPoolError::CallTool {
-                            error: "call_tool was not expected".to_owned(),
+                            error: super::test_service_error("call_tool was not expected"),
                         })
                     })
                 }),
@@ -713,7 +717,7 @@ fn counting_pool(
                 call_tool_fn: Box::new(|_params| {
                     Box::pin(async {
                         Err(McpPoolError::CallTool {
-                            error: "call_tool was not expected".to_owned(),
+                            error: super::test_service_error("call_tool was not expected"),
                         })
                     })
                 }),
@@ -890,7 +894,7 @@ async fn healthy_service_concurrent_cold_connects_stay_benign() {
                 call_tool_fn: Box::new(|_params| {
                     Box::pin(async {
                         Err(McpPoolError::CallTool {
-                            error: "call_tool was not expected".to_owned(),
+                            error: super::test_service_error("call_tool was not expected"),
                         })
                     })
                 }),
@@ -944,7 +948,9 @@ async fn poison_recovery_preserves_list_tools_safe_read_retry() {
                     Box::pin(async move {
                         if attempt == 2 {
                             return Err(McpPoolError::ListTools {
-                                error: "transport dropped after poison recovery".to_owned(),
+                                error: super::test_service_error(
+                                    "transport dropped after poison recovery",
+                                ),
                             });
                         }
                         Ok(ListToolsResult::default())
@@ -953,7 +959,7 @@ async fn poison_recovery_preserves_list_tools_safe_read_retry() {
                 call_tool_fn: Box::new(|_params| {
                     Box::pin(async {
                         Err(McpPoolError::CallTool {
-                            error: "call_tool was not expected".to_owned(),
+                            error: super::test_service_error("call_tool was not expected"),
                         })
                     })
                 }),

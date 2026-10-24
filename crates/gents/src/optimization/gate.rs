@@ -144,7 +144,7 @@ fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), Struc
             .iter()
             .map(|document| (document.collection, document.add.clone())),
     )
-    .map_err(invalid)?;
+    .map_err(|error| invalid(error.into()))?;
     plan.documents()
         .iter()
         .filter(|document| document.collection == Collection::Trigger)
