@@ -154,6 +154,8 @@ pub(crate) enum RequestHelpersError {
     PreparedReceiptMissing,
     #[error("committed signed request receipt is missing")]
     CommittedReceiptMissing,
+    #[error("the command produced no report")]
+    NoReport,
 }
 
 pub(crate) fn ensure_local_request_signer(
@@ -429,7 +431,7 @@ pub(crate) async fn create_agent_request(
         graphql, node_did, content, session_id, agent_id, None, options,
     )
     .await?;
-    submit_prepared_agent_request_committed(graphql, &prepared).await
+    Ok(submit_prepared_agent_request_committed(graphql, &prepared).await?)
 }
 
 #[derive(Debug, Clone)]
@@ -664,7 +666,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
 pub(crate) async fn submit_prepared_agent_request_committed(
     graphql: &GraphqlEndpoint,
     prepared: &PreparedAgentRequest,
-) -> Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, RequestHelpersError> {
     let access = gents::ConfigAccess::Graphql(graphql.clone());
     let mutation = prepared
         .create
@@ -684,7 +686,7 @@ pub(crate) async fn submit_prepared_agent_request_committed(
     let row = matching_prepared_receipt(graphql, &prepared.create)
         .await?
         .ok_or(RequestHelpersError::PreparedReceiptMissing)?;
-    Ok(submitted_from_receipt(row)?)
+    submitted_from_receipt(row)
 }
 
 async fn committed_submitted_request(
@@ -1243,16 +1245,17 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<(), RequestHelpersError> {
         .map_err(RequestHelpersError::WriteNdjson)
 }
 
-pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
+pub(crate) async fn capture_report<F, E>(command: F) -> Result<Value, E>
 where
-    F: std::future::Future<Output = Result<()>>,
+    F: std::future::Future<Output = Result<(), E>>,
+    E: From<RequestHelpersError>,
 {
     CAPTURED_REPORT
         .scope(std::cell::RefCell::new(None), async move {
             command.await?;
             CAPTURED_REPORT
                 .with(|report| report.borrow_mut().take())
-                .ok_or_else(|| anyhow::anyhow!("the command produced no report"))
+                .ok_or_else(|| RequestHelpersError::NoReport.into())
         })
         .await
 }

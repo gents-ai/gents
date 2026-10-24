@@ -160,6 +160,22 @@ pub(crate) enum ServeError {
     JoinCodexShimTask { error: tokio::task::JoinError },
     #[error("unable to determine a default tool root for local tools")]
     DefaultToolRootUnavailable,
+    #[error("runtime did not publish the resolved post-apply configuration")]
+    RuntimeConfigurationTimeout(#[source] tokio::time::error::Elapsed),
+    #[error("runtime configuration observer closed")]
+    RuntimeConfigurationClosed(#[source] watch::error::RecvError),
+    #[error(transparent)]
+    HomeState(#[from] crate::home_state::HomeStateError),
+    #[error("loading node identity key")]
+    LoadNodeIdentityKey(#[source] gents::identity::IdentityError),
+    #[error("creating or loading node identity key")]
+    CreateNodeIdentityKey(#[source] gents::identity::IdentityError),
+    #[error("loading local P2P peer id from the embedded node")]
+    LocalP2pPeerId(#[source] defra_p2p_adapter::P2PError),
+    #[error("loading connected P2P peers from the embedded node")]
+    ConnectedP2pPeers(#[source] defra_p2p_adapter::P2PError),
+    #[error("loading local P2P listen addresses from the embedded node")]
+    P2pListenAddresses(#[source] defra_p2p_adapter::P2PError),
 }
 
 pub(crate) struct CliReadyObserver {
@@ -235,7 +251,7 @@ impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
 async fn wait_for_runtime_configuration(
     receiver: &mut watch::Receiver<Option<RuntimeConfigurationObservation>>,
     expected_fingerprint: Option<&str>,
-) -> Result<RuntimeConfigurationObservation> {
+) -> Result<RuntimeConfigurationObservation, ServeError> {
     let wait = async {
         loop {
             if let Some(observation) = receiver.borrow_and_update().clone() {
@@ -248,15 +264,15 @@ async fn wait_for_runtime_configuration(
     };
     tokio::time::timeout(Duration::from_secs(30), wait)
         .await
-        .context("runtime did not publish the resolved post-apply configuration")?
-        .context("runtime configuration observer closed")
+        .map_err(ServeError::RuntimeConfigurationTimeout)?
+        .map_err(ServeError::RuntimeConfigurationClosed)
 }
 
 async fn wait_for_live_node_readiness(
     graphql_url: &str,
     node_did: &str,
     fence: Option<&PostApplyReadinessFence>,
-) -> Result<NodeReadinessSummary> {
+) -> Result<NodeReadinessSummary, ServeError> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let last_observation =
@@ -284,8 +300,7 @@ async fn wait_for_live_node_readiness(
         if Instant::now() >= deadline {
             return Err(ServeError::ReadinessDeadline {
                 observation: last_observation,
-            }
-            .into());
+            });
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -1077,7 +1092,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                                 );
                             }
                             Err(binding_error) => {
-                                let reason = ErrorChain(binding_error.as_ref()).to_string();
+                                let reason = ErrorChain(&binding_error).to_string();
                                 tracing::warn!("Codex endpoint disabled: {reason}");
                                 codex_shim_output = Some(json!({
                                     "disabled": true,
@@ -1114,7 +1129,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
             let configuration_before_apply =
                 match wait_for_runtime_configuration(&mut configuration_rx, None).await {
                     Ok(observation) => observation,
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(error.into()),
                 };
 
             let applied_pack = match args.apply_root.as_ref() {
@@ -1181,7 +1196,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                     .await
                     {
                         Ok(observation) => observation,
-                        Err(error) => return Err(error),
+                        Err(error) => return Err(error.into()),
                     };
                     if published.generation <= configuration_before_apply.generation {
                         return Err(ServeError::GenerationNotAdvanced {
@@ -1201,7 +1216,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
             .await
             {
                 Ok(readiness) => readiness,
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             };
             let default_agent_id = readiness.snapshot.default_agent_id.clone();
             let runnable_agents = readiness
@@ -1525,7 +1540,7 @@ fn resolve_server_identity(
     init_config: Option<&StoredInitConfig>,
     home_dir: &Path,
     node_name: &str,
-) -> Result<ServerIdentity> {
+) -> Result<ServerIdentity, ServeError> {
     if let Some(config) = init_config {
         let node_did = config.node_did.trim();
         if has_node_did(node_did)
@@ -1543,10 +1558,9 @@ fn resolve_server_identity(
     let key_path = resolve_server_key_path(args, init_config, home_dir, node_name)?;
     ensure_key_path_exists_for_initialized_did(init_config, &key_path)?;
     let identity = if init_config.is_some_and(|config| has_node_did(&config.node_did)) {
-        KeyIdentity::load_existing(&key_path, None).context("loading node identity key")?
+        KeyIdentity::load_existing(&key_path, None).map_err(ServeError::LoadNodeIdentityKey)?
     } else {
-        KeyIdentity::load_or_create(&key_path, None)
-            .context("creating or loading node identity key")?
+        KeyIdentity::load_or_create(&key_path, None).map_err(ServeError::CreateNodeIdentityKey)?
     };
     let identity = Arc::new(identity);
     ensure_identity_matches_init_config(init_config, identity.did())?;
@@ -1560,7 +1574,7 @@ fn resolve_server_identity(
 fn resolve_no_key_server_identity(
     config: &StoredInitConfig,
     home_dir: &Path,
-) -> Result<ServerIdentity> {
+) -> Result<ServerIdentity, ServeError> {
     let identity = crate::load_initialized_home_identity(home_dir, config)?;
     Ok(ServerIdentity {
         node_identity_did: Some(identity.did().to_string()),
@@ -1577,7 +1591,7 @@ fn resolve_server_key_path(
     init_config: Option<&StoredInitConfig>,
     home_dir: &Path,
     node_name: &str,
-) -> Result<PathBuf> {
+) -> Result<PathBuf, ServeError> {
     if let Some(path) = args.key_path.clone() {
         return Ok(path);
     }
@@ -1599,7 +1613,7 @@ fn resolve_server_key_path(
 fn ensure_identity_matches_init_config(
     init_config: Option<&StoredInitConfig>,
     resolved_did: &str,
-) -> Result<()> {
+) -> Result<(), ServeError> {
     let Some(config) = init_config else {
         return Ok(());
     };
@@ -1607,8 +1621,7 @@ fn ensure_identity_matches_init_config(
         return Err(ServeError::InitializedDidMismatch {
             config_did: config.node_did.clone(),
             resolved_did: resolved_did.to_owned(),
-        }
-        .into());
+        });
     }
     Ok(())
 }
@@ -1616,7 +1629,7 @@ fn ensure_identity_matches_init_config(
 fn ensure_key_path_exists_for_initialized_did(
     init_config: Option<&StoredInitConfig>,
     key_path: &Path,
-) -> Result<()> {
+) -> Result<(), ServeError> {
     let Some(config) = init_config else {
         return Ok(());
     };
@@ -1624,8 +1637,7 @@ fn ensure_key_path_exists_for_initialized_did(
         return Err(ServeError::InitializedKeyMissing {
             did: config.node_did.clone(),
             key_path: key_path.to_path_buf(),
-        }
-        .into());
+        });
     }
     Ok(())
 }
@@ -1641,7 +1653,7 @@ fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
 fn resolve_server_p2p_config(
     home_dir: &Path,
     args: &ServeArgs,
-) -> Result<Option<defra_node::P2PConfig>> {
+) -> Result<Option<defra_node::P2PConfig>, ServeError> {
     if args.p2p_transport == P2pTransportArg::None {
         return Ok(None);
     }
@@ -1727,30 +1739,30 @@ fn validate_p2p_admission_config(
     max_concurrent_dag_fetches: usize,
     rate_limit_burst: u32,
     rate_limit_rate: f64,
-) -> Result<()> {
+) -> Result<(), ServeError> {
     if max_pending_dags == 0 {
-        return Err(ServeError::P2pMaxPendingDagsZero.into());
+        return Err(ServeError::P2pMaxPendingDagsZero);
     }
     if max_pending_dags > MAX_P2P_METRICS_GAUGE {
-        return Err(ServeError::P2pMaxPendingDagsTooLarge.into());
+        return Err(ServeError::P2pMaxPendingDagsTooLarge);
     }
     if max_concurrent_push_tasks == 0 {
-        return Err(ServeError::P2pPushTasksZero.into());
+        return Err(ServeError::P2pPushTasksZero);
     }
     if max_concurrent_push_tasks > MAX_P2P_SEMAPHORE_PERMITS {
-        return Err(ServeError::P2pPushTasksTooLarge.into());
+        return Err(ServeError::P2pPushTasksTooLarge);
     }
     if max_concurrent_dag_fetches == 0 {
-        return Err(ServeError::P2pDagFetchesZero.into());
+        return Err(ServeError::P2pDagFetchesZero);
     }
     if max_concurrent_dag_fetches > MAX_P2P_SEMAPHORE_PERMITS {
-        return Err(ServeError::P2pDagFetchesTooLarge.into());
+        return Err(ServeError::P2pDagFetchesTooLarge);
     }
     if rate_limit_burst == 0 {
-        return Err(ServeError::P2pRateBurstZero.into());
+        return Err(ServeError::P2pRateBurstZero);
     }
     if !rate_limit_rate.is_finite() || rate_limit_rate <= 0.0 {
-        return Err(ServeError::P2pRateRateInvalid.into());
+        return Err(ServeError::P2pRateRateInvalid);
     }
     Ok(())
 }
@@ -1780,7 +1792,7 @@ async fn load_local_server_p2p_status(
     node: &EmbeddedNode,
     transport: P2pTransportArg,
     admission: Option<Value>,
-) -> Result<Value> {
+) -> Result<Value, ServeError> {
     let admission = admission.unwrap_or(Value::Null);
     match transport {
         P2pTransportArg::None => Ok(json!({
@@ -1796,12 +1808,12 @@ async fn load_local_server_p2p_status(
             let peer_id = p2p
                 .local_peer_id()
                 .await
-                .context("loading local P2P peer id from the embedded node")?;
+                .map_err(ServeError::LocalP2pPeerId)?;
             let listen_addresses = wait_for_p2p_listen_addresses(p2p.as_ref()).await?;
             let connected_peers = p2p
                 .connected_peers()
                 .await
-                .context("loading connected P2P peers from the embedded node")?;
+                .map_err(ServeError::ConnectedP2pPeers)?;
             Ok(json!({
                 "enabled": true,
                 "p2p_transport": transport.as_str(),
@@ -1816,13 +1828,13 @@ async fn load_local_server_p2p_status(
 
 async fn wait_for_p2p_listen_addresses(
     p2p: &dyn defra_p2p_adapter::P2POperations,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>, ServeError> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let listen_addresses = p2p
             .listen_addresses()
             .await
-            .context("loading local P2P listen addresses from the embedded node")?;
+            .map_err(ServeError::P2pListenAddresses)?;
         if !listen_addresses.is_empty() {
             return Ok(listen_addresses);
         }

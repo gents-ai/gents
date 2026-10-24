@@ -29,6 +29,8 @@ pub(crate) enum InferenceBindingError {
     NodeNotConfigured { node_did: String },
     #[error("node {node_did:?} has no default agent binding")]
     NoDefaultAgent { node_did: String },
+    #[error(transparent)]
+    LoadNode(Box<gents::document_config::DocumentConfigError>),
 }
 
 pub(crate) async fn load_bound_profile(
@@ -134,22 +136,23 @@ pub(crate) async fn resolve_bound_agent_id(
     node: &EmbeddedNode,
     override_agent_id: Option<&str>,
     node_did: &str,
-) -> Result<String> {
+) -> Result<String, InferenceBindingError> {
     if let Some(value) = explicit_agent_override(override_agent_id) {
         return Ok(value);
     }
-    let principal = load_node(node, node_did).await?.ok_or_else(|| {
-        InferenceBindingError::NodeNotConfigured {
+    let principal = load_node(node, node_did)
+        .await
+        .map_err(|error| InferenceBindingError::LoadNode(Box::new(error)))?
+        .ok_or_else(|| InferenceBindingError::NodeNotConfigured {
             node_did: node_did.to_owned(),
-        }
-    })?;
-    Ok(principal
+        })?;
+    principal
         .default_agent_id
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .ok_or_else(|| InferenceBindingError::NoDefaultAgent {
             node_did: node_did.to_owned(),
-        })?)
+        })
 }
 
 pub(crate) fn explicit_agent_override(value: Option<&str>) -> Option<String> {

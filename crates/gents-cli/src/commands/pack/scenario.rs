@@ -4149,8 +4149,7 @@ mod tests {
             &config.unwrap(),
             &access,
         )
-        .await
-        .unwrap();
+        .await;
         assert!(errors.is_empty(), "{errors:?}");
         node.shutdown().await;
     }

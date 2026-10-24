@@ -57,7 +57,7 @@ pub(crate) async fn apply_bound_desired_manifest(
     let desired_manifest = &bound.manifest;
 
     let live_errs =
-        desired_state::validate::validate_manifest_against_live(desired_manifest, access).await?;
+        desired_state::validate::validate_manifest_against_live(desired_manifest, access).await;
     if !live_errs.is_empty() {
         for e in &live_errs {
             tracing::error!(error = %e, "live config validation failed");

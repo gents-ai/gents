@@ -511,11 +511,13 @@ fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<(), TraceError> 
     Ok(())
 }
 
-fn optional_scope_arg(field: &str, value: Option<String>) -> Result<Option<String>> {
+fn optional_scope_arg(
+    field: &str,
+    value: Option<String>,
+) -> Result<Option<String>, crate::CliError> {
     value
         .map(|value| crate::require_non_empty(field, &value).map(ToOwned::to_owned))
         .transpose()
-        .map_err(anyhow::Error::from)
 }
 
 fn adapter_projection_kind(arg: TraceProjectionArg) -> AdapterProjectionKind {

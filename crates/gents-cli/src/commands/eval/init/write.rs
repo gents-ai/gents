@@ -84,14 +84,16 @@ pub(crate) fn commit(
     out: &Path,
     force: bool,
     gents_home: &Path,
-) -> Result<Written> {
+) -> Result<Written, EvalInitError> {
     replaceable_destination(out, force, gents_home)?;
     let _output_lock = recovery::lock_output(out)?;
     recovery::recover_locked(out, gents_home)?;
     let replaced = replaceable_destination(out, force, gents_home)?;
     if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| EvalInitError::CreateDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     // The new pack lands complete beside `out` first, inside a directory this
     // call creates exclusively (a copy when the staging directory is on
@@ -102,8 +104,10 @@ pub(crate) fn commit(
     let landing = private_sibling(out, "new")?;
     let new_pack = landing.path().join("pack");
     if std::fs::rename(staged.dir.path(), &new_pack).is_err() {
-        copy_tree(staged.dir.path(), &new_pack)
-            .with_context(|| format!("copying the definition pack to {}", new_pack.display()))?;
+        copy_tree(staged.dir.path(), &new_pack).map_err(|source| EvalInitError::CopyPack {
+            path: new_pack.clone(),
+            source,
+        })?;
     }
     // The old pack moves aside, is checked again where no other path names
     // it, and is removed only once the new one is in place; an error between
@@ -114,8 +118,10 @@ pub(crate) fn commit(
         Some(existing) => {
             let holder = private_sibling(existing, "replaced")?;
             let old_pack = holder.path().join("pack");
-            std::fs::rename(existing, &old_pack)
-                .with_context(|| format!("moving {} aside", existing.display()))?;
+            std::fs::rename(existing, &old_pack).map_err(|source| EvalInitError::MoveAside {
+                path: existing.clone(),
+                source,
+            })?;
             // Whatever is aside now is what would be deleted: it must still be
             // a pack gents eval init wrote, with nothing else in it.
             let changed = if !is_generated_eval_pack(&old_pack) {
@@ -142,7 +148,7 @@ pub(crate) fn commit(
                     &old_pack,
                     "it changed while being replaced",
                 )?;
-                return Err(error.into());
+                return Err(error);
             }
             Some((existing, holder, old_pack))
         }
@@ -152,19 +158,17 @@ pub(crate) fn commit(
         if let Some((existing, holder, old_pack)) = aside {
             restore(existing, holder, &old_pack, "the new pack failed to land")?;
         }
-        return Err(error).with_context(|| {
-            format!(
-                "moving the definition pack from {} to {}",
-                new_pack.display(),
-                out.display()
-            )
+        return Err(EvalInitError::LandPack {
+            from: new_pack,
+            to: out.to_path_buf(),
+            source: error,
         });
     }
     if let Some((_, holder, _)) = aside {
         let path = holder.path().to_path_buf();
         holder
             .close()
-            .with_context(|| format!("removing the replaced pack at {}", path.display()))?;
+            .map_err(|source| EvalInitError::RemoveReplaced { path, source })?;
     }
     Ok(Written {
         out: out.to_path_buf(),
@@ -172,20 +176,23 @@ pub(crate) fn commit(
     })
 }
 
-fn replaceable_destination(out: &Path, force: bool, gents_home: &Path) -> Result<Option<PathBuf>> {
+fn replaceable_destination(
+    out: &Path,
+    force: bool,
+    gents_home: &Path,
+) -> Result<Option<PathBuf>, EvalInitError> {
     match out.symlink_metadata() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("inspecting eval output"),
+        Err(error) => return Err(EvalInitError::InspectOutput(error)),
         Ok(_) => {}
     }
     if !force {
         return Err(EvalInitError::OutputExists {
             out: out.to_path_buf(),
-        }
-        .into());
+        });
     }
     let user_home = std::env::home_dir();
-    let cwd = std::env::current_dir().context("resolving the working directory")?;
+    let cwd = std::env::current_dir().map_err(EvalInitError::WorkingDirectory)?;
     replaceable_out(out, user_home.as_deref(), gents_home, &cwd).map(Some)
 }
 
@@ -223,19 +230,15 @@ fn replaceable_out(
     user_home: Option<&Path>,
     gents_home: &Path,
     cwd: &Path,
-) -> Result<PathBuf> {
+) -> Result<PathBuf, EvalInitError> {
     if out.symlink_metadata()?.file_type().is_symlink() {
         return Err(EvalInitError::OutSymlink {
             out: out.to_path_buf(),
-        }
-        .into());
+        });
     }
     let resolved = crate::overwritable_home(out, user_home)
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "refusing to replace --out: {}",
-                gents_protocol::error_chain::ErrorChain(&error)
-            )
+        .map_err(|error| EvalInitError::OutRefused {
+            error: gents_protocol::error_chain::ErrorChain(&error).to_string(),
         })?
         .ok_or_else(|| EvalInitError::OutMissing {
             out: out.to_path_buf(),
@@ -245,27 +248,23 @@ fn replaceable_out(
     if contains(gents_home) || crate::home_state::read_init_config(&resolved)?.is_some() {
         return Err(EvalInitError::OutHome {
             out: out.to_path_buf(),
-        }
-        .into());
+        });
     }
     if contains(cwd) {
         return Err(EvalInitError::OutCwd {
             out: out.to_path_buf(),
-        }
-        .into());
+        });
     }
     if !is_generated_eval_pack(&resolved) {
         return Err(EvalInitError::OutNotGenerated {
             out: out.to_path_buf(),
-        }
-        .into());
+        });
     }
     if let Some(extra) = undeclared_entry(&resolved)? {
         return Err(EvalInitError::OutExtraEntry {
             out: out.to_path_buf(),
             extra,
-        }
-        .into());
+        });
     }
     Ok(resolved)
 }

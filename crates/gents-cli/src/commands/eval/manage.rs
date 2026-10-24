@@ -21,7 +21,7 @@ pub(crate) async fn cancel<P>(
     run_id: &str,
     purpose: P,
     out: &mut dyn Write,
-) -> Result<()>
+) -> Result<(), EvalCommandError>
 where
     P: Future<Output = Result<Option<String>>>,
 {
@@ -90,13 +90,13 @@ pub(super) async fn cancel_run(
     args: &EvalRunIdArgs,
     out: &mut dyn Write,
 ) -> Result<()> {
-    cancel(
+    Ok(cancel(
         &ctx.runs_dir(),
         &args.run_id,
         run_purpose(&ctx.access, &ctx.owner, &args.run_id),
         out,
     )
-    .await
+    .await?)
 }
 
 pub(super) async fn invalidate(

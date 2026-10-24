@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::document_config::{BackendAuth, InferenceBackend};
 use serde_json::{json, Value};
@@ -72,22 +71,37 @@ pub(super) async fn diagnose_backends(
     reports
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BackendCheckError {
+    #[error("backend is disabled or has no healthy probe observation")]
+    NoHealthyProbe,
+    #[error("building backend discovery client")]
+    BuildDiscoveryClient(#[source] reqwest::Error),
+    #[error("backend model discovery failed")]
+    Discovery(#[source] gents::backend_provider::BackendProviderError),
+    #[error("backend is missing required models: {missing}")]
+    MissingModels { missing: String },
+    #[error(transparent)]
+    Shared(#[from] crate::shared::SharedError),
+    #[error(transparent)]
+    BackendRegistry(#[from] gents::backend_registry::BackendRegistryError),
+}
+
 async fn backend_check(
     access: &ConfigAccess,
     backend: &InferenceBackend,
     required: &BTreeSet<&str>,
-) -> Result<Value> {
+) -> Result<Value, BackendCheckError> {
     backend.validate()?;
     let observation =
         crate::shared::load_backend_observation(access, &backend.node_did, &backend.backend_id)
             .await?;
-    anyhow::ensure!(
-        gents::document_configured_from_fields(
-            backend.enabled,
-            observation.probe_status.as_deref().unwrap_or("unknown")
-        ),
-        "backend is disabled or has no healthy probe observation"
-    );
+    if !gents::document_configured_from_fields(
+        backend.enabled,
+        observation.probe_status.as_deref().unwrap_or("unknown"),
+    ) {
+        return Err(BackendCheckError::NoHealthyProbe);
+    }
     if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
         return Ok(json!({"probe_status": observation.probe_status,
             "note": OAUTH_CREDENTIAL_DISCOVERY_NOTE, "discovered_models": []}));
@@ -100,7 +114,7 @@ async fn backend_check(
             backend.discovery_timeout_secs.unwrap_or(10) as u64,
         ))
         .build()
-        .context("building backend discovery client")?;
+        .map_err(BackendCheckError::BuildDiscoveryClient)?;
     let key = backend.auth.resolve_api_key()?;
     let discovered = gents::discover_backend_models(
         &client,
@@ -110,17 +124,17 @@ async fn backend_check(
         None,
     )
     .await
-    .context("backend model discovery failed")?;
+    .map_err(BackendCheckError::Discovery)?;
     let names = discovered
         .iter()
         .map(|model| model.model_name.as_str())
         .collect::<BTreeSet<_>>();
     let missing = required.difference(&names).copied().collect::<Vec<_>>();
-    anyhow::ensure!(
-        missing.is_empty(),
-        "backend is missing required models: {}",
-        missing.join(", ")
-    );
+    if !missing.is_empty() {
+        return Err(BackendCheckError::MissingModels {
+            missing: missing.join(", "),
+        });
+    }
     Ok(json!({"probe_status": observation.probe_status, "discovered_models": names, "error": null}))
 }
 

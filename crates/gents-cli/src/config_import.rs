@@ -13,6 +13,14 @@ use crate::config_writes::ConfigApplyTxn;
 use crate::desired_state::{self, DesiredApplyBundle};
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConfigImportError {
+    #[error(transparent)]
+    Shared(#[from] crate::shared::SharedError),
+    #[error(transparent)]
+    ConfigBundle(#[from] crate::config_bundle::ConfigBundleError),
+}
+
 pub(crate) async fn apply_delete_collection(
     txn: &ConfigApplyTxn<'_>,
     collection: Collection,
@@ -102,7 +110,7 @@ fn select_apply_docs_for_collection(
     desired_bundle: &ConfigExportBundle,
     planned: &desired_state::DesiredStateDiffReport,
     collection: Collection,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Value>, ConfigImportError> {
     let diff = planned.collections.get(collection);
     let docs = desired_bundle.docs_for_collection(collection)?;
 

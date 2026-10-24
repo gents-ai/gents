@@ -157,4 +157,58 @@ pub(crate) enum EvalInitError {
     DraftMismatch,
     #[error("the installed definition's cases differ from the pack's")]
     InstalledCasesDiffer,
+    #[error(transparent)]
+    HomeState(#[from] crate::home_state::HomeStateError),
+    #[error("copying the definition pack to {}", path.display())]
+    CopyPack {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("moving {} aside", path.display())]
+    MoveAside {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("moving the definition pack from {} to {}", from.display(), to.display())]
+    LandPack {
+        from: PathBuf,
+        to: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("removing the replaced pack at {}", path.display())]
+    RemoveReplaced {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting eval output")]
+    InspectOutput(#[source] std::io::Error),
+    #[error("inspecting eval output before recovery")]
+    InspectOutputBeforeRecovery(#[source] std::io::Error),
+    #[error("resolving the working directory")]
+    WorkingDirectory(#[source] std::io::Error),
+    #[error("resolving the user home for eval recovery")]
+    RecoveryUserHome,
+    #[error("eval output has no parent")]
+    OutputWithoutParent,
+    #[error("restoring interrupted eval output {} from {}", out.display(), backup.display())]
+    RestoreInterrupted {
+        out: PathBuf,
+        backup: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("eval backup has no holder")]
+    BackupWithoutHolder,
+    #[error("reading runtime readiness for the eval author")]
+    ReadAuthorReadiness(#[source] gents::config_client::ConfigClientError),
+    #[error("decoding runtime readiness for the eval author")]
+    DecodeAuthorReadiness(#[source] serde_json::Error),
+    #[error("parsing pack config JSON")]
+    ParsePackConfig(#[source] serde_json::Error),
+    #[error("refusing to replace --out: {error}")]
+    OutRefused { error: String },
 }

@@ -69,11 +69,11 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
         &PackInstallOptions {
             node_did: "did:key:dossier".into(),
         },
-        &|path| {
+        &|path| -> Result<Vec<u8>> {
             read.borrow_mut().insert(path.to_owned());
             let bytes = asset(path)?.clone();
             if path == config_path {
-                literal_placeholders(&bytes)
+                Ok(literal_placeholders(&bytes)?)
             } else {
                 Ok(bytes)
             }
@@ -310,7 +310,7 @@ pub(super) fn read_pack(
     Ok((manifest, assets))
 }
 
-fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>> {
+fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>, EvalInitError> {
     const OWNER: &str = "${GENTS_PACK_NODE_DID}";
     fn escape(value: &mut Value) {
         match value {
@@ -322,7 +322,7 @@ fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>> {
             _ => {}
         }
     }
-    let mut value: Value = serde_json::from_slice(bytes).context("parsing pack config JSON")?;
+    let mut value: Value = serde_json::from_slice(bytes).map_err(EvalInitError::ParsePackConfig)?;
     escape(&mut value);
     Ok(serde_json::to_vec(&value)?)
 }

@@ -76,7 +76,7 @@ pub(crate) fn lock_init_store(
     home_dir: &Path,
     data_dir: &Path,
     overwrite: bool,
-) -> Result<gents::home::StoreLock> {
+) -> Result<gents::home::StoreLock, InitError> {
     let user_home = std::env::home_dir();
     lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
 }
@@ -86,20 +86,24 @@ pub(crate) fn lock_init_store_for_user(
     data_dir: &Path,
     overwrite: bool,
     user_home: Option<&Path>,
-) -> Result<gents::home::StoreLock> {
+) -> Result<gents::home::StoreLock, InitError> {
     let home = if overwrite {
         crate::overwritable_home(home_dir, user_home)?
     } else {
         None
     };
     let Some(home) = home else {
-        fs::create_dir_all(data_dir)
-            .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+        fs::create_dir_all(data_dir).map_err(|source| InitError::CreateDataDir {
+            path: data_dir.to_path_buf(),
+            source,
+        })?;
         return Ok(gents::home::lock_store(home_dir, data_dir)?);
     };
     let data_dir = overwrite_data_dir(home_dir, &home, data_dir)?;
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    fs::create_dir_all(&data_dir).map_err(|source| InitError::CreateDataDir {
+        path: data_dir.to_path_buf(),
+        source,
+    })?;
     let lock = gents::home::lock_store(home_dir, &data_dir)?;
     let overwritten_encryption = read_init_config(&home)
         .ok()
@@ -117,8 +121,10 @@ pub(crate) fn lock_init_store_for_user(
                 "could not remove the overwritten home's store key");
         }
     }
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    fs::create_dir_all(&data_dir).map_err(|source| InitError::CreateDataDir {
+        path: data_dir.to_path_buf(),
+        source,
+    })?;
     Ok(lock)
 }
 
@@ -171,6 +177,32 @@ pub(crate) enum InitError {
     DefaultToolRootUnavailable,
     #[error(transparent)]
     Serialize(#[from] serde_json::Error),
+    #[error("creating data directory {}", path.display())]
+    CreateDataDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating or loading node identity key")]
+    CreateNodeIdentityKey(#[source] gents::identity::IdentityError),
+    #[error(transparent)]
+    Cli(#[from] crate::CliError),
+    #[error(transparent)]
+    Home(#[from] gents::home::HomeError),
+    #[error(transparent)]
+    HomeState(#[from] crate::home_state::HomeStateError),
+    #[error("loading macOS keychain identity {label}")]
+    LoadKeychainIdentity {
+        label: String,
+        #[source]
+        source: gents::identity::IdentityError,
+    },
+    #[error("loading macOS Secure Enclave identity {label}")]
+    LoadSecureEnclaveIdentity {
+        label: String,
+        #[source]
+        source: gents::identity::IdentityError,
+    },
 }
 
 fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<PathBuf, InitError> {
@@ -719,8 +751,10 @@ pub(crate) async fn write_identity_only_home_metadata(
     options: IdentityOnlyHomeOptions<'_>,
 ) -> Result<IdentityOnlyHomeSummary> {
     let data_dir = default_data_dir(options.home);
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    fs::create_dir_all(&data_dir).map_err(|source| InitError::CreateDataDir {
+        path: data_dir.to_path_buf(),
+        source,
+    })?;
 
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: options.home,
@@ -806,7 +840,9 @@ async fn initialize_home_store(
     Ok(record.initialize(&key_file, data_path)?)
 }
 
-fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<HomeIdentity> {
+fn load_or_create_home_identity(
+    options: HomeIdentityOptions<'_>,
+) -> Result<HomeIdentity, InitError> {
     if let Some(stored) = read_init_config(options.home)? {
         let identity = crate::home_state::load_initialized_home_identity(options.home, &stored)?;
         let node_identity_did = Some(identity.did().to_string());
@@ -827,7 +863,7 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 .unwrap_or_else(|| default_key_path(options.home, options.node_name));
             let identity = Arc::new(
                 KeyIdentity::load_or_create(&key_path, None)
-                    .context("creating or loading node identity key")?,
+                    .map_err(InitError::CreateNodeIdentityKey)?,
             );
             let node_identity_did = identity.did().to_string();
             Ok(HomeIdentity {
@@ -841,17 +877,19 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
         }
         IdentityBackendArg::MacosKeychain => {
             if options.key_path.is_some() {
-                return Err(InitError::KeyPathWithKeychain.into());
+                return Err(InitError::KeyPathWithKeychain);
             }
             let label = options
                 .keychain_label
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or(InitError::KeychainLabelRequired)?;
-            let identity = Arc::new(
-                load_or_create_macos_keychain_identity(label, None)
-                    .with_context(|| format!("loading macOS keychain identity {label}"))?,
-            );
+            let identity = Arc::new(load_or_create_macos_keychain_identity(label, None).map_err(
+                |source| InitError::LoadKeychainIdentity {
+                    label: label.to_owned(),
+                    source,
+                },
+            )?);
             let did = identity.did().to_string();
             Ok(HomeIdentity {
                 identity,
@@ -864,7 +902,7 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
         }
         IdentityBackendArg::MacosSecureEnclave => {
             if options.key_path.is_some() {
-                return Err(InitError::KeyPathWithSecureEnclave.into());
+                return Err(InitError::KeyPathWithSecureEnclave);
             }
             let label = options
                 .secure_enclave_label
@@ -872,8 +910,12 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 .filter(|value| !value.is_empty())
                 .ok_or(InitError::SecureEnclaveLabelRequired)?;
             let identity = Arc::new(
-                load_or_create_macos_secure_enclave_identity(label, None)
-                    .with_context(|| format!("loading macOS Secure Enclave identity {label}"))?,
+                load_or_create_macos_secure_enclave_identity(label, None).map_err(|source| {
+                    InitError::LoadSecureEnclaveIdentity {
+                        label: label.to_owned(),
+                        source,
+                    }
+                })?,
             );
             let did = identity.did().to_string();
             Ok(HomeIdentity {
@@ -957,7 +999,7 @@ async fn initialize_runtime_home(
     let pinned_tool_root = explicit_workspace_policy
         .then(|| tool_root.clone())
         .flatten();
-    let backend_auth = backend_auth_for_init(&backend)?;
+    let backend_auth = backend_auth_for_init(&backend);
     let backend_doc = InferenceBackend {
         node_did: node_did.to_string(),
         backend_id: backend_id.clone(),
@@ -1316,21 +1358,21 @@ fn wide_open_tools_id_for_node(node_did: &str) -> String {
     format!("{node_did}:wide-open")
 }
 
-fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth> {
+fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> BackendAuth {
     if backend.provider_kind.is_node_scoped_oauth() {
-        return Ok(BackendAuth::NodeOAuth { account_ref: None });
+        return BackendAuth::NodeOAuth { account_ref: None };
     }
     match (
         backend.api_key.as_deref(),
         backend.api_key_env_var.as_deref(),
     ) {
-        (Some(key), _) => Ok(BackendAuth::ApiKey {
+        (Some(key), _) => BackendAuth::ApiKey {
             key: key.to_string(),
-        }),
-        (None, Some(variable)) => Ok(BackendAuth::Environment {
+        },
+        (None, Some(variable)) => BackendAuth::Environment {
             variable: variable.to_string(),
-        }),
-        (None, None) => Ok(BackendAuth::Unauthenticated),
+        },
+        (None, None) => BackendAuth::Unauthenticated,
     }
 }
 

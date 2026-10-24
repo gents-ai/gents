@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gents_desktop_core::{
     client::DesktopPaths,
     home_reset::{
@@ -14,7 +13,7 @@ use crate::{
 };
 
 #[derive(Debug, thiserror::Error)]
-enum DesktopError {
+pub(crate) enum DesktopError {
     #[error("Full desktop reset is supported on macOS.")]
     MacOsOnly,
     #[error("The managed service is still running; quit Gents and stop it before resetting.")]
@@ -56,10 +55,32 @@ enum DesktopError {
         #[source]
         source: BrowserError,
     },
+    #[error("resolving current directory")]
+    CurrentDirectory(#[source] std::io::Error),
+    #[error("Browser storage is in use or cannot be checked; nothing was retired")]
+    BrowserInUse(#[source] BrowserError),
+    #[error("stopping the managed service")]
+    StopServiceTask(#[source] tokio::task::JoinError),
+    #[error(transparent)]
+    Cli(#[from] crate::CliError),
+    #[error(transparent)]
+    Home(#[from] gents::home::HomeError),
+    #[error(transparent)]
+    HomeReset(#[from] gents_desktop_core::home_reset::HomeResetError),
+    #[error(transparent)]
+    NativeService(#[from] crate::native_service::NativeServiceError),
+    #[error(transparent)]
+    RequestHelpers(#[from] crate::request_helpers::RequestHelpersError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
+type Result<T, E = DesktopError> = std::result::Result<T, E>;
+
 #[derive(Debug, thiserror::Error)]
-enum BrowserError {
+pub(crate) enum BrowserError {
     #[error("creating browser clearing receipt directory")]
     ReceiptDirectory(#[source] std::io::Error),
     #[error("creating browser clearing stderr capture")]
@@ -84,9 +105,9 @@ enum BrowserError {
     Io(#[from] std::io::Error),
 }
 
-pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
+pub(crate) async fn run(command: DesktopCommand) -> Result<(), DesktopError> {
     if !cfg!(target_os = "macos") {
-        return Err(DesktopError::MacOsOnly.into());
+        return Err(DesktopError::MacOsOnly);
     }
     let DesktopCommand::Reset {
         home,
@@ -121,7 +142,7 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
             },
             Err(error) => format!(
                 "Reset could not finish: {}. Run {retry} to review the remaining state and retry.",
-                ErrorChain(error.as_ref())
+                ErrorChain(error)
             ),
         };
         notify(&message);
@@ -144,11 +165,11 @@ async fn reset(
     desktop_executable: Option<std::path::PathBuf>,
     ready: &mut bool,
     retry: &mut String,
-) -> Result<ManagedServerResetResult> {
+) -> Result<ManagedServerResetResult, DesktopError> {
     let desktop = select_desktop(
         desktop_home,
         std::env::var_os(gents_desktop_core::client::DESKTOP_HOME_ENV),
-        &std::env::current_dir().context("resolving current directory")?,
+        &std::env::current_dir().map_err(DesktopError::CurrentDirectory)?,
     )?;
     let explicit_home = home.or_else(|| {
         std::env::var_os("GENTS_HOME")
@@ -191,7 +212,7 @@ async fn reset(
         None => installed_desktop_executable()?,
     };
     run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
-        .context("Browser storage is in use or cannot be checked; nothing was retired")?;
+        .map_err(DesktopError::BrowserInUse)?;
     let backup = if delete {
         None
     } else {
@@ -206,15 +227,15 @@ async fn reset(
         Ok(service.status()?.is_active_or_transitioning())
     })
     .await
-    .context("stopping the managed service")??;
+    .map_err(DesktopError::StopServiceTask)??;
     if still_running {
-        return Err(DesktopError::ServiceRunning.into());
+        return Err(DesktopError::ServiceRunning);
     }
     let server = crate::server_host::ServerConfig::standard(home.clone());
     let address = std::net::SocketAddr::new(server.http_addr, server.http_port);
     match std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(150)) {
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
-        _ => return Err(DesktopError::EndpointRunning.into()),
+        _ => return Err(DesktopError::EndpointRunning),
     }
     let _home_lock = if plan.runtime.is_some() {
         Some(gents::home::lock_home_store(&home)?)

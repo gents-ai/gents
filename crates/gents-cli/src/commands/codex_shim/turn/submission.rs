@@ -40,5 +40,5 @@ pub(super) async fn create_agent_request_with_retry(
             }
         }
     }
-    result
+    Ok(result?)
 }

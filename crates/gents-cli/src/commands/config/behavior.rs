@@ -12,6 +12,8 @@ use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
 use crate::config_writes::{write_agent_document, ConfigAccess};
 use crate::request_helpers::resolve_dual_id;
+
+use super::error::ConfigCommandError;
 use crate::{
     graphql_rows, load_initialized_home_identity, print_json, read_init_config,
     resolve_config_access, resolve_home_dir,
@@ -47,13 +49,12 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
     Ok(())
 }
 
-fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn NodeIdentity>> {
+fn local_identity(
+    home: Option<&std::path::Path>,
+) -> Result<Arc<dyn NodeIdentity>, ConfigCommandError> {
     let home_dir = resolve_home_dir(home);
-    let config = read_init_config(&home_dir)?.with_context(|| {
-        format!(
-            "no init config found in {}; run `gents init` first",
-            home_dir.display()
-        )
+    let config = read_init_config(&home_dir)?.ok_or_else(|| ConfigCommandError::NoInitConfig {
+        home: home_dir.clone(),
     })?;
     Ok(load_initialized_home_identity(&home_dir, &config)?)
 }
@@ -147,7 +148,7 @@ async fn load_document(
     fields: &str,
     owner: Option<&str>,
     id: &str,
-) -> Result<Option<Value>> {
+) -> Result<Option<Value>, ConfigCommandError> {
     let escaped_id = escape_graphql_string(id);
     let filter = match owner {
         Some(owner) => format!(
@@ -167,16 +168,20 @@ async fn load_document(
         unique_field = collection.unique_field(),
     );
     let rows = graphql_rows(access, collection.graphql_type(), &query).await?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "ambiguous {} {id:?}: {} live rows resolve this logical id",
-        collection.graphql_type(),
-        rows.len()
-    );
+    if rows.len() > 1 {
+        return Err(ConfigCommandError::AmbiguousLogicalId {
+            collection: collection.graphql_type(),
+            id: id.to_owned(),
+            rows: rows.len(),
+        });
+    }
     Ok(rows.into_iter().next())
 }
 
-async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<&'static str>> {
+async fn classify_preset(
+    access: &ConfigAccess,
+    value: &Value,
+) -> Result<Option<&'static str>, ConfigCommandError> {
     use gents::document_config::{
         merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools,
     };
@@ -198,7 +203,7 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
             id,
         )
         .await?
-        .with_context(|| format!("missing selected datastore surface {id:?}"))?;
+        .ok_or_else(|| ConfigCommandError::MissingSelectedSurface { id: id.clone() })?;
         surfaces.push(serde_json::from_value(row)?);
     }
     let merged = merge_datastore_tool_surfaces(&tools, &surfaces)?;

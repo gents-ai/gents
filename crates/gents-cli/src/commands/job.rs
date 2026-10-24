@@ -46,6 +46,8 @@ pub(crate) enum JobCommandError {
     Print(#[from] RequestHelpersError),
     #[error(transparent)]
     Encode(#[from] serde_json::Error),
+    #[error(transparent)]
+    OutputFormat(#[from] crate::cli::output_format::OutputFormatError),
 }
 
 pub(crate) const ACTIVE_STATES: [JobState; 3] =
@@ -64,7 +66,7 @@ pub(crate) async fn dispatch(command: JobCommand) -> Result<()> {
     match command {
         JobCommand::List(args) => job_list(args).await,
         JobCommand::Show(args) => job_show(args).await,
-        JobCommand::Watch(args) => job_watch(args).await,
+        JobCommand::Watch(args) => Ok(job_watch(args).await?),
         JobCommand::Stop(args) => job_control(args, JobControlKind::Stop).await,
         JobCommand::Pause(args) => job_control(args, JobControlKind::Pause).await,
     }
@@ -75,7 +77,7 @@ const BACKOFF_CAP: Duration = Duration::from_secs(30);
 const NOT_YET_OBSERVABLE_LIMIT: Duration = Duration::from_secs(120);
 const NOT_OBSERVABLE_EXIT: i32 = 4;
 
-async fn job_watch(args: JobWatchArgs) -> Result<()> {
+async fn job_watch(args: JobWatchArgs) -> Result<(), JobCommandError> {
     let format = args.output.ensure_supported(
         "job watch",
         &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson],

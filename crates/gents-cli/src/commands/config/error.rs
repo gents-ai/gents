@@ -71,6 +71,101 @@ pub(crate) enum ConfigCommandError {
     DecodeTools(#[source] serde_json::Error),
     #[error("validated manifest root produced no manifest")]
     ValidatedManifestMissing,
+    #[error("no init config found in {}; run `gents init` first", home.display())]
+    NoInitConfig { home: PathBuf },
+    #[error("ambiguous {collection} {id:?}: {rows} live rows resolve this logical id")]
+    AmbiguousLogicalId {
+        collection: &'static str,
+        id: String,
+        rows: usize,
+    },
+    #[error("missing selected datastore surface {id:?}")]
+    MissingSelectedSurface { id: String },
+    #[error("initialized home metadata is required for --bind-node-did home; run `gents init --identity-only --home {}` first", home.display())]
+    BindHomeNotInitialized { home: PathBuf },
+    #[error("initialized home {} has node DID {init_did}, but identity key resolves to {key_did}; rerun `gents init --identity-only` or repair the home identity metadata", home.display())]
+    HomeKeyDidMismatch {
+        home: PathBuf,
+        init_did: String,
+        key_did: String,
+    },
+    #[error("initialized home {} does not contain an node DID or identity key path; rerun `gents init --identity-only`", home.display())]
+    HomeWithoutIdentity { home: PathBuf },
+    #[error("initialized home {} points to missing identity key {}; rerun `gents init --identity-only`", home.display(), key_path.display())]
+    HomeKeyMissing { home: PathBuf, key_path: PathBuf },
+    #[error("loading identity key {}", key_path.display())]
+    LoadIdentityKey {
+        key_path: PathBuf,
+        #[source]
+        source: gents::identity::IdentityError,
+    },
+    #[error("querying live node readiness for node DID")]
+    QueryLiveReadiness(#[source] gents::config_client::ConfigClientError),
+    #[error("live runtime did not publish active node readiness")]
+    NoActiveReadiness,
+    #[error("live node readiness row did not contain node_did")]
+    ReadinessWithoutNodeDid,
+    #[error("configuration query returned a foreign owner")]
+    ForeignOwnerRow,
+    #[error("configuration row has no logical ID")]
+    RowWithoutLogicalId,
+    #[error("ambiguous scoped configuration {collection} {id:?}")]
+    AmbiguousScopedConfiguration {
+        collection: &'static str,
+        id: String,
+    },
+    #[error("reading instructions from {}", path.display())]
+    ReadSkillInstructions {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("no Skill document with skill_id {skill_id:?}")]
+    SkillNotFound { skill_id: String },
+    #[error("creating {}", path.display())]
+    CreateSkillDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}/SKILL.md", dir.display())]
+    WriteSkillMd {
+        dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}/openai.yaml", dir.display())]
+    WriteOpenAiYaml {
+        dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("lookup Task fire request failed: {errors:?}")]
+    TaskFireLookup { errors: Vec<serde_json::Value> },
+    #[error("Task fire retry_key resolved to multiple AgentRequest rows")]
+    TaskFireRetryKeyAmbiguous,
+    #[error("decoding Task fire canonical AgentRequest row")]
+    DecodeTaskFireRow(#[source] serde_json::Error),
+    #[error("configuration query returned a different logical ID")]
+    DifferentLogicalId,
+    #[error("not found: {collection} {node_did:?}/{id:?}")]
+    DocumentNotFound {
+        collection: &'static str,
+        node_did: String,
+        id: String,
+    },
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    HomeState(#[from] crate::home_state::HomeStateError),
+    #[error(transparent)]
+    ToolSurface(#[from] gents::tool_surface::ToolSurfaceError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    PluginStore(#[from] gents::plugin::store::PluginStoreError),
+    #[error(transparent)]
+    RequestReceipt(#[from] gents::RequestReceiptError),
 }
 
 impl From<DocumentConfigError> for ConfigCommandError {

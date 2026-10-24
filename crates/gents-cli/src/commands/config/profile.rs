@@ -67,7 +67,7 @@ pub(crate) fn bound_slots(
     graphql: Option<&str>,
     node_did: &str,
     profile_id: &str,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>, super::ConfigCommandError> {
     if graphql.is_some() {
         return Ok(Vec::new());
     }

@@ -206,12 +206,11 @@ fn scope_flags(scope: &crate::cli::EvalScopeArgs) -> String {
     flags
 }
 
-pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
+pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<(), EvalInitError> {
     if !args.force && args.out.symlink_metadata().is_ok() {
         return Err(EvalInitError::OutputExists {
             out: args.out.clone(),
-        }
-        .into());
+        });
     }
     let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let graphql = match args
@@ -229,14 +228,13 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         None => false,
     };
     if !served {
-        return Err(EvalInitError::ServedHomeRequired.into());
+        return Err(EvalInitError::ServedHomeRequired);
     }
     write::recover_output(&args.out, &home_dir)?;
     if !args.force && args.out.symlink_metadata().is_ok() {
         return Err(EvalInitError::OutputExists {
             out: args.out.clone(),
-        }
-        .into());
+        });
     }
     Ok(())
 }

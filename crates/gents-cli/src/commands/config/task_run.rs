@@ -368,7 +368,7 @@ async fn lookup_request_by_retry_key(
     access: &ConfigAccess,
     node_did: &str,
     retry_key: &str,
-) -> Result<Option<AgentRequestRow>> {
+) -> Result<Option<AgentRequestRow>, ConfigCommandError> {
     let query = format!(
         r#"query {{
             AgentRequest(filter: {{ node_did: {{ _eq: "{owner}" }}, requester_did: {{ _eq: "{owner}" }}, retry_key: {{ _eq: "{key}" }} }}, limit: 2) {{
@@ -382,7 +382,9 @@ async fn lookup_request_by_retry_key(
     let response = access.execute(&query).await?;
     if let Some(errors) = response.get("errors").and_then(Value::as_array) {
         if !errors.is_empty() {
-            anyhow::bail!("lookup Task fire request failed: {errors:?}");
+            return Err(ConfigCommandError::TaskFireLookup {
+                errors: errors.clone(),
+            });
         }
     }
     let rows = response
@@ -392,13 +394,13 @@ async fn lookup_request_by_retry_key(
         .cloned()
         .unwrap_or_default();
     if rows.len() > 1 {
-        anyhow::bail!("Task fire retry_key resolved to multiple AgentRequest rows");
+        return Err(ConfigCommandError::TaskFireRetryKeyAmbiguous);
     }
     rows.first()
         .cloned()
         .map(|row| {
-            let row: AgentRequestRow = serde_json::from_value(row)
-                .context("decoding Task fire canonical AgentRequest row")?;
+            let row: AgentRequestRow =
+                serde_json::from_value(row).map_err(ConfigCommandError::DecodeTaskFireRow)?;
             gents::verify_request_receipt_signature(&row)?;
             Ok(row)
         })

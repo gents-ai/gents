@@ -176,7 +176,10 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     }
 }
 
-fn resolve_config_id(spec: ConfigDocumentSpec, args: &ConfigShowArgs) -> Result<String> {
+fn resolve_config_id(
+    spec: ConfigDocumentSpec,
+    args: &ConfigShowArgs,
+) -> Result<String, ConfigCommandError> {
     Ok(resolve_dual_id(
         spec.noun,
         "--id",
@@ -211,7 +214,7 @@ pub(super) async fn query_collection(
     spec: ConfigDocumentSpec,
     node_did: &str,
     id: Option<&str>,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Value>, ConfigCommandError> {
     let mut filter = format!(
         r#"node_did: {{ _eq: "{}" }}"#,
         escape_graphql_string(node_did)
@@ -233,24 +236,23 @@ pub(super) async fn query_collection(
     let rows = graphql_rows(access, spec.collection.graphql_type(), &query).await?;
     let mut ids = std::collections::BTreeSet::new();
     for row in &rows {
-        anyhow::ensure!(
-            row.get("node_did").and_then(Value::as_str) == Some(node_did),
-            "configuration query returned a foreign owner"
-        );
+        if row.get("node_did").and_then(Value::as_str) != Some(node_did) {
+            return Err(ConfigCommandError::ForeignOwnerRow);
+        }
         let row_id = row
             .get(spec.collection.unique_field())
             .and_then(Value::as_str)
-            .context("configuration row has no logical ID")?;
-        anyhow::ensure!(
-            ids.insert(row_id),
-            "ambiguous scoped configuration {} {row_id:?}",
-            spec.collection.graphql_type()
-        );
+            .ok_or(ConfigCommandError::RowWithoutLogicalId)?;
+        if !ids.insert(row_id) {
+            return Err(ConfigCommandError::AmbiguousScopedConfiguration {
+                collection: spec.collection.graphql_type(),
+                id: row_id.to_owned(),
+            });
+        }
         if let Some(id) = id {
-            anyhow::ensure!(
-                row_id == id,
-                "configuration query returned a different logical ID"
-            );
+            if row_id != id {
+                return Err(ConfigCommandError::DifferentLogicalId);
+            }
         }
     }
     Ok(rows)
@@ -261,16 +263,15 @@ pub(super) async fn load_one(
     spec: ConfigDocumentSpec,
     node_did: &str,
     id: &str,
-) -> Result<Value> {
+) -> Result<Value, ConfigCommandError> {
     query_collection(access, spec, node_did, Some(id))
         .await?
         .into_iter()
         .next()
-        .with_context(|| {
-            format!(
-                "not found: {} {node_did:?}/{id:?}",
-                spec.collection.graphql_type()
-            )
+        .ok_or_else(|| ConfigCommandError::DocumentNotFound {
+            collection: spec.collection.graphql_type(),
+            node_did: node_did.to_owned(),
+            id: id.to_owned(),
         })
 }
 

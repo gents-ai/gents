@@ -27,7 +27,10 @@ fn gql_string_list(values: &[String]) -> String {
 
 /// On the upsert update path `null` clears a stale value that omitting it
 /// would leave.
-async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
+async fn upsert_skill(
+    access: &ConfigAccess,
+    skill: &SkillDocument,
+) -> Result<String, ConfigCommandError> {
     let skill_id = escape_graphql_string(&skill.skill_id);
     let tool_refs = if skill.tool_refs.is_empty() {
         "tool_refs: null".to_string()
@@ -64,12 +67,14 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<St
     Ok(extract_mutation_doc_id(&response, "Skill")?)
 }
 
-pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
+pub(super) async fn skill_add(args: SkillAddArgs) -> Result<(), ConfigCommandError> {
     let instructions = match args.instructions_file {
-        Some(ref path) => Some(
-            std::fs::read_to_string(path)
-                .with_context(|| format!("reading instructions from {}", path.display()))?,
-        ),
+        Some(ref path) => Some(std::fs::read_to_string(path).map_err(|source| {
+            ConfigCommandError::ReadSkillInstructions {
+                path: path.clone(),
+                source,
+            }
+        })?),
         None => args.instructions.clone(),
     };
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
@@ -106,7 +111,7 @@ fn skill_rows(response: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
+pub(super) async fn skill_list(args: SkillListArgs) -> Result<(), ConfigCommandError> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
@@ -128,7 +133,7 @@ pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
+pub(super) async fn skill_show(args: SkillShowArgs) -> Result<(), ConfigCommandError> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let skill_id = escape_graphql_string(&args.skill_id);
     let query = format!(
@@ -137,12 +142,16 @@ pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
     let response = access.execute(&query).await?;
     match skill_rows(&response).into_iter().next() {
         Some(skill) => print_json(&skill)?,
-        None => anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id),
+        None => {
+            return Err(ConfigCommandError::SkillNotFound {
+                skill_id: args.skill_id,
+            })
+        }
     }
     Ok(())
 }
 
-pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
+pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<(), ConfigCommandError> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let skill_id = escape_graphql_string(&args.skill_id);
     let mutation = format!(
@@ -156,13 +165,18 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
         .map(|rows| rows.len())
         .unwrap_or(0);
     if deleted == 0 {
-        anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id);
+        return Err(ConfigCommandError::SkillNotFound {
+            skill_id: args.skill_id,
+        });
     }
     print_json(&json!({ "deleted": deleted, "skill_id": args.skill_id }))?;
     Ok(())
 }
 
-pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Result<()> {
+pub(super) async fn skill_set_enabled(
+    args: SkillRefArgs,
+    enabled: bool,
+) -> Result<(), ConfigCommandError> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let skill_id = escape_graphql_string(&args.skill_id);
     let mutation = format!(
@@ -183,7 +197,9 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
         .map(|rows| rows.len())
         .unwrap_or(0);
     if updated == 0 {
-        anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id);
+        return Err(ConfigCommandError::SkillNotFound {
+            skill_id: args.skill_id,
+        });
     }
     print_json(&json!({ "skill_id": args.skill_id, "enabled": enabled, "updated": updated }))?;
     Ok(())
@@ -395,7 +411,7 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>, ConfigCommandErro
     Ok(Some(serde_yaml::to_string(&openai)?))
 }
 
-pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
+pub(super) async fn skill_export(args: SkillExportArgs) -> Result<(), ConfigCommandError> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
@@ -414,15 +430,30 @@ pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
             continue;
         }
         let dir = args.dir.join(skill_id);
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        std::fs::write(dir.join("SKILL.md"), render_skill_md(skill)?)
-            .with_context(|| format!("writing {}/SKILL.md", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|source| ConfigCommandError::CreateSkillDir {
+            path: dir.clone(),
+            source,
+        })?;
+        std::fs::write(dir.join("SKILL.md"), render_skill_md(skill)?).map_err(|source| {
+            ConfigCommandError::WriteSkillMd {
+                dir: dir.clone(),
+                source,
+            }
+        })?;
         if let Some(yaml) = render_openai_yaml(skill)? {
             let agents_dir = dir.join("agents");
-            std::fs::create_dir_all(&agents_dir)
-                .with_context(|| format!("creating {}", agents_dir.display()))?;
-            std::fs::write(agents_dir.join("openai.yaml"), yaml)
-                .with_context(|| format!("writing {}/openai.yaml", agents_dir.display()))?;
+            std::fs::create_dir_all(&agents_dir).map_err(|source| {
+                ConfigCommandError::CreateSkillDir {
+                    path: agents_dir.clone(),
+                    source,
+                }
+            })?;
+            std::fs::write(agents_dir.join("openai.yaml"), yaml).map_err(|source| {
+                ConfigCommandError::WriteOpenAiYaml {
+                    dir: agents_dir.clone(),
+                    source,
+                }
+            })?;
         }
         exported.push(json!({
             "skill_id": skill_id,

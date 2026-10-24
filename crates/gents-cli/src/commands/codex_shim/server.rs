@@ -93,7 +93,7 @@ pub(crate) async fn resolve_codex_shim_agent_id(
     node: &EmbeddedNode,
     override_agent_id: Option<&str>,
     node_did: &str,
-) -> Result<String> {
+) -> Result<String, crate::commands::inference_binding::InferenceBindingError> {
     bound_behavior::resolve_bound_agent_id(node, override_agent_id, node_did).await
 }
 
@@ -140,7 +140,7 @@ pub(crate) async fn bind_codex_shim(
         &args.node_did,
     )
     .await
-    .map_err(CodexShimBindError::DependencyMissing)?;
+    .map_err(|error| CodexShimBindError::DependencyMissing(error.into()))?;
     bound_behavior::load_bound_inference_profile_id(&args.node, &args.node_did, &bound_agent_id)
         .await
         .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))

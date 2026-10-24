@@ -39,6 +39,20 @@ enum ImportError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("reading plugin.yaml")]
+    ReadPluginYaml(#[source] std::io::Error),
+    #[error("plugin.yaml is not valid YAML")]
+    PluginYaml(#[source] serde_yaml::Error),
+    #[error("reading SKILL.md")]
+    ReadSkillMd(#[source] std::io::Error),
+    #[error("writing {path}")]
+    WritePrompt {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Skills(#[from] gents::skills::import::SkillsError),
 }
 
 pub(crate) async fn import(args: PackImportArgs) -> Result<()> {
@@ -171,20 +185,20 @@ fn read_json(path: &Path) -> Result<Value, ImportError> {
     })
 }
 
-fn plugin_manifest(root: &Path, from: PackImportFrom) -> Result<Value> {
+fn plugin_manifest(root: &Path, from: PackImportFrom) -> Result<Value, ImportError> {
     Ok(match from {
         PackImportFrom::Claude => read_json(&root.join(".claude-plugin/plugin.json"))?,
         PackImportFrom::Codex => read_json(&root.join(".codex-plugin/plugin.json"))?,
         PackImportFrom::AgentPlugins => read_json(&root.join("plugin.json"))?,
         PackImportFrom::Mcp => read_json(&root.join("server.json"))?,
         PackImportFrom::Hermes => {
-            let text =
-                std::fs::read_to_string(root.join("plugin.yaml")).context("reading plugin.yaml")?;
-            serde_yaml::from_str(&text).context("plugin.yaml is not valid YAML")?
+            let text = std::fs::read_to_string(root.join("plugin.yaml"))
+                .map_err(ImportError::ReadPluginYaml)?;
+            serde_yaml::from_str(&text).map_err(ImportError::PluginYaml)?
         }
         PackImportFrom::Skill => {
             let text =
-                std::fs::read_to_string(root.join("SKILL.md")).context("reading SKILL.md")?;
+                std::fs::read_to_string(root.join("SKILL.md")).map_err(ImportError::ReadSkillMd)?;
             let (front, _) = gents::skills::import::parse_skill_md(&text)?;
             json!({ "name": front.name, "description": front.description, "license": front.license })
         }
@@ -196,7 +210,7 @@ fn import_parts(
     from: PackImportFrom,
     pack: &mut PackEdit,
     report: &mut Report,
-) -> Result<()> {
+) -> Result<(), ImportError> {
     if from == PackImportFrom::Skill {
         return import_skill(root, pack, report);
     }
@@ -343,8 +357,8 @@ fn import_parts(
     Ok(())
 }
 
-fn import_skill(dir: &Path, pack: &mut PackEdit, report: &mut Report) -> Result<()> {
-    let text = std::fs::read_to_string(dir.join("SKILL.md")).context("reading SKILL.md")?;
+fn import_skill(dir: &Path, pack: &mut PackEdit, report: &mut Report) -> Result<(), ImportError> {
+    let text = std::fs::read_to_string(dir.join("SKILL.md")).map_err(ImportError::ReadSkillMd)?;
     let (front, _) = gents::skills::import::parse_skill_md(&text)?;
     let id = kebab(
         front
@@ -420,8 +434,8 @@ fn import_markdown_dir(
     dir: &str,
     pack: &mut PackEdit,
     report: &mut Report,
-    mut each: impl FnMut(&mut PackEdit, &str, &Path) -> Result<String>,
-) -> Result<()> {
+    mut each: impl FnMut(&mut PackEdit, &str, &Path) -> Result<String, ImportError>,
+) -> Result<(), ImportError> {
     let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
         return Ok(());
     };
@@ -442,11 +456,16 @@ fn import_markdown_dir(
     Ok(())
 }
 
-fn write_prompt(pack: &PackEdit, path: &str, source: &Path) -> Result<()> {
-    let text =
-        std::fs::read_to_string(source).with_context(|| format!("reading {}", source.display()))?;
+fn write_prompt(pack: &PackEdit, path: &str, source: &Path) -> Result<(), ImportError> {
+    let text = std::fs::read_to_string(source).map_err(|source_error| ImportError::Read {
+        path: source.to_path_buf(),
+        source: source_error,
+    })?;
     let (_, body) = gents::skills::import::parse_skill_md(&text)?;
-    std::fs::write(pack.dir.join(path), body + "\n").with_context(|| format!("writing {path}"))
+    std::fs::write(pack.dir.join(path), body + "\n").map_err(|source| ImportError::WritePrompt {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 fn add(pack: &mut PackEdit, command: PackAddCommand) -> Result<(), PackEditError> {

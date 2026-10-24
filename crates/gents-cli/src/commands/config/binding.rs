@@ -214,45 +214,47 @@ async fn resolve_bound_node_did(
         }
         ManifestBindMode::Live => {
             if let Some(access) = access {
-                return resolve_live_node_did(access).await;
+                return Ok(resolve_live_node_did(access).await?);
             }
             let (access, _) = crate::resolve_config_access(home, graphql).await?;
-            resolve_live_node_did(&access).await
+            Ok(resolve_live_node_did(&access).await?)
         }
     }
 }
 
-fn resolve_home_binding_node_did(home: Option<&Path>) -> Result<String> {
+fn resolve_home_binding_node_did(home: Option<&Path>) -> Result<String, super::ConfigCommandError> {
     let home_dir = crate::resolve_home_dir(home);
     let init_config = crate::read_init_config(&home_dir)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "initialized home metadata is required for --bind-node-did home; run `gents init --identity-only --home {}` first",
-            home_dir.display()
-        )
+        super::ConfigCommandError::BindHomeNotInitialized {
+            home: home_dir.clone(),
+        }
     })?;
 
     let init_did = init_config.node_did.trim();
     if !init_did.is_empty() {
         if let Some(key_did) = load_init_key_did(init_config.key_path.as_deref(), &home_dir)? {
             if key_did != init_did {
-                anyhow::bail!(
-                    "initialized home {} has node DID {init_did}, but identity key resolves to {key_did}; rerun `gents init --identity-only` or repair the home identity metadata",
-                    home_dir.display()
-                );
+                return Err(super::ConfigCommandError::HomeKeyDidMismatch {
+                    home: home_dir,
+                    init_did: init_did.to_owned(),
+                    key_did,
+                });
             }
         }
         return Ok(init_did.to_string());
     }
 
     load_init_key_did(init_config.key_path.as_deref(), &home_dir)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "initialized home {} does not contain an node DID or identity key path; rerun `gents init --identity-only`",
-            home_dir.display()
-        )
+        super::ConfigCommandError::HomeWithoutIdentity {
+            home: home_dir.clone(),
+        }
     })
 }
 
-fn load_init_key_did(key_path: Option<&str>, home_dir: &Path) -> Result<Option<String>> {
+fn load_init_key_did(
+    key_path: Option<&str>,
+    home_dir: &Path,
+) -> Result<Option<String>, super::ConfigCommandError> {
     let Some(key_path) = key_path
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -261,19 +263,22 @@ fn load_init_key_did(key_path: Option<&str>, home_dir: &Path) -> Result<Option<S
         return Ok(None);
     };
     if !key_path.exists() {
-        anyhow::bail!(
-            "initialized home {} points to missing identity key {}; rerun `gents init --identity-only`",
-            home_dir.display(),
-            key_path.display()
-        );
+        return Err(super::ConfigCommandError::HomeKeyMissing {
+            home: home_dir.to_path_buf(),
+            key_path,
+        });
     }
 
-    let identity = KeyIdentity::load_or_create(&key_path, None)
-        .with_context(|| format!("loading identity key {}", key_path.display()))?;
+    let identity = KeyIdentity::load_or_create(&key_path, None).map_err(|source| {
+        super::ConfigCommandError::LoadIdentityKey {
+            key_path: key_path.clone(),
+            source,
+        }
+    })?;
     Ok(Some(identity.did().to_string()))
 }
 
-async fn resolve_live_node_did(access: &ConfigAccess) -> Result<String> {
+async fn resolve_live_node_did(access: &ConfigAccess) -> Result<String, super::ConfigCommandError> {
     let response = access
         .execute(
             r#"{
@@ -285,7 +290,7 @@ async fn resolve_live_node_did(access: &ConfigAccess) -> Result<String> {
             }"#,
         )
         .await
-        .context("querying live node readiness for node DID")?;
+        .map_err(super::ConfigCommandError::QueryLiveReadiness)?;
     let rows = response
         .pointer("/data/NodeReadiness")
         .and_then(Value::as_array)
@@ -305,13 +310,13 @@ async fn resolve_live_node_did(access: &ConfigAccess) -> Result<String> {
                 })
                 .is_some_and(is_active_runtime_state)
         })
-        .ok_or_else(|| anyhow::anyhow!("live runtime did not publish active node readiness"))?;
+        .ok_or(super::ConfigCommandError::NoActiveReadiness)?;
     let node_did = selected
         .get("node_did")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("live node readiness row did not contain node_did"))?;
+        .ok_or(super::ConfigCommandError::ReadinessWithoutNodeDid)?;
     Ok(node_did.to_string())
 }
 

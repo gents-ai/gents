@@ -29,56 +29,62 @@ fn default_prepare_input() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
-pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<()> {
+pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<(), PrepareError> {
     let mut prepared_seed_fields = BTreeSet::new();
     for step in &manifest.prepare {
-        anyhow::ensure!(
-            step.input.is_object(),
-            "prepare step for plugin {} input must be a JSON object",
-            step.plugin
-        );
+        if !step.input.is_object() {
+            return Err(PrepareError::InputNotObject {
+                plugin: step.plugin.clone(),
+            });
+        }
         let plugin = manifest
             .plugins
             .iter()
             .find(|declared| declared.name == step.plugin)
-            .with_context(|| format!("prepare step names undeclared plugin {}", step.plugin))?;
+            .ok_or_else(|| PrepareError::UndeclaredPlugin {
+                plugin: step.plugin.clone(),
+            })?;
         match (&step.bind_dir, &plugin.bind_dir) {
             (Some(_), Some(_)) | (None, None) => {}
-            (Some(_), None) => bail!(
-                "prepare step for plugin {} sets bind_dir, but the plugin declares none",
-                step.plugin
-            ),
-            (None, Some(_)) => bail!(
-                "prepare step for plugin {} must set bind_dir; the plugin declares one",
-                step.plugin
-            ),
+            (Some(_), None) => {
+                return Err(PrepareError::UnexpectedBindDir {
+                    plugin: step.plugin.clone(),
+                })
+            }
+            (None, Some(_)) => {
+                return Err(PrepareError::MissingBindDir {
+                    plugin: step.plugin.clone(),
+                })
+            }
         }
         for (field, pointer) in &step.seed_fields {
-            gents::graphql::validate_graphql_name(field).with_context(|| {
-                format!(
-                    "prepare step for plugin {} seed field {field:?}",
-                    step.plugin
-                )
+            gents::graphql::validate_graphql_name(field).map_err(|source| {
+                PrepareError::InvalidSeedField {
+                    plugin: step.plugin.clone(),
+                    field: field.clone(),
+                    source,
+                }
             })?;
             if manifest.seed.fields.contains_key(field)
                 || field == &manifest.seed.job_id_field
                 || field == &manifest.seed.prompt_field
             {
-                bail!(
-                    "prepare step for plugin {} seed field {field} collides with a seed field \
-                     already claimed by seed.fields, seed.job_id_field, or seed.prompt_field",
-                    step.plugin
-                );
+                return Err(PrepareError::SeedFieldCollision {
+                    plugin: step.plugin.clone(),
+                    field: field.clone(),
+                });
             }
             if !prepared_seed_fields.insert(field.as_str()) {
-                bail!("prepare steps declare seed field {field} more than once");
+                return Err(PrepareError::DuplicateSeedField {
+                    field: field.clone(),
+                });
             }
             if !pointer.is_empty() && !pointer.starts_with('/') {
-                bail!(
-                    "prepare step for plugin {} seed field {field} pointer {pointer:?} must be \
-                     \"\" or start with \"/\"",
-                    step.plugin
-                );
+                return Err(PrepareError::InvalidSeedPointer {
+                    plugin: step.plugin.clone(),
+                    field: field.clone(),
+                    pointer: pointer.clone(),
+                });
             }
         }
     }
@@ -97,6 +103,37 @@ pub(super) enum PrepareError {
         field: String,
         pointer: String,
         value: String,
+    },
+    #[error("prepare step for plugin {plugin} input must be a JSON object")]
+    InputNotObject { plugin: String },
+    #[error("prepare step names undeclared plugin {plugin}")]
+    UndeclaredPlugin { plugin: String },
+    #[error("prepare step for plugin {plugin} sets bind_dir, but the plugin declares none")]
+    UnexpectedBindDir { plugin: String },
+    #[error("prepare step for plugin {plugin} must set bind_dir; the plugin declares one")]
+    MissingBindDir { plugin: String },
+    #[error("prepare step for plugin {plugin} seed field {field:?}")]
+    InvalidSeedField {
+        plugin: String,
+        field: String,
+        #[source]
+        source: gents_protocol::graphql::GraphqlError,
+    },
+    #[error(
+        "prepare step for plugin {plugin} seed field {field} collides with a seed field \
+         already claimed by seed.fields, seed.job_id_field, or seed.prompt_field"
+    )]
+    SeedFieldCollision { plugin: String, field: String },
+    #[error("prepare steps declare seed field {field} more than once")]
+    DuplicateSeedField { field: String },
+    #[error(
+        "prepare step for plugin {plugin} seed field {field} pointer {pointer:?} must be \
+         \"\" or start with \"/\""
+    )]
+    InvalidSeedPointer {
+        plugin: String,
+        field: String,
+        pointer: String,
     },
 }
 

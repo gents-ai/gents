@@ -47,16 +47,16 @@ pub async fn installed(home: PathBuf, registry: Option<String>) -> Result<Value>
 }
 
 pub async fn search(registry: Option<String>, query: String, page: u32) -> Result<Value> {
-    capture_report(command::registry::search(PackSearchArgs {
+    Ok(capture_report(command::registry::search(PackSearchArgs {
         query: Some(query),
         page,
         registry,
     }))
-    .await
+    .await?)
 }
 
 pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
-    capture_report(command::account::info(PackInfoArgs { package, registry })).await
+    Ok(capture_report(command::account::info(PackInfoArgs { package, registry })).await?)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -204,7 +204,7 @@ pub async fn remove(home: PathBuf, package: String, edited: EditedDocuments) -> 
 }
 
 pub async fn login(home: PathBuf, registry: Option<String>, token: String) -> Result<Value> {
-    capture_report(command::account::login(PackLoginArgs {
+    Ok(capture_report(command::account::login(PackLoginArgs {
         username: None,
         password_stdin: false,
         token: Some(token),
@@ -212,25 +212,25 @@ pub async fn login(home: PathBuf, registry: Option<String>, token: String) -> Re
         registry,
         home: Some(home),
     }))
-    .await
+    .await?)
 }
 
 pub async fn logout(home: PathBuf, registry: Option<String>) -> Result<Value> {
-    capture_report(async {
+    Ok(capture_report(async {
         command::account::logout(PackAccountArgs {
             registry,
             home: Some(home),
         })
     })
-    .await
+    .await?)
 }
 
 pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
-    capture_report(command::account::whoami(PackAccountArgs {
+    Ok(capture_report(command::account::whoami(PackAccountArgs {
         registry,
         home: Some(home),
     }))
-    .await
+    .await?)
 }
 
 /* ---- UX plugins: what the desktop's doors read ---- */

@@ -303,7 +303,7 @@ async fn cancel_without_context(
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    manage::cancel(&runs_dir(&home_dir), &args.run_id, purpose, &mut out).await
+    Ok(manage::cancel(&runs_dir(&home_dir), &args.run_id, purpose, &mut out).await?)
 }
 
 /// `gents eval watch` from argv. The process hosting the run may hold the

@@ -1,12 +1,11 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use gents::pack_registry::credentials;
 use serde_json::json;
 
 use super::registry::{
     read_stdin_line, resolve_registry_token, resolve_registry_url, resolve_token_flag,
-    RegistryClient,
+    RegistryClient, RegistryCommandError,
 };
 use crate::cli::{PackAccountArgs, PackInfoArgs, PackLoginArgs, PackOwnerArgs, PackYankArgs};
 
@@ -14,12 +13,12 @@ pub(crate) fn resolve_publish_token(
     explicit: Option<&str>,
     registry: &str,
     home: &Path,
-) -> Result<String> {
+) -> Result<String, RegistryCommandError> {
     if let Some(token) = resolve_registry_token(explicit) {
         return Ok(token);
     }
-    credentials::get(home, registry)?.with_context(|| {
-        format!("you are not signed in to {registry}; run gents pack login, or pass --token")
+    credentials::get(home, registry)?.ok_or_else(|| RegistryCommandError::NotSignedIn {
+        registry: registry.to_owned(),
     })
 }
 
@@ -27,15 +26,14 @@ async fn login_with_password(
     client: &RegistryClient,
     username: &str,
     password: &str,
-) -> Result<String> {
-    anyhow::ensure!(
-        !password.is_empty(),
-        "the password read from standard input is empty"
-    );
+) -> Result<String, RegistryCommandError> {
+    if password.is_empty() {
+        return Err(RegistryCommandError::EmptyPassword);
+    }
     Ok(client.login(username, password).await?)
 }
 
-pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
+pub(crate) async fn login(args: PackLoginArgs) -> Result<(), RegistryCommandError> {
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let client = RegistryClient::new(registry.clone());
@@ -43,28 +41,25 @@ pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
     let token = match (token_flag, args.username) {
         (Some(token), _) => token,
         (None, Some(username)) => {
-            anyhow::ensure!(
-                args.password_stdin,
-                "pass the password on standard input with --password-stdin, or sign in with --token"
-            );
+            if !args.password_stdin {
+                return Err(RegistryCommandError::PasswordStdinRequired);
+            }
             let password = read_stdin_line("password")?;
             login_with_password(&client, &username, &password).await?
         }
-        (None, None) => anyhow::bail!(
-            "pass --username with --password-stdin, or --token with a token from your registry dashboard"
-        ),
+        (None, None) => return Err(RegistryCommandError::CredentialsRequired),
     };
     let me = client
         .me(&token)
         .await
-        .context("the registry did not accept that token")?;
+        .map_err(RegistryCommandError::TokenRejected)?;
     credentials::set(&home, &registry, &token)?;
     Ok(crate::print_json(
         &json!({ "registry": registry, "signed_in_as": me["username"] }),
     )?)
 }
 
-pub(crate) fn logout(args: PackAccountArgs) -> Result<()> {
+pub(crate) fn logout(args: PackAccountArgs) -> Result<(), RegistryCommandError> {
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let removed = credentials::remove(&home, &registry)?;
@@ -73,7 +68,7 @@ pub(crate) fn logout(args: PackAccountArgs) -> Result<()> {
     )?)
 }
 
-pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
+pub(crate) async fn whoami(args: PackAccountArgs) -> Result<(), RegistryCommandError> {
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token = resolve_publish_token(None, &registry, &home)?;
@@ -83,19 +78,19 @@ pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
     )?)
 }
 
-pub(crate) async fn info(args: PackInfoArgs) -> Result<()> {
+pub(crate) async fn info(args: PackInfoArgs) -> Result<(), RegistryCommandError> {
     let (namespace, name) = super::split_namespace(&args.package);
     let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
     Ok(crate::print_json(&client.package(namespace, name).await?)?)
 }
 
-pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
-    let (coordinate, version) = args.package.split_once('@').with_context(|| {
-        format!(
-            "name the version to yank as namespace/name@version, not {:?}",
-            args.package
-        )
-    })?;
+pub(crate) async fn yank(args: PackYankArgs) -> Result<(), RegistryCommandError> {
+    let (coordinate, version) =
+        args.package
+            .split_once('@')
+            .ok_or_else(|| RegistryCommandError::YankVersionRequired {
+                package: args.package.clone(),
+            })?;
     let (namespace, name) = super::split_namespace(coordinate);
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
@@ -107,7 +102,7 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
     Ok(crate::print_json(&response)?)
 }
 
-pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
+pub(crate) async fn owner(args: PackOwnerArgs) -> Result<(), RegistryCommandError> {
     let (namespace, name) = super::split_namespace(&args.package);
     let registry = resolve_registry_url(args.registry.as_deref());
     let client = RegistryClient::new(registry.clone());
@@ -118,10 +113,13 @@ pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
             "owner": package["owner"],
         }))?);
     };
-    anyhow::ensure!(
-        args.yes,
-        "transferring {namespace}/{name} to {username} cannot be undone; pass --yes to confirm"
-    );
+    if !args.yes {
+        return Err(RegistryCommandError::TransferNeedsConfirmation {
+            namespace: namespace.to_owned(),
+            name: name.to_owned(),
+            username,
+        });
+    }
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = resolve_publish_token(token_flag.as_deref(), &registry, &home)?;

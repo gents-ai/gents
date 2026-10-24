@@ -1464,7 +1464,7 @@ impl TurnManager {
                     self.interrupt_submitted(&row).await;
                 }
             }
-            result
+            Ok(result?)
         };
         let submitted = submitted?;
         let row = self

@@ -8,6 +8,18 @@ use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RemoveReportError {
+    #[error("encoding the remove report")]
+    Encode(#[source] serde_json::Error),
+    #[error("remove report must serialize as an object")]
+    ReportNotObject,
+    #[error("remove report listed {listed} dependencies but {released} were released")]
+    DependencyCount { listed: usize, released: usize },
+    #[error("dependency report must serialize as an object")]
+    DependencyNotObject,
+}
+
 pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     let (namespace, name) = super::split_namespace(&args.package);
     let coordinate = format!("{namespace}/{name}");
@@ -91,23 +103,23 @@ fn augment_report(
     dependency_plugin_records: &[Vec<InstalledPackPlugin>],
     plugin_bytes: &[String],
     archives: &[String],
-) -> Result<Value> {
-    let mut value = serde_json::to_value(report).context("encoding the remove report")?;
+) -> Result<Value, RemoveReportError> {
+    let mut value = serde_json::to_value(report).map_err(RemoveReportError::Encode)?;
     let object = value
         .as_object_mut()
-        .context("remove report must serialize as an object")?;
+        .ok_or(RemoveReportError::ReportNotObject)?;
     object.insert("plugins".to_owned(), json!(pack_plugin_records));
     if let Some(dependencies) = object.get_mut("dependencies").and_then(Value::as_array_mut) {
-        anyhow::ensure!(
-            dependencies.len() == dependency_plugin_records.len(),
-            "remove report listed {} dependencies but {} were released",
-            dependencies.len(),
-            dependency_plugin_records.len()
-        );
+        if dependencies.len() != dependency_plugin_records.len() {
+            return Err(RemoveReportError::DependencyCount {
+                listed: dependencies.len(),
+                released: dependency_plugin_records.len(),
+            });
+        }
         for (dependency, plugins) in dependencies.iter_mut().zip(dependency_plugin_records) {
             let dependency = dependency
                 .as_object_mut()
-                .context("dependency report must serialize as an object")?;
+                .ok_or(RemoveReportError::DependencyNotObject)?;
             dependency.insert("plugins".to_owned(), json!(plugins));
         }
     }
@@ -128,13 +140,14 @@ fn release_plugin_records(
     )?)
 }
 
-fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<Vec<String>> {
+fn plugin_release_result(
+    home: &Path,
+    candidates: &BTreeSet<String>,
+) -> Result<Vec<String>, gents::plugin::store::PluginStoreError> {
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(gents::plugin::store::release_unreferenced_bytes(
-        home, candidates,
-    )?)
+    gents::plugin::store::release_unreferenced_bytes(home, candidates)
 }
 
 async fn release_archives(

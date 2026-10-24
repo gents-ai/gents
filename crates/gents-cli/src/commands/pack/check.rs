@@ -12,6 +12,14 @@ use crate::cli::{PackCheckArgs, PackGraphArgs};
 #[cfg(test)]
 const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PackCheckError {
+    #[error("{failed} of {total} packs failed the check")]
+    PacksFailed { failed: usize, total: usize },
+    #[error(transparent)]
+    RequestHelpers(#[from] crate::request_helpers::RequestHelpersError),
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct CheckReport {
     pub(crate) dir: PathBuf,
@@ -21,7 +29,7 @@ pub(crate) struct CheckReport {
     pub(crate) problems: Vec<String>,
 }
 
-pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
+pub(crate) async fn check(args: PackCheckArgs) -> Result<(), PackCheckError> {
     let dirs = if args.dirs.is_empty() {
         vec![PathBuf::from(".")]
     } else {
@@ -36,11 +44,12 @@ pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
         .filter(|report| !report.problems.is_empty())
         .count();
     crate::print_json(&json!({ "packs": reports }))?;
-    anyhow::ensure!(
-        failed == 0,
-        "{failed} of {} packs failed the check",
-        reports.len()
-    );
+    if failed != 0 {
+        return Err(PackCheckError::PacksFailed {
+            failed,
+            total: reports.len(),
+        });
+    }
     Ok(())
 }
 
@@ -60,7 +69,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     let manifest = match read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
-            report.problems.push(ErrorChain(error.as_ref()).to_string());
+            report.problems.push(ErrorChain(&error).to_string());
             return report;
         }
     };
@@ -95,8 +104,10 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     report
 }
 
-fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
-    Ok(gents::pack::authoring::read_manifest(dir)?)
+fn read_manifest(
+    dir: &Path,
+) -> Result<gents::pack::PackManifest, gents::pack::authoring::check::CheckError> {
+    gents::pack::authoring::read_manifest(dir)
 }
 
 fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConfig> {

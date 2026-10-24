@@ -13,6 +13,54 @@ use crate::cli::args::{PackFetchArgs, PackPublishArgs, PackSearchArgs};
 
 const REGISTRY_TOKEN_ENV_VAR: &str = "GENTS_REGISTRY_TOKEN";
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RegistryCommandError {
+    #[error("reading the {what} from standard input")]
+    ReadStdin {
+        what: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the registry advertised digest {advertised} for version {version} but the bytes hash to {computed}; nothing was saved")]
+    DigestMismatch {
+        advertised: String,
+        version: String,
+        computed: String,
+    },
+    #[error("reading {}", path.display())]
+    ReadPublishFile {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is empty", path.display())]
+    EmptyPublishFile { path: std::path::PathBuf },
+    #[error("you are not signed in to {registry}; run gents pack login, or pass --token")]
+    NotSignedIn { registry: String },
+    #[error("the password read from standard input is empty")]
+    EmptyPassword,
+    #[error("pass the password on standard input with --password-stdin, or sign in with --token")]
+    PasswordStdinRequired,
+    #[error("pass --username with --password-stdin, or --token with a token from your registry dashboard")]
+    CredentialsRequired,
+    #[error("the registry did not accept that token")]
+    TokenRejected(#[source] gents::pack_registry::PackRegistryError),
+    #[error("name the version to yank as namespace/name@version, not {package:?}")]
+    YankVersionRequired { package: String },
+    #[error(
+        "transferring {namespace}/{name} to {username} cannot be undone; pass --yes to confirm"
+    )]
+    TransferNeedsConfirmation {
+        namespace: String,
+        name: String,
+        username: String,
+    },
+    #[error(transparent)]
+    Registry(#[from] gents::pack_registry::PackRegistryError),
+    #[error(transparent)]
+    RequestHelpers(#[from] crate::request_helpers::RequestHelpersError),
+}
+
 pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
     explicit
         .map(str::to_owned)
@@ -24,20 +72,23 @@ pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
         })
 }
 
-pub(crate) fn read_stdin_line(what: &str) -> Result<String> {
+pub(crate) fn read_stdin_line(what: &str) -> Result<String, RegistryCommandError> {
     use std::io::BufRead;
     let mut line = String::new();
     std::io::stdin()
         .lock()
         .read_line(&mut line)
-        .with_context(|| format!("reading the {what} from standard input"))?;
+        .map_err(|source| RegistryCommandError::ReadStdin {
+            what: what.to_owned(),
+            source,
+        })?;
     Ok(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 pub(crate) fn resolve_token_flag(
     token: Option<String>,
     token_stdin: bool,
-) -> Result<Option<String>> {
+) -> Result<Option<String>, RegistryCommandError> {
     if token_stdin {
         Ok(Some(read_stdin_line("registry token")?))
     } else {
@@ -147,15 +198,22 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
     }))?)
 }
 
-fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<()> {
-    anyhow::ensure!(
-        computed == advertised,
-        "the registry advertised digest {advertised} for version {version} but the bytes hash to {computed}; nothing was saved"
-    );
+fn verify_digest_hex(
+    computed: &str,
+    advertised: &str,
+    version: &str,
+) -> Result<(), RegistryCommandError> {
+    if computed != advertised {
+        return Err(RegistryCommandError::DigestMismatch {
+            advertised: advertised.to_owned(),
+            version: version.to_owned(),
+            computed: computed.to_owned(),
+        });
+    }
     Ok(())
 }
 
-pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
+pub(crate) async fn search(args: PackSearchArgs) -> Result<(), RegistryCommandError> {
     let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
     let results = client
         .search(args.query.as_deref().unwrap_or(""), args.page.max(1))
@@ -163,14 +221,19 @@ pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
     Ok(crate::print_json(&results)?)
 }
 
-pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
+pub(crate) async fn publish(args: PackPublishArgs) -> Result<(), RegistryCommandError> {
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = super::account::resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
     let bytes =
-        std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?;
-    anyhow::ensure!(!bytes.is_empty(), "{} is empty", args.file.display());
+        std::fs::read(&args.file).map_err(|source| RegistryCommandError::ReadPublishFile {
+            path: args.file.clone(),
+            source,
+        })?;
+    if bytes.is_empty() {
+        return Err(RegistryCommandError::EmptyPublishFile { path: args.file });
+    }
     let client = RegistryClient::new(registry);
     let result = client.publish(&token, bytes).await?;
     Ok(crate::print_json(&result)?)

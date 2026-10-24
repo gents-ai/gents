@@ -82,7 +82,9 @@ fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf, ConfigComman
     Ok(normalized)
 }
 
-pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<()> {
+pub(super) async fn workspace_root_set(
+    args: WorkspaceRootUpsertArgs,
+) -> Result<(), ConfigCommandError> {
     let path = canonicalize_workspace_root_path(&args.path)?;
     let root_path = path
         .to_str()

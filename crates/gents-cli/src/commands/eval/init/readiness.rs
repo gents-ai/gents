@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents::ConfigAccess;
 use gents_protocol::row::{project_node_readiness, NodeReadinessRow, ProjectedAgentReadiness};
@@ -15,7 +14,7 @@ pub(super) async fn wait_for_author(
     agent: &str,
     timeout: Duration,
     poll: Duration,
-) -> Result<()> {
+) -> Result<(), EvalInitError> {
     let query = format!(
         r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
         escape_graphql_string(owner)
@@ -26,13 +25,13 @@ pub(super) async fn wait_for_author(
             let response = access
                 .execute(&query)
                 .await
-                .context("reading runtime readiness for the eval author")?;
+                .map_err(EvalInitError::ReadAuthorReadiness)?;
             let row = response
                 .pointer("/data/NodeReadiness/0")
                 .cloned()
                 .map(serde_json::from_value::<NodeReadinessRow>)
                 .transpose()
-                .context("decoding runtime readiness for the eval author")?;
+                .map_err(EvalInitError::DecodeAuthorReadiness)?;
             let projection = project_node_readiness(row.as_ref(), owner, [agent], None);
             let state = projection.agents.get(agent).cloned();
             if state == Some(ProjectedAgentReadiness::Ready) {
@@ -54,8 +53,7 @@ pub(super) async fn wait_for_author(
             agent: agent.to_owned(),
             seconds: timeout.as_secs_f64(),
             last,
-        }
-        .into()),
+        }),
     }
 }
 

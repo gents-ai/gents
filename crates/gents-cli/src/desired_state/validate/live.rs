@@ -1,8 +1,6 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 
-use anyhow::Result;
-
 use crate::config_writes::ConfigAccess;
 
 use super::super::DesiredStateManifest;
@@ -13,7 +11,7 @@ use super::super::DesiredStateManifest;
 pub(crate) async fn validate_manifest_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
-) -> Result<Vec<String>> {
+) -> Vec<String> {
     let mut errors = Vec::new();
     for source in &manifest.event_sources {
         let source_collection = source.source_collection.trim();
@@ -138,7 +136,7 @@ pub(crate) async fn validate_manifest_against_live(
         }
     }
 
-    Ok(errors)
+    errors
 }
 
 #[cfg(test)]
@@ -226,7 +224,7 @@ mod tests {
             json ! ({ "correlation_field" : "workspace_id" , "group" : { "expected_count" : 2 } }),
             true,
         )?;
-        let errors = validate_manifest_against_live(&grouped, &access).await?;
+        let errors = validate_manifest_against_live(&grouped, &access).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].contains("trigger on-review prompt_template references doc.attempt")
@@ -234,7 +232,7 @@ mod tests {
             "{errors:?}"
         );
         let outcome_less = receipt_manifest(json ! ({ "event_kind" : "created" }), false)?;
-        let errors = validate_manifest_against_live(&outcome_less, &access).await?;
+        let errors = validate_manifest_against_live(&outcome_less, &access).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].contains("trigger on-review prompt_template references doc.attempt")
@@ -256,7 +254,7 @@ mod tests {
             json!([]),
             json!([]),
         )?;
-        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        let errors = validate_manifest_against_live(&manifest, &access).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].contains("filter syntax error"),
@@ -270,7 +268,7 @@ mod tests {
         let tempdir = tempfile::tempdir()?;
         let access = probe_access(&tempdir).await?;
         let manifest = receipt_manifest(json ! ({ "event_kind" : "created" }), true)?;
-        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        let errors = validate_manifest_against_live(&manifest, &access).await;
         assert_eq!(errors, Vec::<String>::new(), "{errors:?}");
         Ok(())
     }
@@ -284,7 +282,7 @@ mod tests {
             json ! ([{ "node_did" : OWNER , "task_id" : "summarize" , "agent_id" : "beh" , "prompt_template" : "Summarize {{ doc.x" , }]),
             json ! ([{ "node_did" : OWNER , "trigger_id" : "on-broken" , "task_id" : "summarize" , "source" : { "kind" : "event" , "event_source_id" : "broken" } , }]),
         )?;
-        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        let errors = validate_manifest_against_live(&manifest, &access).await;
         assert ! (errors . iter () . any (| error | error . contains ("template parse error")) , "an unparsable template must fail the pre-flight without a correlation or count probe: {errors:?}");
         Ok(())
     }
@@ -308,7 +306,7 @@ mod tests {
                 "source": {"kind": "event", "event_source_id": "templated"}
             }]),
         )?;
-        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        let errors = validate_manifest_against_live(&manifest, &access).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].contains("references doc.nope")
@@ -338,7 +336,7 @@ mod tests {
                 "source": {"kind": "event", "event_source_id": "templated"}
             }]),
         )?;
-        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        let errors = validate_manifest_against_live(&manifest, &access).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].contains("session_id_template references doc.session")
@@ -355,7 +353,7 @@ mod tests {
         let mut missing = source("missing", json!({"correlation_field": "batch"}));
         missing["source_collection"] = json!("LiveProbeLater");
         let manifest = manifest(json!([missing]), json!([]), json!([]))?;
-        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        let errors = validate_manifest_against_live(&manifest, &access).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].contains("references unknown source_collection LiveProbeLater"),
