@@ -609,3 +609,131 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn canonical_terminal_publications_order_real_inventory_rows() {
+    check_real_inventory_chronology(false).await;
+}
+
+#[tokio::test]
+async fn background_receipt_cannot_order_real_inventory_rows() {
+    check_real_inventory_chronology(true).await;
+}
+
+async fn check_real_inventory_chronology(background: bool) {
+    use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    let contracts: serde_json::Value = tokio::task::spawn_blocking(
+        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let modeled = contracts["file_inventory_order_comparison_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| {
+            case["name"]
+                == if background {
+                    "background_receipt_resource"
+                } else {
+                    "sequential_resource"
+                }
+        })
+        .unwrap();
+    let expected = modeled["expected"].as_array();
+    let (fixture, mut request) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "inventory-terminal-chronology".into(),
+        real_identity: true,
+        await_mode: if background {
+            crate::tool_call_lifecycle::AwaitMode::Background
+        } else {
+            crate::tool_call_lifecycle::AwaitMode::Foreground
+        },
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = fixture.node;
+    let mut first = fixture.tool;
+    if background {
+        assert!(first
+            .publish_background_receipt("running in background")
+            .await
+            .unwrap());
+    }
+    first.complete("first retained output").await.unwrap();
+    retain_fork_fixture_capture(&node, &first, "repeated.rs").await;
+    let mut second = publish_accepted_on_claimed_request(
+        node.clone(),
+        &mut request,
+        &fixture.node_did,
+        1,
+        "write_file",
+        "second-chronology-tool",
+        serde_json::json!({"path":"repeated.rs"}),
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        true,
+    )
+    .await
+    .unwrap();
+    second.complete("second retained output").await.unwrap();
+    retain_fork_fixture_capture(&node, &second, "repeated.rs").await;
+    let requester = first.requester_did().unwrap().to_owned();
+    let session = ConfigAccess::transact_local_readonly(
+        &node,
+        None,
+        "test.inventory.chronology_session",
+        |txn| {
+            let (did, session, requester) = (&fixture.node_did, first.session_id(), &requester);
+            Box::pin(async move {
+                crate::session::load_agent_session_row_in_txn(txn, did, session, Some(requester))
+                    .await
+            })
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let admission = FileInventoryAdmission {
+        session_doc_id: session.doc_id,
+        request: HydrationRequest {
+            request_key: "inventory-terminal-chronology".into(),
+            peer_id: "fixture-peer".into(),
+            requester_did: requester,
+            node_did: fixture.node_did.clone(),
+            session_id: first.session_id().into(),
+        },
+    };
+    let inventory = FileInventorySnapshot::load(&node, &admission)
+        .await
+        .unwrap();
+    assert_eq!(
+        inventory.entries.len(),
+        modeled["snapshot"]["tools"].as_array().unwrap().len()
+    );
+    for (tool, model_id) in [(&first, 90u64), (&second, 2)] {
+        let entry = inventory
+            .entries
+            .iter()
+            .find(|entry| entry.tool_call_doc_id == tool.doc_id().unwrap())
+            .unwrap();
+        let ordinal = expected.map(|ids| {
+            let index = ids
+                .iter()
+                .position(|id| id.as_u64() == Some(model_id))
+                .unwrap();
+            gents_protocol::file_inventory::FileInventoryOrdinal {
+                index: index.try_into().unwrap(),
+                entries: ids.len().try_into().unwrap(),
+            }
+        });
+        assert_eq!(entry.order, ordinal);
+    }
+    let repeated = FileInventorySnapshot::load(&node, &admission)
+        .await
+        .unwrap();
+    assert_eq!(inventory.binding, repeated.binding);
+    node.shutdown().await;
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+}
