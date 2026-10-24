@@ -5,6 +5,8 @@ use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::DesktopPaths;
 use tokio::net::{UnixListener, UnixStream};
 
+pub type Connection = UnixStream;
+
 pub(super) struct Listener {
     listener: UnixListener,
     path: PathBuf,

@@ -12,6 +12,7 @@ use crate::types::{
 /// Additional commands are negotiated through the initialization inventory.
 /// Typed captures require a host that preserves their submitted snapshots.
 pub const PROTOCOL_VERSION: u32 = 5;
+pub const INSTALLATION_CONTROL_VERSION: u32 = 1;
 /// The private store-key channel completes before ordinary host framing begins.
 /// Its failures use the canonical bridge error contract and never raw causes.
 pub const EDITOR_STORE_BOOTSTRAP_VERSION: u32 = 2;
@@ -22,9 +23,23 @@ pub const MAX_PENDING_CALLS: usize = 32;
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub enum ClientMessage {
-    Hello { version: u32 },
-    Call { id: u32, command: Value },
-    Cancel { id: u32 },
+    Hello {
+        version: u32,
+    },
+    Call {
+        id: u32,
+        command: Value,
+    },
+    Cancel {
+        id: u32,
+    },
+    /// The acknowledgement must flush before EOF. EOF follows attachment
+    /// draining; the store lock remains the authority for replacement startup.
+    Retire {
+        id: u32,
+        #[serde(rename = "expectedBuild")]
+        expected_build: String,
+    },
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -424,6 +439,10 @@ pub enum HostMessage {
         commands: Vec<String>,
         #[serde(rename = "maxFrameBytes")]
         max_frame_bytes: usize,
+        #[serde(rename = "installationBuild")]
+        installation_build: Option<String>,
+        #[serde(rename = "installationControlVersion")]
+        installation_control_version: u32,
     },
     Response {
         id: u32,

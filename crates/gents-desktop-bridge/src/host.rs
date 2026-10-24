@@ -30,6 +30,7 @@ use protocol::ClientCommand;
 /// The installation host must stop and join attachments before closing the core.
 pub struct ClientHost {
     core: Arc<ClientCore>,
+    installation_build: Option<String>,
     policy: ResolvedBridgePolicy,
     speech: speech::SpeechClient,
     pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
@@ -40,11 +41,20 @@ impl ClientHost {
         Self::with_accounts(core, Arc::default())
     }
 
+    /// The executable digest is compatibility metadata, never runtime identity
+    /// or document authority. Embedded application hosts retain their own lifetime.
+    pub fn for_installation(core: Arc<ClientCore>, build: String) -> Self {
+        let mut host = Self::new(core);
+        host.installation_build = Some(build);
+        host
+    }
+
     pub(crate) fn with_accounts(
         core: Arc<ClientCore>,
         pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
     ) -> Self {
         Self {
+            installation_build: None,
             policy: ResolvedBridgePolicy {
                 desktop_paths: core.paths().clone(),
                 node_home: None,

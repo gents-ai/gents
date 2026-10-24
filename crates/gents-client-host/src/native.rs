@@ -28,6 +28,7 @@ impl Drop for StartupChild {
 }
 
 pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
+    let build = installation_build().await?;
     let provider = editor_store.then(|| {
         Arc::new(crate::editor_store::Provider::new(
             paths.root().to_owned(),
@@ -75,7 +76,10 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
         }
     });
     let result = listener
-        .serve_until_idle(Arc::new(ClientHost::new(core.clone())), stop)
+        .serve_until_idle(
+            Arc::new(ClientHost::for_installation(core.clone(), build)),
+            stop,
+        )
         .await;
     signal.abort();
     let _ = signal.await;
@@ -105,19 +109,42 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
     let mut bootstrap = editor_store.then(|| {
         crate::editor_store::frames(tokio::io::join(tokio::io::stdin(), tokio::io::stdout()))
     });
+    let build = installation_build().await?;
     let connection = tokio::time::timeout(Duration::from_secs(90), async {
-        if let Ok(connection) = local::connect(&paths).await {
+        if matches!(inspect_installation(&paths, &build).await?, Installation::Current) {
+            let connection = local::connect(&paths).await?;
             if let Some(bootstrap) = &mut bootstrap {
                 crate::editor_store::send(bootstrap, &crate::editor_store::Message::Ready).await?;
             }
             return Ok(connection);
         }
         let _startup = local::startup_lock(&paths).await?;
-        if let Ok(connection) = local::connect(&paths).await {
+        let observed = inspect_installation(&paths, &build).await?;
+        if matches!(observed, Installation::Current) {
+            let connection = local::connect(&paths).await?;
             if let Some(bootstrap) = &mut bootstrap {
                 crate::editor_store::send(bootstrap, &crate::editor_store::Message::Ready).await?;
             }
             return Ok(connection);
+        }
+        if let Installation::Outdated { build: previous, control } = observed {
+            if control != u64::from(gents_desktop_bridge::host::protocol::INSTALLATION_CONTROL_VERSION) {
+                let message = "The application serving this history predates safe updates. Update that application, or close its clients and retry after it exits. Your history is unchanged.";
+                if let Some(bootstrap) = &mut bootstrap {
+                    crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
+                        error: gents_desktop_bridge::BridgeError::new(
+                            gents_desktop_bridge::BridgeErrorCode::Unsupported, message),
+                    }).await?;
+                }
+                bail!(message);
+            }
+            retire_installation(&paths, &previous).await?;
+            wait_for_store_release(&paths).await?;
+            gents_protocol::client_installation::State {
+                phase: gents_protocol::client_installation::Phase::Released,
+                attachments: 0,
+            }.step(gents_protocol::client_installation::Action::Replace { startup_reserved: true })
+                .context("client installation replacement was refused")?;
         }
         let mut command = Command::new(std::env::current_exe()?);
         command
@@ -191,4 +218,129 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
         result = output => result?,
     }
     Ok(())
+}
+
+#[derive(Debug)]
+enum Installation {
+    Missing,
+    Current,
+    Outdated { build: String, control: u64 },
+}
+
+async fn installation_build() -> Result<String> {
+    tokio::task::spawn_blocking(|| {
+        let file = std::fs::File::open(std::env::current_exe()?)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_reader(file)?;
+        Ok(hasher.finalize().to_hex().to_string())
+    })
+    .await
+    .context("reading client installation build identity")?
+}
+
+async fn inspect_installation(paths: &DesktopPaths, build: &str) -> Result<Installation> {
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use gents_desktop_bridge::host::protocol::{MAX_FRAME_BYTES, PROTOCOL_VERSION};
+    let Ok(connection) = local::connect(paths).await else {
+        return Ok(Installation::Missing);
+    };
+    let mut frames = tokio_util::codec::LengthDelimitedCodec::builder()
+        .max_frame_length(MAX_FRAME_BYTES)
+        .new_framed(connection);
+    frames
+        .send(Bytes::from(serde_json::to_vec(&serde_json::json!({
+            "kind":"hello", "version":PROTOCOL_VERSION
+        }))?))
+        .await?;
+    let Some(frame) = frames.next().await else {
+        return Ok(Installation::Outdated {
+            build: String::new(),
+            control: 0,
+        });
+    };
+    let hello: serde_json::Value = serde_json::from_slice(&frame?)?;
+    let current = hello["kind"] == "hello"
+        && hello["version"] == PROTOCOL_VERSION
+        && (hello["installationBuild"] == build
+            || (hello["installationBuild"].is_null() && hello["installationControlVersion"] == 0))
+        && hello["maxFrameBytes"] == MAX_FRAME_BYTES
+        && hello["commands"].as_array().is_some_and(|commands| {
+            gents_desktop_bridge::host::protocol::ClientCommand::NAMES
+                .iter()
+                .all(|name| {
+                    commands
+                        .iter()
+                        .any(|command| command.as_str() == Some(*name))
+                })
+        });
+    if current {
+        Ok(Installation::Current)
+    } else {
+        Ok(Installation::Outdated {
+            build: hello["installationBuild"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            control: hello["installationControlVersion"]
+                .as_u64()
+                .unwrap_or_default(),
+        })
+    }
+}
+
+async fn retire_installation(paths: &DesktopPaths, expected: &str) -> Result<()> {
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use gents_desktop_bridge::host::protocol::{MAX_FRAME_BYTES, PROTOCOL_VERSION};
+    let mut frames = tokio_util::codec::LengthDelimitedCodec::builder()
+        .max_frame_length(MAX_FRAME_BYTES)
+        .new_framed(local::connect(paths).await?);
+    frames
+        .send(Bytes::from(serde_json::to_vec(&serde_json::json!({
+            "kind":"hello", "version":PROTOCOL_VERSION
+        }))?))
+        .await?;
+    let hello = frames
+        .next()
+        .await
+        .context("shared client closed before update")??;
+    let hello: serde_json::Value = serde_json::from_slice(&hello)?;
+    anyhow::ensure!(
+        hello["installationBuild"] == expected,
+        "The shared client changed before the update. Retry the update."
+    );
+    frames
+        .send(Bytes::from(serde_json::to_vec(&serde_json::json!({
+            "kind":"retire", "id":1, "expectedBuild":expected
+        }))?))
+        .await?;
+    let mut acknowledged = false;
+    while let Some(frame) = frames.next().await {
+        let message: serde_json::Value = serde_json::from_slice(&frame?)?;
+        if message["kind"] == "response" && message["id"] == 1 {
+            anyhow::ensure!(
+                message["error"].is_null(),
+                "shared client refused the update"
+            );
+            acknowledged = true;
+        }
+    }
+    anyhow::ensure!(acknowledged, "shared client update was not confirmed");
+    Ok(())
+}
+
+async fn wait_for_store_release(paths: &DesktopPaths) -> Result<()> {
+    loop {
+        match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+            Ok(reservation) => {
+                drop(reservation);
+                return Ok(());
+            }
+            Err(error) if error.downcast_ref::<gents::home::StoreLockHeld>().is_some() => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => return Err(error).context("waiting for the previous client store owner"),
+        }
+    }
 }

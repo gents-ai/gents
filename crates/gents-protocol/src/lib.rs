@@ -1,5 +1,6 @@
 pub mod canonical;
 pub mod chatgpt_oauth;
+pub mod client_installation;
 pub mod client_media;
 pub mod client_protocol;
 pub mod enrollment;

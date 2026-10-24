@@ -62,6 +62,12 @@ where
                 .map(|name| (*name).to_owned())
                 .collect(),
             max_frame_bytes: MAX_FRAME_BYTES,
+            installation_build: host.installation_build.clone(),
+            installation_control_version: if host.installation_build.is_some() {
+                super::protocol::INSTALLATION_CONTROL_VERSION
+            } else {
+                0
+            },
         })?)
         .await?;
 
@@ -87,6 +93,7 @@ where
     let mut sequence = 0_u64;
     let approvals = Arc::new(super::approvals::AttachmentApprovals::default());
     let mut approval_changes = approvals.changes();
+    let mut retirement_accepted = false;
     let result: Result<()> = async {
         loop {
             tokio::select! {
@@ -99,6 +106,20 @@ where
                         ClientMessage::Hello { .. } => bail!("client is already initialized"),
                         ClientMessage::Cancel { id } => {
                             if let Some(cancel) = pending.get(&id) { cancel.cancel(); }
+                        }
+                        ClientMessage::Retire { id, expected_build } => {
+                            if pending.contains_key(&id) { bail!("duplicate pending request id {id}"); }
+                            let accepted = host.installation_build.as_deref() == Some(expected_build.as_str());
+                            let result = if accepted { Ok(serde_json::Value::Null) } else {
+                                Err(BridgeError::new(BridgeErrorCode::InvalidArgument,
+                                    "The shared client changed or does not support updates. Retry the update."))
+                            };
+                            publish(&out, &local_stop, HostMessage::response(id, result)).await?;
+                            if accepted {
+                                retirement_accepted = true;
+                                stop.cancel();
+                                break;
+                            }
                         }
                         ClientMessage::Call { id, command } => {
                             if pending.contains_key(&id) { bail!("duplicate pending request id {id}"); }
@@ -181,7 +202,9 @@ where
         }
     }
     drop(out);
-    writer.abort();
+    if !retirement_accepted {
+        writer.abort();
+    }
     match writer.await {
         Ok(result) => result?,
         Err(error) if error.is_cancelled() => {}
