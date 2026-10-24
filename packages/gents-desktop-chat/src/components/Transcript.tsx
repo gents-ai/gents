@@ -4,16 +4,10 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { useListWindow } from "@source-inc/gents-desktop-ui";
 import type { ReactNode } from "react";
-import {
-  Fragment,
-  memo,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Fragment, memo, useMemo } from "react";
 
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
+import { useAssistantReveal } from "./transcript/useAssistantReveal.js";
 import { TimelineItem, timelineKey } from "./transcript/TimelineItem.js";
 import {
   coalesceToolGroups,
@@ -49,30 +43,10 @@ export const MessageList = memo(function MessageList({
     estimateItemSize,
     { enabled: !!scrollElement, anchorTo: "end" },
   );
-  const previousTailRef = useRef<{
-    identity?: string | null;
-    itemKey: string;
-    kind: RenderedTimelineItem["kind"];
-  } | null>(null);
-  const tail = displayItems[displayItems.length - 1] ?? null;
-  const [revealAssistantItemKey, setRevealAssistantItemKey] = useState<
-    string | null
-  >(null);
-  useLayoutEffect(() => {
-    const previousTail = previousTailRef.current;
-    setRevealAssistantItemKey(
-      tail?.kind === "assistantMessage" &&
-        previousTail != null &&
-        previousTail.identity === timelineIdentity &&
-        previousTail.itemKey !== tail.itemKey &&
-        previousTail.kind !== "liveAssistant"
-        ? tail.itemKey
-        : null,
-    );
-    previousTailRef.current = tail
-      ? { identity: timelineIdentity, itemKey: tail.itemKey, kind: tail.kind }
-      : null;
-  }, [tail?.itemKey, tail?.kind, timelineIdentity]);
+  const revealAssistantItemKey = useAssistantReveal(
+    displayItems,
+    timelineIdentity,
+  );
 
   return (
     <>
