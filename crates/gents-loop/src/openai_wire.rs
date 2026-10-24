@@ -1,7 +1,14 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::backend_provider::BackendProviderKind;
+
+#[derive(Debug, thiserror::Error)]
+pub enum OpenAiWireApiError {
+    #[error("unknown OpenAI wire API {api}")]
+    Unknown { api: String },
+}
+
+type Result<T, E = OpenAiWireApiError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -20,7 +27,9 @@ impl OpenAiWireApi {
             None => Ok(None),
             Some("responses") => Ok(Some(Self::Responses)),
             Some("chat_completions") | Some("chat-completions") => Ok(Some(Self::ChatCompletions)),
-            Some(other) => anyhow::bail!("unknown OpenAI wire API {other}"),
+            Some(other) => Err(OpenAiWireApiError::Unknown {
+                api: other.to_owned(),
+            }),
         }
     }
 

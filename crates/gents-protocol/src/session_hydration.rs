@@ -1,9 +1,30 @@
 //! Signed terminal receipts for exact session hydration.
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::enrollment::canonical_domain_payload;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionHydrationError {
+    #[error("serialize session hydration manifest")]
+    SerializeManifest(#[source] serde_json::Error),
+    #[error("decode session hydration manifest")]
+    DecodeManifest(#[source] serde_json::Error),
+    #[error("unsupported session hydration receipt version")]
+    UnsupportedVersion,
+    #[error("session hydration receipt status is not terminal")]
+    NotTerminal,
+    #[error("session hydration receipt signer does not own the target agent")]
+    SignerNotNodeOwner,
+    #[error("invalid session hydration receipt signature length")]
+    InvalidSignatureLength,
+    #[error("session hydration manifest must be sorted and unique")]
+    ManifestNotSorted,
+    #[error("session hydration manifest contains an empty document identity")]
+    EmptyDocumentIdentity,
+}
+
+type Result<T, E = SessionHydrationError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct HydrationRequest {
@@ -104,48 +125,45 @@ impl SessionHydrationReceipt {
     }
 
     pub fn validate_shape(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.version == SESSION_HYDRATION_RECEIPT_VERSION,
-            "unsupported session hydration receipt version"
-        );
-        anyhow::ensure!(
-            matches!(self.status.as_str(), "served" | "rejected"),
-            "session hydration receipt status is not terminal"
-        );
-        anyhow::ensure!(
-            self.signer_did == self.node_did,
-            "session hydration receipt signer does not own the target agent"
-        );
-        anyhow::ensure!(
-            self.signature.len() == 64,
-            "invalid session hydration receipt signature length"
-        );
-        anyhow::ensure!(
-            self.served_manifest
-                .windows(2)
-                .all(|pair| pair[0] < pair[1]),
-            "session hydration manifest must be sorted and unique"
-        );
-        for entry in &self.served_manifest {
-            anyhow::ensure!(
-                !entry.doc_id.is_empty(),
-                "session hydration manifest contains an empty document identity"
-            );
+        if self.version != SESSION_HYDRATION_RECEIPT_VERSION {
+            return Err(SessionHydrationError::UnsupportedVersion);
+        }
+        if !matches!(self.status.as_str(), "served" | "rejected") {
+            return Err(SessionHydrationError::NotTerminal);
+        }
+        if self.signer_did != self.node_did {
+            return Err(SessionHydrationError::SignerNotNodeOwner);
+        }
+        if self.signature.len() != 64 {
+            return Err(SessionHydrationError::InvalidSignatureLength);
+        }
+        if !self
+            .served_manifest
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+        {
+            return Err(SessionHydrationError::ManifestNotSorted);
+        }
+        if self
+            .served_manifest
+            .iter()
+            .any(|entry| entry.doc_id.is_empty())
+        {
+            return Err(SessionHydrationError::EmptyDocumentIdentity);
         }
         Ok(())
     }
 }
 
 pub fn canonical_manifest_json(entries: &[SessionHydrationDocumentKey]) -> Result<String> {
-    serde_json::to_string(entries).context("serialize session hydration manifest")
+    serde_json::to_string(entries).map_err(SessionHydrationError::SerializeManifest)
 }
 
 pub fn decode_manifest_json(raw: &str) -> Result<Vec<SessionHydrationDocumentKey>> {
     let entries: Vec<SessionHydrationDocumentKey> =
-        serde_json::from_str(raw).context("decode session hydration manifest")?;
-    anyhow::ensure!(
-        entries.windows(2).all(|pair| pair[0] < pair[1]),
-        "session hydration manifest must be sorted and unique"
-    );
+        serde_json::from_str(raw).map_err(SessionHydrationError::DecodeManifest)?;
+    if !entries.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err(SessionHydrationError::ManifestNotSorted);
+    }
     Ok(entries)
 }

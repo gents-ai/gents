@@ -1691,14 +1691,14 @@ fn replay_capture_key(
         turn_index,
         attempt,
     } = coordinate;
-    gents_loop::rendered_request::capture_key(
+    Ok(gents_loop::rendered_request::capture_key(
         node_did,
         session_id,
         request_doc_id,
         &capture_scope.to_string(),
         usize::try_from(turn_index)?,
         attempt,
-    )
+    )?)
 }
 
 /// Batched `capture_key` read for the pass's selected coordinates: one chunked

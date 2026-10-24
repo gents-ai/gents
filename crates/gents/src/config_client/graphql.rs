@@ -51,7 +51,7 @@ pub(super) async fn query_with_options(
 ) -> Result<Value> {
     ensure_query_document(query)?;
     let authorization = endpoint.authorization()?;
-    execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await
+    Ok(execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await?)
 }
 
 pub(super) async fn txn_begin(

@@ -1512,15 +1512,7 @@ fn generated_claude_replay_cases_drive_native_messages_body() {
         let result = build_messages_body_native("claude-sonnet-5", None, Some(128), &history, &[]);
         if case.outcome != "ok" {
             let error = result.expect_err("modeled unsupported replay must fail closed");
-            let codec = error
-                .downcast_ref::<gents_loop::claude_messages_body::AssistantCodecError>()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{}: expected native assistant codec error: {error:#}",
-                        case.name
-                    )
-                });
-            assert_eq!(replay_codec_outcome(codec), case.outcome, "{}", case.name);
+            assert_eq!(replay_codec_outcome(&error), case.outcome, "{}", case.name);
             continue;
         }
         let body = result.unwrap_or_else(|error| panic!("{}: {error}", case.name));

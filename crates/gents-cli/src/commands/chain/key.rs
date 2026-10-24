@@ -211,7 +211,10 @@ async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) ->
                 let response = txn
                     .execute(&create_chain_key_binding_mutation(doc)?)
                     .await?;
-                gents_protocol::graphql::extract_mutation_doc_id(&response, "ChainKeyBinding")
+                Ok(gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "ChainKeyBinding",
+                )?)
             })
         })
         .await

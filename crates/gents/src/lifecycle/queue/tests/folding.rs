@@ -17,7 +17,7 @@ async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> Strin
                     &json!({ "input": input }),
                 )
                 .await?;
-            gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")
+            Ok(gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")?)
         })
     })
     .await

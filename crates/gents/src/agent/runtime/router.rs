@@ -482,7 +482,10 @@ pub(super) async fn fail_routed_request(
         match ExecutionOrigin::from_persisted(request.execution_origin.as_deref()) {
             Ok(origin) => origin,
             Err(error) => {
-                let reason = format!("request admission denied: {error:#}");
+                let reason = format!(
+                    "request admission denied: {}",
+                    gents_protocol::error_chain::ErrorChain(&error)
+                );
                 return crate::request_admission::terminalize_pending_request_rejection(
                     &node,
                     &request.doc_id,

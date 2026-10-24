@@ -1,9 +1,32 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::enrollment::canonical_domain_payload;
 use crate::session_hydration::HydrationRequest;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FileImageHydrationError {
+    #[error("file image demand has an empty reference")]
+    EmptyReference,
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    ProcessedAt(#[from] chrono::ParseError),
+    #[error("unsupported file image receipt version")]
+    UnsupportedVersion,
+    #[error("file image receipt signer does not own the target node")]
+    SignerNotNodeOwner,
+    #[error("invalid file image receipt signature length")]
+    InvalidSignatureLength,
+    #[error("invalid selected file image receipt")]
+    InvalidSelected,
+    #[error("missing file images cannot carry a rejection")]
+    MissingWithRejection,
+    #[error("file image rejection requires a reason")]
+    RejectionWithoutReason,
+}
+
+type Result<T, E = FileImageHydrationError> = std::result::Result<T, E>;
 
 pub const FILE_IMAGE_RECEIPT_VERSION: u8 = 2;
 const KEY_DOMAIN: &str = "gents-file-image-demand-v1";
@@ -65,12 +88,13 @@ impl FileImageDemand {
     }
 
     pub fn validate_reference(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.reference_fields()
-                .iter()
-                .all(|(_, value)| !value.is_empty()),
-            "file image demand has an empty reference"
-        );
+        if self
+            .reference_fields()
+            .iter()
+            .any(|(_, value)| value.is_empty())
+        {
+            return Err(FileImageHydrationError::EmptyReference);
+        }
         Ok(())
     }
 }
@@ -119,32 +143,32 @@ impl FileImageHydrationReceipt {
         if !matches!(self.selection, FileImageSelection::Rejected) {
             self.demand.validate_reference()?;
         }
-        anyhow::ensure!(
-            self.version == FILE_IMAGE_RECEIPT_VERSION,
-            "unsupported file image receipt version"
-        );
-        anyhow::ensure!(
-            self.signer_did == self.demand.admission.node_did,
-            "file image receipt signer does not own the target node"
-        );
-        anyhow::ensure!(
-            self.signature.len() == 64,
-            "invalid file image receipt signature length"
-        );
+        if self.version != FILE_IMAGE_RECEIPT_VERSION {
+            return Err(FileImageHydrationError::UnsupportedVersion);
+        }
+        if self.signer_did != self.demand.admission.node_did {
+            return Err(FileImageHydrationError::SignerNotNodeOwner);
+        }
+        if self.signature.len() != 64 {
+            return Err(FileImageHydrationError::InvalidSignatureLength);
+        }
         chrono::DateTime::parse_from_rfc3339(&self.processed_at)?;
         match &self.selection {
-            FileImageSelection::Selected { document } => anyhow::ensure!(
-                !document.is_empty() && self.detail.is_empty(),
-                "invalid selected file image receipt"
-            ),
-            FileImageSelection::Missing => anyhow::ensure!(
-                self.detail.is_empty(),
-                "missing file images cannot carry a rejection"
-            ),
-            FileImageSelection::Rejected => anyhow::ensure!(
-                !self.detail.is_empty(),
-                "file image rejection requires a reason"
-            ),
+            FileImageSelection::Selected { document } => {
+                if document.is_empty() || !self.detail.is_empty() {
+                    return Err(FileImageHydrationError::InvalidSelected);
+                }
+            }
+            FileImageSelection::Missing => {
+                if !self.detail.is_empty() {
+                    return Err(FileImageHydrationError::MissingWithRejection);
+                }
+            }
+            FileImageSelection::Rejected => {
+                if self.detail.is_empty() {
+                    return Err(FileImageHydrationError::RejectionWithoutReason);
+                }
+            }
         }
         Ok(())
     }

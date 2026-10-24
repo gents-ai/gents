@@ -15,6 +15,7 @@ pub(crate) struct ToolContext {
 #[derive(Debug)]
 pub(crate) enum ToolError {
     Other(anyhow::Error),
+    LiveOutput(gents_loop::live_output::LiveOutputError),
     PolicyDenial(CommandPolicyDenial),
     ReportedFailure { class: FailureClass, text: String },
 }
@@ -45,7 +46,7 @@ impl ToolError {
     pub(crate) fn command_policy_denial(&self) -> Option<&CommandPolicyDenial> {
         match self {
             Self::PolicyDenial(denial) => Some(denial),
-            Self::Other(_) | Self::ReportedFailure { .. } => None,
+            Self::Other(_) | Self::LiveOutput(_) | Self::ReportedFailure { .. } => None,
         }
     }
 }
@@ -54,6 +55,9 @@ impl std::fmt::Display for ToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Other(error) => write!(f, "{error:#}"),
+            Self::LiveOutput(error) => {
+                write!(f, "{}", gents_protocol::error_chain::ErrorChain(error))
+            }
             Self::PolicyDenial(denial) => write!(f, "{}", denial.tool_error_payload()),
             Self::ReportedFailure { text, .. } => f.write_str(text),
         }
@@ -64,6 +68,13 @@ impl std::error::Error for ToolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Other(error) => Some(error.root_cause()),
+            Self::LiveOutput(error) => {
+                let mut root: &(dyn std::error::Error + 'static) = error;
+                while let Some(next) = root.source() {
+                    root = next;
+                }
+                Some(root)
+            }
             Self::PolicyDenial(_) | Self::ReportedFailure { .. } => None,
         }
     }
@@ -72,6 +83,12 @@ impl std::error::Error for ToolError {
 impl From<anyhow::Error> for ToolError {
     fn from(error: anyhow::Error) -> Self {
         Self::Other(error)
+    }
+}
+
+impl From<gents_loop::live_output::LiveOutputError> for ToolError {
+    fn from(error: gents_loop::live_output::LiveOutputError) -> Self {
+        Self::LiveOutput(error)
     }
 }
 

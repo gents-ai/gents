@@ -77,7 +77,7 @@ pub(super) fn receipt_write_backoff(retry_index: u32) -> Duration {
 }
 
 pub(super) fn is_retryable_ambiguous_write(error: &anyhow::Error) -> bool {
-    gents_protocol::graphql::graphql_error_is_retryable(error)
+    gents_protocol::graphql::graphql_error_is_retryable(error.as_ref())
 }
 
 pub(super) fn is_transaction_conflict_text(text: &str) -> bool {

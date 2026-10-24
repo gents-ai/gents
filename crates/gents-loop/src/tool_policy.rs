@@ -2,9 +2,20 @@ pub mod access_review;
 pub mod operator_paths;
 pub mod workspace_permissions;
 
-use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ToolPolicyError {
+    #[error("unknown command execution policy mode {mode}")]
+    UnknownCommandExecutionMode { mode: String },
+    #[error("unknown workspace authority {authority}")]
+    UnknownWorkspaceAuthority { authority: String },
+    #[error("unknown command network mode {mode}")]
+    UnknownCommandNetworkMode { mode: String },
+}
+
+type Result<T, E = ToolPolicyError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,7 +43,9 @@ impl CommandExecutionMode {
             }
             "artifact_write" | "ArtifactWrite" => Ok(Self::ArtifactWrite),
             "unrestricted" | "Unrestricted" => Ok(Self::Unrestricted),
-            other => bail!("unknown command execution policy mode {other}"),
+            other => Err(ToolPolicyError::UnknownCommandExecutionMode {
+                mode: other.to_owned(),
+            }),
         }
     }
 
@@ -73,7 +86,9 @@ impl WorkspaceAuthority {
             "readOnly" | "ReadOnly" | "read_only" => Ok(Self::ReadOnly),
             "readWrite" | "ReadWrite" | "read_write" => Ok(Self::ReadWrite),
             "integrate" | "Integrate" => Ok(Self::Integrate),
-            other => bail!("unknown workspace authority {other}"),
+            other => Err(ToolPolicyError::UnknownWorkspaceAuthority {
+                authority: other.to_owned(),
+            }),
         }
     }
 
@@ -151,7 +166,9 @@ impl CommandNetworkMode {
             "" | "inherit" | "Inherit" => Ok(Self::Inherit),
             "disabled" | "Disabled" | "off" | "Off" => Ok(Self::Disabled),
             "enabled" | "Enabled" | "on" | "On" => Ok(Self::Enabled),
-            other => bail!("unknown command network mode {other}"),
+            other => Err(ToolPolicyError::UnknownCommandNetworkMode {
+                mode: other.to_owned(),
+            }),
         }
     }
 

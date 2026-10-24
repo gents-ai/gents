@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::{RequestInputError, Result};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -86,9 +88,9 @@ impl CapturedContext {
 }
 
 impl CapturedContext {
-    pub fn to_document(&self) -> anyhow::Result<crate::message::Document> {
+    pub fn to_document(&self) -> Result<crate::message::Document> {
         let serde_json::Value::Object(mut metadata) = serde_json::to_value(self)? else {
-            anyhow::bail!("captured context metadata must be an object");
+            return Err(RequestInputError::MetadataNotObject);
         };
         metadata.remove("content");
         Ok(crate::message::Document {
@@ -101,48 +103,44 @@ impl CapturedContext {
     /// The native marker identifies structured context; ordinary document and
     /// prose content is never inspected for it. The payload is the sole text
     /// source, including in forks whose origin request is no longer local.
-    pub fn from_document(document: &crate::message::Document) -> anyhow::Result<Option<Self>> {
+    pub fn from_document(document: &crate::message::Document) -> Result<Option<Self>> {
         let Some(params) = document.additional_params.as_ref() else {
             return Ok(None);
         };
         let Some(metadata) = params.get("captured_context") else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            params.as_object().is_some_and(|object| object.len() == 1),
-            "captured context document contains unrelated provider parameters"
-        );
-        anyhow::ensure!(
-            matches!(
-                document.media_type,
-                Some(crate::message::DocumentMediaType::TXT)
-            ),
-            "captured context requires a text document"
-        );
+        if !params.as_object().is_some_and(|object| object.len() == 1) {
+            return Err(RequestInputError::UnrelatedProviderParameters);
+        }
+        if !matches!(
+            document.media_type,
+            Some(crate::message::DocumentMediaType::TXT)
+        ) {
+            return Err(RequestInputError::RequiresTextDocument);
+        }
         let crate::message::DocumentSourceKind::String(content) = &document.data else {
-            anyhow::bail!("captured context requires captured text, not a live source location");
+            return Err(RequestInputError::RequiresCapturedText);
         };
         let mut fields = metadata
             .as_object()
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("captured context metadata must be an object"))?;
-        anyhow::ensure!(
-            !fields.contains_key("content"),
-            "captured context text must stay in its payload"
-        );
+            .ok_or(RequestInputError::MetadataNotObject)?;
+        if fields.contains_key("content") {
+            return Err(RequestInputError::ContentInMetadata);
+        }
         fields.insert(
             "content".to_owned(),
             serde_json::Value::String(content.clone()),
         );
         let context: Self = serde_json::from_value(serde_json::Value::Object(fields))?;
-        anyhow::ensure!(
-            context.is_well_formed(),
-            "captured context has an invalid buffer version or selection range"
-        );
+        if !context.is_well_formed() {
+            return Err(RequestInputError::InvalidCapturedContext);
+        }
         Ok(Some(context))
     }
 
-    pub fn from_message(message: &crate::message::Message) -> anyhow::Result<Vec<Self>> {
+    pub fn from_message(message: &crate::message::Message) -> Result<Vec<Self>> {
         let crate::message::Message::User { content } = message else {
             return Ok(Vec::new());
         };

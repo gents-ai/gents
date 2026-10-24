@@ -831,7 +831,7 @@ pub(crate) async fn load_shared_json(
         );
         Ok((block.bytes.clone(), block.field_commit_cid.clone()))
     })?;
-    canonical_json_string(&value)
+    Ok(canonical_json_string(&value)?)
 }
 
 async fn decode_capture_json_from_cached<R>(

@@ -1,7 +1,20 @@
-use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::claude_messages_body::ReplayWire;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReplayFrontierError {
+    #[error("encoding replay flat item")]
+    EncodeFlatItem(#[source] serde_json::Error),
+    #[error("replay body is not an object")]
+    BodyNotObject,
+    #[error("replay body has no conversation")]
+    NoConversation,
+    #[error("replay message is not an object")]
+    MessageNotObject,
+}
+
+type Result<T, E = ReplayFrontierError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatItem {
@@ -124,7 +137,7 @@ const NON_PREFIX_FIELDS: &[&str] = &[
 
 fn canonical_bytes(value: &Value) -> Result<Vec<u8>> {
     serde_json::to_vec(&crate::rendered_request::canonical_json(value))
-        .context("encoding replay flat item")
+        .map_err(ReplayFrontierError::EncodeFlatItem)
 }
 
 fn without_cache_hint(value: &Value) -> Value {
@@ -138,7 +151,7 @@ fn without_cache_hint(value: &Value) -> Value {
 pub fn flatten(body: &Value, wire: ReplayWire) -> Result<Vec<FlatItem>> {
     let mut context = body
         .as_object()
-        .context("replay body is not an object")?
+        .ok_or(ReplayFrontierError::BodyNotObject)?
         .clone();
     let conversation_key = match wire {
         ReplayWire::ClaudeMessages => "messages",
@@ -146,7 +159,7 @@ pub fn flatten(body: &Value, wire: ReplayWire) -> Result<Vec<FlatItem>> {
     };
     let conversation = context
         .remove(conversation_key)
-        .context("replay body has no conversation")?;
+        .ok_or(ReplayFrontierError::NoConversation)?;
     for field in NON_PREFIX_FIELDS {
         context.remove(*field);
     }
@@ -176,7 +189,7 @@ pub fn flatten(body: &Value, wire: ReplayWire) -> Result<Vec<FlatItem>> {
             for message in messages {
                 let mut header = message
                     .as_object()
-                    .context("replay message is not an object")?
+                    .ok_or(ReplayFrontierError::MessageNotObject)?
                     .clone();
                 let content = header.remove("content");
                 items.push(FlatItem::Ordinary(canonical_bytes(&Value::Object(header))?));

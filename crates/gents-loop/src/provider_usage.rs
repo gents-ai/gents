@@ -1,5 +1,19 @@
 use rig::completion::Usage;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderUsageError {
+    #[error("persisted prompt_tokens must be non-negative")]
+    NegativePromptTokens,
+    #[error("persisted completion_tokens must be non-negative")]
+    NegativeCompletionTokens,
+    #[error(
+        "persisted prompt_tokens and completion_tokens must both be present or both be absent"
+    )]
+    UnpairedTokens,
+}
+
+type Result<T, E = ProviderUsageError> = std::result::Result<T, E>;
+
 pub fn charged_usage_total(usage: Usage) -> u64 {
     usage.input_tokens.saturating_add(usage.output_tokens)
 }
@@ -7,23 +21,21 @@ pub fn charged_usage_total(usage: Usage) -> u64 {
 fn charged_from_persisted_parts(
     prompt_tokens: Option<i64>,
     completion_tokens: Option<i64>,
-) -> anyhow::Result<Option<u64>> {
+) -> Result<Option<u64>> {
     match (prompt_tokens, completion_tokens) {
         (None, None) => Ok(None),
         (Some(prompt), Some(completion)) => {
-            let prompt = u64::try_from(prompt)
-                .map_err(|_| anyhow::anyhow!("persisted prompt_tokens must be non-negative"))?;
+            let prompt =
+                u64::try_from(prompt).map_err(|_| ProviderUsageError::NegativePromptTokens)?;
             let completion = u64::try_from(completion)
-                .map_err(|_| anyhow::anyhow!("persisted completion_tokens must be non-negative"))?;
+                .map_err(|_| ProviderUsageError::NegativeCompletionTokens)?;
             Ok(Some(prompt.saturating_add(completion)))
         }
-        _ => anyhow::bail!(
-            "persisted prompt_tokens and completion_tokens must both be present or both be absent"
-        ),
+        _ => Err(ProviderUsageError::UnpairedTokens),
     }
 }
 
-pub fn sum_charged_from_persisted_parts<I>(rows: I) -> anyhow::Result<u64>
+pub fn sum_charged_from_persisted_parts<I>(rows: I) -> Result<u64>
 where
     I: IntoIterator<Item = (Option<i64>, Option<i64>)>,
 {

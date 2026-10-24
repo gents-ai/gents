@@ -121,9 +121,9 @@ where
             .await
         };
         let provider_request = assembled.map_err(anyhow::Error::new)?;
-        config
+        Ok(config
             .provider_input_counter
-            .estimate_request(&provider_request)
+            .estimate_request(&provider_request)?)
     }
 
     pub(super) async fn handle_request(

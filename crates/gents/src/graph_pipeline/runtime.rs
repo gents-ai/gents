@@ -701,7 +701,9 @@ async fn create_document(
     let input = graphql_input_literal(document)?;
     let mutation = format!("mutation {{ create_{collection}(input: {input}) {{ _docID }} }}");
     let response = txn.execute(&mutation).await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &response, collection,
+    )?)
 }
 
 async fn update_document(

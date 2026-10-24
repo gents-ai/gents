@@ -1,11 +1,67 @@
-use anyhow::{Context, Result};
-use rig::completion::CompletionRequest;
+use gents_protocol::request_input::RequestInputError;
+use rig::completion::{CompletionError, CompletionRequest};
+use rig::message::MessageError;
 #[cfg(feature = "native")]
 use serde_json::Map;
 use serde_json::Value;
 
 use crate::backend_provider::BackendProviderKind;
+use crate::claude_messages_body::AssistantCodecError;
 use crate::openai_wire::OpenAiWireApi;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderInputError {
+    #[error("provider request must be an object")]
+    NotAnObject,
+    #[error("decoding provider request")]
+    DecodeRequest(#[source] serde_json::Error),
+    #[error("encoding provider request")]
+    EncodeRequest(#[source] serde_json::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    RequestInput(#[from] RequestInputError),
+    #[error(transparent)]
+    Codec(#[from] AssistantCodecError),
+    #[error(transparent)]
+    Message(#[from] MessageError),
+    #[error("projecting OpenAI Chat Completions request")]
+    OpenAiChatProjection(#[source] CompletionError),
+    #[error("serializing OpenAI Chat Completions request")]
+    OpenAiChatSerialize(#[source] serde_json::Error),
+    #[error("projecting OpenAI Responses request")]
+    ResponsesProjection(#[source] CompletionError),
+    #[error("serializing OpenAI Responses request")]
+    ResponsesSerialize(#[source] serde_json::Error),
+    #[error("projecting OpenRouter preamble")]
+    OpenRouterPreamble(#[source] MessageError),
+    #[error("projecting OpenRouter documents")]
+    OpenRouterDocuments(#[source] MessageError),
+    #[error("projecting OpenRouter message")]
+    OpenRouterMessage(#[source] MessageError),
+    #[error("projecting OpenRouter tool choice")]
+    OpenRouterToolChoice(#[source] CompletionError),
+    #[error("serializing provider body for rewrite")]
+    RewriteSerialize(#[source] serde_json::Error),
+    #[error("decoding deterministically rewritten provider body")]
+    RewriteDecode(#[source] serde_json::Error),
+    #[error("provider input message projection was empty")]
+    EmptyMessageProjection,
+    #[error("provider document projection reduced the provider message estimate")]
+    DocumentsReducedMessages,
+    #[error("provider input component estimate overflow")]
+    ComponentOverflow,
+    #[error(
+        "provider input component partition exceeded total: classified={classified}, total={total}"
+    )]
+    ComponentPartition { classified: usize, total: usize },
+    #[error("provider input field estimate overflow")]
+    FieldOverflow,
+    #[error("serializing provider input for token estimate")]
+    EstimateSerialize(#[source] serde_json::Error),
+}
+
+type Result<T, E = ProviderInputError> = std::result::Result<T, E>;
 
 #[path = "provider_input_budget.rs"]
 pub mod budget;
@@ -134,15 +190,15 @@ impl ServiceTier {
     /// native selection after DTO conversion, before accounting and capture.
     pub fn apply(self, body: &mut Value) -> Result<()> {
         body.as_object_mut()
-            .context("provider request must be an object")?
+            .ok_or(ProviderInputError::NotAnObject)?
             .insert("service_tier".into(), self.wire_value().into());
         Ok(())
     }
 
     pub fn patch(self, body: &[u8]) -> Result<Vec<u8>> {
-        let mut value = serde_json::from_slice(body).context("decoding provider request")?;
+        let mut value = serde_json::from_slice(body).map_err(ProviderInputError::DecodeRequest)?;
         self.apply(&mut value)?;
-        serde_json::to_vec(&value).context("encoding provider request")
+        serde_json::to_vec(&value).map_err(ProviderInputError::EncodeRequest)
     }
 }
 
@@ -282,9 +338,9 @@ impl ProviderInputCounter {
                     self.model.clone(),
                     request.clone(),
                 ))
-                .context("projecting OpenAI Chat Completions request")?;
-                let mut body = serde_json::to_value(dto)
-                    .context("serializing OpenAI Chat Completions request")?;
+                .map_err(ProviderInputError::OpenAiChatProjection)?;
+                let mut body =
+                    serde_json::to_value(dto).map_err(ProviderInputError::OpenAiChatSerialize)?;
                 set_streaming_fields(&mut body, true);
                 body
             }
@@ -323,7 +379,8 @@ impl ProviderInputCounter {
     /// Guest fallback serializes Rig core requests and undercounts wire input.
     pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         if self.profile == ProviderInputProfile::ClaudeMessages {
-            return crate::claude_messages_body::build_messages_body(&self.model, request);
+            return crate::claude_messages_body::build_messages_body(&self.model, request)
+                .map_err(ProviderInputError::Codec);
         }
         let mut body = serde_json::json!({
             "model": request.model.clone().unwrap_or_else(|| self.model.clone()),
@@ -359,7 +416,7 @@ impl ProviderInputCounter {
         }
         let chat_history =
             rig::one_or_many::OneOrMany::many(crate::rig_compat::to_rig_messages(messages))
-                .map_err(|_| anyhow::anyhow!("provider input message projection was empty"))?;
+                .map_err(|_| ProviderInputError::EmptyMessageProjection)?;
         let request = CompletionRequest {
             model: None,
             preamble: None,
@@ -381,8 +438,8 @@ impl ProviderInputCounter {
             self.model.clone(),
             request.clone(),
         ))
-        .context("projecting OpenAI Responses request")?;
-        serde_json::to_value(dto).context("serializing OpenAI Responses request")
+        .map_err(ProviderInputError::ResponsesProjection)?;
+        serde_json::to_value(dto).map_err(ProviderInputError::ResponsesSerialize)
     }
 
     #[cfg(feature = "native")]
@@ -393,19 +450,19 @@ impl ProviderInputCounter {
         if let Some(preamble) = request.preamble.as_ref() {
             messages.extend(
                 Vec::<OpenRouterMessage>::try_from(rig::completion::Message::system(preamble))
-                    .context("projecting OpenRouter preamble")?,
+                    .map_err(ProviderInputError::OpenRouterPreamble)?,
             );
         }
         if let Some(documents) = request.normalized_documents() {
             messages.extend(
                 Vec::<OpenRouterMessage>::try_from(documents)
-                    .context("projecting OpenRouter documents")?,
+                    .map_err(ProviderInputError::OpenRouterDocuments)?,
             );
         }
         for message in request.chat_history.clone() {
             messages.extend(
                 Vec::<OpenRouterMessage>::try_from(message)
-                    .context("projecting OpenRouter message")?,
+                    .map_err(ProviderInputError::OpenRouterMessage)?,
             );
         }
 
@@ -420,7 +477,7 @@ impl ProviderInputCounter {
             .clone()
             .map(rig::providers::openai::completion::ToolChoice::try_from)
             .transpose()
-            .context("projecting OpenRouter tool choice")?;
+            .map_err(ProviderInputError::OpenRouterToolChoice)?;
 
         let mut body = Map::new();
         body.insert(
@@ -484,10 +541,11 @@ pub fn set_streaming_fields(body: &mut Value, include_usage: bool) {
 
 #[cfg(feature = "native")]
 fn rewrite_bytes(body: Value, rewrite: fn(&[u8]) -> Option<bytes::Bytes>) -> Result<Value> {
-    let encoded = serde_json::to_vec(&body).context("serializing provider body for rewrite")?;
+    let encoded = serde_json::to_vec(&body).map_err(ProviderInputError::RewriteSerialize)?;
     match rewrite(&encoded) {
-        Some(rewritten) => serde_json::from_slice(&rewritten)
-            .context("decoding deterministically rewritten provider body"),
+        Some(rewritten) => {
+            serde_json::from_slice(&rewritten).map_err(ProviderInputError::RewriteDecode)
+        }
         None => Ok(body),
     }
 }
@@ -511,7 +569,7 @@ fn projected_accounting(
         .unwrap_or(provider_messages);
     let documents = provider_messages
         .checked_sub(documentless_messages)
-        .context("provider document projection reduced the provider message estimate")?;
+        .ok_or(ProviderInputError::DocumentsReducedMessages)?;
     let messages = documentless_messages;
     let tool_schemas = field_estimate(&body, &["tools", "tool_choice"])?;
     let output_schema = field_estimate(&body, &["response_format", "text"])?;
@@ -520,12 +578,13 @@ fn projected_accounting(
         .checked_add(documents)
         .and_then(|total| total.checked_add(tool_schemas))
         .and_then(|total| total.checked_add(output_schema))
-        .context("provider input component estimate overflow")?;
-    let additional_parameters = estimated_input_tokens.checked_sub(classified).ok_or_else(|| {
-        anyhow::anyhow!(
-            "provider input component partition exceeded total: classified={classified}, total={estimated_input_tokens}"
-        )
-    })?;
+        .ok_or(ProviderInputError::ComponentOverflow)?;
+    let additional_parameters = estimated_input_tokens.checked_sub(classified).ok_or(
+        ProviderInputError::ComponentPartition {
+            classified,
+            total: estimated_input_tokens,
+        },
+    )?;
     let components = gents_protocol::rendered_request::ContextInputComponents {
         messages,
         documents,
@@ -565,13 +624,13 @@ fn field_estimate(value: &Value, fields: &[&str]) -> Result<usize> {
             .unwrap_or(0);
         total
             .checked_add(field_tokens)
-            .context("provider input field estimate overflow")
+            .ok_or(ProviderInputError::FieldOverflow)
     })
 }
 
 pub fn estimate_json(value: &Value) -> Result<usize> {
     Ok(serde_json::to_vec(value)
-        .context("serializing provider input for token estimate")?
+        .map_err(ProviderInputError::EstimateSerialize)?
         .len()
         / 4)
 }

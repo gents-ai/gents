@@ -5109,7 +5109,6 @@ dependencies = [
 name = "gents-protocol"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "axum",
  "base64 0.22.1",
  "bs58",

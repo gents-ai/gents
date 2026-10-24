@@ -509,7 +509,7 @@ pub async fn capture_body(
         components,
         admission_join,
     )
-    .map_err(|error| (CaptureFailureStage::BuildFact, error))?;
+    .map_err(|error| (CaptureFailureStage::BuildFact, anyhow::Error::from(error)))?;
 
     let capture_key = rendered.capture_key.clone();
     let request_id = rendered.request_id.clone();

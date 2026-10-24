@@ -4,11 +4,50 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::Context;
 use gents_protocol::output::{PayloadPresentation, PresentationPart};
 use tokio::sync::Mutex;
 
 pub const COMMAND_OUTPUT_META_PREFIX: &str = "gents_exec: ";
+
+#[derive(Debug, thiserror::Error)]
+pub enum LiveOutputError {
+    #[error("canonical output registration disappeared before receipt")]
+    ReceiptRegistrationMissing,
+    #[error("canonical output receipt underflow")]
+    ReceiptUnderflow,
+    #[error("canonical output registration disappeared before presentation")]
+    PresentationRegistrationMissing,
+    #[error("prepared tool presentation does not match the terminal native text")]
+    PreparedPresentationMismatch,
+    #[error("command capture receipts do not cover the complete raw stdout/stderr")]
+    CaptureReceiptsIncomplete,
+    #[error("command truncation returned an invalid UTF-8 range")]
+    InvalidTruncationRange,
+    #[error("command truncation did not preserve its declared raw prefix")]
+    TruncationPrefixMismatch,
+    #[error("command truncation did not preserve its declared raw suffix")]
+    TruncationSuffixMismatch,
+    #[error("command metadata did not serialize as a JSON object")]
+    MetadataNotObject,
+    #[error("command receipt range exceeds canonical chunk")]
+    ReceiptRangeExceedsChunk,
+    #[error("command presentation range has a receipt gap")]
+    ReceiptGap,
+    #[error("plugin receipt has no registered physical tool invocation")]
+    PluginReceiptUnregistered,
+    #[error("plugin execution receipt conflicts with this physical tool invocation")]
+    PluginReceiptConflict,
+    #[error("deferred writes have no registered physical tool invocation")]
+    DeferredWritesUnregistered,
+    #[error("command presentation requires a canonical live-output writer")]
+    CanonicalWriterRequired,
+    #[error(transparent)]
+    Integer(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+type Result<T, E = LiveOutputError> = std::result::Result<T, E>;
 
 pub const COMMAND_OUTPUT_VOLATILE_FIELDS: [&str; 2] = ["duration_ms", "hint"];
 
@@ -162,14 +201,14 @@ impl LiveToolOutputRegistry {
         tool_call_id: &str,
         stream: LiveOutputStream,
         source: std::ops::Range<u64>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if source.is_empty() {
             return Ok(());
         }
         let mut live = self.inner.lock().await;
-        let state = live.get_mut(tool_call_id).ok_or_else(|| {
-            anyhow::anyhow!("canonical output registration disappeared before receipt")
-        })?;
+        let state = live
+            .get_mut(tool_call_id)
+            .ok_or(LiveOutputError::ReceiptRegistrationMissing)?;
         let receipts = &mut state.receipts[stream.index()];
         let channel_start = receipts
             .last()
@@ -178,7 +217,7 @@ impl LiveToolOutputRegistry {
         let bytes = source
             .end
             .checked_sub(source.start)
-            .context("canonical output receipt underflow")?;
+            .ok_or(LiveOutputError::ReceiptUnderflow)?;
         receipts.push(OutputReceipt {
             channel_start,
             channel_end: channel_start + bytes,
@@ -192,7 +231,7 @@ impl LiveToolOutputRegistry {
         &self,
         tool_call_id: &str,
         expected_text: &str,
-    ) -> anyhow::Result<Option<PayloadPresentation>> {
+    ) -> Result<Option<PayloadPresentation>> {
         let mut live = self.inner.lock().await;
         let Some(state) = live.get_mut(tool_call_id) else {
             return Ok(None);
@@ -200,10 +239,9 @@ impl LiveToolOutputRegistry {
         let Some(prepared) = state.prepared.take() else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            prepared.expected_text == expected_text,
-            "prepared tool presentation does not match the terminal native text"
-        );
+        if prepared.expected_text != expected_text {
+            return Err(LiveOutputError::PreparedPresentationMismatch);
+        }
         Ok(Some(prepared.presentation))
     }
 
@@ -214,28 +252,26 @@ impl LiveToolOutputRegistry {
         layout: CommandPresentationLayout<'_>,
         stdout: CapturedChannel<'_>,
         stderr: CapturedChannel<'_>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let mut live = self.inner.lock().await;
-        let state = live.get_mut(tool_call_id).ok_or_else(|| {
-            anyhow::anyhow!("canonical output registration disappeared before presentation")
-        })?;
-        anyhow::ensure!(
-            channel_len(&state.receipts[LiveOutputStream::Stdout.index()])
-                == stdout.raw.len() as u64
-                && channel_len(&state.receipts[LiveOutputStream::Stderr.index()])
-                    == stderr.raw.len() as u64,
-            "command capture receipts do not cover the complete raw stdout/stderr"
-        );
+        let state = live
+            .get_mut(tool_call_id)
+            .ok_or(LiveOutputError::PresentationRegistrationMissing)?;
+        if channel_len(&state.receipts[LiveOutputStream::Stdout.index()]) != stdout.raw.len() as u64
+            || channel_len(&state.receipts[LiveOutputStream::Stderr.index()])
+                != stderr.raw.len() as u64
+        {
+            return Err(LiveOutputError::CaptureReceiptsIncomplete);
+        }
         let json_object = matches!(layout, CommandPresentationLayout::JsonObject { .. });
         let stdout_plan = channel_plan(&stdout, !json_object)?;
         let stderr_plan = channel_plan(&stderr, !json_object)?;
         let mut parts = Vec::new();
         match layout {
             CommandPresentationLayout::JsonObject { metadata_json } => {
-                anyhow::ensure!(
-                    metadata_json.starts_with('{') && metadata_json.ends_with('}'),
-                    "command metadata did not serialize as a JSON object"
-                );
+                if !(metadata_json.starts_with('{') && metadata_json.ends_with('}')) {
+                    return Err(LiveOutputError::MetadataNotObject);
+                }
                 let metadata_fields = &metadata_json[1..metadata_json.len() - 1];
                 push_literal(&mut parts, r#"{"stdout":""#.to_owned());
                 append_json_channel(&mut parts, stdout.raw, &stdout_plan, &state.receipts[0])?;
@@ -301,35 +337,30 @@ fn channel_len(receipts: &[OutputReceipt]) -> u64 {
         .unwrap_or(0)
 }
 
-fn channel_plan(
-    channel: &CapturedChannel<'_>,
-    empty_marker: bool,
-) -> anyhow::Result<Vec<ChannelPart>> {
+fn channel_plan(channel: &CapturedChannel<'_>, empty_marker: bool) -> Result<Vec<ChannelPart>> {
     let CapturedChannel {
         raw,
         rendered,
         shown,
     } = channel;
-    anyhow::ensure!(
-        shown.start <= shown.end
-            && shown.end <= raw.len()
-            && raw.is_char_boundary(shown.start)
-            && raw.is_char_boundary(shown.end)
-            && (shown.start == 0 || shown.end == raw.len()),
-        "command truncation returned an invalid UTF-8 range"
-    );
+    if !(shown.start <= shown.end
+        && shown.end <= raw.len()
+        && raw.is_char_boundary(shown.start)
+        && raw.is_char_boundary(shown.end)
+        && (shown.start == 0 || shown.end == raw.len()))
+    {
+        return Err(LiveOutputError::InvalidTruncationRange);
+    }
     let kept = &raw[shown.clone()];
     let (before, after) = if shown.start == 0 {
-        anyhow::ensure!(
-            rendered.starts_with(kept),
-            "command truncation did not preserve its declared raw prefix"
-        );
+        if !rendered.starts_with(kept) {
+            return Err(LiveOutputError::TruncationPrefixMismatch);
+        }
         ("", &rendered[kept.len()..])
     } else {
-        anyhow::ensure!(
-            rendered.ends_with(kept),
-            "command truncation did not preserve its declared raw suffix"
-        );
+        if !rendered.ends_with(kept) {
+            return Err(LiveOutputError::TruncationSuffixMismatch);
+        }
         (&rendered[..rendered.len() - kept.len()], "")
     };
     let mut parts = Vec::new();
@@ -361,7 +392,7 @@ fn append_plain_channel(
     output: &mut Vec<PresentationPart>,
     plan: &[ChannelPart],
     receipts: &[OutputReceipt],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     for part in plan {
         match part {
             ChannelPart::Range { start, end } => {
@@ -378,7 +409,7 @@ fn append_channel_range(
     receipts: &[OutputReceipt],
     start: u64,
     end: u64,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let mut cursor = start;
     for receipt in receipts {
         let from = cursor.max(receipt.channel_start);
@@ -388,20 +419,18 @@ fn append_channel_range(
         }
         let source_start = receipt.source_start + (from - receipt.channel_start);
         let source_end = receipt.source_start + (until - receipt.channel_start);
-        anyhow::ensure!(
-            source_end <= receipt.source_end,
-            "command receipt range exceeds canonical chunk"
-        );
+        if source_end > receipt.source_end {
+            return Err(LiveOutputError::ReceiptRangeExceedsChunk);
+        }
         output.push(PresentationPart::OutputRange {
             start_byte: source_start,
             end_byte: source_end,
         });
         cursor = until;
     }
-    anyhow::ensure!(
-        cursor == end,
-        "command presentation range has a receipt gap"
-    );
+    if cursor != end {
+        return Err(LiveOutputError::ReceiptGap);
+    }
     Ok(())
 }
 
@@ -410,7 +439,7 @@ fn append_json_channel(
     raw: &str,
     plan: &[ChannelPart],
     receipts: &[OutputReceipt],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     for part in plan {
         match part {
             ChannelPart::Literal(text) => push_literal(output, json_fragment(text)?),
@@ -438,7 +467,7 @@ fn append_json_channel(
     Ok(())
 }
 
-fn json_fragment(text: &str) -> anyhow::Result<String> {
+fn json_fragment(text: &str) -> Result<String> {
     let encoded = serde_json::to_string(text)?;
     Ok(encoded[1..encoded.len() - 1].to_owned())
 }
@@ -470,27 +499,27 @@ impl LiveToolOutputWriter {
     pub async fn record_plugin_receipt(
         &self,
         receipt: gents_protocol::plugin::PluginExecutionReceipt,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let mut states = self.registry.inner.lock().await;
         let state = states
             .get_mut(&self.tool_call_id)
-            .context("plugin receipt has no registered physical tool invocation")?;
-        anyhow::ensure!(
-            state
-                .plugin_receipt
-                .as_ref()
-                .is_none_or(|existing| existing == &receipt),
-            "plugin execution receipt conflicts with this physical tool invocation"
-        );
+            .ok_or(LiveOutputError::PluginReceiptUnregistered)?;
+        if !state
+            .plugin_receipt
+            .as_ref()
+            .is_none_or(|existing| existing == &receipt)
+        {
+            return Err(LiveOutputError::PluginReceiptConflict);
+        }
         state.plugin_receipt = Some(receipt);
         Ok(())
     }
 
-    pub async fn record_deferred_writes(&self, writes: DeferredToolWrites) -> anyhow::Result<()> {
+    pub async fn record_deferred_writes(&self, writes: DeferredToolWrites) -> Result<()> {
         let mut states = self.registry.inner.lock().await;
         let state = states
             .get_mut(&self.tool_call_id)
-            .context("deferred writes have no registered physical tool invocation")?;
+            .ok_or(LiveOutputError::DeferredWritesUnregistered)?;
         match &mut state.deferred_writes {
             Some(existing) => existing.0.extend(writes.0),
             None => state.deferred_writes = Some(writes),
@@ -504,11 +533,10 @@ impl LiveToolOutputWriter {
         layout: CommandPresentationLayout<'_>,
         stdout: CapturedChannel<'_>,
         stderr: CapturedChannel<'_>,
-    ) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.canonical.is_some(),
-            "command presentation requires a canonical live-output writer"
-        );
+    ) -> Result<()> {
+        if self.canonical.is_none() {
+            return Err(LiveOutputError::CanonicalWriterRequired);
+        }
         self.flush_pending().await;
         self.registry
             .prepare_command_presentation(&self.tool_call_id, expected_text, layout, stdout, stderr)

@@ -3,7 +3,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -22,8 +21,20 @@ pub use transport::RenderedRequestCapturingHttpClient;
 
 const CAPTURE_KEY_PREFIX: &str = "rendered:v1";
 
+#[derive(Debug, thiserror::Error)]
+pub enum RenderedRequestError {
+    #[error("encoding rendered-request provenance")]
+    EncodeProvenance(#[source] serde_json::Error),
+    #[error("encoding rendered-request provenance payload")]
+    EncodeProvenancePayload(#[source] serde_json::Error),
+    #[error("encoding canonical JSON")]
+    EncodeCanonicalJson(#[source] serde_json::Error),
+}
+
+type Result<T, E = RenderedRequestError> = std::result::Result<T, E>;
+
 pub type RenderedRequestCaptureSink = Arc<
-    dyn Fn(RenderedCompletionRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
+    dyn Fn(RenderedCompletionRequest) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
         + Send
         + Sync,
 >;
@@ -141,11 +152,11 @@ pub fn build_rendered_completion_request(
     )
     .with_provider_route(context.provider_family.clone(), provider_route_path_sha256);
     let provenance_json = canonical_json(
-        &serde_json::to_value(&manifest).context("encoding rendered-request provenance")?,
+        &serde_json::to_value(&manifest).map_err(RenderedRequestError::EncodeProvenance)?,
     );
     let provenance_payload_json = canonical_json(
         &serde_json::to_value(&assembly_trace)
-            .context("encoding rendered-request provenance payload")?,
+            .map_err(RenderedRequestError::EncodeProvenancePayload)?,
     );
     let model_name = request_json
         .get("model")
@@ -217,7 +228,7 @@ pub fn canonical_json(value: &Value) -> Value {
 }
 
 pub fn canonical_json_string(value: &Value) -> Result<String> {
-    serde_json::to_string(&canonical_json(value)).context("encoding canonical JSON")
+    serde_json::to_string(&canonical_json(value)).map_err(RenderedRequestError::EncodeCanonicalJson)
 }
 
 pub fn sha256_canonical_json(value: &Value) -> Result<String> {

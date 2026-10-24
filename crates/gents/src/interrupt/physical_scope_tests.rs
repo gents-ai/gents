@@ -7,7 +7,7 @@ async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> Str
         Box::pin(async move {
             let query = format!("mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}");
             let response = txn.execute_with_variables(&query, &json!({"input":value})).await?;
-            gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
+            Ok(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
         })
     }).await.unwrap()
 }

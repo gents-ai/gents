@@ -2140,7 +2140,7 @@ async fn wait_for_retry_or_cancel(
 }
 
 fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize) -> bool {
-    if !gents_protocol::graphql::graphql_transport_error_in_chain(error)
+    if !gents_protocol::graphql::graphql_transport_error_in_chain(error.as_ref())
         || *consecutive >= MAX_TRANSIENT_GRAPHQL_READ_RETRIES
     {
         return false;

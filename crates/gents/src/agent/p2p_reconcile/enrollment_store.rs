@@ -668,10 +668,10 @@ impl GraphqlEnrollmentStore {
         match committed {
             Ok(response) => {
                 let response = json!({ "data": response.data.unwrap_or_default() });
-                gents_protocol::graphql::extract_mutation_doc_id(
+                Ok(gents_protocol::graphql::extract_mutation_doc_id(
                     &response,
                     "NetworkEnrollmentRouteReceipt",
-                )
+                )?)
             }
             Err(commit_error) => {
                 let projection = self.load_projection().await?;

@@ -440,11 +440,13 @@ impl WorkspaceLineage {
     }
 
     pub fn require_authority_if_workspace_id(&self) -> Result<()> {
-        gents_protocol::request_admission::validate_workspace_reference(
-            self.workspace_id.as_deref(),
-            self.workspace_owner_node_did.as_deref(),
-            self.workspace_authority.as_deref(),
-            self.workspace_seal_hash.as_deref(),
+        Ok(
+            gents_protocol::request_admission::validate_workspace_reference(
+                self.workspace_id.as_deref(),
+                self.workspace_owner_node_did.as_deref(),
+                self.workspace_authority.as_deref(),
+                self.workspace_seal_hash.as_deref(),
+            )?,
         )
     }
 

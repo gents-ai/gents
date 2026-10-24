@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use crate::provider_input::ProviderInputError;
 use crate::rig_compat::ProviderModel;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::future::BoxFuture;
 use gents_protocol::message::Message;
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,30 @@ pub enum ReductionError {
     InvalidRollingPlan,
     #[error("compaction_cannot_fit_provider_visible_history: the conversation cannot be reduced enough for this model's context budget without removing required history. Start a new session or use a larger context window.")]
     CannotFit,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CompactionError {
+    #[error("exact reduction is not the provider order of its association rows")]
+    AssociationOrder,
+    #[error("projecting compactable provider messages")]
+    ProjectCompactable(#[source] ProviderInputError),
+    #[error("projecting original compaction input")]
+    ProjectOriginal(#[source] ProviderInputError),
+    #[error("projecting normalized compaction input")]
+    ProjectNormalized(#[source] ProviderInputError),
+    #[error("projecting final compacted provider input")]
+    ProjectFinal(#[source] ProviderInputError),
+    #[error("session compaction prefix exceeds the canonical provider history")]
+    PrefixExceedsHistory,
+    #[error("exact reduction does not partition the active session provider view")]
+    ExactPartition,
+    #[error("projecting rolling compaction summary request")]
+    ProjectSummaryRequest(#[source] ProviderInputError),
+    #[error("exact reduction split exceeds its association rows")]
+    SplitExceedsRows,
+    #[error("session compaction provider-prefix count overflow")]
+    PrefixOverflow,
 }
 
 pub fn rolling_plan_is_valid(
@@ -263,7 +288,7 @@ enum ReductionResultState {
 }
 
 impl ReductionResult {
-    pub fn provider_messages(&self) -> Result<&[Message]> {
+    pub fn provider_messages(&self) -> Result<&[Message], ReductionError> {
         match &self.state {
             ReductionResultState::ProviderViewRepaired { messages } => Ok(messages),
             ReductionResultState::Decided(outcome) => match outcome {
@@ -271,7 +296,7 @@ impl ReductionResult {
                 ReductionOutcome::Reduced {
                     retained_suffix, ..
                 } => Ok(retained_suffix),
-                ReductionOutcome::CannotFit => Err(ReductionError::CannotFit.into()),
+                ReductionOutcome::CannotFit => Err(ReductionError::CannotFit),
             },
         }
     }
@@ -320,13 +345,10 @@ pub struct ExactReduction<'a> {
 }
 
 impl ExactReduction<'_> {
-    pub fn messages_compacted(&self) -> Result<u32> {
-        u32::try_from(self.compacted_prefix.len()).map_err(|_| {
-            ReductionError::ExactCountOverflow {
-                field: "messages_compacted",
-                value: self.compacted_prefix.len(),
-            }
-            .into()
+    pub fn messages_compacted(&self) -> Result<u32, ReductionError> {
+        u32::try_from(self.compacted_prefix.len()).map_err(|_| ReductionError::ExactCountOverflow {
+            field: "messages_compacted",
+            value: self.compacted_prefix.len(),
         })
     }
 
@@ -364,14 +386,14 @@ impl ExactReduction<'_> {
         profile: ProviderInputProfile,
         compacted_prefix: Vec<Message>,
         retained_suffix: Vec<Message>,
-    ) -> Result<AssociationReduction> {
-        anyhow::ensure!(
-            history::normalize_assistant_content_order(profile, compacted_prefix.clone())
-                == self.compacted_prefix
-                && history::normalize_assistant_content_order(profile, retained_suffix.clone())
-                    == self.retained_suffix,
-            "exact reduction is not the provider order of its association rows"
-        );
+    ) -> Result<AssociationReduction, CompactionError> {
+        if history::normalize_assistant_content_order(profile, compacted_prefix.clone())
+            != self.compacted_prefix
+            || history::normalize_assistant_content_order(profile, retained_suffix.clone())
+                != self.retained_suffix
+        {
+            return Err(CompactionError::AssociationOrder);
+        }
         Ok(AssociationReduction {
             compacted_prefix,
             retained_suffix,
@@ -441,13 +463,13 @@ where
         configured_keep_recent: usize,
         compactable_messages: &[Message],
         admission: ReductionAdmission,
-    ) -> Result<usize> {
+    ) -> Result<usize, CompactionError> {
         let compactable_input_tokens = self
             .source_input_counter
             .as_ref()
             .unwrap_or(&self.config.provider_input_counter)
             .estimate_message_request(compactable_messages)
-            .context("projecting compactable provider messages")?;
+            .map_err(CompactionError::ProjectCompactable)?;
         let fixed_input_tokens = admission
             .input_tokens()
             .saturating_sub(compactable_input_tokens);
@@ -477,7 +499,9 @@ where
         messages: &[Message],
         admission: ReductionAdmission,
     ) -> Result<usize> {
-        ProviderReductionEngine::retention_target(self, configured, messages, admission)
+        Ok(ProviderReductionEngine::retention_target(
+            self, configured, messages, admission,
+        )?)
     }
 
     fn reduce<'a>(
@@ -499,13 +523,13 @@ where
             };
             let original_token_estimate = counter
                 .estimate_message_request(&messages)
-                .context("projecting original compaction input")?;
+                .map_err(CompactionError::ProjectOriginal)?;
 
             let (stripped_messages, stripped_activity) = provider_view(counter.profile(), messages);
 
             let stripped_token_estimate = counter
                 .estimate_message_request(&stripped_messages)
-                .context("projecting normalized compaction input")?;
+                .map_err(CompactionError::ProjectNormalized)?;
             if matches!(options.mode, ReductionMode::StripOnly) {
                 return Ok(ReductionResult {
                     state: ReductionResultState::provider_view_repaired(stripped_messages),
@@ -666,7 +690,7 @@ where
             compacted_projection.extend(recent_messages.iter().cloned());
             let compacted_token_estimate = counter
                 .estimate_message_request(&compacted_projection)
-                .context("projecting final compacted provider input")?;
+                .map_err(CompactionError::ProjectFinal)?;
             let prefix_len = old_messages.len();
             u32::try_from(prefix_len).map_err(|_| ReductionError::ExactCountOverflow {
                 field: "messages_compacted",
@@ -813,7 +837,8 @@ where
     summary_config
         .provider_input_counter
         .estimate_request(&request)
-        .context("projecting rolling compaction summary request")
+        .map_err(CompactionError::ProjectSummaryRequest)
+        .map_err(anyhow::Error::from)
 }
 
 async fn summarize_checkpoint<M>(
@@ -868,8 +893,10 @@ where
             )
             .await
             .map_err(|fallback_error| {
-                if crate::loop_stream::aggregate_token_budget_exhaustion_message(&fallback_error)
-                    .is_some()
+                if crate::loop_stream::aggregate_token_budget_exhaustion_message(
+                    fallback_error.as_ref(),
+                )
+                .is_some()
                 {
                     fallback_error.context(
                         "non-guided compaction fallback exhausted the request token budget",
@@ -893,7 +920,9 @@ where
             })
         }
         Err(error) => {
-            if crate::loop_stream::aggregate_token_budget_exhaustion_message(&error).is_some() {
+            if crate::loop_stream::aggregate_token_budget_exhaustion_message(error.as_ref())
+                .is_some()
+            {
                 return Err(error.context("guided compaction exhausted the request token budget"));
             }
             let deadline_context = if deadline_elapsed(summary_config.deadline, now.as_ref()) {
@@ -1021,30 +1050,29 @@ pub fn session_cursor_for_reduction(
     rows: &[(u32, Message)],
     prior_provider_prefix: usize,
     reduction: ExactReduction<'_>,
-) -> Result<Option<u32>> {
+) -> Result<Option<u32>, CompactionError> {
     let durable_messages = rows
         .iter()
         .map(|(_, message)| message.clone())
         .collect::<Vec<_>>();
     let mut full_provider_view = provider_view(profile, durable_messages).0;
-    anyhow::ensure!(
-        prior_provider_prefix <= full_provider_view.len(),
-        "session compaction prefix exceeds the canonical provider history"
-    );
+    if prior_provider_prefix > full_provider_view.len() {
+        return Err(CompactionError::PrefixExceedsHistory);
+    }
     let active =
         sanitize_history_for_provider(profile, full_provider_view.split_off(prior_provider_prefix));
-    anyhow::ensure!(
-        reduction
-            .compacted_prefix
-            .iter()
-            .chain(reduction.retained_suffix.iter())
-            .eq(active.iter()),
-        "exact reduction does not partition the active session provider view"
-    );
+    if !reduction
+        .compacted_prefix
+        .iter()
+        .chain(reduction.retained_suffix.iter())
+        .eq(active.iter())
+    {
+        return Err(CompactionError::ExactPartition);
+    }
 
     let cumulative_prefix = prior_provider_prefix
         .checked_add(reduction.compacted_prefix.len())
-        .context("session compaction provider-prefix count overflow")?;
+        .ok_or(CompactionError::PrefixOverflow)?;
     let candidate = compacted_through_sequence(profile, rows, cumulative_prefix);
     Ok(candidate.filter(|cursor| {
         let suffix = rows
