@@ -56,7 +56,8 @@ pub use contract::{
     AuthoredInput, EstimateSeedGuard, FinishOrIntake, FoldedPrompt, LoopConfig, LoopReplayInput,
     LoopStreamItem, RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolveError,
     ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot,
-    StructuredOutputConfig, TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
+    StructuredOutputConfig, TaggedMessage, TurnCompactionError, TurnCompactionOutcome,
+    TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,

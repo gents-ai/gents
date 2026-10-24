@@ -10,10 +10,31 @@ pub(crate) struct ExecutionGeneration(String);
 
 #[derive(Debug, thiserror::Error)]
 #[error("execution lease expired or ownership was revoked")]
-pub(crate) struct ExecutionOwnershipLost;
+pub struct ExecutionOwnershipLost;
+
+impl ExecutionOwnershipLost {
+    /// `#[error(transparent)]` wrappers forward `source()` past the lease error
+    /// and the stream processor's lifecycle source, so both are matched here.
+    pub(crate) fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        use gents_loop::stream_processor::StreamProcessorError;
+        std::iter::successors(Some(error), |error| error.source()).any(|error| {
+            error.is::<Self>()
+                || matches!(
+                    error.downcast_ref::<ExecutionLeaseError>(),
+                    Some(ExecutionLeaseError::OwnershipLost(_))
+                )
+                || matches!(
+                    error.downcast_ref::<StreamProcessorError>(),
+                    Some(StreamProcessorError::Lifecycle(source)) if Self::occurs_in(&**source)
+                )
+        })
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionLeaseError {
+    #[error(transparent)]
+    OwnershipLost(#[from] ExecutionOwnershipLost),
     #[error(transparent)]
     Lifecycle(#[from] LifecycleError),
     #[error(transparent)]
@@ -261,7 +282,7 @@ impl RequestLifecycle {
             .await
     }
 
-    pub(crate) async fn validate_owned_execution(&self) -> anyhow::Result<()> {
+    pub(crate) async fn validate_owned_execution(&self) -> LeaseResult<()> {
         if !self
             .decide_lease(super::execution_policy::authorize_producer_decision)
             .await?

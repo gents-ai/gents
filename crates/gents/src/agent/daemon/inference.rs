@@ -1,4 +1,4 @@
-use gents_protocol::error_chain::{find_source, ErrorChain};
+use gents_protocol::error_chain::ErrorChain;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use tracing::Instrument;
 
 use super::{AgentDaemon, DaemonError, HandleRequestOutcome, ShutdownDrainFailure};
 use crate::admission::{self, CallKind};
+use crate::agent::loop_stream::TurnCompactionError;
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::compaction::{CompactionError, ReductionOptions};
 use crate::config::{MaxTurnsProvenance, ResolvedAgent};
@@ -309,7 +310,7 @@ where
                             dyn std::future::Future<
                                     Output = Result<
                                         crate::agent::loop_stream::TurnCompactionOutcome,
-                                        CompactionError,
+                                        TurnCompactionError,
                                     >,
                                 > + Send,
                         >,
@@ -323,11 +324,12 @@ where
                             let provider_view = crate::agent::loop_stream::provider_view_tagged(
                                 compaction_request.messages,
                             )
-                            .map_err(|error| CompactionError::Compactor(Box::new(error)))?;
+                            .map_err(|error| TurnCompactionError::Compactor(Box::new(error)))?;
                             options.max_compacted_prefix_messages =
                                 crate::agent::loop_stream::replay_compaction_prefix_bound(
                                     &provider_view, &compaction_request.required,
-                                )?;
+                                )
+                                .map_err(CompactionError::from)?;
                             let native_messages = crate::agent::loop_stream::provider_messages(
                                 provider_profile,
                                 &provider_view,
@@ -350,7 +352,7 @@ where
                                     &request_commit_cid,
                                 )
                                 .await
-                                .map_err(|error| CompactionError::Compactor(Box::new(error)))?;
+                                .map_err(|error| TurnCompactionError::Compactor(Box::new(error)))?;
                             let (result, producer_join) = admission::scope_call_with_join(
                                 CallKind::Compaction,
                                 1,
@@ -379,8 +381,8 @@ where
                                         crate::agent::loop_stream::TurnCompactionOutcome::CannotFit,
                                     );
                                 }
-                                if result.provider_messages()? != provider_values {
-                                    return Err(CompactionError::RepairedViewDisagrees);
+                                if result.provider_messages().map_err(CompactionError::from)? != provider_values {
+                                    return Err(TurnCompactionError::Compactor(Box::new(DaemonError::RepairedViewDisagrees)));
                                 }
                                 return Ok(
                                     crate::agent::loop_stream::TurnCompactionOutcome::ProviderViewRepaired {
@@ -394,7 +396,7 @@ where
                                 .chain(exact.retained_suffix)
                                 .eq(provider_values.iter())
                             {
-                                return Err(CompactionError::ExactSplitDisagrees);
+                                return Err(TurnCompactionError::Compactor(Box::new(DaemonError::ExactSplitDisagrees)));
                             }
                             let split = exact.compacted_prefix.len();
                             let native = crate::agent::loop_stream::association_reduction(
@@ -435,11 +437,11 @@ where
                                 exact,
                             )
                             .await
-                            .map_err(|error| CompactionError::Compactor(Box::new(error)))?;
+                            .map_err(|error| TurnCompactionError::Compactor(Box::new(error)))?;
                             Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
                                 messages: row
                                     .checkpoint_tagged_messages()
-                                    .map_err(|error| CompactionError::Compactor(Box::new(error)))?,
+                                    .map_err(|error| TurnCompactionError::Compactor(Box::new(error)))?,
                                 reduction_key: row.reduction_key,
                             })
                         })
@@ -627,7 +629,7 @@ where
                                         async {
                                             match processor.validate_execution().await {
                                                 Ok(()) => {}
-                                                Err(error) if find_source::<crate::lifecycle::ExecutionOwnershipLost>(error.as_ref()).is_some() => {
+                                                Err(error) if crate::lifecycle::ExecutionOwnershipLost::occurs_in(&error) => {
                                                     tracing::warn!(
                                                         request_id = %request_id,
                                                         session_id = %session_id,
@@ -636,7 +638,7 @@ where
                                                     );
                                                     return Ok(false);
                                                 }
-                                                Err(error) => return Err(error),
+                                                Err(error) => return Err(anyhow::Error::from(error)),
                                             }
                                             processor.persist_received_partial_turn("persist received assistant turn during graceful shutdown").await?;
                                             Ok(true)
@@ -688,13 +690,13 @@ where
                                 }
                                 _ = lease_poll.tick() => {
                                     if let Err(error) = processor.validate_execution().await {
-                                        let reason = format!("request execution lease: {}", ErrorChain(error.as_ref()));
+                                        let reason = format!("request execution lease: {}", ErrorChain(&error));
                                         admission::set_terminal_failure_reason(
                                             &terminal_failure_reason,
                                             reason.clone(),
                                         );
                                         drop(stream);
-                                        return Err(error);
+                                        return Err(error.into());
                                     }
                                     lease_poll.reset();
                                     continue;

@@ -1485,10 +1485,12 @@ where
     .map_err(|error| {
         if matches!(
             error,
-            crate::compaction::CompactionError::Reduction(
-                crate::compaction::ReductionError::CannotFit
-            ) | crate::compaction::CompactionError::ReplayCheckpoint(_)
-                | crate::compaction::CompactionError::ReplayEvidence(_)
+            super::TurnCompactionError::Compaction(
+                crate::compaction::CompactionError::Reduction(
+                    crate::compaction::ReductionError::CannotFit
+                ) | crate::compaction::CompactionError::ReplayCheckpoint(_)
+                    | crate::compaction::CompactionError::ReplayEvidence(_)
+            )
         ) {
             return StreamingError::Completion(CompletionError::RequestError(Box::new(error)));
         }

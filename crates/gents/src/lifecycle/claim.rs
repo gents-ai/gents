@@ -338,7 +338,7 @@ impl RequestLifecycle {
         // Repeating an acknowledged begin is a read-only ownership check; it
         // must not reset buffered output on the live writer.
         if self.state == LocalLifecycleState::Streaming {
-            return self.validate_owned_execution().await;
+            return Ok(self.validate_owned_execution().await?);
         }
         self.ensure_state(&[LocalLifecycleState::Claimed], "begin_owned_execution")?;
         let generation = self.execution_generation()?.to_owned();

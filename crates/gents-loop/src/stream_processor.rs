@@ -72,21 +72,12 @@ pub enum StreamProcessorError {
     AttemptMismatch,
     #[error("queued provider audit caused an unexpected stream action")]
     QueuedAuditAction,
-    #[error("stream writer failed")]
-    Writer {
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-    #[error("session hook failed")]
-    Hook {
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-    #[error("owned execution check failed")]
-    Lifecycle {
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
+    #[error(transparent)]
+    Writer(Box<dyn std::error::Error + Send + Sync>),
+    #[error(transparent)]
+    Hook(Box<dyn std::error::Error + Send + Sync>),
+    #[error(transparent)]
+    Lifecycle(Box<dyn std::error::Error + Send + Sync>),
     #[error("{context}: closing partial provider attempt")]
     PartialAttemptClose {
         context: String,
@@ -105,21 +96,15 @@ pub enum StreamProcessorError {
 
 impl StreamProcessorError {
     fn writer(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-        Self::Writer {
-            source: source.into(),
-        }
+        Self::Writer(source.into())
     }
 
     fn hook(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-        Self::Hook {
-            source: source.into(),
-        }
+        Self::Hook(source.into())
     }
 
     fn lifecycle(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-        Self::Lifecycle {
-            source: source.into(),
-        }
+        Self::Lifecycle(source.into())
     }
 }
 

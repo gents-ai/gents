@@ -667,9 +667,9 @@ async fn failed_input_publication_prevents_provider_dispatch() {
         panic!("input publication must precede provider dispatch");
     };
     reply
-        .send(Err(crate::stream_processor::StreamProcessorError::Writer {
-            source: "publication rejected".into(),
-        }))
+        .send(Err(crate::stream_processor::StreamProcessorError::Writer(
+            "publication rejected".into(),
+        )))
         .unwrap();
     let error = stream.next().await.unwrap().unwrap_err();
     assert!(error.to_string().contains("publication rejected"));

@@ -1955,3 +1955,20 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         );
     }
 }
+
+#[test]
+fn ownership_loss_is_found_through_stream_processor_lifecycle_errors() {
+    use gents_loop::stream_processor::StreamProcessorError;
+    let lifecycle = || {
+        StreamProcessorError::Lifecycle(Box::new(ExecutionLeaseError::from(ExecutionOwnershipLost)))
+    };
+    assert!(ExecutionOwnershipLost::occurs_in(&lifecycle()));
+    let wrapped = StreamProcessorError::PartialTailReset {
+        context: "persist received assistant turn".to_owned(),
+        source: Box::new(lifecycle()),
+    };
+    assert!(ExecutionOwnershipLost::occurs_in(&wrapped));
+    assert!(!ExecutionOwnershipLost::occurs_in(
+        &StreamProcessorError::Lifecycle(Box::new(ExecutionLeaseError::MissingState))
+    ));
+}

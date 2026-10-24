@@ -215,8 +215,9 @@ pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
 };
 pub(crate) use output::{
-    load_canonical_message_in_txn, load_request_headers_in_txn, resolve_canonical_replay_tags,
-    validate_canonical_replay_boundary, CanonicalReplayScope, TxnCanonicalReader,
+    load_canonical_message_in_txn, load_request_headers_in_txn, replay_resolution_error,
+    resolve_canonical_replay_tags, validate_canonical_replay_boundary, CanonicalReplayScope,
+    TxnCanonicalReader,
 };
 pub(crate) use query::session_is_stopped;
 pub(crate) use query::session_stopped_in_txn;

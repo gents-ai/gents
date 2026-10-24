@@ -172,12 +172,20 @@ pub enum TurnCompactionOutcome {
     CannotFit,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum TurnCompactionError {
+    #[error(transparent)]
+    Compaction(#[from] CompactionError),
+    #[error(transparent)]
+    Compactor(Box<dyn std::error::Error + Send + Sync>),
+}
+
 pub type TurnCompactor = Arc<
     dyn Fn(
             TurnCompactionRequest,
-        )
-            -> Pin<Box<dyn Future<Output = Result<TurnCompactionOutcome, CompactionError>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<dyn Future<Output = Result<TurnCompactionOutcome, TurnCompactionError>> + Send>,
+        > + Send
         + Sync,
 >;
 

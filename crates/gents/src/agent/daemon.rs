@@ -67,6 +67,10 @@ enum DaemonError {
     TaskHookCwd { error: std::io::Error },
     #[error("agent stream completed without producing any visible response content")]
     NoVisibleResponse,
+    #[error("repaired provider view disagrees with source-index projection")]
+    RepairedViewDisagrees,
+    #[error("exact reduction split disagrees with source-index provider view")]
+    ExactSplitDisagrees,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1327,7 +1331,7 @@ where
 /// A work failure caused by losing the execution lease is not this execution's
 /// failure to report.
 async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
-    if find_source::<crate::lifecycle::ExecutionOwnershipLost>(error.as_ref()).is_some() {
+    if crate::lifecycle::ExecutionOwnershipLost::occurs_in(error.as_ref()) {
         return true;
     }
     matches!(lifecycle.owns_execution().await, Ok(false))

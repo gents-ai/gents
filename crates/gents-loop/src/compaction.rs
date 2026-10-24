@@ -92,12 +92,6 @@ pub enum CompactionError {
     ReplayCheckpoint(#[from] ReplayCheckpointError),
     #[error(transparent)]
     ReplayEvidence(#[from] ReplayEvidenceViolation),
-    #[error("repaired provider view disagrees with source-index projection")]
-    RepairedViewDisagrees,
-    #[error("exact reduction split disagrees with source-index provider view")]
-    ExactSplitDisagrees,
-    #[error(transparent)]
-    Compactor(Box<dyn std::error::Error + Send + Sync>),
     #[error("compaction_provider_failure: {deadline_context}{diagnostic}")]
     GuidedProviderFailure {
         deadline_context: &'static str,

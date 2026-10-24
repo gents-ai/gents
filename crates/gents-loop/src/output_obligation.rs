@@ -2,13 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 #[derive(Debug, thiserror::Error)]
-pub enum OutputObligationError {
-    #[error("output obligation check failed")]
-    Check {
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-}
+#[error(transparent)]
+pub struct OutputObligationCheckError(pub Box<dyn std::error::Error + Send + Sync>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnmetOutputObligation {
@@ -42,7 +37,7 @@ pub trait OutputObligationCheck: Send + Sync {
         &'a self,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<Vec<UnmetOutputObligation>, OutputObligationError>>
+            dyn Future<Output = Result<Vec<UnmetOutputObligation>, OutputObligationCheckError>>
                 + Send
                 + 'a,
         >,

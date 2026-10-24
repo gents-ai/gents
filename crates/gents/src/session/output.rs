@@ -1879,6 +1879,38 @@ async fn validated_canonical_replay_boundary(
     Ok((request_commits, Some(high_water.clone())))
 }
 
+/// Separates a canonical replay violation from storage failures in
+/// `resolve_canonical_replay_tags`'s anyhow result; the violation may sit under
+/// added context.
+pub(crate) fn replay_resolution_error(
+    error: anyhow::Error,
+) -> gents_loop::loop_stream::ReplayEvidenceResolveError {
+    use gents_loop::loop_stream::{ReplayEvidenceResolveError, ReplayEvidenceViolation};
+    match error.downcast::<ReplayEvidenceViolation>() {
+        Ok(violation) => ReplayEvidenceResolveError::Violation(violation),
+        Err(error) => ReplayEvidenceResolveError::Storage {
+            source: error.into(),
+        },
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn replay_violation_is_classified_through_context() {
+    use gents_loop::loop_stream::{ReplayEvidenceResolveError, ReplayEvidenceViolation};
+    let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
+        .context("resolving required replay");
+    assert!(matches!(
+        replay_resolution_error(error),
+        ReplayEvidenceResolveError::Violation(_)
+    ));
+    let error = anyhow::anyhow!("canonical replay tag belongs to another physical request");
+    assert!(matches!(
+        replay_resolution_error(error),
+        ReplayEvidenceResolveError::Storage { .. }
+    ));
+}
+
 /// Resolve all requested tags from one physically bounded canonical candidate
 /// view. Preserve input order and every physical match (including zero or
 /// multiple matches) for the replay owner to reject, without a cross-boundary

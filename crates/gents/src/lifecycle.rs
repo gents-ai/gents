@@ -783,9 +783,9 @@ impl TerminalRedriveReport {
 
 #[async_trait::async_trait]
 impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
-    type Error = anyhow::Error;
+    type Error = ExecutionLeaseError;
 
-    async fn validate_owned_execution(&self) -> anyhow::Result<()> {
+    async fn validate_owned_execution(&self) -> std::result::Result<(), ExecutionLeaseError> {
         RequestLifecycle::validate_owned_execution(self).await
     }
 }

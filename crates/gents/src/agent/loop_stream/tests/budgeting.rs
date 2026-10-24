@@ -460,7 +460,7 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
                      estimated_input_tokens=2000, remaining=1000"
                     ))),
                 )),
-            ))
+            ).into())
         })
     }));
 

@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
-use gents_loop::loop_stream::{
-    LoopReplayInput, ReplayEvidenceResolveError, ReplayEvidenceViolation, TaggedMessage,
-};
+use gents_loop::loop_stream::{LoopReplayInput, ReplayEvidenceResolveError, TaggedMessage};
 
 pub(crate) fn owned_replay_input(
     node: Arc<EmbeddedNode>,
@@ -55,14 +53,7 @@ pub(crate) fn owned_replay_input(
                     &tags,
                 )
                 .await
-                .map_err(|error| {
-                    match error.downcast::<ReplayEvidenceViolation>() {
-                        Ok(violation) => ReplayEvidenceResolveError::Violation(violation),
-                        Err(error) => ReplayEvidenceResolveError::Storage {
-                            source: error.into(),
-                        },
-                    }
-                })?;
+                .map_err(crate::session::replay_resolution_error)?;
                 tracing::info!(
                     target: "gents::provider_input",
                     request_id = %request.request_id,
