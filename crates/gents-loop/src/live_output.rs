@@ -4,6 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::output::{PayloadPresentation, PresentationPart};
 use tokio::sync::Mutex;
 
@@ -45,6 +46,11 @@ pub enum LiveOutputError {
     Integer(#[from] std::num::TryFromIntError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("canonical output append failed")]
+    Appender {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 type Result<T, E = LiveOutputError> = std::result::Result<T, E>;
@@ -117,7 +123,7 @@ pub trait CanonicalOutputAppender: std::fmt::Debug + Send + Sync {
     fn append<'a>(
         &'a self,
         text: &'a str,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<std::ops::Range<u64>>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<std::ops::Range<u64>, LiveOutputError>> + Send + 'a>>;
 }
 
 impl LiveToolOutputRegistry {
@@ -590,11 +596,13 @@ impl LiveToolOutputWriter {
                     .record_receipt(&self.tool_call_id, stream, source)
                     .await
                 {
-                    tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
+                    tracing::error!(tool_call_doc_id = %self.tool_call_id,
+                        error = %ErrorChain(&error),
                         "canonical tool receipt recording failed");
                 }
             }
-            Err(error) => tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
+            Err(error) => tracing::error!(tool_call_doc_id = %self.tool_call_id,
+                error = %ErrorChain(&error),
                 "canonical tool output append failed"),
         }
     }
@@ -748,7 +756,7 @@ mod tests {
         fn append<'a>(
             &'a self,
             text: &'a str,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<std::ops::Range<u64>>> + Send + 'a>>
+        ) -> Pin<Box<dyn Future<Output = Result<std::ops::Range<u64>, LiveOutputError>> + Send + 'a>>
         {
             Box::pin(async move {
                 let mut source = self.0.lock().unwrap();

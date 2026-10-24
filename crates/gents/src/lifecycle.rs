@@ -783,6 +783,8 @@ impl TerminalRedriveReport {
 
 #[async_trait::async_trait]
 impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
+    type Error = anyhow::Error;
+
     async fn validate_owned_execution(&self) -> anyhow::Result<()> {
         RequestLifecycle::validate_owned_execution(self).await
     }

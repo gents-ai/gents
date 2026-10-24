@@ -1047,10 +1047,10 @@ async fn rolling_compaction_rechecks_the_shared_deadline_before_each_chunk() {
         .await
         .expect_err("the shared deadline must stop the next rolling chunk");
 
-    assert!(error.chain().any(|cause| matches!(
-        cause.downcast_ref::<CompactionError>(),
-        Some(CompactionError::Reduction(ReductionError::DeadlineElapsed))
-    )));
+    assert!(matches!(
+        error,
+        CompactionError::Reduction(ReductionError::DeadlineElapsed)
+    ));
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
@@ -1092,20 +1092,14 @@ async fn indivisible_oversized_tool_turn_fails_without_returning_a_partial_check
         .await
         .expect_err("an indivisible provider-visible tool turn cannot be discarded");
 
-    assert!(error
-        .chain()
-        .any(|cause| cause
-            .downcast_ref::<CompactionError>()
-            .is_some_and(|typed| {
-                matches!(
-                    typed,
-                    CompactionError::Reduction(ReductionError::IndivisibleUnitCannotFit {
-                        start: 1,
-                        end: 3,
-                        ..
-                    })
-                )
-            })));
+    assert!(matches!(
+        error,
+        CompactionError::Reduction(ReductionError::IndivisibleUnitCannotFit {
+            start: 1,
+            end: 3,
+            ..
+        })
+    ));
     assert_eq!(
         observed.lock().unwrap().len(),
         1,
@@ -1553,11 +1547,10 @@ async fn protected_zero_prefix_rejects_before_summary_provider_call() {
         )
         .await
         .expect_err("required first row leaves no summarizable historical prefix");
-    assert!(error
-        .downcast_ref::<CompactionError>()
-        .is_some_and(|error| {
-            matches!(error, CompactionError::Reduction(ReductionError::CannotFit))
-        }));
+    assert!(matches!(
+        error,
+        CompactionError::Reduction(ReductionError::CannotFit)
+    ));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 

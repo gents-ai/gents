@@ -29,12 +29,16 @@ pub enum RenderedRequestError {
     EncodeProvenancePayload(#[source] serde_json::Error),
     #[error("encoding canonical JSON")]
     EncodeCanonicalJson(#[source] serde_json::Error),
+    #[error(transparent)]
+    Sink(Box<dyn std::error::Error + Send + Sync>),
 }
 
 type Result<T, E = RenderedRequestError> = std::result::Result<T, E>;
 
 pub type RenderedRequestCaptureSink = Arc<
-    dyn Fn(RenderedCompletionRequest) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+    dyn Fn(
+            RenderedCompletionRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RenderedRequestError>> + Send>>
         + Send
         + Sync,
 >;

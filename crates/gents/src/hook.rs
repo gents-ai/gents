@@ -1130,6 +1130,8 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
+    type Error = anyhow::Error;
+
     async fn run_foreground_tool(
         &self,
         name: &str,

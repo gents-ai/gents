@@ -34,7 +34,7 @@ use rig::streaming::StreamedAssistantContent;
 use crate::output_obligation::OutputObligationCheck;
 use crate::provider_audit::ClaudeAuditEvent;
 use crate::session_hook::SessionHook;
-use crate::stream_processor::AssistantTurnAccumulator;
+use crate::stream_processor::{AssistantTurnAccumulator, StreamProcessorError};
 use crate::tool_call_lifecycle::runtime::{
     current_tool_runtime_context, deadline_remaining, scope_request_tool_execution_with_session,
     ToolOutcome,
@@ -54,9 +54,9 @@ mod turn_threading;
 
 pub use contract::{
     AuthoredInput, EstimateSeedGuard, FinishOrIntake, FoldedPrompt, LoopConfig, LoopReplayInput,
-    LoopStreamItem, RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolver,
-    ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot, StructuredOutputConfig,
-    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
+    LoopStreamItem, RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolveError,
+    ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot,
+    StructuredOutputConfig, TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
@@ -322,7 +322,7 @@ where
                             .await
                             .map_err(|error| {
                                 StreamingError::Completion(CompletionError::ProviderError(format!(
-                                    "capturing rendered completion request failed: {}", ErrorChain(error.as_ref())
+                                    "capturing rendered completion request failed: {}", ErrorChain(&error)
                                 )))
                             })?;
                     }
@@ -1168,7 +1168,7 @@ where
                 if let Some(gate) = config.output_obligation_gate.as_ref() {
                     let unmet = gate.unmet().await.map_err(|error| {
                         StreamingError::Completion(CompletionError::ProviderError(format!(
-                            "checking output obligations failed: {}", ErrorChain(error.as_ref())
+                            "checking output obligations failed: {}", ErrorChain(&error)
                         )))
                     })?;
                     if !unmet.is_empty() {
@@ -1195,7 +1195,7 @@ where
                     let (reply, decision) = tokio::sync::oneshot::channel();
                     yield LoopStreamItem::FinishOrIntake { text: turn_text.clone(), reply };
                     match decision.await.map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish acknowledgment dropped: {error}"))))?
-                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {}", ErrorChain(error.as_ref())))))? {
+                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {}", ErrorChain(&error)))))? {
                         FinishOrIntake::Finished => {
                             yield LoopStreamItem::Final { text: turn_text.clone() };
                             break 'turns;
@@ -1230,7 +1230,7 @@ where
 }
 
 async fn receive_steering(
-    committed: tokio::sync::oneshot::Receiver<anyhow::Result<Vec<FoldedPrompt>>>,
+    committed: tokio::sync::oneshot::Receiver<Result<Vec<FoldedPrompt>, StreamProcessorError>>,
 ) -> Result<Vec<FoldedPrompt>, StreamingError> {
     committed
         .await
@@ -1242,7 +1242,7 @@ async fn receive_steering(
         .map_err(|error| {
             StreamingError::Completion(CompletionError::ProviderError(format!(
                 "steering publication failed: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             )))
         })
 }

@@ -324,9 +324,23 @@ impl OutputObligationCheck for OutputObligationGate {
     fn unmet<'a>(
         &'a self,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<UnmetOutputObligation>>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        Vec<UnmetOutputObligation>,
+                        gents_loop::output_obligation::OutputObligationError,
+                    >,
+                > + Send
+                + 'a,
+        >,
     > {
-        Box::pin(OutputObligationGate::unmet(self))
+        Box::pin(async move {
+            OutputObligationGate::unmet(self).await.map_err(|error| {
+                gents_loop::output_obligation::OutputObligationError::Check {
+                    source: error.into(),
+                }
+            })
+        })
     }
 }
 

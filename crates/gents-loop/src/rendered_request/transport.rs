@@ -215,7 +215,8 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             scope.mark_claimed_durable(&claimed, body_fingerprint);
             Ok(())
         }
-        Err((stage, error)) => {
+        Err(error) => {
+            let stage = error.stage();
             // Never log the payload.
             tracing::error!(
                 capture_scope = %capture_scope,
@@ -224,7 +225,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 turn_index,
                 attempt,
                 stage = stage.as_str(),
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "refusing provider send: rendered-request capture failed"
             );
             Err(http_client::Error::Instance(Box::new(
@@ -446,7 +447,7 @@ mod tests {
     use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
-        RenderedRequestContext,
+        RenderedRequestContext, RenderedRequestError,
     };
 
     fn context() -> RenderedRequestContext {
@@ -480,7 +481,13 @@ mod tests {
     }
 
     fn failing_sink() -> RenderedRequestCaptureSink {
-        Arc::new(|_| Box::pin(async { anyhow::bail!("injected capture failure") }))
+        Arc::new(|_| {
+            Box::pin(async {
+                Err(RenderedRequestError::Sink(
+                    "injected capture failure".into(),
+                ))
+            })
+        })
     }
 
     fn trace() -> AssemblyTrace {

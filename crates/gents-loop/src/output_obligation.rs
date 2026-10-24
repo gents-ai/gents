@@ -1,6 +1,15 @@
 use std::future::Future;
 use std::pin::Pin;
 
+#[derive(Debug, thiserror::Error)]
+pub enum OutputObligationError {
+    #[error("output obligation check failed")]
+    Check {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnmetOutputObligation {
     pub tool_name: String,
@@ -31,7 +40,13 @@ impl UnmetOutputObligation {
 pub trait OutputObligationCheck: Send + Sync {
     fn unmet<'a>(
         &'a self,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<UnmetOutputObligation>>> + Send + 'a>>;
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<Vec<UnmetOutputObligation>, OutputObligationError>>
+                + Send
+                + 'a,
+        >,
+    >;
 }
 
 pub fn continuation_message(obligations: &[UnmetOutputObligation]) -> String {

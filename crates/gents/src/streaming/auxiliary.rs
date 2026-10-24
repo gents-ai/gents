@@ -4,7 +4,8 @@ use std::time::Duration;
 use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_loop::provider_audit::{
-    AuxiliaryObserve, AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
+    AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
+    AuxiliaryOutputSink,
 };
 use gents_loop::stream_processor::AssistantTurnAccumulator;
 use gents_loop::stream_writer::PendingOutput;
@@ -13,6 +14,12 @@ use gents_protocol::rendered_request::CaptureScope;
 use tokio::sync::Mutex;
 
 use super::{canonical::ProviderAttemptClose, DefraStreamWriter, StreamWriter};
+
+fn sink_failure(error: anyhow::Error) -> AuxiliaryOutputError {
+    AuxiliaryOutputError::Sink {
+        source: error.into(),
+    }
+}
 
 impl DefraStreamWriter {
     pub(crate) fn auxiliary_output_sink(
@@ -78,135 +85,143 @@ pub(crate) fn sink_with_writer(
         let state = Arc::clone(&state);
         let generation = generation.clone();
         Box::pin(async move {
-            let coordinate = (
-                observation.capture_scope,
-                observation.turn,
-                observation.attempt,
-            );
-            anyhow::ensure!(
-                OutputSource::ProviderTurn {
-                    scope: observation.capture_scope,
-                    turn_index: u32::try_from(observation.turn)?,
-                    attempt: observation.attempt,
-                }
-                .is_auxiliary_audit(),
-                "auxiliary output sink received a non-audit source"
-            );
-            let mut state = state.lock().await;
-            if matches!(observation.event, AuxiliaryOutputEvent::AttemptStarted) {
-                anyhow::ensure!(
-                    state.active.is_none(),
-                    "auxiliary attempt overlaps an open source"
+            let observed: anyhow::Result<()> = async move {
+                let coordinate = (
+                    observation.capture_scope,
+                    observation.turn,
+                    observation.attempt,
                 );
-                writer.initialize_request_buffer(&request.doc_id).await?;
-                writer
-                    .start_provider_attempt(
-                        &request.doc_id,
-                        observation.turn,
-                        observation.attempt,
-                        observation.capture_scope,
-                    )
-                    .await;
-                state.active = Some(coordinate);
-                state.closed = None;
-                state.content = AssistantTurnAccumulator::default();
-                state.audit_seen = false;
-                return Ok(());
-            }
-            if state.active.is_none()
-                && state.closed.is_some_and(|(closed, _)| closed == coordinate)
-            {
-                match observation.event {
-                    AuxiliaryOutputEvent::OutputObligationPending { .. }
-                    | AuxiliaryOutputEvent::FinalText(_)
-                        if state.closed
-                            == Some((coordinate, ProviderAttemptClose::AuxiliaryComplete)) =>
-                    {
-                        return Ok(())
+                anyhow::ensure!(
+                    OutputSource::ProviderTurn {
+                        scope: observation.capture_scope,
+                        turn_index: u32::try_from(observation.turn)?,
+                        attempt: observation.attempt,
                     }
-                    AuxiliaryOutputEvent::ClosePartial => return Ok(()),
-                    _ => {}
-                }
-            }
-            anyhow::ensure!(
-                state.active == Some(coordinate),
-                "auxiliary output belongs to another attempt"
-            );
-            let mut close = None;
-            let pending = match &observation.event {
-                AuxiliaryOutputEvent::Audit(event) => PendingOutput::of_audit(event),
-                AuxiliaryOutputEvent::ReasoningDelta { .. }
-                | AuxiliaryOutputEvent::Reasoning(_) => PendingOutput::Reasoning,
-                _ => PendingOutput::Visible,
-            };
-            match observation.event {
-                AuxiliaryOutputEvent::AttemptStarted => unreachable!(),
-                AuxiliaryOutputEvent::Audit(event) => {
+                    .is_auxiliary_audit(),
+                    "auxiliary output sink received a non-audit source"
+                );
+                let mut state = state.lock().await;
+                if matches!(observation.event, AuxiliaryOutputEvent::AttemptStarted) {
                     anyhow::ensure!(
-                        profile == gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-                        "Claude audit reached another auxiliary provider"
+                        state.active.is_none(),
+                        "auxiliary attempt overlaps an open source"
                     );
-                    state.content.apply_provider_audit(&event)?;
-                    state.audit_seen = true;
+                    writer.initialize_request_buffer(&request.doc_id).await?;
+                    writer
+                        .start_provider_attempt(
+                            &request.doc_id,
+                            observation.turn,
+                            observation.attempt,
+                            observation.capture_scope,
+                        )
+                        .await;
+                    state.active = Some(coordinate);
+                    state.closed = None;
+                    state.content = AssistantTurnAccumulator::default();
+                    state.audit_seen = false;
+                    return Ok(());
                 }
-                AuxiliaryOutputEvent::TextDelta(text) => state.content.push_text(&text),
-                AuxiliaryOutputEvent::ReasoningDelta { id, fragment } => {
-                    if !state.audit_seen {
-                        state.content.push_reasoning_delta(id, &fragment);
+                if state.active.is_none()
+                    && state.closed.is_some_and(|(closed, _)| closed == coordinate)
+                {
+                    match observation.event {
+                        AuxiliaryOutputEvent::OutputObligationPending { .. }
+                        | AuxiliaryOutputEvent::FinalText(_)
+                            if state.closed
+                                == Some((coordinate, ProviderAttemptClose::AuxiliaryComplete)) =>
+                        {
+                            return Ok(())
+                        }
+                        AuxiliaryOutputEvent::ClosePartial => return Ok(()),
+                        _ => {}
                     }
                 }
-                AuxiliaryOutputEvent::Reasoning(reasoning) => {
-                    state.content.push_provider_reasoning(profile, reasoning)?
+                anyhow::ensure!(
+                    state.active == Some(coordinate),
+                    "auxiliary output belongs to another attempt"
+                );
+                let mut close = None;
+                let pending = match &observation.event {
+                    AuxiliaryOutputEvent::Audit(event) => PendingOutput::of_audit(event),
+                    AuxiliaryOutputEvent::ReasoningDelta { .. }
+                    | AuxiliaryOutputEvent::Reasoning(_) => PendingOutput::Reasoning,
+                    _ => PendingOutput::Visible,
+                };
+                match observation.event {
+                    AuxiliaryOutputEvent::AttemptStarted => unreachable!(),
+                    AuxiliaryOutputEvent::Audit(event) => {
+                        anyhow::ensure!(
+                            profile
+                                == gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
+                            "Claude audit reached another auxiliary provider"
+                        );
+                        state.content.apply_provider_audit(&event)?;
+                        state.audit_seen = true;
+                    }
+                    AuxiliaryOutputEvent::TextDelta(text) => state.content.push_text(&text),
+                    AuxiliaryOutputEvent::ReasoningDelta { id, fragment } => {
+                        if !state.audit_seen {
+                            state.content.push_reasoning_delta(id, &fragment);
+                        }
+                    }
+                    AuxiliaryOutputEvent::Reasoning(reasoning) => {
+                        state.content.push_provider_reasoning(profile, reasoning)?
+                    }
+                    AuxiliaryOutputEvent::ToolCall(call) => state.content.push_tool_call(call),
+                    AuxiliaryOutputEvent::FinalText(text) => state.content.reconcile_text(&text),
+                    AuxiliaryOutputEvent::TurnReady { message } => {
+                        writer
+                            .flush_owned_partial(&request, &generation, &message)
+                            .await?;
+                        close = Some(ProviderAttemptClose::AuxiliaryComplete);
+                    }
+                    AuxiliaryOutputEvent::Retract => close = Some(ProviderAttemptClose::Retracted),
+                    AuxiliaryOutputEvent::AttemptFailed { will_retry } => {
+                        close = Some(if will_retry {
+                            ProviderAttemptClose::Retracted
+                        } else {
+                            ProviderAttemptClose::Partial
+                        });
+                    }
+                    AuxiliaryOutputEvent::OutputObligationPending { .. } => {
+                        anyhow::bail!("auxiliary continuation preceded accepted turn closure");
+                    }
+                    AuxiliaryOutputEvent::ClosePartial => {
+                        close = Some(ProviderAttemptClose::Partial)
+                    }
                 }
-                AuxiliaryOutputEvent::ToolCall(call) => state.content.push_tool_call(call),
-                AuxiliaryOutputEvent::FinalText(text) => state.content.reconcile_text(&text),
-                AuxiliaryOutputEvent::TurnReady { message } => {
+                if !matches!(close, Some(ProviderAttemptClose::AuxiliaryComplete))
+                    && (close.is_some()
+                        || writer.mark_pending_output(&request.doc_id, pending).await?)
+                {
+                    if let Some(message) = state.content.message_snapshot() {
+                        writer
+                            .flush_owned_partial(&request, &generation, &message)
+                            .await?;
+                    }
+                    writer.flush_pending(&request.doc_id).await?;
+                }
+                if let Some(close) = close {
                     writer
-                        .flush_owned_partial(&request, &generation, &message)
-                        .await?;
-                    close = Some(ProviderAttemptClose::AuxiliaryComplete);
+                        .close_owned_attempt(
+                            &request,
+                            &generation,
+                            observation.turn,
+                            observation.attempt,
+                            close,
+                        )
+                        .await
+                        .context("closing auxiliary audit output")?;
+                    writer.reset_tail(&request.doc_id).await?;
+                    state.active = None;
+                    state.closed = Some((coordinate, close));
+                    state.content = AssistantTurnAccumulator::default();
+                    state.audit_seen = false;
                 }
-                AuxiliaryOutputEvent::Retract => close = Some(ProviderAttemptClose::Retracted),
-                AuxiliaryOutputEvent::AttemptFailed { will_retry } => {
-                    close = Some(if will_retry {
-                        ProviderAttemptClose::Retracted
-                    } else {
-                        ProviderAttemptClose::Partial
-                    });
-                }
-                AuxiliaryOutputEvent::OutputObligationPending { .. } => {
-                    anyhow::bail!("auxiliary continuation preceded accepted turn closure");
-                }
-                AuxiliaryOutputEvent::ClosePartial => close = Some(ProviderAttemptClose::Partial),
+                Ok(())
             }
-            if !matches!(close, Some(ProviderAttemptClose::AuxiliaryComplete))
-                && (close.is_some() || writer.mark_pending_output(&request.doc_id, pending).await?)
-            {
-                if let Some(message) = state.content.message_snapshot() {
-                    writer
-                        .flush_owned_partial(&request, &generation, &message)
-                        .await?;
-                }
-                writer.flush_pending(&request.doc_id).await?;
-            }
-            if let Some(close) = close {
-                writer
-                    .close_owned_attempt(
-                        &request,
-                        &generation,
-                        observation.turn,
-                        observation.attempt,
-                        close,
-                    )
-                    .await
-                    .context("closing auxiliary audit output")?;
-                writer.reset_tail(&request.doc_id).await?;
-                state.active = None;
-                state.closed = Some((coordinate, close));
-                state.content = AssistantTurnAccumulator::default();
-                state.audit_seen = false;
-            }
-            Ok(())
+            .await;
+            observed.map_err(sink_failure)
         })
     });
     AuxiliaryOutputSink {
@@ -217,10 +232,11 @@ pub(crate) fn sink_with_writer(
             let state = Arc::clone(&deadline_state);
             Box::pin(async move {
                 let state = state.lock().await;
-                anyhow::ensure!(
-                    state.active == Some((scope, turn, attempt)),
-                    "auxiliary deadline belongs to another attempt"
-                );
+                if state.active != Some((scope, turn, attempt)) {
+                    return Err(sink_failure(anyhow::anyhow!(
+                        "auxiliary deadline belongs to another attempt"
+                    )));
+                }
                 Ok(writer.next_flush_deadline(&request.doc_id).await)
             })
         }),
@@ -230,18 +246,22 @@ pub(crate) fn sink_with_writer(
             let state = Arc::clone(&flush_state);
             let generation = flush_generation.clone();
             Box::pin(async move {
-                let state = state.lock().await;
-                anyhow::ensure!(
-                    state.active == Some((scope, turn, attempt)),
-                    "auxiliary flush belongs to another attempt"
-                );
-                if let Some(message) = state.content.message_snapshot() {
-                    writer
-                        .flush_owned_partial(&request, &generation, &message)
-                        .await?;
+                let flushed: anyhow::Result<()> = async move {
+                    let state = state.lock().await;
+                    anyhow::ensure!(
+                        state.active == Some((scope, turn, attempt)),
+                        "auxiliary flush belongs to another attempt"
+                    );
+                    if let Some(message) = state.content.message_snapshot() {
+                        writer
+                            .flush_owned_partial(&request, &generation, &message)
+                            .await?;
+                    }
+                    writer.flush_pending(&request.doc_id).await?;
+                    Ok(())
                 }
-                writer.flush_pending(&request.doc_id).await?;
-                Ok(())
+                .await;
+                flushed.map_err(sink_failure)
             })
         }),
     }

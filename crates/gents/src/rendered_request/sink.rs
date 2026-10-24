@@ -726,7 +726,11 @@ pub(crate) fn defra_rendered_request_capture_factory(
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let sink: RenderedRequestCaptureSink = Arc::new(move |rendered| {
             let sink = sink.clone();
-            Box::pin(async move { sink.capture(rendered).await.map_err(anyhow::Error::from) })
+            Box::pin(async move {
+                sink.capture(rendered).await.map_err(|error| {
+                    gents_loop::rendered_request::RenderedRequestError::Sink(Box::new(error))
+                })
+            })
         });
         sink
     })

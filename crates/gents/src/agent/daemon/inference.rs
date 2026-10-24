@@ -12,7 +12,7 @@ use tracing::Instrument;
 use super::{AgentDaemon, HandleRequestOutcome, ShutdownDrainFailure};
 use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
-use crate::compaction::ReductionOptions;
+use crate::compaction::{CompactionError, ReductionOptions};
 use crate::config::{MaxTurnsProvenance, ResolvedAgent};
 use crate::error::LoopFailureCause;
 use crate::hook::DefraSessionHook;
@@ -306,8 +306,9 @@ where
                     | -> std::pin::Pin<
                         Box<
                             dyn std::future::Future<
-                                    Output = anyhow::Result<
+                                    Output = Result<
                                         crate::agent::loop_stream::TurnCompactionOutcome,
+                                        CompactionError,
                                     >,
                                 > + Send,
                         >,
@@ -321,7 +322,7 @@ where
                             let provider_view = crate::agent::loop_stream::provider_view_tagged(
                                 compaction_request.messages,
                             )
-                            .map_err(anyhow::Error::new)?;
+                            .map_err(|error| CompactionError::Compactor(Box::new(error)))?;
                             options.max_compacted_prefix_messages =
                                 crate::agent::loop_stream::replay_compaction_prefix_bound(
                                     &provider_view, &compaction_request.required,
@@ -347,7 +348,8 @@ where
                                     &request.doc_id,
                                     &request_commit_cid,
                                 )
-                                .await?;
+                                .await
+                                .map_err(|error| CompactionError::Compactor(Box::new(error)))?;
                             let (result, producer_join) = admission::scope_call_with_join(
                                 CallKind::Compaction,
                                 1,
@@ -376,24 +378,23 @@ where
                                         crate::agent::loop_stream::TurnCompactionOutcome::CannotFit,
                                     );
                                 }
-                                anyhow::ensure!(
-                                    result.provider_messages()? == provider_values,
-                                    "repaired provider view disagrees with source-index projection"
-                                );
+                                if result.provider_messages()? != provider_values {
+                                    return Err(CompactionError::RepairedViewDisagrees);
+                                }
                                 return Ok(
                                     crate::agent::loop_stream::TurnCompactionOutcome::ProviderViewRepaired {
                                         messages: provider_view,
                                     },
                                 );
                             };
-                            anyhow::ensure!(
-                                exact
-                                    .compacted_prefix
-                                    .iter()
-                                    .chain(exact.retained_suffix)
-                                    .eq(provider_values.iter()),
-                                "exact reduction split disagrees with source-index provider view"
-                            );
+                            if !exact
+                                .compacted_prefix
+                                .iter()
+                                .chain(exact.retained_suffix)
+                                .eq(provider_values.iter())
+                            {
+                                return Err(CompactionError::ExactSplitDisagrees);
+                            }
                             let split = exact.compacted_prefix.len();
                             let native = crate::agent::loop_stream::association_reduction(
                                 provider_profile,
@@ -432,9 +433,12 @@ where
                                 },
                                 exact,
                             )
-                            .await?;
+                            .await
+                            .map_err(|error| CompactionError::Compactor(Box::new(error)))?;
                             Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
-                                messages: row.checkpoint_tagged_messages()?,
+                                messages: row
+                                    .checkpoint_tagged_messages()
+                                    .map_err(|error| CompactionError::Compactor(Box::new(error)))?,
                                 reduction_key: row.reduction_key,
                             })
                         })
@@ -677,7 +681,7 @@ where
                                             error = %error,
                                             "failed to persist received provider audit before interrupt terminal transition"
                                         );
-                                        return Err(error.context("persisting received provider audit during interrupt"));
+                                        return Err(anyhow::Error::new(error).context("persisting received provider audit during interrupt"));
                                     }
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
@@ -779,25 +783,25 @@ where
                                 Err(error) => {
                                     drop(stream);
                                     return Err(match flush_failure {
-                                        Some(flush_error) => error.context(format!(
-                                            "retaining the received stream item after a flush failed: {}", ErrorChain(flush_error.as_ref())
+                                        Some(flush_error) => anyhow::Error::new(error).context(format!(
+                                            "retaining the received stream item after a flush failed: {}", ErrorChain(&flush_error)
                                         )),
-                                        None => error,
+                                        None => error.into(),
                                     });
                                 }
                             };
                             if let Some(error) = flush_failure {
                                 drop(stream);
                                 if processor.natural_finished {
-                                    return Err(error);
+                                    return Err(error.into());
                                 }
                                 let retained = processor
                                     .persist_received_partial_turn("persist received assistant turn after flush failure")
                                     .await;
                                 return Err(match retained {
-                                    Ok(_) => error,
-                                    Err(retention_error) => retention_error.context(format!(
-                                        "retaining received output after a flush failed: {}", ErrorChain(error.as_ref())
+                                    Ok(_) => error.into(),
+                                    Err(retention_error) => anyhow::Error::new(retention_error).context(format!(
+                                        "retaining received output after a flush failed: {}", ErrorChain(&error)
                                     )),
                                 });
                             }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 pub(crate) type AgentFactory =
@@ -138,7 +138,11 @@ impl GentsBuilder {
             let message = Arc::clone(&message);
             Arc::new(move |_rendered| {
                 let message = Arc::clone(&message);
-                Box::pin(async move { Err(anyhow!(message.as_str().to_owned())) })
+                Box::pin(async move {
+                    Err(gents_loop::rendered_request::RenderedRequestError::Sink(
+                        message.as_str().into(),
+                    ))
+                })
             })
         }));
         self

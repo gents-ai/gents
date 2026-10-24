@@ -47,7 +47,7 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
-            reason: format!("{context} partial output persistence failed: {}", ErrorChain(error.as_ref())),
+            reason: format!("{context} partial output persistence failed: {}", ErrorChain(&error)),
         }.into()),
         Err(_) => Err(super::ShutdownDrainFailure {
             reason: format!("{context} partial output persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state"),

@@ -1,16 +1,16 @@
 use super::*;
 use crate::provider_audit::{
-    AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
+    AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
 };
 use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::rendered_request::CaptureScope;
 
 #[derive(Debug, thiserror::Error)]
-#[error("auxiliary output persistence failed during {operation}: {source}")]
+#[error("auxiliary output persistence failed during {operation}")]
 pub struct AuxiliaryPersistenceFailure {
     operation: &'static str,
     #[source]
-    source: anyhow::Error,
+    source: AuxiliaryOutputError,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +83,20 @@ pub enum OneShotError {
     ToolCallWithoutSource,
     #[error("auxiliary final response has no source")]
     FinalWithoutSource,
+    #[error("auxiliary output persistence failed during {operation}: {context}: {original}")]
+    PersistenceCleanup {
+        operation: &'static str,
+        context: &'static str,
+        original: String,
+        #[source]
+        source: AuxiliaryOutputError,
+    },
+    #[error("auxiliary output persistence failed during error cleanup: original one-shot error: {original}")]
+    ErrorCleanup {
+        original: String,
+        #[source]
+        source: Box<OneShotError>,
+    },
     #[error("receiving the auxiliary item after a flush failed: {flush}")]
     ReceivingAfterFlushFailed {
         flush: String,
@@ -97,7 +111,16 @@ pub enum OneShotError {
     },
 }
 
-fn persistence_failure(operation: &'static str, source: anyhow::Error) -> OneShotError {
+impl OneShotError {
+    fn is_persistence_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Persistence(_) | Self::PersistenceCleanup { .. } | Self::ErrorCleanup { .. }
+        )
+    }
+}
+
+fn persistence_failure(operation: &'static str, source: AuxiliaryOutputError) -> OneShotError {
     OneShotError::Persistence(AuxiliaryPersistenceFailure { operation, source })
 }
 
@@ -145,11 +168,12 @@ async fn emit_auxiliary(
             let error = persistence_failure("observation", error);
             match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
                 Ok(_) => Err(error),
-                Err(close_error) => Err(persistence_failure(
-                    "observation cleanup",
-                    close_error
-                        .context(format!("original auxiliary error: {}", ErrorChain(&error))),
-                )),
+                Err(close_error) => Err(OneShotError::PersistenceCleanup {
+                    operation: "observation cleanup",
+                    context: "original auxiliary error",
+                    original: ErrorChain(&error).to_string(),
+                    source: close_error,
+                }),
             }
         }
     }
@@ -160,7 +184,7 @@ async fn close_received_auxiliary() -> Result<(), OneShotError> {
         Ok(true) => Ok(()),
         Ok(false) => Err(persistence_failure(
             "close",
-            anyhow::anyhow!("active auxiliary output could not be closed"),
+            AuxiliaryOutputError::NotClosed,
         )),
         Err(error) => Err(persistence_failure("close", error)),
     }
@@ -169,25 +193,26 @@ async fn close_received_auxiliary() -> Result<(), OneShotError> {
 async fn close_received_auxiliary_after_error(error: OneShotError) -> OneShotError {
     match close_received_auxiliary().await {
         Ok(()) => error,
-        Err(close_error) => persistence_failure(
-            "error cleanup",
-            anyhow::Error::new(close_error)
-                .context(format!("original one-shot error: {}", ErrorChain(&error))),
-        ),
+        Err(close_error) => OneShotError::ErrorCleanup {
+            original: ErrorChain(&error).to_string(),
+            source: Box::new(close_error),
+        },
     }
 }
 
 async fn finish_one_shot_result<T>(result: Result<T, OneShotError>) -> Result<T, OneShotError> {
     match result {
         Ok(value) => Ok(value),
-        Err(error) if matches!(error, OneShotError::Persistence(_)) => Err(error),
+        Err(error) if error.is_persistence_failure() => Err(error),
         Err(error) => {
             match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
                 Ok(_) => Err(error),
-                Err(close_error) => Err(persistence_failure(
-                    "error cleanup",
-                    close_error.context(format!("original one-shot error: {}", ErrorChain(&error))),
-                )),
+                Err(close_error) => Err(OneShotError::PersistenceCleanup {
+                    operation: "error cleanup",
+                    context: "original one-shot error",
+                    original: ErrorChain(&error).to_string(),
+                    source: close_error,
+                }),
             }
         }
     }
@@ -583,7 +608,11 @@ mod tests {
                 Box::pin(async { Ok(Some(tokio::time::Instant::now())) })
             }),
             flush_pending: Arc::new(|_, _, _| {
-                Box::pin(async { Err(anyhow::anyhow!("mock flush failure")) })
+                Box::pin(async {
+                    Err(AuxiliaryOutputError::Sink {
+                        source: "mock flush failure".into(),
+                    })
+                })
             }),
         };
         let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
@@ -640,8 +669,10 @@ mod tests {
             assert!(item.is_none());
             let error =
                 close_received_auxiliary_after_error(result.expect_err("mock flush fails")).await;
-            assert!(error.to_string().contains("mock flush failure"));
-            assert!(matches!(error, OneShotError::Persistence(_)));
+            assert!(ErrorChain(&error)
+                .to_string()
+                .contains("mock flush failure"));
+            assert!(error.is_persistence_failure());
             {
                 let events = captured
                     .lock()
@@ -811,7 +842,9 @@ mod tests {
                 Box::pin(async move {
                     if matches!(observation.event, AuxiliaryOutputEvent::ClosePartial) {
                         closes.fetch_add(1, Ordering::SeqCst);
-                        anyhow::bail!("mock close failure");
+                        return Err(AuxiliaryOutputError::Sink {
+                            source: "mock close failure".into(),
+                        });
                     }
                     Ok(())
                 })
@@ -877,7 +910,7 @@ mod tests {
                         .expect_err("cleanup failure must dominate identity error")
                 }
             };
-            assert!(matches!(error, OneShotError::Persistence(_)));
+            assert!(error.is_persistence_failure());
             assert!(ErrorChain(&error)
                 .to_string()
                 .contains("mock close failure"));
@@ -885,7 +918,7 @@ mod tests {
             let error = finish_one_shot_result::<String>(Err(error))
                 .await
                 .expect_err("persistence failure remains fatal");
-            assert!(matches!(error, OneShotError::Persistence(_)));
+            assert!(error.is_persistence_failure());
             assert_eq!(closes.load(Ordering::SeqCst), 1);
         })
         .await;

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use crate::claude_messages_body::ReplayCheckpointError;
+use crate::loop_stream::ReplayEvidenceViolation;
 use crate::provider_input::ProviderInputError;
 use crate::rig_compat::ProviderModel;
-use anyhow::Result;
 use futures::future::BoxFuture;
 use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::message::Message;
@@ -87,6 +88,16 @@ pub enum CompactionError {
     EstimateMessages(#[from] ProviderInputError),
     #[error(transparent)]
     BuildSummaryRequest(#[from] crate::error::LoopStreamError),
+    #[error(transparent)]
+    ReplayCheckpoint(#[from] ReplayCheckpointError),
+    #[error(transparent)]
+    ReplayEvidence(#[from] ReplayEvidenceViolation),
+    #[error("repaired provider view disagrees with source-index projection")]
+    RepairedViewDisagrees,
+    #[error("exact reduction split disagrees with source-index provider view")]
+    ExactSplitDisagrees,
+    #[error(transparent)]
+    Compactor(Box<dyn std::error::Error + Send + Sync>),
     #[error("compaction_provider_failure: {deadline_context}{diagnostic}")]
     GuidedProviderFailure {
         deadline_context: &'static str,
@@ -420,6 +431,8 @@ impl ExactReduction<'_> {
     }
 }
 
+type Result<T, E = CompactionError> = std::result::Result<T, E>;
+
 pub trait ReductionEngine: Send + Sync {
     fn retention_target(
         &self,
@@ -517,9 +530,7 @@ where
         messages: &[Message],
         admission: ReductionAdmission,
     ) -> Result<usize> {
-        Ok(ProviderReductionEngine::retention_target(
-            self, configured, messages, admission,
-        )?)
+        ProviderReductionEngine::retention_target(self, configured, messages, admission)
     }
 
     fn reduce<'a>(
@@ -626,7 +637,7 @@ where
             while consumed < old_messages.len() {
                 // A prior chunk may have consumed the shared request deadline
                 if deadline_elapsed(summary_config.deadline, self.now.as_ref()) {
-                    return Err(CompactionError::Reduction(ReductionError::DeadlineElapsed).into());
+                    return Err(CompactionError::Reduction(ReductionError::DeadlineElapsed));
                 }
                 let remaining = &old_messages[consumed..];
                 let (chunk_len, chunk_input_tokens) = largest_fitting_summary_chunk(
@@ -691,7 +702,9 @@ where
                 .trim()
                 .to_string();
             if summary.is_empty() {
-                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
+                return Err(CompactionError::Reduction(
+                    ReductionError::InvalidRollingPlan,
+                ));
             }
             if !rolling_plan_is_valid(
                 old_messages.len(),
@@ -700,7 +713,9 @@ where
                 &chunk_can_dispatch,
                 consumed,
             ) {
-                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
+                return Err(CompactionError::Reduction(
+                    ReductionError::InvalidRollingPlan,
+                ));
             }
             let mut compacted_projection =
                 crate::prompt::compaction_summary_message(std::slice::from_ref(&summary))
@@ -722,7 +737,9 @@ where
                 admission.decision(true, prefix_len, summary),
             );
             if matches!(outcome, ReductionOutcome::CannotFit) {
-                return Err(CompactionError::Reduction(ReductionError::InvalidRollingPlan).into());
+                return Err(CompactionError::Reduction(
+                    ReductionError::InvalidRollingPlan,
+                ));
             }
             Ok(ReductionResult {
                 state: ReductionResultState::decided(outcome),

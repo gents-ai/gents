@@ -38,15 +38,17 @@ fn replay_input_error(message: impl Into<String>) -> StreamingError {
     )))
 }
 
-pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
-    match error.downcast::<ReplayEvidenceViolation>() {
-        Ok(violation) => {
+pub(super) fn replay_resolution_error(error: ReplayEvidenceResolveError) -> StreamingError {
+    match error {
+        ReplayEvidenceResolveError::Violation(violation) => {
             StreamingError::Completion(CompletionError::RequestError(Box::new(violation)))
         }
-        Err(error) => StreamingError::Completion(CompletionError::ProviderError(format!(
-            "loading canonical Claude replay evidence failed: {}",
-            ErrorChain(error.as_ref()),
-        ))),
+        ReplayEvidenceResolveError::Storage { source } => {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "loading canonical Claude replay evidence failed: {}",
+                ErrorChain(source.as_ref()),
+            )))
+        }
     }
 }
 
@@ -792,9 +794,10 @@ mod replay_error_tests {
     }
 
     #[test]
-    fn canonical_violation_retains_its_type_through_context() {
-        let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
-            .context("resolving required replay");
+    fn canonical_violation_retains_its_type() {
+        let error = ReplayEvidenceResolveError::Violation(ReplayEvidenceViolation(
+            "invalid canonical join".into(),
+        ));
         let StreamingError::Completion(CompletionError::RequestError(error)) =
             replay_resolution_error(error)
         else {
@@ -805,7 +808,9 @@ mod replay_error_tests {
 
     #[test]
     fn storage_error_is_not_reclassified_by_message_text() {
-        let error = anyhow::anyhow!("canonical replay tag belongs to another physical request");
+        let error = ReplayEvidenceResolveError::Storage {
+            source: "canonical replay tag belongs to another physical request".into(),
+        };
         assert!(matches!(
             replay_resolution_error(error),
             StreamingError::Completion(CompletionError::ProviderError(_))
@@ -1479,25 +1484,19 @@ where
     .await
     .map_err(|error| {
         if matches!(
-            error.downcast_ref::<crate::compaction::ReductionError>(),
-            Some(crate::compaction::ReductionError::CannotFit)
-        ) || matches!(
-            error.downcast_ref::<crate::compaction::CompactionError>(),
-            Some(crate::compaction::CompactionError::Reduction(
+            error,
+            crate::compaction::CompactionError::Reduction(
                 crate::compaction::ReductionError::CannotFit
-            ))
-        ) || error.is::<ReplayCheckpointError>()
-            || error.is::<ReplayEvidenceViolation>()
-        {
-            return StreamingError::Completion(CompletionError::RequestError(
-                error.into_boxed_dyn_error(),
-            ));
+            ) | crate::compaction::CompactionError::ReplayCheckpoint(_)
+                | crate::compaction::CompactionError::ReplayEvidence(_)
+        ) {
+            return StreamingError::Completion(CompletionError::RequestError(Box::new(error)));
         }
-        aggregate_token_budget_exhaustion_message(error.as_ref()).map_or_else(
+        aggregate_token_budget_exhaustion_message(&error).map_or_else(
             || {
                 StreamingError::Completion(CompletionError::ProviderError(format!(
                     "per-turn provider-input compaction failed: {}",
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 )))
             },
             |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),

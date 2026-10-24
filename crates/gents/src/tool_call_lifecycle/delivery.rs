@@ -218,9 +218,20 @@ impl gents_loop::live_output::CanonicalOutputAppender for ToolOutputBinding {
         &'a self,
         text: &'a str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<std::ops::Range<u64>>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<
+                    Output = Result<std::ops::Range<u64>, gents_loop::live_output::LiveOutputError>,
+                > + Send
+                + 'a,
+        >,
     > {
-        Box::pin(async move { append_tool_output(self, text).await })
+        Box::pin(async move {
+            append_tool_output(self, text).await.map_err(|error| {
+                gents_loop::live_output::LiveOutputError::Appender {
+                    source: error.into(),
+                }
+            })
+        })
     }
 }
 
