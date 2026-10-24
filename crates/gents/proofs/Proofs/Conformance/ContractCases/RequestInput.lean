@@ -139,7 +139,7 @@ def capturedCompatibilityCases : List RequestInputCase :=
   [ { name := "capture-requires-runtime-advertisement", input := {capturedContext := [capturedSelection]},
       contextSkillIds := [], runtimeInputVersion := none }
   , { name := "capture-rejects-unknown-runtime-contract", input := {capturedContext := [capturedSelection]},
-      contextSkillIds := [], runtimeInputVersion := some 2 }
+      contextSkillIds := [], runtimeInputVersion := some 3 }
   , { name := "plain-input-keeps-unadvertised-runtime-support", input := {}, contextSkillIds := [],
       runtimeInputVersion := none }
   ]
@@ -156,6 +156,23 @@ def goalAssignmentCases : List RequestInputCase :=
         goalAssignment := some ⟨"goal:résumé", some "physical:opening"⟩,
         capturedContext := [capturedSelection], cwd := some "/tmp/工具",
         selectedSkillIds := ["review"] }, contextSkillIds := ["review"] }
+  ]
+
+def attachmentCases : List RequestInputCase :=
+  let a : RequestAttachment := ⟨"pixel.png", "image/png", "iVBORw0KGgo="⟩
+  [ { name := "image-only", input := {attachments := [a]}, authoredText := "", contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "image-and-text", input := {attachments := [a]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "image-old-runtime", input := {attachments := [a]}, contextSkillIds := [] }
+  , { name := "image-no-runtime", input := {attachments := [a]}, contextSkillIds := [], runtimeInputVersion := none }
+  , { name := "image-ordered-duplicates", input := {attachments := [a,a]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "image-changed-content", input := {attachments := [{a with data := "R0lGODlh"}]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "unicode-file-name", input := {attachments := [{a with name := String.mk (List.replicate 100 '漢')}]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "text-attachment", input := {attachments := [⟨"note.txt", "text/plain", "aGVsbG8="⟩]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "pdf-attachment", input := {attachments := [⟨"note.pdf", "application/pdf", "JVBERi0xLjQ="⟩]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "image-empty-name", input := {attachments := [{a with name := ""}]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "image-empty-data", input := {attachments := [{a with data := ""}]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "image-unknown-type", input := {attachments := [{a with mediaType := "application/octet-stream"}]}, contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "image-count-over-limit", input := {attachments := [a,a,a,a,a]}, contextSkillIds := [], runtimeInputVersion := some 2 }
   ]
 
 def requestInputCases : List RequestInputCase :=
@@ -239,13 +256,13 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases ++ goalAssignmentCases
+  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases ++ goalAssignmentCases ++ attachmentCases
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 15 true := by native_decide
+      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 24 true ++ List.replicate 4 false := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map

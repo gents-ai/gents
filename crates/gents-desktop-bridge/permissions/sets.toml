@@ -28,6 +28,7 @@ identifier = "session-read"
 description = "Session/conversation snapshot and live-delta reads"
 permissions = [
   "allow-desktop-session-snapshot",
+  "allow-desktop-request-attachments",
   "allow-desktop-session-live-delta",
   "allow-desktop-session-rows",
   "allow-desktop-session-goal",
@@ -53,6 +54,7 @@ identifier = "chat-write"
 description = "Chat submission, branching, and rename"
 permissions = [
   "allow-desktop-chat-send",
+  "allow-desktop-attachment-read",
   "allow-desktop-pending-queue-edit",
   "allow-desktop-pending-message-steer",
   "allow-desktop-goal-control",

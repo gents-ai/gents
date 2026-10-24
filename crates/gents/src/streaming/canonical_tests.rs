@@ -1696,7 +1696,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
 }
 
 #[tokio::test]
-async fn modeled_capture_documents_survive_publication_replay_and_forks() {
+async fn modeled_inputs_survive_publication_replay_and_forks() {
     use gents_protocol::request_input::RequestInput;
     const OWNER: &str = "did:test:test";
     const SESSION: &str = "captured-documents";
@@ -1714,7 +1714,10 @@ async fn modeled_capture_documents_survive_publication_replay_and_forks() {
         .enumerate()
     {
         let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
-        if input.captured_context.is_empty() || case["expected_provider_parts"].is_null() {
+        if (input.captured_context.is_empty() && input.attachments.is_empty())
+            || case["expected_provider_parts"].is_null()
+            || !input.attachments_well_formed()
+        {
             continue;
         }
         let message = input

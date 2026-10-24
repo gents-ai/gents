@@ -299,10 +299,12 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                             .into_iter()
                             .map(|entry| crate::types::PendingQueueEntryView {
                                 request_doc_id: entry.request_doc_id,
-                                request_id: entry.request_id,
+                                request_id: entry.request_id.clone(),
                                 content: entry.content,
                                 captured_context: (!entry.captured_context.is_empty())
                                     .then_some(entry.captured_context),
+                                attachments: (!entry.attachments.is_empty())
+                                    .then_some(entry.attachments),
                                 editable: entry.editable,
                                 steerable: entry.steerable,
                                 edit_group: entry.edit_group,

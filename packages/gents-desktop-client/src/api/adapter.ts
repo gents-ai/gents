@@ -17,6 +17,15 @@ export function createDesktopApiAdapter(
   );
 
   return {
+    readAttachment: (path) =>
+      invokeDesktop("desktop_attachment_read", { path }),
+    requestAttachments: (nodeDid, sessionId, requestId, messageKey) =>
+      invokeDesktop("desktop_request_attachments", {
+        nodeDid,
+        sessionId,
+        requestId,
+        messageKey,
+      }),
     fetchSessionGoal: (nodeDid, sessionId) =>
       invokeDesktop("desktop_session_goal", { nodeDid, sessionId }),
     controlGoal: (request) =>

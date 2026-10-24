@@ -10,7 +10,7 @@ build = "build.rs"
 
 [features]
 default = ["tauri-host"]
-tauri-host = ["dep:tauri", "dep:tauri-plugin"]
+tauri-host = ["dep:tauri", "dep:tauri-plugin", "dep:tauri-plugin-fs"]
 # Compiles real native-E2E command bodies (still double-gated by debug_assertions
 # + GENTS_NATIVE_E2E=1). Never in default; app forwards for E2E launchers only.
 native-e2e = ["tauri-host", "gents-server/native-e2e"]
@@ -22,6 +22,7 @@ required-features = ["tauri-host"]
 [dependencies]
 anyhow.workspace = true
 bytes.workspace = true
+base64.workspace = true
 blake3 = "1"
 chrono.workspace = true
 dirs.workspace = true
@@ -39,6 +40,7 @@ serde.workspace = true
 serde_json.workspace = true
 rapidhash = { workspace = true }
 tauri = { version = "2", features = [], optional = true }
+tauri-plugin-fs = { version = "2", optional = true }
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing.workspace = true

@@ -28,6 +28,9 @@ pub struct MessageView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
     pub reasoning: Option<String>,
     pub has_tool_calls: bool,
     pub has_tool_results: bool,
@@ -331,6 +334,9 @@ pub struct PendingQueueEntryView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
     pub editable: bool,
     pub steerable: bool,
     pub edit_group: Option<String>,
@@ -347,6 +353,9 @@ pub struct PendingTurnView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
     /// The request whose transcript published this as a folded entry; it is
@@ -395,6 +404,9 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
         timestamp: Option<String>,
         reconstruction: MessageReconstructionView,
     },
@@ -448,6 +460,9 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
         selected_skill_ids: Vec<String>,
         lifecycle_state: Option<String>,
         folded_into_request_id: Option<String>,

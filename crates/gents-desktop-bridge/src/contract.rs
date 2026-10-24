@@ -75,6 +75,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_request_timeline", "trace-read"),
         ("desktop_tool_surface_explain", "tool-surface-read"),
         ("desktop_chat_send", "chat-write"),
+        ("desktop_attachment_read", "chat-write"),
+        ("desktop_request_attachments", "session-read"),
         ("desktop_pending_queue_edit", "chat-write"),
         ("desktop_pending_message_steer", "chat-write"),
         ("desktop_goal_control", "chat-write"),

@@ -107,6 +107,33 @@ pub async fn create_runtime_request(
             execution_origin: "interactive",
             caused_by_source_doc_id: None,
             content,
+            input: Default::default(),
+        },
+    )
+    .await
+}
+
+pub async fn create_runtime_request_with_input(
+    node: &EmbeddedNode,
+    node_did: &str,
+    agent_id: &str,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+    input: gents_protocol::request_input::RequestInput,
+) -> String {
+    create_runtime_request_inner(
+        node,
+        node_did,
+        RuntimeRequestSpec {
+            agent_id,
+            request_id,
+            session_id,
+            content,
+            input,
+            valid_until: None,
+            execution_origin: "interactive",
+            caused_by_source_doc_id: None,
         },
     )
     .await
@@ -132,6 +159,7 @@ pub async fn create_runtime_request_with_valid_until(
             execution_origin: "interactive",
             caused_by_source_doc_id: None,
             content,
+            input: Default::default(),
         },
     )
     .await
@@ -157,6 +185,7 @@ pub async fn create_runtime_request_with_execution_origin(
             execution_origin,
             caused_by_source_doc_id: None,
             content,
+            input: Default::default(),
         },
     )
     .await
@@ -182,6 +211,7 @@ pub async fn create_runtime_request_caused_by_source(
             execution_origin: "interactive",
             caused_by_source_doc_id: Some(caused_by_source_doc_id),
             content,
+            input: Default::default(),
         },
     )
     .await
@@ -195,6 +225,7 @@ struct RuntimeRequestSpec<'a> {
     execution_origin: &'a str,
     caused_by_source_doc_id: Option<&'a str>,
     content: &'a str,
+    input: gents_protocol::request_input::RequestInput,
 }
 
 async fn create_runtime_request_inner(
@@ -210,6 +241,7 @@ async fn create_runtime_request_inner(
         execution_origin,
         caused_by_source_doc_id,
         content,
+        input,
     } = spec;
     ensure_generated_session(node, node_did, agent_id, session_id).await;
 
@@ -226,6 +258,7 @@ async fn create_runtime_request_inner(
         created_at,
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
+    create.input = input;
     create.max_retries = i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
     create.valid_until = valid_until.map(str::to_string);
     create.caused_by_source_doc_id = caused_by_source_doc_id.map(str::to_string);

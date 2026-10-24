@@ -46,4 +46,4 @@ pub use task::{
 };
 pub use tool_service::{save_tool_service_config, test_tool_service_config};
 
-pub use session::{session_rows, session_snapshot};
+pub use session::{message_attachments, session_rows, session_snapshot};

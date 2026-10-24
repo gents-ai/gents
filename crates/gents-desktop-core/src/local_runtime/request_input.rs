@@ -12,7 +12,11 @@ pub(crate) async fn ensure_request_input_supported(
     record: Option<&PeerRecord>,
     input: &RequestInput,
 ) -> Result<()> {
-    if input.captured_context.is_empty() && input.goal_assignment.is_none() {
+    input.validate_attachments()?;
+    if input.captured_context.is_empty()
+        && input.attachments.is_empty()
+        && input.goal_assignment.is_none()
+    {
         return Ok(());
     }
     anyhow::ensure!(
@@ -44,8 +48,12 @@ fn decode(status: &Value, expected_did: &str, input: &RequestInput) -> Result<()
         "The extension and runtime use different goal controls. Update them together, then reconnect."
     );
     anyhow::ensure!(
-        input.captured_input_compatible(status.get(STATUS_INPUT_CONTRACT_FIELD).and_then(Value::as_u64)),
-        "This runtime does not support attached editor context. Update the runtime to match the extension."
+        input.captured_input_compatible(
+            status
+                .get(STATUS_INPUT_CONTRACT_FIELD)
+                .and_then(Value::as_u64)
+        ),
+        "This runtime does not support this attachment input. Update the runtime and reconnect."
     );
     Ok(())
 }
