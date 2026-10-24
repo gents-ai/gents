@@ -1,4 +1,5 @@
 pub mod allowed_dirs;
+pub mod attachments;
 pub mod chat;
 pub mod config;
 pub mod db_explorer;

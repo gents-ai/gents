@@ -12,6 +12,11 @@ import { createSelectors, type WithSelectors } from "./createSelectors";
 export type ChatState = {
   localWorkflow: ChatWorkflowState;
   sending: boolean;
+  submissionError: {
+    nodeDid: string;
+    sessionId: string | null;
+    message: string;
+  } | null;
   optimisticPendingTurn: OptimisticPendingTurn | null;
   /** the messages sent from here, newest last, and whether each queued
       behind a running turn: kept after the transcript holds them, for
@@ -31,6 +36,7 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
     createStore<ChatState>(() => ({
       localWorkflow: { kind: "ready" },
       sending: false,
+      submissionError: null,
       optimisticPendingTurn: null,
       sentTurns: [],
       folders: loadChatFolders(),

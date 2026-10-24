@@ -1,3 +1,4 @@
+import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
 import { useMemo, useRef, type KeyboardEvent, type RefCallback } from "react";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -47,8 +48,9 @@ export function OpenSessionComposer({
   const sending = stores.chat.use.sending();
   const inFlight = useInterruptVisible();
   const deployment = useSelectedNode();
-  const { draft, setDraft, send } = useComposerSend(agentId);
+  const { draft, setDraft, send, error: sendError } = useComposerSend(agentId);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
   const edit = useComposerEditing({ queue, onEdit, setDraft, send, textarea });
   const editing = edit.editing;
@@ -64,15 +66,26 @@ export function OpenSessionComposer({
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
   );
 
-  const status = presentedComposerSendStatus(draft, sendStatus);
   /* a session that never takes this app's messages says so before anything is typed */
   const readOnly =
     sendStatus.kind === "disabled" && sendStatus.reason === "sessionNotOwned"
       ? sendStatus.hint
       : null;
-  const queueing = status.kind === "queue";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
+
+  const attachments = useAttachmentDraft(
+    attachmentRoot,
+    blocked || readOnly !== null || !!editing,
+    textarea,
+  );
+
+  const status = presentedComposerSendStatus(
+    draft,
+    sendStatus,
+    attachments.hasAttachments,
+  );
+  const queueing = status.kind === "queue";
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (editing) {
@@ -89,7 +102,7 @@ export function OpenSessionComposer({
         event.preventDefault();
       return;
     }
-    if (event.key === "ArrowUp" && draft === "") {
+    if (event.key === "ArrowUp" && draft === "" && !attachments.hasAttachments) {
       const last = lastEditable(queue);
       if (last) {
         event.preventDefault();
@@ -125,12 +138,23 @@ export function OpenSessionComposer({
       <ComposerEditContext.Provider value={editContext}>
         <SelectedPendingTray />
       </ComposerEditContext.Provider>
-      <div data-testid="composer" className="grid">
+      <div
+        data-testid="composer"
+        ref={attachmentRoot}
+        {...attachments.dropProps}
+        className={cn("grid rounded-2xl", attachments.over && "ring-2 ring-ring")}
+      >
+        <input
+          {...attachments.fileInputProps}
+          className="hidden"
+          aria-label="Choose attachments"
+        />
         <div
           inert={covered || undefined}
           className={cn("[grid-area:1/1]", covered && "invisible")}
         >
           <Composer
+            className="text-foreground"
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
             onSend={
@@ -140,13 +164,39 @@ export function OpenSessionComposer({
                 : send
             }
             models={[]}
+            onAttach={attachments.pick}
+            attachDisabled={blocked || readOnly !== null || !!editing}
+            hasAttachments={
+              editing ? !!editing.attachments?.length : attachments.hasAttachments
+            }
+            submitDisabled={!editing && attachments.pending}
+            onPaste={attachments.onPaste}
             disabled={!editing && blocked}
             above={
               editing ? (
-                <EditingChip reached={editing.reached} onCancel={edit.cancel} />
+                <>
+                  <EditingChip reached={editing.reached} onCancel={edit.cancel} />
+                  <SentAttachments
+                    items={editing.attachments}
+                    requestId={editing.requestId}
+                  />
+                </>
               ) : (
                 <>
                   <ReplyingTo />
+                  {attachments.over && (
+                    <p
+                      role="status"
+                      className="px-3 pt-2 text-xs text-muted-foreground"
+                    >
+                      Drop files to attach
+                    </p>
+                  )}
+                  <AttachmentTray
+                    items={attachments.items}
+                    remove={attachments.remove}
+                    error={attachments.error}
+                  />
                   <SlashSkillMenu
                     items={slash.items}
                     active={slash.active}
@@ -177,13 +227,26 @@ export function OpenSessionComposer({
         </div>
         {covered && <LoadingStatus overlay />}
       </div>
+      {edit.error && (
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          {edit.error}
+        </p>
+      )}
+      {sendError && (
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          {sendError}
+        </p>
+      )}
       <ComposerFooter
         folder={<SelectedChatFolder />}
         status={
           <SessionSubmissionStatus
             activityStatus={activityStatus}
             hint={
-              status.kind === "disabled" && !inFlight && !covered && draft.trim() !== ""
+              status.kind === "disabled" &&
+              !inFlight &&
+              !covered &&
+              (draft.trim() !== "" || attachments.hasAttachments)
                 ? status.hint
                 : null
             }

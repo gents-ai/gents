@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-request-attachments"
+description = "Enables the desktop_request_attachments command without any pre-configured scope."
+commands.allow = ["desktop_request_attachments"]
+
+[[permission]]
+identifier = "deny-desktop-request-attachments"
+description = "Denies the desktop_request_attachments command without any pre-configured scope."
+commands.deny = ["desktop_request_attachments"]

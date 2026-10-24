@@ -102,7 +102,10 @@ export async function openWithOpener(url: string): Promise<void> {
   await openUrl(url);
 }
 
+let currentZoom = 1;
+
 export function setWebviewZoom(level: number) {
+  currentZoom = level;
   void getCurrentWebview()
     .setZoom(level)
     .catch((error) => console.warn("could not zoom the window", error));
@@ -115,4 +118,43 @@ export function onZoomMenu(handle: (action: ZoomAction) => void) {
       handle(event.payload);
   });
   return () => void stop.then((unlisten) => unlisten());
+}
+
+export async function pickFiles(): Promise<string[]> {
+  if (!inNativeShell()) return [];
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    multiple: true,
+    directory: false,
+    title: "Attach files",
+  });
+  return typeof selected === "string" ? [selected] : (selected ?? []);
+}
+
+export async function listenFileDrop(
+  handler: (event: { type: string; paths?: string[]; x: number; y: number }) => void,
+): Promise<() => void> {
+  if (!inNativeShell()) return () => {};
+  let sequence = 0;
+  return getCurrentWebview().onDragDropEvent(({ payload }) => {
+    const observed = ++sequence;
+    if (payload.type === "leave") {
+      handler({ type: "leave", x: 0, y: 0 });
+      return;
+    }
+    void getCurrentWindow()
+      .scaleFactor()
+      .then((scale) => {
+        if (payload.type !== "drop" && observed !== sequence) return;
+        handler({
+          type: payload.type,
+          paths: "paths" in payload ? payload.paths : undefined,
+          x: payload.position.x / scale / currentZoom,
+          y: payload.position.y / scale / currentZoom,
+        });
+      })
+      .catch(() => {
+        if (observed === sequence) handler({ type: "leave", x: 0, y: 0 });
+      });
+  });
 }

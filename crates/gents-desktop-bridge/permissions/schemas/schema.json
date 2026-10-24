@@ -367,6 +367,18 @@
           "markdownDescription": "Denies the desktop_app_quit command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_attachment_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-attachment-read",
+          "markdownDescription": "Enables the desktop_attachment_read command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_attachment_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-attachment-read",
+          "markdownDescription": "Denies the desktop_attachment_read command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_backend_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-backend-delete",
@@ -1375,6 +1387,18 @@
           "markdownDescription": "Denies the desktop_provider_usage_read command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_request_attachments command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-request-attachments",
+          "markdownDescription": "Enables the desktop_request_attachments command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_request_attachments command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-request-attachments",
+          "markdownDescription": "Denies the desktop_request_attachments command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_request_resend command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-request-resend",
@@ -1789,10 +1813,10 @@
           "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
         },
         {
-          "description": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`",
+          "description": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`",
           "type": "string",
           "const": "session-read",
-          "markdownDescription": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`"
+          "markdownDescription": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`"
         },
         {
           "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",

@@ -83,9 +83,11 @@ jobs:
           bash -n scripts/harbor/run_gents.sh
           bash -n scripts/measure-gents-binary.sh
           bash -n scripts/measure-gents-build-attribution.sh
+          bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
           shellcheck scripts/measure-gents-build-attribution.sh
+          shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh
 
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test
@@ -397,8 +399,7 @@ jobs:
           RUST_MIN_STACK: 16777216
         run: |
           python3 .github/scripts/ensure-rust-build-space.py "$CARGO_TARGET_DIR"
-          cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
-          cargo test -p gents-client-host --features runtime-e2e --test runtime
+          .github/scripts/desktop-runtime-journey.sh run
 
       - name: Run full CLI test suite
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'

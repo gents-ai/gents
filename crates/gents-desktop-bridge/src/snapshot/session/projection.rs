@@ -1637,6 +1637,11 @@ pub(super) fn project_transcript_rows(
                     normalize_optional(Some(presentation.body_markdown.as_str()))
                 }),
                 captured_context: (!captured_context.is_empty()).then_some(captured_context),
+                attachments: reconstructed
+                    .as_ref()
+                    .map(gents_protocol::request_input::RequestAttachment::from_message)
+                    .map(|v| v.iter().map(|a| a.view()).collect())
+                    .filter(|v: &Vec<_>| !v.is_empty()),
                 reasoning: presentation.as_ref().and_then(|presentation| {
                     presentation
                         .reasoning_markdown
