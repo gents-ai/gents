@@ -71,10 +71,8 @@ jobs:
           cache-on-failure: "true"
           cache-workspace-crates: "false"
           cache-bin: "false"
-      - name: Compile transport tests in one feature graph
+      - name: Compile native binaries and transport tests in one feature graph
         run: python .github/scripts/editor-native-tests.py compile --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
-      - name: Build the native client and runtime
-        run: cargo build --locked --profile test --target-dir target -p gents-cli -p gents-client-host --bins
       - name: Check the native protocol descriptor
         run: |
           $hostInfo = & .\target\debug\gents-client-host.exe --describe | ConvertFrom-Json
