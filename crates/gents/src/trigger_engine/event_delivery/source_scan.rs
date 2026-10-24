@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
+use super::super::TriggerEngineError;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 const SOURCE_SCAN_PAGE_SIZE: usize = 1_000;
@@ -10,7 +11,11 @@ pub(crate) async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Resul
     load_source_rows(node, collection, None, None)
         .await?
         .into_iter()
-        .map(|row| document_id(&row).map(str::to_owned))
+        .map(|row| {
+            document_id(&row)
+                .map(str::to_owned)
+                .map_err(anyhow::Error::from)
+        })
         .collect()
 }
 
@@ -28,11 +33,11 @@ pub(crate) async fn load_doc_field(
     Ok(fields)
 }
 
-fn document_id(row: &Value) -> Result<&str> {
+fn document_id(row: &Value) -> Result<&str, TriggerEngineError> {
     row.get("_docID")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
-        .context("event source scan omitted a document ID")
+        .ok_or(TriggerEngineError::ScanDocumentIdMissing)
 }
 
 pub(crate) async fn load_source_rows(

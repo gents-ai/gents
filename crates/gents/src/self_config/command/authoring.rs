@@ -128,7 +128,7 @@ fn ensure_mode(
 }
 
 fn admit_scaffold_dir(context: &crate::toolset::ToolContext, name: &str) -> Result<PathBuf> {
-    context.resolve_path_allow_create(name)
+    Ok(context.resolve_path_allow_create(name)?)
 }
 
 fn check_outcome_fields(report: &CheckReport) -> (bool, String) {
@@ -172,7 +172,7 @@ impl ConfigCommandTool {
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
             .with_context(|| format!("pack {operation} requires an effective tool root"))?;
-        crate::toolset::ToolContext::new(root.into(), false)
+        Ok(crate::toolset::ToolContext::new(root.into(), false)?)
     }
 
     async fn scaffold(&self, name: &str, input: &ScaffoldInput) -> Result<String> {

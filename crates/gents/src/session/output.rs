@@ -46,6 +46,8 @@ pub enum CanonicalOutputReadError {
     MissingCanonicalHeader { header_doc_id: String },
     #[error("canonical header lookup is ambiguous: {header_doc_id}")]
     AmbiguousCanonicalHeader { header_doc_id: String },
+    #[error("canonical output query omitted {collection} rows")]
+    RowsOmitted { collection: String },
 }
 
 /// The physical request and node scope supplied by the owned restore.
@@ -697,7 +699,7 @@ pub(crate) async fn load_request_headers_in_txn(
     let headers = rows_value(&response, "AgentMessage")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut sequences = std::collections::BTreeSet::new();
     for header in &headers {
         anyhow::ensure!(
@@ -718,12 +720,14 @@ pub(crate) async fn load_request_headers_in_txn(
 fn rows_value<'a>(
     response: &'a serde_json::Value,
     collection: &str,
-) -> Result<&'a Vec<serde_json::Value>> {
+) -> Result<&'a Vec<serde_json::Value>, CanonicalOutputReadError> {
     response
         .get("data")
         .and_then(|data| data.get(collection))
         .and_then(serde_json::Value::as_array)
-        .with_context(|| format!("canonical output query omitted {collection} rows"))
+        .ok_or_else(|| CanonicalOutputReadError::RowsOmitted {
+            collection: collection.to_owned(),
+        })
 }
 
 async fn load_header(
@@ -755,7 +759,7 @@ async fn load_header(
         rows_value(&response, "AgentMessage")?
             .iter()
             .map(decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
     };
     match headers.len() {
         0 => Err(anyhow::Error::new(
@@ -847,10 +851,10 @@ async fn coordinate_twins(
         let rows = rows_value(&response, "AgentMessage")?.clone();
         sessions.insert(session_id.clone(), SessionHeaderRows::from(rows));
     }
-    sessions[session_id]
+    Ok(sessions[session_id]
         .coordinate_matches(key, sequence)
         .map(decode_transcript_message_row)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 fn validate_fork(
@@ -1171,7 +1175,7 @@ async fn load_referenced_segments(
         closures.extend(
             rows.iter()
                 .map(decode_output_segment_row)
-                .collect::<Result<Vec<_>>>()?,
+                .collect::<Result<Vec<_>, _>>()?,
         );
     }
     for closure in &closures {
@@ -1416,7 +1420,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     let headers = rows_value(&response, "AgentMessage")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut ids = BTreeSet::new();
     let mut sequences = BTreeSet::new();
     let mut keys = BTreeSet::new();
@@ -2395,7 +2399,7 @@ pub(super) async fn load_sequenced_messages(
         .context("canonical history query omitted AgentMessage rows")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut cache = ReadCache {
         reuse_node_scans: true,
         ..ReadCache::default()

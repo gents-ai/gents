@@ -1400,7 +1400,8 @@ fn engine_admission(job: serde_json::Value, via: crate::pack::InstalledVia) -> R
         "acme/engine",
         &[("acme/engine".into(), &own), ("acme/base".into(), &base)],
         via,
-    )
+    )?;
+    Ok(())
 }
 
 fn operator_refusal(job: serde_json::Value) {

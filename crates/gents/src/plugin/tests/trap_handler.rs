@@ -97,7 +97,9 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
             .call(&serde_json::json!({}), &PluginBudget::default())
             .expect_err("an out-of-bounds load is a trap, not a result");
         assert!(
-            format!("{error:#}").contains("trapped"),
+            gents_protocol::error_chain::ErrorChain(&error)
+                .to_string()
+                .contains("trapped"),
             "the fault must come back as a typed trap: {error:#}"
         );
 

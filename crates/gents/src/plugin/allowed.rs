@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 
+use super::approval::PluginApprovalError;
+use super::bound::NotLinkable;
 use super::BoundDir;
 use crate::pack::BindAccess;
 
@@ -19,6 +21,138 @@ struct Stored {
     dirs: Vec<AllowedDir>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PluginAllowedError {
+    #[error("creating the allowed-folders home")]
+    CreateHome(#[source] std::io::Error),
+    #[error("opening the allowed-folders lock")]
+    OpenLock(#[source] std::io::Error),
+    #[error("locking allowed folders")]
+    Lock(#[source] std::io::Error),
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not a valid allowed-folders file", path.display())]
+    Malformed {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+    #[error("staging the allowed folders")]
+    Stage(#[source] std::io::Error),
+    #[error("{} does not exist or cannot be read", path.display())]
+    Unreadable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not a file or folder", path.display())]
+    NotFileOrFolder { path: PathBuf },
+    #[error("allowed path {} is unavailable", path.display())]
+    Unavailable {
+        path: PathBuf,
+        #[source]
+        source: Box<PluginAllowedError>,
+    },
+    #[error("{} is too broad or includes the gents home; allow a specific file or folder", path.display())]
+    TooBroad { path: PathBuf },
+    #[error("The requested path changed or is unavailable: {}. Retry the action with its current path.", path.display())]
+    PathChanged { path: PathBuf },
+    #[error(transparent)]
+    NotLinkable(#[from] NotLinkable),
+    #[error(transparent)]
+    Approval(Box<PluginApprovalError>),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{} is not a directory", path.display())]
+    NotDirectory { path: PathBuf },
+    #[error("{} is outside {}, the only directory this call may bind", path.display(), within.display())]
+    OutsideBindRoot { path: PathBuf, within: PathBuf },
+    #[error("{} cannot be read", path.display())]
+    CannotRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not a file", path.display())]
+    NotFile { path: PathBuf },
+    #[error("{} is not a folder", path.display())]
+    NotFolder { path: PathBuf },
+    #[error("{} now resolves to {}; the path changed after it was validated", path.display(), resolved.display())]
+    PathResolvesElsewhere { path: PathBuf, resolved: PathBuf },
+    #[error("{} has no folder", path.display())]
+    NoFolder { path: PathBuf },
+    #[error("{} has no file name", path.display())]
+    NoFileName { path: PathBuf },
+    #[error("{} changed while it was being shared", path.display())]
+    ChangedWhileShared { path: PathBuf },
+    #[error("{} no longer exists or cannot be read", path.display())]
+    NoLongerExists {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} now resolves to {}; the bound path changed after it was validated", path.display(), now.display())]
+    BoundPathChanged { path: PathBuf, now: PathBuf },
+    #[error("Runtime permission files cannot be shared with a plugin.")]
+    Protected,
+    #[error("Command isolation for runtime permissions is unavailable. Use native file tools or a runtime with supported command isolation.")]
+    CommandIsolationUnavailable,
+    #[error("The runtime permission home changed. Retry the command.")]
+    PermissionHomeChanged,
+    #[error("A runtime permission file has a hard-link alias. Remove the alias outside this session, then retry the command.")]
+    PermissionFileAliased,
+    #[error("{} is not owned by this user", path.display())]
+    NotOwned { path: PathBuf },
+    #[error("creating a private folder in {}", path.display())]
+    PrivateFolder {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating permission staging directory")]
+    StagingDir(#[source] std::io::Error),
+    #[error("staging runtime permissions")]
+    StageFile(#[source] std::io::Error),
+    #[error("flushing runtime permissions")]
+    Flush(#[source] std::io::Error),
+    #[error("publishing runtime permissions")]
+    Publish(#[source] std::io::Error),
+    #[error("resolving the permission home")]
+    ResolveHome(#[source] std::io::Error),
+    #[error("resolving command permission state")]
+    ResolveCommandPermissionState(#[source] std::io::Error),
+    #[error("permission target is outside its runtime home")]
+    OutsideHome,
+    #[error("permission target has no parent")]
+    NoParent,
+    #[error("permission target has no name")]
+    NoName,
+    #[error("permission staging directory or file changed before publication")]
+    StagingChanged,
+    #[error(
+        "The shared folder contains protected runtime permissions. Choose another file or folder."
+    )]
+    MountProtected,
+}
+
+impl From<PluginApprovalError> for PluginAllowedError {
+    fn from(error: PluginApprovalError) -> Self {
+        Self::Approval(Box::new(error))
+    }
+}
+
 fn file(home: &Path) -> PathBuf {
     home.join(crate::home::ALLOWED_DIRS_FILE_NAME)
 }
@@ -27,51 +161,67 @@ fn lock_file(home: &Path) -> PathBuf {
     home.join(crate::home::ALLOWED_DIRS_LOCK_FILE_NAME)
 }
 
-fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
-    std::fs::create_dir_all(home).context("creating the allowed-folders home")?;
+fn lock(home: &Path) -> Result<crate::file_lock::FileLock, PluginAllowedError> {
+    std::fs::create_dir_all(home).map_err(PluginAllowedError::CreateHome)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(lock_file(home))
-        .context("opening the allowed-folders lock")?;
-    crate::file_lock::FileLock::exclusive(file).context("locking allowed folders")
+        .map_err(PluginAllowedError::OpenLock)?;
+    crate::file_lock::FileLock::exclusive(file).map_err(PluginAllowedError::Lock)
 }
-pub fn list(home: &Path) -> Result<Vec<AllowedDir>> {
+
+pub fn list(home: &Path) -> Result<Vec<AllowedDir>, PluginAllowedError> {
     let path = file(home);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+        Err(source) => return Err(PluginAllowedError::Read { path, source }),
     };
-    let mut stored: Stored = serde_json::from_slice(&bytes)
-        .with_context(|| format!("{} is not a valid allowed-folders file", path.display()))?;
+    let mut stored: Stored =
+        serde_json::from_slice(&bytes).map_err(|source| PluginAllowedError::Malformed {
+            path: path.clone(),
+            source,
+        })?;
     stored.dirs.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(stored.dirs)
 }
 
-fn save(home: &Path, dirs: Vec<AllowedDir>) -> Result<()> {
-    std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
+fn save(home: &Path, dirs: Vec<AllowedDir>) -> Result<(), PluginAllowedError> {
+    std::fs::create_dir_all(home).map_err(|source| PluginAllowedError::CreateDir {
+        path: home.to_path_buf(),
+        source,
+    })?;
     let bytes = serde_json::to_vec_pretty(&Stored { dirs })?;
     let path = file(home);
     write_permission_file(home, &path, |file| {
-        std::io::Write::write_all(file, &bytes).context("staging the allowed folders")
+        std::io::Write::write_all(file, &bytes).map_err(PluginAllowedError::Stage)
     })
 }
 
-pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
+pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir, PluginAllowedError> {
     put(home, path, access, false)
 }
 
 /// An approval may widen a grant, but never downgrade a concurrent grant.
 /// The path is the canonical target captured by the question before waiting.
 /// All allowed-folder mutations share the same native exclusive lock.
-pub(super) fn grant_at_least(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
+pub(super) fn grant_at_least(
+    home: &Path,
+    path: &Path,
+    access: BindAccess,
+) -> Result<AllowedDir, PluginAllowedError> {
     put(home, path, access, true)
 }
 
-fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Result<AllowedDir> {
+fn put(
+    home: &Path,
+    path: &Path,
+    access: BindAccess,
+    preserve_wider: bool,
+) -> Result<AllowedDir, PluginAllowedError> {
     let entry = if preserve_wider {
         prepare_answered_grant(home, path, access)?
     } else {
@@ -84,29 +234,35 @@ fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Re
     Ok(entry)
 }
 
-pub(super) fn prepare_grant(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
+pub(super) fn prepare_grant(
+    home: &Path,
+    path: &Path,
+    access: BindAccess,
+) -> Result<AllowedDir, PluginAllowedError> {
     let path = path
         .canonicalize()
-        .with_context(|| format!("{} does not exist or cannot be read", path.display()))?;
-    anyhow::ensure!(
-        path.is_dir() || path.is_file(),
-        "{} is not a file or folder",
-        path.display()
-    );
+        .map_err(|source| PluginAllowedError::Unreadable {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !(path.is_dir() || path.is_file()) {
+        return Err(PluginAllowedError::NotFileOrFolder { path });
+    }
     ensure_scope_path(&path, user_home().as_deref(), home)?;
     Ok(AllowedDir { path, access })
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("The requested path changed or is unavailable: {}. Retry the action with its current path.", .0.display())]
-pub(super) struct PathChanged(pub PathBuf);
-
 /// Consent records hold canonical targets; a later alias cannot select a
 /// different target under an existing grant.
-pub(super) fn canonical_target(path: &Path, directory: Option<bool>) -> Result<PathBuf> {
+pub(super) fn canonical_target(
+    path: &Path,
+    directory: Option<bool>,
+) -> Result<PathBuf, PluginAllowedError> {
     let current = path
         .canonicalize()
-        .map_err(|_| PathChanged(path.to_owned()))?;
+        .map_err(|_| PluginAllowedError::PathChanged {
+            path: path.to_owned(),
+        })?;
     if current != path
         || directory.is_some_and(|expected| {
             if expected {
@@ -116,7 +272,9 @@ pub(super) fn canonical_target(path: &Path, directory: Option<bool>) -> Result<P
             }
         })
     {
-        return Err(PathChanged(path.to_owned()).into());
+        return Err(PluginAllowedError::PathChanged {
+            path: path.to_owned(),
+        });
     }
     Ok(current)
 }
@@ -127,10 +285,12 @@ pub(super) fn prepare_answered_grant(
     home: &Path,
     path: &Path,
     access: BindAccess,
-) -> Result<AllowedDir> {
+) -> Result<AllowedDir, PluginAllowedError> {
     let entry = prepare_grant(home, path, access)?;
     if entry.path != path {
-        return Err(PathChanged(path.to_owned()).into());
+        return Err(PluginAllowedError::PathChanged {
+            path: path.to_owned(),
+        });
     }
     Ok(entry)
 }
@@ -151,7 +311,7 @@ pub(super) fn put_entry(
     entry
 }
 
-pub fn remove(home: &Path, path: &Path) -> Result<bool> {
+pub fn remove(home: &Path, path: &Path) -> Result<bool, PluginAllowedError> {
     let canonical = path.canonicalize().ok();
     let _lock = lock(home)?;
     let mut dirs = list(home)?;
@@ -223,15 +383,20 @@ fn too_broad(dir: &Path, user_home: Option<&Path>, gents_home: &Path) -> bool {
             .is_ok_and(|home| home.starts_with(dir))
 }
 
-fn ensure_scope_path(path: &Path, user_home: Option<&Path>, gents_home: &Path) -> Result<()> {
-    anyhow::ensure!(
-        !too_broad(path, user_home, gents_home)
-            && !gents_home
-                .canonicalize()
-                .is_ok_and(|home| path.starts_with(home)),
-        "{} is too broad or includes the gents home; allow a specific file or folder",
-        path.display()
-    );
+fn ensure_scope_path(
+    path: &Path,
+    user_home: Option<&Path>,
+    gents_home: &Path,
+) -> Result<(), PluginAllowedError> {
+    if too_broad(path, user_home, gents_home)
+        || gents_home
+            .canonicalize()
+            .is_ok_and(|home| path.starts_with(home))
+    {
+        return Err(PluginAllowedError::TooBroad {
+            path: path.to_path_buf(),
+        });
+    }
     Ok(())
 }
 
@@ -245,7 +410,7 @@ impl Scope {
         gents_home: &Path,
         workdir: Option<&Path>,
         user_home: Option<&Path>,
-    ) -> Result<Self> {
+    ) -> Result<Self, PluginAllowedError> {
         Self::from_entries(gents_home, list(gents_home)?, workdir, user_home)
     }
 
@@ -254,10 +419,14 @@ impl Scope {
         mut entries: Vec<AllowedDir>,
         workdir: Option<&Path>,
         user_home: Option<&Path>,
-    ) -> Result<Self> {
+    ) -> Result<Self, PluginAllowedError> {
         for entry in &entries {
-            let path = canonical_target(&entry.path, None)
-                .with_context(|| format!("allowed path {} is unavailable", entry.path.display()))?;
+            let path = canonical_target(&entry.path, None).map_err(|source| {
+                PluginAllowedError::Unavailable {
+                    path: entry.path.clone(),
+                    source: Box::new(source),
+                }
+            })?;
             ensure_scope_path(&path, user_home, gents_home)?;
         }
         let working = workdir
@@ -288,7 +457,7 @@ pub fn bind(
     access: BindAccess,
     folder_allowed: bool,
 ) -> Result<BoundDir, String> {
-    let failed = |error: anyhow::Error| format!("{error:#}");
+    let failed = |error: PluginAllowedError| ErrorChain(&error).to_string();
     if resolved.is_dir {
         return BoundDir::folder(&resolved.target, access).map_err(failed);
     }
@@ -299,15 +468,12 @@ pub fn bind(
         ));
     }
     match BoundDir::for_file(&resolved.target, access) {
-        Err(error)
-            if folder_allowed
-                && access == BindAccess::Read
-                && error.is::<super::bound::NotLinkable>() =>
-        {
+        Err(PluginAllowedError::NotLinkable(_)) if folder_allowed && access == BindAccess::Read => {
             BoundDir::beside(&resolved.target, access).map_err(failed)
         }
-        Err(error) if error.is::<super::bound::NotLinkable>() => Err(format!(
-            "{error:#}; allow its folder with `gents plugin dirs add {}`",
+        Err(error @ PluginAllowedError::NotLinkable(_)) => Err(format!(
+            "{}; allow its folder with `gents plugin dirs add {}`",
+            ErrorChain(&error),
             resolved.folder().display()
         )),
         other => other.map_err(failed),

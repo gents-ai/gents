@@ -64,11 +64,13 @@ pub(in crate::lifecycle) async fn request_segments(
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
         .context("AgentOutputSegment query omitted rows")?;
-    crate::session::canonical_rows::decode_scoped_request_output_segments(
-        rows,
-        agent,
-        Some(session_id),
-        requester,
+    Ok(
+        crate::session::canonical_rows::decode_scoped_request_output_segments(
+            rows,
+            agent,
+            Some(session_id),
+            requester,
+        )?,
     )
 }
 

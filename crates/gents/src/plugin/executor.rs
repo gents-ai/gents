@@ -210,11 +210,12 @@ impl PluginExecutor {
         input: &serde_json::Value,
         budget: PluginBudget,
     ) -> Result<PluginOutcome> {
-        Self::sealed_artifact_runner(artifact)?.call(input, &budget)
+        Ok(Self::sealed_artifact_runner(artifact)?.call(input, &budget)?)
     }
 
     pub(crate) fn validate_sealed_artifact(artifact: &[u8]) -> Result<()> {
-        Self::sealed_artifact_runner(artifact).map(|_| ())
+        Self::sealed_artifact_runner(artifact)?;
+        Ok(())
     }
 
     fn sealed_artifact_runner(artifact: &[u8]) -> Result<PluginRunner> {
@@ -227,7 +228,11 @@ impl PluginExecutor {
                 }))
                 .expect("the sealed callback declaration is a valid PackPlugin")
             });
-        PluginRunner::compile_within(artifact, &DECLARATION, &Manifold::sealed())
+        Ok(PluginRunner::compile_within(
+            artifact,
+            &DECLARATION,
+            &Manifold::sealed(),
+        )?)
     }
 
     pub fn new(home: Option<PathBuf>) -> Self {
@@ -311,15 +316,16 @@ impl PluginExecutor {
         let resolved = allowed::resolve(requested, context.workdir, user_home.as_deref(), home)
             .map_err(refuse)?;
         if resolved.is_dir {
-            allowed::ensure_mount_safe(&resolved.target)
-                .map_err(|error| refuse(format!("{error:#}")))?;
+            allowed::ensure_mount_safe(&resolved.target).map_err(|error| {
+                refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+            })?;
         } else if allowed::is_protected(&resolved.target) {
             return Err(refuse(
                 "Runtime permission files cannot be shared with a plugin.".into(),
             ));
         }
         let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
-            .map_err(|error| refuse(format!("{error:#}")))?;
+            .map_err(|error| refuse(gents_protocol::error_chain::ErrorChain(&error).to_string()))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
@@ -338,7 +344,7 @@ impl PluginExecutor {
             covered || approval::workspace::within_workspace(&resolved.target),
             || Ok(input.clone()),
         )
-        .map_err(|error| refuse(format!("{error:#}")))?;
+        .map_err(|error| refuse(gents_protocol::error_chain::ErrorChain(&error).to_string()))?;
         let mut consent = None;
         if route.is_some() || !covered {
             let allowed = match route {
@@ -351,7 +357,9 @@ impl PluginExecutor {
                         context.session_id.map(str::to_owned),
                     )
                     .await
-                    .map_err(|error| refuse(format!("{error:#}")))?;
+                    .map_err(|error| {
+                        refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+                    })?;
                     consent = Some(approval::workspace::action_consent(home, binding));
                     allowed
                 }
@@ -363,7 +371,9 @@ impl PluginExecutor {
                             approval::Request::new(&plugin, &resolved, access, session_id);
                         approval::ask(home, &request, approval::WAIT)
                             .await
-                            .map_err(|error| refuse(format!("{error:#}")))?
+                            .map_err(|error| {
+                                refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+                            })?
                     }
                 },
             };
@@ -379,7 +389,9 @@ impl PluginExecutor {
         }
         let folder_allowed =
             approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
-                .map_err(|error| refuse(format!("{error:#}")))?
+                .map_err(|error| {
+                    refuse(gents_protocol::error_chain::ErrorChain(&error).to_string())
+                })?
                 .granted(resolved.folder())
                 .is_some();
         allowed::bind(&resolved, access, folder_allowed)
@@ -671,7 +683,11 @@ impl PluginExecutor {
             )
             .await
             .inspect_err(|error| {
-                if error.downcast_ref::<super::GuestTrap>().is_some() {
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<super::PluginError>()
+                        .is_some_and(|error| matches!(error, super::PluginError::Trap(_)))
+                }) {
                     receipt.verdict = PluginExecutionVerdict::Failed;
                 }
             })?;
@@ -822,7 +838,9 @@ async fn drive_with_calls(
     mounts: Vec<AssetMount>,
 ) -> Result<PluginOutcome> {
     let round: rounds::Round = Arc::new(move |input, budget| {
-        runner.call_mounted(&input, &budget, bound.as_ref(), &mounts)
+        runner
+            .call_mounted(&input, &budget, bound.as_ref(), &mounts)
+            .map_err(anyhow::Error::from)
     });
     if calls.is_empty() {
         tokio::task::spawn_blocking(move || round(input, budget))

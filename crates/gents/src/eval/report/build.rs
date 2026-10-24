@@ -218,7 +218,7 @@ pub fn build(
         return Err(refused(format!(
             "eval definition {:?} no longer digests to what run {run_id} froze; its report cannot be read against the installed definition",
             origin.definition.definition_id
-        )));
+        )).into());
     }
     for trial in trials {
         let identity = &trial.identity;
@@ -226,7 +226,8 @@ pub fn build(
             return Err(refused(format!(
                 "trial {} belongs to run {}, not {run_id}",
                 identity.trial_id, identity.run_id
-            )));
+            ))
+            .into());
         }
         if !origin
             .cells
@@ -236,20 +237,23 @@ pub fn build(
             return Err(refused(format!(
                 "run {run_id} did not freeze cell {:?} (trial {})",
                 identity.cell_id, identity.trial_id
-            )));
+            ))
+            .into());
         }
         if !origin.case_ids.contains(&identity.case_id) {
             return Err(refused(format!(
                 "run {run_id} did not freeze case {:?} (trial {})",
                 identity.case_id, identity.trial_id
-            )));
+            ))
+            .into());
         }
     }
     if let Some(verdict) = verdicts.iter().find(|verdict| verdict.run_id != run_id) {
         return Err(refused(format!(
             "verdict {} belongs to run {}, not {run_id}",
             verdict.verdict_id, verdict.run_id
-        )));
+        ))
+        .into());
     }
 
     let rows = RunRows {
@@ -549,7 +553,7 @@ mod tests {
 
     fn refusal(result: Result<EvalReport>) -> String {
         let error = result.expect_err("expected a refusal");
-        report_refused(&error)
+        report_refused(error.as_ref())
             .unwrap_or_else(|| panic!("expected a ReportRefused, got {error:#}"))
             .0
             .clone()

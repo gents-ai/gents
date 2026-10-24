@@ -34,8 +34,8 @@ fn versions(values: &Value, identities: &[KeyIdentity]) -> Vec<super::super::Goa
         .collect()
 }
 
-fn observation(
-    value: anyhow::Result<RequestAssignmentObservation>,
+fn observation<E>(
+    value: Result<RequestAssignmentObservation, E>,
     roots: Option<&RapidHashMap<u64, String>>,
 ) -> Value {
     match value {

@@ -3,8 +3,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::Context as _;
 use same_file::Handle;
+
+use super::PluginAllowedError;
+
+type Result<T, E = PluginAllowedError> = std::result::Result<T, E>;
 
 static PROTECTED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
@@ -43,26 +46,28 @@ impl CommandProtection {
         &self.home
     }
 
-    pub(crate) fn capture(home: &Path, supported: bool) -> anyhow::Result<Self> {
+    pub(crate) fn capture(home: &Path, supported: bool) -> Result<Self, PluginAllowedError> {
         use gents_loop::tool_policy::operator_paths::command_guard_allows;
 
-        anyhow::ensure!(
-            command_guard_allows(true, supported, true, true),
-            "Command isolation for runtime permissions is unavailable. Use native file tools or a runtime with supported command isolation."
-        );
+        if !command_guard_allows(true, supported, true, true) {
+            return Err(PluginAllowedError::CommandIsolationUnavailable);
+        }
         let canonical = home
             .canonicalize()
-            .context("resolving command permission state")?;
-        anyhow::ensure!(
-            canonical == home,
-            "The runtime permission home changed. Retry the command."
-        );
+            .map_err(PluginAllowedError::ResolveCommandPermissionState)?;
+        if canonical != home {
+            return Err(PluginAllowedError::PermissionHomeChanged);
+        }
         let paths = reserved_paths(home).to_vec();
         let links = visit_objects(&paths, true, single_linked)?;
-        anyhow::ensure!(
-            command_guard_allows(true, supported, true, links.into_iter().all(|single| single)),
-            "A runtime permission file has a hard-link alias. Remove the alias outside this session, then retry the command."
-        );
+        if !command_guard_allows(
+            true,
+            supported,
+            true,
+            links.into_iter().all(|single| single),
+        ) {
+            return Err(PluginAllowedError::PermissionFileAliased);
+        }
         Ok(Self {
             home: canonical,
             #[cfg(target_os = "macos")]
@@ -83,7 +88,7 @@ impl CommandProtection {
             .collect()
     }
 
-    pub(crate) fn revalidate(&self) -> anyhow::Result<()> {
+    pub(crate) fn revalidate(&self) -> Result<(), PluginAllowedError> {
         Self::capture(&self.home, true).map(|_| ())
     }
 }
@@ -111,27 +116,22 @@ fn single_linked(path: &Path) -> io::Result<bool> {
 /// Temporary permission data shares the reserved boundary of its final file.
 /// Retained handles detect directory or object replacement before publication;
 /// namespace changes after the last inspection remain a host filesystem premise.
-pub(crate) fn write_permission_file(
+pub(crate) fn write_permission_file<E>(
     home: &Path,
     target: &Path,
-    write: impl FnOnce(&mut fs::File) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
+    write: impl FnOnce(&mut fs::File) -> Result<(), E>,
+) -> Result<(), E>
+where
+    E: From<PluginAllowedError> + From<io::Error>,
+{
     let home = home
         .canonicalize()
-        .context("resolving the permission home")?;
-    anyhow::ensure!(
-        target
-            .parent()
-            .context("permission target has no parent")?
-            .canonicalize()?
-            == home,
-        "permission target is outside its runtime home"
-    );
-    let target = home.join(
-        target
-            .file_name()
-            .context("permission target has no name")?,
-    );
+        .map_err(PluginAllowedError::ResolveHome)?;
+    let parent = target.parent().ok_or(PluginAllowedError::NoParent)?;
+    if parent.canonicalize()? != home {
+        return Err(PluginAllowedError::OutsideHome.into());
+    }
+    let target = home.join(target.file_name().ok_or(PluginAllowedError::NoName)?);
     let directory = home.join(crate::home::PERMISSION_STAGING_DIR_NAME);
     #[cfg(unix)]
     let create = {
@@ -145,25 +145,24 @@ pub(crate) fn write_permission_file(
     match create {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error).context("creating permission staging directory"),
+        Err(error) => return Err(PluginAllowedError::StagingDir(error).into()),
     }
     super::canonical_target(&directory, Some(true))?;
     let directory_identity = Handle::from_path(&directory)?;
     protect(&home);
     let mut staged =
-        tempfile::NamedTempFile::new_in(&directory).context("staging runtime permissions")?;
+        tempfile::NamedTempFile::new_in(&directory).map_err(PluginAllowedError::StageFile)?;
     let file_identity = Handle::from_file(staged.as_file().try_clone()?)?;
     validate_staging(&directory, &directory_identity, &staged, &file_identity)?;
     write(staged.as_file_mut())?;
     staged
         .as_file()
         .sync_all()
-        .context("flushing runtime permissions")?;
+        .map_err(PluginAllowedError::Flush)?;
     validate_staging(&directory, &directory_identity, &staged, &file_identity)?;
     staged
         .persist(&target)
-        .map_err(|error| error.error)
-        .context("publishing runtime permissions")?;
+        .map_err(|error| PluginAllowedError::Publish(error.error))?;
     Ok(())
 }
 
@@ -172,14 +171,14 @@ fn validate_staging(
     directory_identity: &Handle,
     staged: &tempfile::NamedTempFile,
     file_identity: &Handle,
-) -> anyhow::Result<()> {
+) -> Result<(), PluginAllowedError> {
     super::canonical_target(directory, Some(true))?;
     super::canonical_target(staged.path(), Some(false))?;
-    anyhow::ensure!(
-        Handle::from_path(directory)? == *directory_identity
-            && regular_file(staged.path())? == *file_identity,
-        "permission staging directory or file changed before publication"
-    );
+    if Handle::from_path(directory)? != *directory_identity
+        || regular_file(staged.path())? != *file_identity
+    {
+        return Err(PluginAllowedError::StagingChanged);
+    }
     Ok(())
 }
 
@@ -196,15 +195,14 @@ pub fn is_protected(path: &Path) -> bool {
 /// WASI preopens reject links outside their root. Inspect physical descendants
 /// without following links; an in-root link's target is visited at its own name.
 /// Namespace changes after the final inspection remain a host filesystem premise.
-pub(crate) fn ensure_mount_safe(root: &Path) -> anyhow::Result<()> {
+pub(crate) fn ensure_mount_safe(root: &Path) -> Result<(), PluginAllowedError> {
     let paths = PROTECTED
         .lock()
         .map_err(|_| io::Error::other("operator path guard is unavailable"))?
         .clone();
-    anyhow::ensure!(
-        !mount_contains_protected(&paths, root)?,
-        "The shared folder contains protected runtime permissions. Choose another file or folder."
-    );
+    if mount_contains_protected(&paths, root)? {
+        return Err(PluginAllowedError::MountProtected);
+    }
     Ok(())
 }
 

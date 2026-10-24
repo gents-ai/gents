@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::event_source::SourceSchemaCache;
+use super::TriggerEngineError;
 use crate::document_config::{CallbackBinding, EventGroupCount, EventSource};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
@@ -59,7 +60,7 @@ impl Delivery<'_> {
             Self::Callback { source, .. } => source.correlation_field.as_deref(),
         }
     }
-    pub(crate) fn timeout_secs(&self) -> Result<Option<u64>> {
+    pub(crate) fn timeout_secs(&self) -> Result<Option<u64>, TriggerEngineError> {
         match self {
             Self::Trigger { trigger, .. } => Ok(trigger.group_timeout_secs),
             Self::Callback { source, .. } => source
@@ -67,45 +68,47 @@ impl Delivery<'_> {
                 .as_ref()
                 .and_then(|group| group.timeout_secs)
                 .map(|n| {
-                    anyhow::ensure!(n > 0, "group timeout must be positive");
+                    if n <= 0 {
+                        return Err(TriggerEngineError::GroupTimeoutNotPositive);
+                    }
                     Ok(n as u64)
                 })
                 .transpose(),
         }
     }
-    fn minimum_count(&self) -> Result<usize> {
+    fn minimum_count(&self) -> Result<usize, TriggerEngineError> {
         let count = match self {
             Self::Trigger { trigger, .. } => trigger.group_min_count,
             Self::Callback { source, .. } => {
                 let n = source
                     .group
                     .as_ref()
-                    .context("callback source is not grouped")?
+                    .ok_or(TriggerEngineError::CallbackSourceNotGrouped)?
                     .min_count
                     .unwrap_or(1);
-                anyhow::ensure!(n > 0, "minimum group count must be positive");
+                if n <= 0 {
+                    return Err(TriggerEngineError::MinimumCountNotPositive);
+                }
                 usize::try_from(n)?
             }
         };
-        anyhow::ensure!(
-            count > 0 && count <= MAX_EVENT_TRIGGER_GROUP_DOCS,
-            "minimum group count exceeds bounds"
-        );
+        if count == 0 || count > MAX_EVENT_TRIGGER_GROUP_DOCS {
+            return Err(TriggerEngineError::MinimumCountOutOfBounds);
+        }
         Ok(count)
     }
-    fn expected(&self) -> Result<Option<EventGroupCount>> {
+    fn expected(&self) -> Result<Option<EventGroupCount>, TriggerEngineError> {
         match self {
             Self::Callback { source, .. } => Ok(source
                 .group
                 .as_ref()
-                .context("callback source is not grouped")?
+                .ok_or(TriggerEngineError::CallbackSourceNotGrouped)?
                 .expected_count
                 .clone()),
             Self::Trigger { trigger, .. } => {
-                anyhow::ensure!(
-                    trigger.expected_count.is_none() || trigger.expected_count_field.is_none(),
-                    "group has two expected count sources"
-                );
+                if trigger.expected_count.is_some() && trigger.expected_count_field.is_some() {
+                    return Err(TriggerEngineError::TwoExpectedCountSources);
+                }
                 Ok(
                     match (trigger.expected_count, &trigger.expected_count_field) {
                         (Some(n), None) => Some(EventGroupCount::Fixed(i64::try_from(n)?)),
@@ -245,26 +248,28 @@ fn decode_group(
     response: &Value,
     delivery: Delivery<'_>,
     correlation: &str,
-) -> Result<Option<GroupRecord>> {
+) -> Result<Option<GroupRecord>, TriggerEngineError> {
     let rows = gents_protocol::graphql::graphql_rows_from_response(response, "EventGroupState");
-    anyhow::ensure!(rows.len() <= 1, "ambiguous durable event group");
+    if rows.len() > 1 {
+        return Err(TriggerEngineError::AmbiguousGroup);
+    }
     rows.into_iter()
         .next()
-        .map(|mut row| {
+        .map(|mut row| -> Result<GroupRecord, TriggerEngineError> {
             let doc_id = row
                 .as_object_mut()
                 .and_then(|row| row.remove("_docID"))
                 .and_then(|value| value.as_str().map(str::to_owned))
-                .context("group record missing physical ID")?;
+                .ok_or(TriggerEngineError::GroupRecordMissingId)?;
             let state: EventGroupState = serde_json::from_value(row)?;
-            anyhow::ensure!(
-                state.node_did == delivery.owner()
-                    && state.consumer == delivery.consumer()
-                    && state.consumer_config_key == delivery.config_key()
-                    && state.correlation == correlation
-                    && state.group_key == delivery.group_key(correlation),
-                "group ownership/identity mismatch"
-            );
+            if !(state.node_did == delivery.owner()
+                && state.consumer == delivery.consumer()
+                && state.consumer_config_key == delivery.config_key()
+                && state.correlation == correlation
+                && state.group_key == delivery.group_key(correlation))
+            {
+                return Err(TriggerEngineError::GroupIdentityMismatch);
+            }
             Ok(GroupRecord { doc_id, state })
         })
         .transpose()
@@ -402,14 +407,17 @@ pub(crate) async fn evaluate_group(
         complete,
     })
 }
-fn expected_count(delivery: Delivery<'_>, docs: &[Value]) -> Result<Option<usize>> {
+fn expected_count(
+    delivery: Delivery<'_>,
+    docs: &[Value],
+) -> Result<Option<usize>, TriggerEngineError> {
     expected_group_count(delivery.expected()?.as_ref(), docs)
 }
 
 pub(crate) fn expected_group_count(
     expected: Option<&EventGroupCount>,
     docs: &[Value],
-) -> Result<Option<usize>> {
+) -> Result<Option<usize>, TriggerEngineError> {
     let Some(expected) = expected else {
         return Ok(None);
     };
@@ -420,14 +428,13 @@ pub(crate) fn expected_group_count(
             for doc in docs {
                 let value = doc
                     .get(source_field)
-                    .context("group member missing expected-count field")?;
+                    .ok_or(TriggerEngineError::ExpectedCountFieldMissing)?;
                 let n =
                     crate::graphql::canonical_positive_count(value, MAX_EVENT_TRIGGER_GROUP_DOCS)
-                        .context("expected count must be a canonical positive bounded integer")?;
-                anyhow::ensure!(
-                    resolved.is_none_or(|prior| prior == n),
-                    "group members disagree on expected count"
-                );
+                        .ok_or(TriggerEngineError::ExpectedCountNotCanonical)?;
+                if !resolved.is_none_or(|prior| prior == n) {
+                    return Err(TriggerEngineError::ExpectedCountConflict);
+                }
                 resolved = Some(n);
             }
             Ok(resolved)

@@ -335,7 +335,7 @@ async fn execute(
                     .requests
                     .iter()
                     .map(|row| row.doc_id.clone().context("request has no physical ID"))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, _>>()?;
                 let calls = if docs.is_empty() {
                     super::InvestigationCallsEnvelope {
                         inference_calls: vec![],
@@ -674,7 +674,7 @@ async fn transcript(
     let observed = headers
         .iter()
         .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     reader.observe_headers(&observed);
     let mut messages = Vec::new();
     let mut next = None;
@@ -747,7 +747,7 @@ async fn search_session(
         let observed = headers
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         reader.observe_headers(&observed);
         let exhausted = headers.len() < SEARCH_MESSAGE_PAGE;
         for row in headers {

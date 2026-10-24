@@ -245,7 +245,7 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     let received = received_rows
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     anyhow::ensure!(
         received
             .iter()

@@ -158,7 +158,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     let rows = raw
         .iter()
         .map(decode_output_segment_row)
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let close = rows.iter().find(|row| row.segment.close.is_some()).unwrap();
     assert!(
@@ -856,7 +856,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<anyhow::Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(
             rows.len(),

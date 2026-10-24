@@ -22,7 +22,7 @@ mod text_tests;
 pub use ops::{
     apply_tool_grant_selection, guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice,
     guard_tools_keep_control, guard_tools_keep_grants, reselection_keeps_grants,
-    validate_tool_network_selection, OperatorGrants, PatchOutcome, SelfConfigCore,
+    validate_tool_network_selection, GuardError, OperatorGrants, PatchOutcome, SelfConfigCore,
     EFFECT_TIMING_NOTE,
 };
 
@@ -111,8 +111,14 @@ impl From<anyhow::Error> for SelfConfigError {
     }
 }
 
-fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
-    serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
+#[derive(Debug, thiserror::Error)]
+enum OutcomeTextError {
+    #[error("serialize outcome: {error}")]
+    Serialize { error: serde_json::Error },
+}
+
+fn outcome_text(outcome: &PatchOutcome) -> Result<String, OutcomeTextError> {
+    serde_json::to_string_pretty(outcome).map_err(|error| OutcomeTextError::Serialize { error })
 }
 
 fn anchored_request(
@@ -132,7 +138,9 @@ fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     let id = core.agent_id().to_owned();
     let mut request = ApplyRequest::new(SelfConfigTarget::Agent, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
-    request.guard = Box::new(|_, stored, merged| guard_agent_keeps_reach(stored, merged));
+    request.guard = Box::new(|_, stored, merged| {
+        guard_agent_keeps_reach(stored, merged).map_err(anyhow::Error::from)
+    });
     fence_profile_pick(&mut request);
     request
 }
@@ -275,10 +283,12 @@ fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
         let held = held.clone();
         Box::pin(async move {
             validate_merged_selection(&merged)?;
-            guard_tools_keep_grants(&held, Some(&stored), &merged)
+            guard_tools_keep_grants(&held, Some(&stored), &merged).map_err(anyhow::Error::from)
         })
     });
-    request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
+    request.guard = Box::new(|_, stored, merged| {
+        guard_tools_keep_control(stored, merged).map_err(anyhow::Error::from)
+    });
     request
 }
 fn refuse_silent_tools_drops(

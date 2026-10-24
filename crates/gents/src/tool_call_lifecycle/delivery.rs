@@ -2339,7 +2339,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
     }
 
@@ -2496,7 +2496,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let tool_rows = rows
             .iter()
@@ -2587,7 +2587,7 @@ mod spawned_background_tests {
                 .unwrap()
                 .iter()
                 .map(decode_output_segment_row)
-                .collect::<Result<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             let tool_rows = rows
                 .iter()
@@ -2706,7 +2706,7 @@ mod spawned_background_tests {
                 .unwrap()
                 .iter()
                 .map(decode_output_segment_row)
-                .collect::<Result<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
                 .unwrap()
                 .into_iter()
                 .map(|row| row.doc_id)
@@ -2989,7 +2989,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .filter(|row| {
@@ -3148,7 +3148,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .filter(|row| {
@@ -3277,7 +3277,7 @@ mod spawned_background_tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .filter(|row| {

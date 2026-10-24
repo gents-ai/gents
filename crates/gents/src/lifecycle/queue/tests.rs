@@ -341,16 +341,16 @@ impl CanonicalBackgroundFixture {
         wake_content: &str,
         queue: RequestQueue,
         existing_notification_doc_id: Option<&str>,
-    ) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
-        anyhow::ensure!(
-            queue.source == QueueSource::BackgroundCompletion
-                && queue.policy == QueuePolicy::Coalesce
-                && queue
-                    .key
-                    .as_deref()
-                    .is_some_and(|key| !key.trim().is_empty()),
-            "fixture notification requires a keyed coalescing background queue"
-        );
+    ) -> Result<EnqueuedBackgroundCompletionInput, Box<dyn std::error::Error + Send + Sync>> {
+        if !(queue.source == QueueSource::BackgroundCompletion
+            && queue.policy == QueuePolicy::Coalesce
+            && queue
+                .key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty()))
+        {
+            return Err("fixture notification requires a keyed coalescing background queue".into());
+        }
         let turn = self.next_turn;
         self.next_turn += 1;
         self.writer
@@ -380,11 +380,13 @@ impl CanonicalBackgroundFixture {
             .publish_native_turn(&self.lifecycle, turn, 0, &message)
             .await?
             .accepted_tools;
-        anyhow::ensure!(accepted.len() == 1, "fixture expected one accepted tool");
+        if accepted.len() != 1 {
+            return Err("fixture expected one accepted tool".into());
+        }
         let deadline = self
             .lifecycle
             .claimed_deadline_at()
-            .context("fixture parent claim has no deadline")?;
+            .ok_or("fixture parent claim has no deadline")?;
         let mut tool = ToolCallLifecycle::from_accepted(
             self.node.clone(),
             self.parent.node_did.clone(),
@@ -407,16 +409,13 @@ impl CanonicalBackgroundFixture {
         tool.start_running().await?;
         let binding = tool
             .tool_output_binding()
-            .context("accepted fixture tool has output binding")?;
+            .map_err(|error| format!("accepted fixture tool has output binding: {error}"))?;
         crate::tool_call_lifecycle::delivery::append_tool_output(&binding, notification_content)
             .await?;
-        anyhow::ensure!(
-            tool.complete_owned(notification_content, None).await?,
-            "fixture tool terminal CAS lost"
-        );
-        let tool_call_doc_id = tool
-            .doc_id()
-            .context("fixture tool has physical document")?;
+        if !tool.complete_owned(notification_content, None).await? {
+            return Err("fixture tool terminal CAS lost".into());
+        }
+        let tool_call_doc_id = tool.doc_id().ok_or("fixture tool has physical document")?;
         persist_background_completion_with_message_canonical(
             &self.node,
             &self.parent,
@@ -435,6 +434,7 @@ impl CanonicalBackgroundFixture {
             crate::lifecycle::RequestHopCause::Continuation,
         )
         .await
+        .map_err(Into::into)
     }
 }
 

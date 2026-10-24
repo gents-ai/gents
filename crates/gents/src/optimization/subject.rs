@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde_json::Value;
 
 use crate::document_config::{
@@ -18,6 +18,24 @@ use crate::pack::{declared_paths, interpolate, PackManifest};
 
 /// The canonical config bundle a sidecar reference or an inline prompt lives in.
 const CONFIG_ASSET: &str = "pack_config.json";
+
+#[derive(Debug, thiserror::Error)]
+pub enum SubjectError {
+    #[error("parsing pack_config.json")]
+    ConfigJson(#[source] serde_json::Error),
+    #[error("pack_config.json reads the target's sidecar {asset:?} from more than one field; a candidate could not change one document alone")]
+    SharedSidecar { asset: String },
+    #[error("pack has no asset {path:?}")]
+    MissingAsset { path: String },
+    #[error("asset {path:?} is not UTF-8")]
+    AssetNotUtf8 {
+        path: String,
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+}
+
+type Result<T, E = SubjectError> = std::result::Result<T, E>;
 
 /// One arm's pack: where it is, what it digests to, what it declares, and the
 /// bytes that digest covers.
@@ -39,7 +57,7 @@ pub fn materialize_pack(
     owner: &str,
     agent_id: &str,
     target: &JobTarget,
-) -> Result<MaterializedPack> {
+) -> anyhow::Result<MaterializedPack> {
     let pack = load_pack(&CellSource::Directory(dir.to_path_buf()), owner)
         .with_context(|| format!("loading pack {}", dir.display()))?;
 
@@ -168,11 +186,12 @@ fn reject_shared_sidecar(files: &BTreeMap<String, Vec<u8>>, asset: &str) -> Resu
     let Some(bytes) = files.get(CONFIG_ASSET) else {
         return Ok(());
     };
-    let raw: Value = serde_json::from_slice(bytes).context("parsing pack_config.json")?;
-    anyhow::ensure!(
-        uses(&raw, asset) <= 1,
-        "{CONFIG_ASSET} reads the target's sidecar {asset:?} from more than one field; a candidate could not change one document alone"
-    );
+    let raw: Value = serde_json::from_slice(bytes).map_err(SubjectError::ConfigJson)?;
+    if uses(&raw, asset) > 1 {
+        return Err(SubjectError::SharedSidecar {
+            asset: asset.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -189,7 +208,7 @@ fn sidecar_prompt_asset(
     let Some(bytes) = files.get(CONFIG_ASSET) else {
         return Ok(None);
     };
-    let mut raw: Value = serde_json::from_slice(bytes).context("parsing pack_config.json")?;
+    let mut raw: Value = serde_json::from_slice(bytes).map_err(SubjectError::ConfigJson)?;
     let Some(reference) = raw_target(&mut raw, target, target_id).and_then(|value| value.as_str())
     else {
         return Ok(None);
@@ -206,9 +225,11 @@ pub fn baseline_text(pack: &MaterializedPack) -> Result<String> {
         let bytes = pack
             .files
             .get(path)
-            .with_context(|| format!("pack has no asset {path:?}"))?;
-        return String::from_utf8(bytes.clone())
-            .with_context(|| format!("asset {path:?} is not UTF-8"));
+            .ok_or_else(|| SubjectError::MissingAsset { path: path.clone() })?;
+        return String::from_utf8(bytes.clone()).map_err(|source| SubjectError::AssetNotUtf8 {
+            path: path.clone(),
+            source,
+        });
     }
     Ok(match pack.target {
         TargetField::AgentContextSystemPrompt => pack
@@ -237,7 +258,7 @@ pub fn materialize_candidate(
     owner: &str,
     text: &str,
     dir: &Path,
-) -> Result<MaterializedPack> {
+) -> anyhow::Result<MaterializedPack> {
     anyhow::ensure!(
         !dir.exists(),
         "candidate directory {} already exists",
@@ -288,7 +309,7 @@ pub(crate) mod tests {
     pub(crate) fn write_fixture_pack(root: &Path) {
         crate::eval::runner::freeze::tests::write_fixture_pack(root, "Off");
     }
-    pub(crate) fn context_pack(dir: &Path) -> Result<MaterializedPack> {
+    pub(crate) fn context_pack(dir: &Path) -> anyhow::Result<MaterializedPack> {
         materialize_pack(dir, OWNER, "monitor", &JobTarget::Context)
     }
 
@@ -424,7 +445,7 @@ pub(crate) mod tests {
         std::fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
     }
 
-    fn task_pack(dir: &Path) -> Result<MaterializedPack> {
+    fn task_pack(dir: &Path) -> anyhow::Result<MaterializedPack> {
         materialize_pack(dir, OWNER, "monitor", &JobTarget::Task("plan".into()))
     }
 

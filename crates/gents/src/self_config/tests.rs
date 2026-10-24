@@ -7377,7 +7377,7 @@ fn job_guard(stored: Option<Value>, candidate: Option<Value>) -> Result<(), Stri
     let stored = job_tools("ns/runner", stored);
     let candidate = job_tools("ns/runner", candidate);
     ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &candidate)
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| gents_protocol::error_chain::ErrorChain(&error).to_string())
 }
 
 #[test]

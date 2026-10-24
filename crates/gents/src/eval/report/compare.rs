@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use crate::eval::documents::EvalError;
 use serde::Serialize;
 
 use crate::eval::report::build::{
@@ -15,6 +15,8 @@ use crate::optimization::policy::{
     cost_ok, decide, evidence_from_pairs, no_case_regression, sufficient, CaseEvidence,
     DecisionReport, Evidence, Mode, PolicyV2,
 };
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CaseComparison {

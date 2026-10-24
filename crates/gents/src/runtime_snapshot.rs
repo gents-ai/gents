@@ -167,7 +167,7 @@ pub(crate) fn seed_schedule_next_run_at(
             expression,
             timezone,
             ..
-        } => next_cron_run_after(expression, timezone, now),
+        } => Ok(next_cron_run_after(expression, timezone, now)?),
     }
 }
 
@@ -186,7 +186,7 @@ pub(crate) fn advance_schedule_next_run_at(
             missed_run_policy,
         } => match missed_run_policy {
             None | Some(CronMissedRunPolicy::LatestOnly) => {
-                next_cron_run_after(expression, timezone, now)
+                Ok(next_cron_run_after(expression, timezone, now)?)
             }
         },
     }

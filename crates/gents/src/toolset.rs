@@ -108,7 +108,6 @@ pub(crate) use shared::run_command_for_test;
 pub(crate) use shared::shell_join;
 #[cfg(test)]
 pub(crate) use shared::validate_command_policy;
-pub(crate) use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
     lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_managed_command,
@@ -117,6 +116,7 @@ pub use shared::{
     workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
 };
+pub(crate) use shared::{ContextError, ToolContext};
 
 pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())

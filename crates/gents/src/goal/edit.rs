@@ -21,21 +21,20 @@ pub(crate) struct GoalEdit {
 }
 
 impl GoalEdit {
-    pub(crate) fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.objective.is_some() || self.budget.is_some(),
-            "provide objective or token_budget to edit the goal"
-        );
-        anyhow::ensure!(
-            self.objective
-                .as_deref()
-                .is_none_or(|value| !value.trim().is_empty()),
-            "goal objective must be non-empty"
-        );
-        anyhow::ensure!(
-            self.budget.is_none_or(|budget| budget > 0),
-            "goal token budget must be positive"
-        );
+    pub(crate) fn validate(&self) -> Result<(), GoalError> {
+        if self.objective.is_none() && self.budget.is_none() {
+            return Err(GoalError::EditFieldRequired);
+        }
+        if self
+            .objective
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(GoalError::ObjectiveEmpty);
+        }
+        if self.budget.is_some_and(|budget| budget <= 0) {
+            return Err(GoalError::BudgetNotPositive);
+        }
         Ok(())
     }
 }

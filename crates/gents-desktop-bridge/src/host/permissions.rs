@@ -151,7 +151,7 @@ pub(super) async fn save(
     })
     .await
     .map_err(|error| super::backend_error(error.into()))?
-    .map_err(super::backend_error)?;
+    .map_err(|error| super::backend_error(error.into()))?;
     local.settings = Some(settings);
     Ok(local.view())
 }

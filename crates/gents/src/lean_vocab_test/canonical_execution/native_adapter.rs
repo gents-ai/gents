@@ -422,7 +422,7 @@ impl NativeCanonicalExecution {
             .context("native completed tool source query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| {
                 matches!(&row.segment.source,
@@ -452,7 +452,7 @@ impl NativeCanonicalExecution {
             .context("native completed tool result query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| {
                 matches!(&row.message.publication,
@@ -673,7 +673,7 @@ impl NativeCanonicalExecution {
             .context("native segment query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         decoded_segments.sort_by_key(|row| {
             self.segment_ids
                 .get(&row.doc_id)
@@ -709,7 +709,7 @@ impl NativeCanonicalExecution {
             .context("native message query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         decoded_messages.sort_by_key(|row| row.message.sequence);
         self.messages = decoded_messages
             .iter()
@@ -2118,7 +2118,7 @@ impl NativeCanonicalExecution {
         let matching = rows
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|row| row.segment == prepared)
             .collect::<Vec<_>>();
@@ -2234,7 +2234,7 @@ impl NativeCanonicalExecution {
         let closing_row = rows
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .find(|row| row.segment.close.is_some())
             .context("accepted partial close did not persist its closure")?;

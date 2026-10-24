@@ -186,11 +186,11 @@ where
     let headers = header_values
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let segments = segment_values
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let observed = segments
         .iter()
         .map(|row| ObservedSegment {

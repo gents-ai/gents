@@ -3137,7 +3137,11 @@ fn allow_scenario_folders(
             if !inside(&canonical) {
                 return Err(outside(&canonical));
             }
-            gents::plugin::allowed::add(home, &canonical, folder.access)
+            Ok(gents::plugin::allowed::add(
+                home,
+                &canonical,
+                folder.access,
+            )?)
         })
         .collect()
 }

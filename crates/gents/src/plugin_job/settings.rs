@@ -1,11 +1,11 @@
 use rapidhash::{HashSetExt, RapidHashSet};
 use std::ops::RangeInclusive;
 
-use anyhow::Context;
 use gents_protocol::job::{DynamicMode, JobCeiling, JobPolicy, PluginJobSettings};
 
 use crate::document_config::{PackConfig, Tools};
 use crate::pack::{InstalledVia, PackMetadata};
+use crate::plugin_job::origin::PluginJobError;
 
 const MAX_LIVE: RangeInclusive<u32> = 1..=64;
 const MAX_SPAWNS: RangeInclusive<u32> = 1..=1024;
@@ -14,11 +14,8 @@ const RESULT_BYTES: RangeInclusive<u64> = 1024..=1024 * 1024;
 const MAX_WALL_SECS: RangeInclusive<u64> = 60..=PluginJobSettings::MAX_WALL_SECS_CAP;
 
 /// Decodes one `integrations.plugins[].job` block; unknown fields are refused.
-pub fn parse(value: serde_json::Value) -> anyhow::Result<PluginJobSettings> {
-    serde_json::from_value(value).context(
-        "job is not a valid block; its fields are agent_targets, max_live, max_spawns, \
-         max_messages_per_slot, result_bytes, max_wall_secs and policy",
-    )
+pub fn parse(value: serde_json::Value) -> Result<PluginJobSettings, PluginJobError> {
+    serde_json::from_value(value).map_err(PluginJobError::InvalidBlock)
 }
 
 /// Lean `Policy.valid`: `dynamic_targets` must lie within `agent_targets`
@@ -61,7 +58,7 @@ pub fn pack_job_block_admissible(
     coordinate: &str,
     shipped: &[(String, &PackConfig)],
     installed_via: InstalledVia,
-) -> anyhow::Result<()> {
+) -> Result<(), PluginJobError> {
     let closure: Vec<String> = std::iter::once(coordinate.to_owned())
         .chain(pack.dependencies.iter().cloned())
         .chain(shipped.iter().map(|(shipper, _)| shipper.clone()))
@@ -85,23 +82,19 @@ pub fn pack_job_block_admissible(
                     )
             })
             .collect();
-        anyhow::ensure!(
-            job_block_admissible(
-                installed_via,
-                &closure,
-                &targets_from,
-                &job.policy.trusted_packs,
-                job.policy.dynamic,
-                &job.policy.project_roots,
-            ),
-            "plugin {:?} ships a job block this install cannot grant. A pack-shipped job \
-             block needs an operator install, job.agent_targets that name AgentTargets shipped \
-             by {coordinate} or its dependencies, job.policy.trusted_packs within {coordinate} \
-             and its dependencies, job.policy.dynamic off or check, and no \
-             job.policy.project_roots. Next: drop the job block from the pack, or install the \
-             pack with `gents pack install` and wire the block into Tools as the operator",
-            plugin.plugin
-        );
+        if !job_block_admissible(
+            installed_via,
+            &closure,
+            &targets_from,
+            &job.policy.trusted_packs,
+            job.policy.dynamic,
+            &job.policy.project_roots,
+        ) {
+            return Err(PluginJobError::JobBlockNotAdmissible {
+                plugin: plugin.plugin.clone(),
+                coordinate: coordinate.to_owned(),
+            });
+        }
     }
     Ok(())
 }

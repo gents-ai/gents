@@ -808,9 +808,10 @@ async fn scoped_canonical_headers(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .context("canonical header query omitted AgentMessage rows")?;
-    rows.iter()
+    Ok(rows
+        .iter()
         .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect()
+        .collect::<Result<_, _>>()?)
 }
 
 #[derive(Debug, Deserialize)]

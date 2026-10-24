@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 mod command;
@@ -19,6 +18,10 @@ pub use review_task::{
 use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Input, Review, Route};
 
 pub use gents_loop::tool_policy::workspace_permissions::{Mode, Preference, Scope, SelectionError};
+
+use super::PluginApprovalError;
+
+type Result<T, E = PluginApprovalError> = std::result::Result<T, E>;
 
 pub const CONTRACT_VERSION: u32 = 1;
 pub const STATUS_SUPPORT_FIELD: &str = "workspace_permissions";
@@ -57,17 +60,21 @@ impl WorkspaceKey {
         agent_id: &str,
         path: &Path,
     ) -> Result<Self> {
-        anyhow::ensure!(
-            !node_did.trim().is_empty()
-                && !requester_did.trim().is_empty()
-                && !agent_id.trim().is_empty(),
-            "Choose a runtime and agent before changing permissions."
-        );
-        anyhow::ensure!(path.is_absolute(), "Choose an absolute workspace folder.");
+        if node_did.trim().is_empty()
+            || requester_did.trim().is_empty()
+            || agent_id.trim().is_empty()
+        {
+            return Err(PluginApprovalError::ChooseRuntime);
+        }
+        if !path.is_absolute() {
+            return Err(PluginApprovalError::AbsoluteWorkspace);
+        }
         let path = path
             .canonicalize()
-            .context("resolving the workspace folder")?;
-        anyhow::ensure!(path.is_dir(), "Choose a workspace folder.");
+            .map_err(PluginApprovalError::ResolveWorkspace)?;
+        if !path.is_dir() {
+            return Err(PluginApprovalError::NotWorkspaceFolder);
+        }
         Ok(Self {
             node_did: node_did.to_owned(),
             requester_did: requester_did.to_owned(),
@@ -168,23 +175,20 @@ impl BindingAction {
                 writable_root,
                 ..
             } => {
-                anyhow::ensure!(
-                    !argv.is_empty() && !argv[0].trim().is_empty(),
-                    "the command approval has no executable"
-                );
+                if argv.is_empty() || argv[0].trim().is_empty() {
+                    return Err(PluginApprovalError::NoExecutable);
+                }
                 crate::plugin::allowed::canonical_target(root, Some(true))?;
                 crate::plugin::allowed::canonical_target(cwd, Some(true))?;
                 if let Some(writable) = writable_root {
                     crate::plugin::allowed::canonical_target(writable, Some(true))?;
-                    anyhow::ensure!(
-                        writable.starts_with(root),
-                        "the writable root exceeds the tool root"
-                    );
+                    if !writable.starts_with(root) {
+                        return Err(PluginApprovalError::WritableRootOutside);
+                    }
                 }
-                anyhow::ensure!(
-                    cwd.starts_with(root),
-                    "the command working directory is outside its tool root"
-                );
+                if !cwd.starts_with(root) {
+                    return Err(PluginApprovalError::CwdOutsideRoot);
+                }
             }
             Self::FileMutation {
                 path,
@@ -195,17 +199,14 @@ impl BindingAction {
                 crate::plugin::allowed::canonical_target(root, Some(true))?;
                 let context = crate::toolset::ToolContext::new(root.clone(), false)?;
                 let resolved = context.resolve_path_allow_create(
-                    path.to_str()
-                        .context("the file approval path is not valid UTF-8")?,
+                    path.to_str().ok_or(PluginApprovalError::PathNotUtf8)?,
                 )?;
-                anyhow::ensure!(
-                    resolved == *path && path.try_exists()? == *existed,
-                    "The file approval target changed. Retry the file change."
-                );
-                anyhow::ensure!(
-                    !existed || path.is_file(),
-                    "The file approval target is not a regular file."
-                );
+                if !(resolved == *path && path.try_exists()? == *existed) {
+                    return Err(PluginApprovalError::FileTargetChanged);
+                }
+                if *existed && !path.is_file() {
+                    return Err(PluginApprovalError::FileTargetNotRegular);
+                }
             }
         }
         Ok(())
@@ -235,17 +236,17 @@ impl ActionConsent {
         input_digest: &str,
     ) -> Result<()> {
         self.validate()?;
-        anyhow::ensure!(
-            matches!(&self.binding.action, BindingAction::Plugin {
-                plugin: expected_plugin,
-                artifact_digest: expected_artifact,
-                input_digest: expected_input,
-                ..
-            } if expected_plugin == plugin
-                && expected_artifact == artifact_digest
-                && expected_input == input_digest),
-            "The plugin invocation changed after approval. Retry the action."
-        );
+        if !matches!(&self.binding.action, BindingAction::Plugin {
+            plugin: expected_plugin,
+            artifact_digest: expected_artifact,
+            input_digest: expected_input,
+            ..
+        } if expected_plugin == plugin
+            && expected_artifact == artifact_digest
+            && expected_input == input_digest)
+        {
+            return Err(PluginApprovalError::PluginChanged);
+        }
         Ok(())
     }
 }
@@ -277,7 +278,11 @@ async fn authorize_binding(
         .and_then(|context| context.session_id);
     let binding = decision.binding.clone();
     let allowed = consent_binding(home, decision, super::interactive(), session_id).await?;
-    anyhow::ensure!(allowed, "{denied}");
+    if !allowed {
+        return Err(PluginApprovalError::NotApproved {
+            message: denied.to_owned(),
+        });
+    }
     Ok(binding)
 }
 
@@ -290,7 +295,9 @@ pub(crate) async fn consent_binding(
     use super::{Consent, Request};
 
     let bounds = crate::tool_call_lifecycle::runtime::tool_execution_bounds(super::WAIT);
-    let deadline = bounds.deadline_at.context("approval deadline is missing")?;
+    let deadline = bounds
+        .deadline_at
+        .ok_or(PluginApprovalError::DeadlineMissing)?;
     let remaining = deadline
         .signed_duration_since(chrono::Utc::now())
         .to_std()
@@ -301,14 +308,12 @@ pub(crate) async fn consent_binding(
         .min(u64::try_from(deadline.timestamp_millis()).unwrap_or_default());
     let consent = async {
         let ensure_open = || -> Result<()> {
-            anyhow::ensure!(
-                !bounds.cancellation_token.is_cancelled(),
-                "action cancelled while awaiting approval"
-            );
-            anyhow::ensure!(
-                chrono::Utc::now() < deadline,
-                "action approval exceeded the request deadline"
-            );
+            if bounds.cancellation_token.is_cancelled() {
+                return Err(PluginApprovalError::Cancelled);
+            }
+            if chrono::Utc::now() >= deadline {
+                return Err(PluginApprovalError::RequestDeadline);
+            }
             Ok(())
         };
         ensure_open()?;
@@ -329,26 +334,22 @@ pub(crate) async fn consent_binding(
     };
     tokio::select! {
         biased;
-        _ = bounds.cancellation_token.cancelled() => anyhow::bail!("action cancelled while awaiting approval"),
+        _ = bounds.cancellation_token.cancelled() => Err(PluginApprovalError::Cancelled),
         result = tokio::time::timeout(remaining, consent) => {
-            result.context("action approval exceeded the request deadline")?
+            result.map_err(PluginApprovalError::ApprovalTimeout)?
         }
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("Workspace permissions changed. Retry the action with the current permissions.")]
-pub(crate) struct SelectionChanged;
 
 pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Settings> {
     let settings = get(home, &binding.scope.workspace)?;
     let available: Vec<_> = settings.iter().map(Settings::scope).collect();
     if !policy::approval_scope_matches(&available, &binding.scope) {
-        return Err(SelectionChanged.into());
+        return Err(PluginApprovalError::SelectionChanged);
     }
     crate::plugin::allowed::canonical_target(&binding.scope.workspace.path, Some(true))?;
     binding.action.validate()?;
-    settings.context("workspace permissions are unavailable")
+    settings.ok_or(PluginApprovalError::WorkspaceUnavailable)
 }
 
 pub(crate) fn consume_decision(
@@ -360,7 +361,7 @@ pub(crate) fn consume_decision(
     let settings = validate_binding(home, expected)?;
     let available = [settings.scope()];
     policy::consume_approval(&available, expected, received, allowed)
-        .ok_or_else(|| SelectionChanged.into())
+        .ok_or(PluginApprovalError::SelectionChanged)
 }
 
 pub(crate) fn allowed_scope(
@@ -372,7 +373,9 @@ pub(crate) fn allowed_scope(
     if let Some(settings) = context::settings(home)? {
         entries.extend(settings.dirs);
     }
-    crate::plugin::allowed::Scope::from_entries(home, entries, workdir, user_home)
+    Ok(crate::plugin::allowed::Scope::from_entries(
+        home, entries, workdir, user_home,
+    )?)
 }
 
 /// Installed plugin admission still enforces its manifold. This decision
@@ -428,18 +431,17 @@ fn read(home: &Path) -> Result<Stored> {
     match std::fs::read(preferences_file(home)) {
         Ok(bytes) => {
             let stored: Stored = serde_json::from_slice(&bytes)
-                .context("the workspace permissions file is unreadable")?;
+                .map_err(PluginApprovalError::UnreadableWorkspaceFile)?;
             let mut keys = rapidhash::RapidHashSet::default();
             for entry in &stored.entries {
-                anyhow::ensure!(
-                    keys.insert(&entry.workspace),
-                    "the workspace permissions file contains duplicate scopes"
-                );
+                if !keys.insert(&entry.workspace) {
+                    return Err(PluginApprovalError::DuplicateScopes);
+                }
             }
             Ok(stored)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Stored::default()),
-        Err(error) => Err(error).context("reading workspace permissions"),
+        Err(error) => Err(PluginApprovalError::ReadWorkspace(error)),
     }
 }
 
@@ -460,12 +462,11 @@ pub fn save_mode(
     let _lock = lock(home)?;
     let mut stored = read(home)?;
     let previous = stored.entries.iter().find(|entry| entry.workspace == *key);
-    anyhow::ensure!(
-        review_task
-            .is_none_or(|selection| !selection.task_id.trim().is_empty()
-                && !selection.policy_digest.is_empty()),
-        "Choose a valid access reviewer task."
-    );
+    if !review_task.is_none_or(|selection| {
+        !selection.task_id.trim().is_empty() && !selection.policy_digest.is_empty()
+    }) {
+        return Err(PluginApprovalError::InvalidReviewTask);
+    }
     let selected = gents_loop::tool_policy::workspace_permissions::select_mode(
         previous.map(|entry| &entry.selection),
         expected_revision,
@@ -473,9 +474,9 @@ pub fn save_mode(
         review_task.cloned(),
     )?;
     if !selected.changed {
-        return Ok(previous
-            .context("unchanged workspace permissions are missing")?
-            .clone());
+        return previous
+            .cloned()
+            .ok_or(PluginApprovalError::UnchangedMissing);
     }
     let settings = Settings {
         workspace: key.clone(),
@@ -501,29 +502,29 @@ pub(crate) fn grant_at_least(
         .entries
         .iter_mut()
         .find(|entry| entry.workspace == binding.scope.workspace)
-        .ok_or(SelectionChanged)?;
+        .ok_or(PluginApprovalError::SelectionChanged)?;
     if !policy::approval_scope_matches(&[settings.scope()], &binding.scope) {
-        return Err(SelectionChanged.into());
+        return Err(PluginApprovalError::SelectionChanged);
     }
     crate::plugin::allowed::put_entry(&mut settings.dirs, entry, true);
     save(home, &stored)
 }
 
 fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
-    std::fs::create_dir_all(home).context("preparing workspace permissions")?;
+    std::fs::create_dir_all(home).map_err(PluginApprovalError::PrepareWorkspace)?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(home.join(LOCK))
-        .context("opening the workspace permissions lock")?;
-    crate::file_lock::FileLock::exclusive(lock).context("locking workspace permissions")
+        .map_err(PluginApprovalError::WorkspaceLockOpen)?;
+    crate::file_lock::FileLock::exclusive(lock).map_err(PluginApprovalError::WorkspaceLock)
 }
 
 fn save(home: &Path, stored: &Stored) -> Result<()> {
     crate::plugin::allowed::write_permission_file(home, &preferences_file(home), |file| {
-        serde_json::to_writer(file, &stored).context("encoding workspace permissions")
+        serde_json::to_writer(file, &stored).map_err(PluginApprovalError::EncodeWorkspace)
     })
 }
 

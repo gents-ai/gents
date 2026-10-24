@@ -49,7 +49,7 @@ pub(super) async fn resolve_timeline_messages_for_session(
                 let mut headers = raw_headers
                     .iter()
                     .map(decode_transcript_message_row)
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, _>>()?;
                 for header in &headers {
                     anyhow::ensure!(
                         header.message.session_id == session_id

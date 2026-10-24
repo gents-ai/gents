@@ -236,7 +236,7 @@ async fn view(
 ) -> Result<(Option<RunView>, Option<String>)> {
     match load_report(&ctx.access, &ctx.owner, runs_dir, run_id).await {
         Ok(report) => Ok((Some(run_view(report, dir)), None)),
-        Err(error) => match report_refused(&error) {
+        Err(error) => match report_refused(error.as_ref()) {
             Some(refusal) => Ok((None, Some(refusal.to_string()))),
             None => Err(error),
         },

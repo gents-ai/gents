@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Context;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -292,7 +291,7 @@ fn cursor_after_arg(after: Option<&str>) -> String {
 fn cursor_page<T>(
     response: &defra_node::QueryResponse,
     collection: &str,
-) -> Result<(Vec<T>, Option<String>)>
+) -> Result<(Vec<T>, Option<String>), LifecycleError>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -300,29 +299,32 @@ where
         .data
         .as_ref()
         .and_then(|data| data.get("_cursor"))
-        .context("cursor query omitted _cursor")?;
+        .ok_or(LifecycleError::CursorMissing)?;
     let rows = cursor
         .get(collection)
-        .context("cursor query omitted collection rows")?;
-    let page: Vec<T> = serde_json::from_value(rows.clone())
-        .with_context(|| format!("decode {collection} cursor page"))?;
+        .ok_or(LifecycleError::CursorRowsMissing)?;
+    let page: Vec<T> = serde_json::from_value(rows.clone()).map_err(|source| {
+        LifecycleError::CursorPageDecode {
+            collection: collection.to_owned(),
+            source,
+        }
+    })?;
     let page_info = cursor
         .get("_pageInfo")
-        .context("cursor query omitted _pageInfo")?;
+        .ok_or(LifecycleError::CursorPageInfoMissing)?;
     let has_next = page_info
         .get("hasNext")
         .and_then(serde_json::Value::as_bool)
-        .context("cursor query omitted hasNext")?;
+        .ok_or(LifecycleError::CursorHasNextMissing)?;
     let next = if has_next {
-        anyhow::ensure!(
-            !page.is_empty(),
-            "cursor query returned an empty page with hasNext"
-        );
+        if page.is_empty() {
+            return Err(LifecycleError::CursorEmptyPageWithNext);
+        }
         Some(
             page_info
                 .get("endCursor")
                 .and_then(serde_json::Value::as_str)
-                .context("cursor query omitted endCursor")?
+                .ok_or(LifecycleError::CursorEndMissing)?
                 .to_owned(),
         )
     } else {

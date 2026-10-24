@@ -77,7 +77,8 @@ impl ScheduleCadence {
                     missed_run_policy.map(|policy| match policy {
                         crate::schedule_cron::CronMissedRunPolicy::LatestOnly => "latest_only",
                     }),
-                )
+                )?;
+                Ok(())
             }
         }
     }

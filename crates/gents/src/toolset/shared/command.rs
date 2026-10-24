@@ -2,7 +2,7 @@ use rapidhash::RapidHashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::Serialize;
 
 use super::context::{ToolContext, ToolError};
@@ -10,6 +10,36 @@ use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecReque
 use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
 use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CommandError {
+    #[cfg(test)]
+    #[error("artifact_write requires macOS sandbox-exec enforcement")]
+    ArtifactSandboxUnavailable,
+    #[cfg(test)]
+    #[error("macOS sandbox-exec is required for workspace_write bash but was not found")]
+    SandboxExecMissing,
+    #[cfg(any(test, not(target_os = "macos")))]
+    #[error("workspace_write bash requires macOS seatbelt sandbox enforcement on this build")]
+    SeatbeltUnavailable,
+    #[cfg(not(target_os = "macos"))]
+    #[error("Command isolation for runtime permissions is unavailable on this platform.")]
+    IsolationUnavailable,
+    #[error("command root is not valid UTF-8")]
+    RootNotUtf8,
+    #[error("permission path is not valid UTF-8")]
+    PermissionPathNotUtf8,
+    #[error("permission parent is not valid UTF-8")]
+    PermissionParentNotUtf8,
+    #[error("spawning managed command failed: {error}")]
+    SpawnFailed { error: String },
+    #[error("serializing command output")]
+    SerializeOutput(#[source] serde_json::Error),
+    #[error("serializing command metadata")]
+    SerializeMetadata(#[source] serde_json::Error),
+    #[error("serializing command metadata for canonical presentation")]
+    SerializeCanonicalMetadata(#[source] serde_json::Error),
+}
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
 pub use gents_loop::tool_policy::{
@@ -460,7 +490,7 @@ pub(crate) async fn run_command(
     )
     .await
     .map_err(|error| {
-        ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+        ToolError::reported_failure(FailureClass::PolicyDenied, ErrorChain(&error).to_string())
     })?;
     if let Some(protection) = &launch.protection {
         protection.revalidate().map_err(command_guard_error)?;
@@ -527,7 +557,7 @@ pub(crate) async fn run_command(
         }
         ManagedExecOutcome::Cancelled { .. } => return Ok("command was cancelled".to_string()),
         ManagedExecOutcome::SpawnFailed { error } => {
-            return Err(anyhow!("spawning managed command failed: {error}").into());
+            return Err(CommandError::SpawnFailed { error }.into());
         }
     };
     let stdout_raw = String::from_utf8_lossy(&stdout_bytes).into_owned();
@@ -574,11 +604,10 @@ pub(crate) async fn run_command(
         stdout: stdout.content.clone(),
         stderr: stderr.content.clone(),
     };
-    let rendered = render_command_output(&output, raw_json).map_err(ToolError::from)?;
+    let rendered = render_command_output(&output, raw_json)?;
     if let Some(writer) = live_output {
         let metadata_json = serde_json::to_string(&output.metadata)
-            .context("serializing command metadata for canonical presentation")
-            .map_err(ToolError::from)?;
+            .map_err(CommandError::SerializeCanonicalMetadata)?;
         let head = format!("{OUTPUT_META_PREFIX}{metadata_json}\n");
         let layout = if raw_json {
             gents_loop::live_output::CommandPresentationLayout::JsonObject {
@@ -894,7 +923,7 @@ fn validate_read_only_network_disabled(
 pub(crate) fn select_sandbox_for_policy(
     mode: CommandExecutionMode,
     workspace_write_sandbox_enforced: bool,
-) -> Result<&'static str> {
+) -> Result<&'static str, CommandError> {
     match mode {
         CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
         CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
@@ -903,18 +932,12 @@ pub(crate) fn select_sandbox_for_policy(
         {
             Ok("macos_seatbelt")
         }
-        CommandExecutionMode::ArtifactWrite => {
-            anyhow::bail!("artifact_write requires macOS sandbox-exec enforcement")
-        }
+        CommandExecutionMode::ArtifactWrite => Err(CommandError::ArtifactSandboxUnavailable),
         CommandExecutionMode::WorkspaceWrite => {
             if cfg!(target_os = "macos") {
-                anyhow::bail!(
-                    "macOS sandbox-exec is required for workspace_write bash but was not found"
-                )
+                Err(CommandError::SandboxExecMissing)
             } else {
-                anyhow::bail!(
-                    "workspace_write bash requires macOS seatbelt sandbox enforcement on this build"
-                )
+                Err(CommandError::SeatbeltUnavailable)
             }
         }
     }
@@ -991,10 +1014,13 @@ async fn prepare_command_launch(
     } else {
         None
     };
-    let workspace_root =
-        crate::plugin::approval::workspace::command_writable_root(source_root, policy).map_err(
-            |error| ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}")),
-        )?;
+    let workspace_root = crate::plugin::approval::workspace::command_writable_root(
+        source_root,
+        policy,
+    )
+    .map_err(|error| {
+        ToolError::reported_failure(FailureClass::PolicyDenied, ErrorChain(&error).to_string())
+    })?;
     let writable_root = artifact
         .as_ref()
         .map(|grant| grant.root())
@@ -1027,8 +1053,11 @@ async fn prepare_command_launch(
     })
 }
 
-fn command_guard_error(error: anyhow::Error) -> ToolError {
-    ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+fn command_guard_error<E>(error: E) -> ToolError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    ToolError::reported_failure(FailureClass::PolicyDenied, ErrorChain(&error).to_string())
 }
 
 pub(crate) async fn prepare_declared_cli_command(
@@ -1084,7 +1113,7 @@ fn protected_command_for_policy(
     args: &[String],
     policy: &CommandExecutionPolicy,
     protection: &crate::plugin::allowed::CommandProtection,
-) -> Result<(String, Vec<String>, &'static str)> {
+) -> Result<(String, Vec<String>, &'static str), CommandError> {
     let bounded = matches!(
         policy.mode,
         CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
@@ -1099,7 +1128,7 @@ fn protected_command_for_policy(
     }
     let mut parameters = vec![format!(
         "-DWRITABLE_ROOT={}",
-        root.to_str().context("command root is not valid UTF-8")?
+        root.to_str().ok_or(CommandError::RootNotUtf8)?
     )];
     for (index, path) in protection.paths().iter().enumerate() {
         profile.push_str(&format!(
@@ -1107,8 +1136,7 @@ fn protected_command_for_policy(
         ));
         parameters.push(format!(
             "-DOPERATOR_{index}={}",
-            path.to_str()
-                .context("permission path is not valid UTF-8")?
+            path.to_str().ok_or(CommandError::PermissionPathNotUtf8)?
         ));
     }
     for (index, path) in protection.ancestors().iter().enumerate() {
@@ -1117,8 +1145,7 @@ fn protected_command_for_policy(
         ));
         parameters.push(format!(
             "-DOPERATOR_PARENT_{index}={}",
-            path.to_str()
-                .context("permission parent is not valid UTF-8")?
+            path.to_str().ok_or(CommandError::PermissionParentNotUtf8)?
         ));
     }
     let argv = std::iter::once("-p".to_owned())
@@ -1145,8 +1172,8 @@ fn protected_command_for_policy(
     _args: &[String],
     _policy: &CommandExecutionPolicy,
     _protection: &crate::plugin::allowed::CommandProtection,
-) -> Result<(String, Vec<String>, &'static str)> {
-    anyhow::bail!("Command isolation for runtime permissions is unavailable on this platform.")
+) -> Result<(String, Vec<String>, &'static str), CommandError> {
+    Err(CommandError::IsolationUnavailable)
 }
 
 fn sandboxed_command_for_policy(
@@ -1205,7 +1232,7 @@ fn sandboxed_workspace_write_command(
     network_mode: CommandNetworkMode,
     sandbox: &'static str,
     artifact_only: bool,
-) -> Result<(String, Vec<String>, &'static str)> {
+) -> Result<(String, Vec<String>, &'static str), CommandError> {
     let mut policy = macos_workspace_write_policy(network_mode);
     if artifact_only {
         policy.push_str("\n(deny file-link)\n");
@@ -1229,8 +1256,8 @@ fn sandboxed_workspace_write_command(
     _network_mode: CommandNetworkMode,
     _sandbox: &'static str,
     _artifact_only: bool,
-) -> Result<(String, Vec<String>, &'static str)> {
-    anyhow::bail!("workspace_write bash requires macOS seatbelt sandbox enforcement on this build")
+) -> Result<(String, Vec<String>, &'static str), CommandError> {
+    Err(CommandError::SeatbeltUnavailable)
 }
 
 #[cfg(target_os = "macos")]
@@ -1752,13 +1779,15 @@ pub(crate) fn captured_channel<'a>(
     }
 }
 
-fn render_command_output(output: &CommandOutput, raw_json: bool) -> Result<String> {
+fn render_command_output(output: &CommandOutput, raw_json: bool) -> Result<String, CommandError> {
     if raw_json {
-        return serde_json::to_string(output).context("serializing command output");
+        return serde_json::to_string(output).map_err(CommandError::SerializeOutput);
     }
 
     let mut out = String::from(OUTPUT_META_PREFIX);
-    out.push_str(&serde_json::to_string(&output.metadata).context("serializing command metadata")?);
+    out.push_str(
+        &serde_json::to_string(&output.metadata).map_err(CommandError::SerializeMetadata)?,
+    );
     out.push_str("\nstdout:\n");
     out.push_str(if output.stdout.is_empty() {
         "(empty)"

@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config_client::patch::SelfConfigPatch;
 use crate::document_config::{Agent, AgentContext, InferenceBackend, InferenceProfile};
-use anyhow::{ensure, Result};
 
 #[derive(Clone, Debug, Default)]
 pub struct AgentCatalogView {
@@ -27,92 +26,125 @@ pub enum AgentOperation {
     Disable,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    #[error("agent {target:?} already exists")]
+    AlreadyExists { target: String },
+    #[error("display_name is required")]
+    DisplayNameRequired,
+    #[error("select a published inference profile")]
+    UnpublishedInferenceProfile,
+    #[error("fresh agents require system_prompt")]
+    SystemPromptRequired,
+    #[error("clone source must be an enabled agent")]
+    CloneSourceDisabled,
+    #[error("agent {target:?} does not exist")]
+    Missing { target: String },
+    #[error("protected agent cannot be edited")]
+    ProtectedEdit,
+    #[error("unsupported agent edit field {field:?}")]
+    UnsupportedEditField { field: String },
+    #[error("display_name cannot be empty")]
+    EmptyDisplayName,
+    #[error("system_prompt cannot be blank")]
+    BlankSystemPrompt,
+    #[error("protected agent cannot be disabled")]
+    ProtectedDisable,
+    #[error("agent disable cannot also make the target default")]
+    DisableMakesDefault,
+    #[error("default agent cannot be disabled")]
+    DefaultDisable,
+    #[error("sibling tools require an owned unprotected agent with unshared Context and Tools")]
+    SiblingToolsNotAdmitted,
+}
+
 pub fn decide_agent_operation(
     view: &AgentCatalogView,
     op: &AgentOperation,
     target: &str,
     make_default: bool,
-) -> Result<()> {
+) -> Result<(), AgentError> {
     match op {
         AgentOperation::Create(input) => {
-            ensure!(
-                !view.agents.contains_key(target),
-                "agent {target:?} already exists"
-            );
-            ensure!(!input.display_name.is_empty(), "display_name is required");
-            ensure!(
-                !input.inference_profile_id.trim().is_empty()
-                    && view
-                        .published_profiles
-                        .contains(&input.inference_profile_id),
-                "select a published inference profile"
-            );
+            if view.agents.contains_key(target) {
+                return Err(AgentError::AlreadyExists {
+                    target: target.to_owned(),
+                });
+            }
+            if input.display_name.is_empty() {
+                return Err(AgentError::DisplayNameRequired);
+            }
+            if input.inference_profile_id.trim().is_empty()
+                || !view
+                    .published_profiles
+                    .contains(&input.inference_profile_id)
+            {
+                return Err(AgentError::UnpublishedInferenceProfile);
+            }
             let source = input.clone_from.as_deref().unwrap_or("");
-            ensure!(
-                !source.is_empty() || !input.system_prompt.trim().is_empty(),
-                "fresh agents require system_prompt"
-            );
-            ensure!(
-                source.is_empty() || view.agents.get(source) == Some(&true),
-                "clone source must be an enabled agent"
-            );
+            if source.is_empty() && input.system_prompt.trim().is_empty() {
+                return Err(AgentError::SystemPromptRequired);
+            }
+            if !source.is_empty() && view.agents.get(source) != Some(&true) {
+                return Err(AgentError::CloneSourceDisabled);
+            }
         }
         AgentOperation::Edit(patch) => {
-            ensure!(
-                view.agents.contains_key(target),
-                "agent {target:?} does not exist"
-            );
-            ensure!(
-                !view.protected_ids.contains(target),
-                "protected agent cannot be edited"
-            );
+            if !view.agents.contains_key(target) {
+                return Err(AgentError::Missing {
+                    target: target.to_owned(),
+                });
+            }
+            if view.protected_ids.contains(target) {
+                return Err(AgentError::ProtectedEdit);
+            }
             for (field, value) in patch {
-                ensure!(
-                    matches!(
-                        field.as_str(),
-                        "display_name" | "description" | "system_prompt" | "inference_profile_id"
-                    ),
-                    "unsupported agent edit field {field:?}"
-                );
+                if !matches!(
+                    field.as_str(),
+                    "display_name" | "description" | "system_prompt" | "inference_profile_id"
+                ) {
+                    return Err(AgentError::UnsupportedEditField {
+                        field: field.to_owned(),
+                    });
+                }
                 match (field.as_str(), value) {
-                    ("display_name", Some(value)) => ensure!(
-                        value.as_str().is_some_and(|s| !s.is_empty()),
-                        "display_name cannot be empty"
-                    ),
-                    ("system_prompt", Some(value)) => ensure!(
-                        value.as_str().is_some_and(|s| !s.trim().is_empty()),
-                        "system_prompt cannot be blank"
-                    ),
-                    ("inference_profile_id", value) => ensure!(
-                        value
-                            .as_ref()
-                            .and_then(|v| v.as_str())
-                            .is_some_and(
-                                |s| !s.trim().is_empty() && view.published_profiles.contains(s)
-                            ),
-                        "select a published inference profile"
-                    ),
+                    ("display_name", Some(value)) => {
+                        if !value.as_str().is_some_and(|s| !s.is_empty()) {
+                            return Err(AgentError::EmptyDisplayName);
+                        }
+                    }
+                    ("system_prompt", Some(value)) => {
+                        if !value.as_str().is_some_and(|s| !s.trim().is_empty()) {
+                            return Err(AgentError::BlankSystemPrompt);
+                        }
+                    }
+                    ("inference_profile_id", value) => {
+                        let admitted = value.as_ref().and_then(|v| v.as_str()).is_some_and(|s| {
+                            !s.trim().is_empty() && view.published_profiles.contains(s)
+                        });
+                        if !admitted {
+                            return Err(AgentError::UnpublishedInferenceProfile);
+                        }
+                    }
                     _ => {}
                 }
             }
         }
         AgentOperation::Disable => {
-            ensure!(
-                view.agents.contains_key(target),
-                "agent {target:?} does not exist"
-            );
-            ensure!(
-                !view.protected_ids.contains(target),
-                "protected agent cannot be disabled"
-            );
-            ensure!(
-                !make_default,
-                "agent disable cannot also make the target default"
-            );
-            ensure!(
-                view.default_id.as_deref() != Some(target),
-                "default agent cannot be disabled"
-            );
+            if !view.agents.contains_key(target) {
+                return Err(AgentError::Missing {
+                    target: target.to_owned(),
+                });
+            }
+            if view.protected_ids.contains(target) {
+                return Err(AgentError::ProtectedDisable);
+            }
+            if make_default {
+                return Err(AgentError::DisableMakesDefault);
+            }
+            if view.default_id.as_deref() == Some(target) {
+                return Err(AgentError::DefaultDisable);
+            }
         }
     }
     Ok(())
@@ -188,11 +220,14 @@ pub struct SiblingToolsTarget {
     pub shared_tools: bool,
 }
 
-pub fn admit_sibling_tools_target(target: &SiblingToolsTarget) -> Result<()> {
-    ensure!(
-        target.owner_matches && !target.protected && !target.shared_context && !target.shared_tools,
-        "sibling tools require an owned unprotected agent with unshared Context and Tools"
-    );
+pub fn admit_sibling_tools_target(target: &SiblingToolsTarget) -> Result<(), AgentError> {
+    if !(target.owner_matches
+        && !target.protected
+        && !target.shared_context
+        && !target.shared_tools)
+    {
+        return Err(AgentError::SiblingToolsNotAdmitted);
+    }
     Ok(())
 }
 

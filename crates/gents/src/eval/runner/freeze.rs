@@ -12,6 +12,7 @@ use crate::document_config::{
     InferenceRetryPolicy, InferenceSampling, PackConfig,
 };
 use crate::eval::checks::CHECK_REGISTRY_VERSION;
+use crate::eval::documents::EvalError;
 use crate::eval::runner::executor::{Capture, InferenceBinding, Isolation};
 use crate::eval::scoring::PILOT_PURPOSE;
 use crate::eval::{
@@ -87,12 +88,19 @@ impl std::fmt::Display for FreezeRefused {
 
 impl std::error::Error for FreezeRefused {}
 
-pub fn freeze_refused(error: &anyhow::Error) -> Option<&FreezeRefused> {
-    error.downcast_ref::<FreezeRefused>()
+pub fn freeze_refused<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a FreezeRefused> {
+    std::iter::successors(Some(error), |error| error.source()).find_map(|error| {
+        match error.downcast_ref::<EvalError>() {
+            Some(EvalError::FreezeRefused(found)) => Some(found),
+            _ => error.downcast_ref::<FreezeRefused>(),
+        }
+    })
 }
 
-fn refused(reason: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::from(FreezeRefused(reason.into()))
+fn refused(reason: impl Into<String>) -> EvalError {
+    EvalError::FreezeRefused(FreezeRefused(reason.into()))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -199,7 +207,7 @@ pub(crate) async fn thaw(
         .await?
         .ok_or_else(|| refused(format!("no eval run {run_id:?} for {owner}")))?;
     if record.invalidated.is_some() {
-        return Err(refused(format!("run {run_id} is invalidated")));
+        return Err(refused(format!("run {run_id} is invalidated")).into());
     }
     let run_dir = runs_dir.join(run_id);
     let sidecar = read_sidecar(&run_dir)?.ok_or_else(|| {
@@ -224,7 +232,8 @@ pub(crate) async fn thaw(
             if definition_ref(&definition)?.digest != record.origin.definition.digest {
                 return Err(refused(format!(
                     "eval definition {definition_id:?} changed since run {run_id} froze it"
-                )));
+                ))
+                .into());
             }
             definition
         }
@@ -243,7 +252,8 @@ pub(crate) async fn thaw(
             return Err(refused(format!(
                 "cell {:?} materialized pack no longer digests to what run {run_id} froze",
                 spec.cell_id
-            )));
+            ))
+            .into());
         }
         let inference =
             inference_binding(access, owner, &spec.cell_id, &spec.inference_profile_id).await?;
@@ -277,7 +287,7 @@ pub(crate) async fn thaw(
     })
 }
 
-fn validate_purpose(purpose: &str) -> Result<()> {
+fn validate_purpose(purpose: &str) -> Result<(), EvalError> {
     if purpose == "eval" || purpose == PILOT_PURPOSE {
         return Ok(());
     }
@@ -292,7 +302,7 @@ fn validate_purpose(purpose: &str) -> Result<()> {
     )))
 }
 
-fn validate_evaluator(evaluator_did: &str) -> Result<()> {
+fn validate_evaluator(evaluator_did: &str) -> Result<(), EvalError> {
     if evaluator_did.trim().is_empty() {
         return Err(refused(
             "the run request names no evaluator DID; the launching home's own DID is required",
@@ -301,7 +311,7 @@ fn validate_evaluator(evaluator_did: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn directory_name(kind: &str, value: &str) -> Result<()> {
+pub(crate) fn directory_name(kind: &str, value: &str) -> Result<(), EvalError> {
     let mut components = Path::new(value).components();
     let one_normal = matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none();
@@ -315,7 +325,7 @@ pub(crate) fn directory_name(kind: &str, value: &str) -> Result<()> {
 
 /// A cell is one directory under the run and one row in its origin; a
 /// duplicate id would record two digests against one materialized pack.
-fn validate_cell_identity(request: &RunRequest) -> Result<()> {
+fn validate_cell_identity(request: &RunRequest) -> Result<(), EvalError> {
     directory_name("run_id", &request.run_id)?;
     if request.cells.is_empty() {
         return Err(refused(format!("run {} compares no cell", request.run_id)));
@@ -334,7 +344,7 @@ fn validate_cell_identity(request: &RunRequest) -> Result<()> {
 }
 
 /// A trial's seed is `seed_base + trial_index`, so the last one must fit an i64.
-fn validate_seed_range(request: &RunRequest) -> Result<()> {
+fn validate_seed_range(request: &RunRequest) -> Result<(), EvalError> {
     let last_index = i64::from(request.trials_per_case.saturating_sub(1));
     if request.seed_base.checked_add(last_index).is_some() {
         return Ok(());
@@ -414,7 +424,8 @@ fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec
                     return Err(refused(format!(
                         "case {case_id:?} is on the {:?} split, not the requested {:?} split",
                         case.split, request.split
-                    )));
+                    ))
+                    .into());
                 }
                 selected.push(case.case_id.clone());
             }
@@ -433,7 +444,8 @@ fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec
         return Err(refused(format!(
             "eval definition {:?} selects no case on the {:?} split",
             definition.definition_id, request.split
-        )));
+        ))
+        .into());
     }
     Ok(selected)
 }
@@ -536,7 +548,8 @@ async fn validate_cell(
         return Err(refused(format!(
             "cell {:?} pack has no agent {:?}",
             cell.cell_id, cell.agent_id
-        )));
+        ))
+        .into());
     }
 
     let inference = inference_binding(
@@ -650,7 +663,8 @@ async fn inference_binding(
             "backend {:?} authenticates with node_oauth; an eval run must not \
              spend the launching principal's subscription credential",
             backend.backend_id
-        )));
+        ))
+        .into());
     }
 
     Ok(InferenceBinding {
@@ -672,7 +686,10 @@ async fn inference_binding(
 /// boundary the executor can enforce. Freezing and resuming both go through
 /// here, so a run frozen under a sandboxed executor cannot be resumed into an
 /// embedded one and quietly lose the guarantee it was frozen with.
-fn refuse_host_bash(config: &PackConfig, isolation: Isolation) -> Result<Option<String>> {
+fn refuse_host_bash(
+    config: &PackConfig,
+    isolation: Isolation,
+) -> Result<Option<String>, EvalError> {
     if isolation == Isolation::Embedded {
         if let Some((tools_id, mode)) = host_bash(config) {
             return Err(refused(format!(
@@ -705,41 +722,53 @@ fn unrestricted_bash(config: &PackConfig) -> Option<String> {
         .map(|tools| tools.tools_id.clone())
 }
 
-fn materialize_pack(cell: &FrozenCell, pack: &LoadedPack) -> Result<()> {
+fn materialize_pack(cell: &FrozenCell, pack: &LoadedPack) -> Result<(), EvalError> {
     if cell.pack_dir.join("manifest.json").exists() {
         return Ok(());
     }
     let cell_dir = cell
         .pack_dir
         .parent()
-        .with_context(|| format!("{} has no cell directory", cell.pack_dir.display()))?;
+        .ok_or_else(|| EvalError::NoCellDirectory {
+            path: cell.pack_dir.clone(),
+        })?;
     let staging = cell_dir.join("pack.tmp");
     for stale in [&staging, &cell.pack_dir] {
         if stale.exists() {
-            std::fs::remove_dir_all(stale)
-                .with_context(|| format!("removing {}", stale.display()))?;
+            std::fs::remove_dir_all(stale).map_err(|source| EvalError::RemovePath {
+                path: stale.to_path_buf(),
+                source,
+            })?;
         }
     }
-    std::fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
+    std::fs::create_dir_all(&staging).map_err(|source| EvalError::CreateDir {
+        path: staging.clone(),
+        source,
+    })?;
     write_pack_files(&staging, &pack.files)?;
-    std::fs::rename(&staging, &cell.pack_dir).with_context(|| {
-        format!(
-            "renaming {} to {}",
-            staging.display(),
-            cell.pack_dir.display()
-        )
+    std::fs::rename(&staging, &cell.pack_dir).map_err(|source| EvalError::Rename {
+        from: staging.clone(),
+        to: cell.pack_dir.clone(),
+        source,
     })
 }
 
-pub(crate) fn write_pack_files(dir: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+pub(crate) fn write_pack_files(
+    dir: &Path,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), EvalError> {
     for (path, bytes) in files {
         let destination = dir.join(path);
         if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            std::fs::create_dir_all(parent).map_err(|source| EvalError::CreateDir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
-        std::fs::write(&destination, bytes)
-            .with_context(|| format!("writing {}", destination.display()))?;
+        std::fs::write(&destination, bytes).map_err(|source| EvalError::WriteFile {
+            path: destination.clone(),
+            source,
+        })?;
     }
     Ok(())
 }
@@ -748,34 +777,49 @@ fn sidecar_path(run_dir: &Path) -> PathBuf {
     run_dir.join("run.json")
 }
 
-fn read_sidecar(run_dir: &Path) -> Result<Option<RunSidecar>> {
+fn read_sidecar(run_dir: &Path) -> Result<Option<RunSidecar>, EvalError> {
     let path = sidecar_path(run_dir);
     if !path.exists() {
         return Ok(None);
     }
-    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = std::fs::read(&path).map_err(|source| EvalError::ReadPath {
+        path: path.clone(),
+        source,
+    })?;
     serde_json::from_slice(&bytes)
         .map(Some)
-        .with_context(|| format!("parsing {}", path.display()))
+        .map_err(|source| EvalError::ParsePath { path, source })
 }
 
-pub(crate) fn frozen_captures(run_dir: &Path) -> Result<Option<Vec<Capture>>> {
+pub(crate) fn frozen_captures(run_dir: &Path) -> Result<Option<Vec<Capture>>, EvalError> {
     Ok(read_sidecar(run_dir)?.map(|sidecar| sidecar.captures))
 }
 
-fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<()> {
-    std::fs::create_dir_all(run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
+fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<(), EvalError> {
+    std::fs::create_dir_all(run_dir).map_err(|source| EvalError::CreateDir {
+        path: run_dir.to_path_buf(),
+        source,
+    })?;
     let path = sidecar_path(run_dir);
-    super::files::write_json_atomically(&path, sidecar)
-        .with_context(|| format!("writing {}", path.display()))
+    super::files::write_json_atomically(&path, sidecar).map_err(|source| EvalError::WriteRecord {
+        path,
+        source: Box::new(source),
+    })
 }
 
 pub const DEFINITION_FILE: &str = "definition.json";
-fn write_frozen_definition(run_dir: &Path, definition: &EvalDefinition) -> Result<()> {
-    std::fs::create_dir_all(run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
+fn write_frozen_definition(run_dir: &Path, definition: &EvalDefinition) -> Result<(), EvalError> {
+    std::fs::create_dir_all(run_dir).map_err(|source| EvalError::CreateDir {
+        path: run_dir.to_path_buf(),
+        source,
+    })?;
     let path = run_dir.join(DEFINITION_FILE);
-    super::files::write_json_atomically(&path, definition)
-        .with_context(|| format!("writing {}", path.display()))
+    super::files::write_json_atomically(&path, definition).map_err(|source| {
+        EvalError::WriteRecord {
+            path,
+            source: Box::new(source),
+        }
+    })
 }
 
 pub fn read_frozen_definition(
@@ -786,16 +830,20 @@ pub fn read_frozen_definition(
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+        Err(source) => return Err(EvalError::ReadPath { path, source }.into()),
     };
     let definition: EvalDefinition =
-        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+        serde_json::from_slice(&bytes).map_err(|source| EvalError::ParsePath {
+            path: path.clone(),
+            source,
+        })?;
     if definition_ref(&definition)?.digest != frozen.digest {
         return Err(refused(format!(
             "{} no longer digests to the definition its run froze ({})",
             path.display(),
             frozen.digest
-        )));
+        ))
+        .into());
     }
     Ok(Some(definition))
 }
@@ -807,7 +855,7 @@ fn reuse_or_refuse(
     origin: &RunOrigin,
     sidecar: &RunSidecar,
     run_dir: &Path,
-) -> Result<()> {
+) -> Result<(), EvalError> {
     if record.invalidated.is_some() {
         return Err(refused(format!("run {} is invalidated", record.run_id)));
     }
@@ -1109,7 +1157,7 @@ pub(crate) mod tests {
     }
 
     fn refusal(error: &anyhow::Error) -> String {
-        freeze_refused(error)
+        freeze_refused(error.as_ref())
             .unwrap_or_else(|| panic!("expected a FreezeRefused, got {error:#}"))
             .0
             .clone()

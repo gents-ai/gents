@@ -361,7 +361,7 @@ async fn recover_active_requests(
             Ok(canonical_recovery::RecoveryResult::Lost) => {
                 report.requests.awaiting_outcome += 1;
             }
-            Err(error) if definitive_output_corruption(&error) => {
+            Err(error) if definitive_output_corruption(error.as_ref()) => {
                 // Failed recovery rolled back. Revoke only the same observed
                 // lease tuple; a renewal/recovery winner makes this lose. This
                 // metadata-only escape never repairs or chooses payload twins.
@@ -402,11 +402,12 @@ async fn recover_active_requests(
 /// Missing replica dependencies and access/storage failures are not proof of
 /// corruption. Only typed contradictory or malformed immutable facts authorize
 /// the model's metadata-only revocation escape.
-fn definitive_output_corruption(error: &anyhow::Error) -> bool {
+fn definitive_output_corruption(error: &(dyn std::error::Error + 'static)) -> bool {
+    use gents_protocol::error_chain::find_source;
     use gents_protocol::output::recovery::RecoveryPlanError;
     use gents_protocol::output::ReconstructionError;
     matches!(
-        error.downcast_ref::<RecoveryPlanError>(),
+        find_source::<RecoveryPlanError>(error),
         Some(
             RecoveryPlanError::IdentityConflict { .. }
                 | RecoveryPlanError::ConflictingOrdinal { .. }
@@ -414,7 +415,7 @@ fn definitive_output_corruption(error: &anyhow::Error) -> bool {
                 | RecoveryPlanError::MalformedExtent
         )
     ) || matches!(
-        error.downcast_ref::<ReconstructionError>(),
+        find_source::<ReconstructionError>(error),
         Some(
             ReconstructionError::ConflictingSegments { .. }
                 | ReconstructionError::ConflictingClosures { .. }

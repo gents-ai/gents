@@ -15,8 +15,11 @@ fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     })
 }
 
-fn failed(error: anyhow::Error) -> BridgeError {
-    BridgeError::untyped(format!("{error:#}"))
+fn failed<E>(error: E) -> BridgeError
+where
+    E: std::error::Error,
+{
+    BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
 }
 
 fn view(home: &std::path::Path) -> Result<AllowedFoldersView, BridgeError> {
@@ -39,9 +42,7 @@ pub fn desktop_allowed_dirs_add(
     state: State<'_, DesktopAppState>,
 ) -> Result<AllowedFoldersView, BridgeError> {
     let home = home(&state)?;
-    let access: BindAccess = access
-        .parse()
-        .map_err(|error: gents::pack::PackError| failed(error.into()))?;
+    let access: BindAccess = access.parse().map_err(failed)?;
     allowed::add(&home, std::path::Path::new(&path), access).map_err(failed)?;
     view(&home)
 }

@@ -1,12 +1,71 @@
 use std::collections::BTreeSet;
 
-use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Timelike, Utc};
 use chrono_tz::Tz;
 
 pub const DEFAULT_CRON_MISSED_RUN_POLICY: &str = "latest_only";
 
 const MAX_CRON_LOOKAHEAD_MINUTES: i64 = 366 * 24 * 60 * 5;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ScheduleCronError {
+    #[error(
+        "unsupported missed_run_policy {value}; supported values: {DEFAULT_CRON_MISSED_RUN_POLICY}"
+    )]
+    UnsupportedMissedRunPolicy { value: String },
+    #[error(
+        "cron expression must contain exactly 5 fields: minute hour day-of-month month day-of-week"
+    )]
+    FieldCount,
+    #[error("cron expression {expression:?} in timezone {timezone:?} did not produce a run within 5 years")]
+    NoRunWithinLookahead {
+        expression: String,
+        timezone: String,
+    },
+    #[error("invalid IANA timezone {timezone:?}")]
+    InvalidTimezone {
+        timezone: String,
+        #[source]
+        source: chrono_tz::ParseError,
+    },
+    #[error("cron {field} field is empty")]
+    EmptyField { field: &'static str },
+    #[error("cron {field} field contains an empty list item")]
+    EmptyListItem { field: &'static str },
+    #[error("cron {field} field has invalid step {step:?}")]
+    InvalidStep {
+        field: &'static str,
+        step: String,
+        #[source]
+        source: std::num::ParseIntError,
+    },
+    #[error("cron {field} field step must be greater than 0")]
+    ZeroStep { field: &'static str },
+    #[error("cron {field} field range start {start} is greater than end {end}")]
+    ReversedRange {
+        field: &'static str,
+        start: u32,
+        end: u32,
+    },
+    #[error("cron {field} field contains an empty value")]
+    EmptyValue { field: &'static str },
+    #[error("cron {field} field has invalid value {raw:?}")]
+    InvalidValue {
+        field: &'static str,
+        raw: String,
+        #[source]
+        source: std::num::ParseIntError,
+    },
+    #[error("cron {field} field value {value} is outside {min}..={max}")]
+    ValueOutOfRange {
+        field: &'static str,
+        value: u32,
+        min: u32,
+        max: u32,
+    },
+}
+
+type Result<T, E = ScheduleCronError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,9 +82,9 @@ impl CronMissedRunPolicy {
             .unwrap_or(DEFAULT_CRON_MISSED_RUN_POLICY);
         match value {
             DEFAULT_CRON_MISSED_RUN_POLICY => Ok(Self::LatestOnly),
-            other => bail!(
-                "unsupported missed_run_policy {other}; supported values: {DEFAULT_CRON_MISSED_RUN_POLICY}"
-            ),
+            other => Err(ScheduleCronError::UnsupportedMissedRunPolicy {
+                value: other.to_owned(),
+            }),
         }
     }
 }
@@ -57,16 +116,20 @@ pub fn next_cron_run_after(
         candidate += ChronoDuration::minutes(1);
     }
 
-    bail!(
-        "cron expression {expression:?} in timezone {timezone:?} did not produce a run within 5 years"
-    )
+    Err(ScheduleCronError::NoRunWithinLookahead {
+        expression: expression.to_owned(),
+        timezone: timezone.to_owned(),
+    })
 }
 
 pub fn parse_timezone(timezone: &str) -> Result<Tz> {
     timezone
         .trim()
         .parse::<Tz>()
-        .with_context(|| format!("invalid IANA timezone {timezone:?}"))
+        .map_err(|source| ScheduleCronError::InvalidTimezone {
+            timezone: timezone.to_owned(),
+            source,
+        })
 }
 
 fn truncate_to_next_minute(after_utc: DateTime<Utc>) -> DateTime<Utc> {
@@ -90,9 +153,7 @@ impl CronSpec {
     fn parse(expression: &str) -> Result<Self> {
         let fields = expression.split_whitespace().collect::<Vec<_>>();
         if fields.len() != 5 {
-            bail!(
-                "cron expression must contain exactly 5 fields: minute hour day-of-month month day-of-week"
-            );
+            return Err(ScheduleCronError::FieldCount);
         }
 
         Ok(Self {
@@ -141,7 +202,9 @@ impl CronField {
     fn parse(raw: &str, kind: FieldKind) -> Result<Self> {
         let raw = raw.trim();
         if raw.is_empty() {
-            bail!("cron {} field is empty", kind.label());
+            return Err(ScheduleCronError::EmptyField {
+                field: kind.label(),
+            });
         }
 
         let mut values = BTreeSet::new();
@@ -150,7 +213,9 @@ impl CronField {
         for part in raw.split(',') {
             let part = part.trim();
             if part.is_empty() {
-                bail!("cron {} field contains an empty list item", kind.label());
+                return Err(ScheduleCronError::EmptyListItem {
+                    field: kind.label(),
+                });
             }
             if part.starts_with('*') {
                 wildcard = true;
@@ -173,13 +238,19 @@ impl CronField {
 fn extend_part_values(part: &str, kind: FieldKind, values: &mut BTreeSet<u32>) -> Result<()> {
     let (base, step, has_step) = match part.split_once('/') {
         Some((base, step)) => {
-            let step = step.parse::<u32>().with_context(|| {
-                format!("cron {} field has invalid step {step:?}", kind.label())
-            })?;
-            if step == 0 {
-                bail!("cron {} field step must be greater than 0", kind.label());
+            let parsed = step
+                .parse::<u32>()
+                .map_err(|source| ScheduleCronError::InvalidStep {
+                    field: kind.label(),
+                    step: step.to_owned(),
+                    source,
+                })?;
+            if parsed == 0 {
+                return Err(ScheduleCronError::ZeroStep {
+                    field: kind.label(),
+                });
             }
-            (base, step, true)
+            (base, parsed, true)
         }
         None => (part, 1, false),
     };
@@ -198,12 +269,11 @@ fn extend_part_values(part: &str, kind: FieldKind, values: &mut BTreeSet<u32>) -
     };
 
     if start > end {
-        bail!(
-            "cron {} field range start {} is greater than end {}",
-            kind.label(),
+        return Err(ScheduleCronError::ReversedRange {
+            field: kind.label(),
             start,
-            end
-        );
+            end,
+        });
     }
 
     let mut value = start;
@@ -261,24 +331,29 @@ impl FieldKind {
     fn parse_value(self, raw: &str) -> Result<u32> {
         let raw = raw.trim();
         if raw.is_empty() {
-            bail!("cron {} field contains an empty value", self.label());
+            return Err(ScheduleCronError::EmptyValue {
+                field: self.label(),
+            });
         }
 
         let value = match self.named_value(raw) {
             Some(value) => value,
-            None => raw.parse::<u32>().with_context(|| {
-                format!("cron {} field has invalid value {raw:?}", self.label())
-            })?,
+            None => raw
+                .parse::<u32>()
+                .map_err(|source| ScheduleCronError::InvalidValue {
+                    field: self.label(),
+                    raw: raw.to_owned(),
+                    source,
+                })?,
         };
 
         if value < self.min() || value > self.max() {
-            return Err(anyhow!(
-                "cron {} field value {} is outside {}..={}",
-                self.label(),
+            return Err(ScheduleCronError::ValueOutOfRange {
+                field: self.label(),
                 value,
-                self.min(),
-                self.max()
-            ));
+                min: self.min(),
+                max: self.max(),
+            });
         }
 
         Ok(value)

@@ -825,7 +825,7 @@ async fn retained_provider_reasoning(
     let rows = values
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut sources = Vec::new();
     for row in &rows {
         if matches!(&row.segment.source, OutputSource::ProviderTurn { .. })

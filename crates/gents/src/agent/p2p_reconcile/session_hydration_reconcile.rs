@@ -630,7 +630,7 @@ async fn load_hydration_selection(
     let mut root_headers = rows::<serde_json::Value>(&response, "AgentMessage")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let mut root_header_ids = root_headers
         .iter()
         .map(|row| row.doc_id.clone())
@@ -685,7 +685,7 @@ async fn load_hydration_selection(
     let mut output_segments = rows::<serde_json::Value>(&response, "AgentOutputSegment")?
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     load_referenced_segments(
         node,
         &root_headers,
@@ -848,7 +848,7 @@ async fn load_origin_headers(
         let decoded = rows::<serde_json::Value>(&response, "AgentMessage")?
             .iter()
             .map(decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         anyhow::ensure!(
             decoded.len() == 1,
             "hydration origin is missing, denied, or conflicting"
@@ -1804,7 +1804,7 @@ mod tests {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let arguments = segments
             .iter()

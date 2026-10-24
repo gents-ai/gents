@@ -8,6 +8,7 @@ use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 pub(crate) mod deferred_delivery;
 pub(crate) mod durable;
+mod error;
 pub(crate) mod event_delivery;
 pub(crate) mod event_source;
 pub(crate) mod goal_source;
@@ -15,6 +16,8 @@ pub(crate) mod manual_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
 pub mod subscription_source;
+
+pub use error::TriggerEngineError;
 
 #[cfg(test)]
 mod tests;
@@ -485,7 +488,7 @@ impl TriggerEngine {
         if intent.trigger_kind != TriggerKind::Event {
             let validation = if let Some(schedule) = schedule {
                 if schedule.task_id != intent.task.task_id {
-                    Err(anyhow::anyhow!("schedule Task changed before admission"))
+                    Err(TriggerEngineError::ScheduleTaskChanged)
                 } else {
                     validate_task_delivery_options(
                         TriggerKind::Schedule,
@@ -562,13 +565,13 @@ impl TriggerEngine {
             return result;
         }
         let mut delivery = if intent.trigger_kind == TriggerKind::Event || targeted_schedule {
-            let prepared = (|| -> anyhow::Result<gents_protocol::trigger_delivery::TriggerFire> {
+            let prepared = (|| -> Result<gents_protocol::trigger_delivery::TriggerFire, TriggerEngineError> {
                 let event_trigger = if intent.trigger_kind == TriggerKind::Event {
                     Some(
                         snapshot
                             .active_event_triggers()
                             .get(intent.trigger_id.as_deref().unwrap_or_default())
-                            .ok_or_else(|| anyhow::anyhow!("event trigger disappeared"))?,
+                            .ok_or(TriggerEngineError::EventTriggerMissing)?,
                     )
                 } else {
                     None
@@ -578,7 +581,7 @@ impl TriggerEngine {
                     .or_else(|| schedule.and_then(|s| s.session_id_template.as_deref()));
                 let owner = snapshot
                     .agent(&intent.task.agent_id)
-                    .ok_or_else(|| anyhow::anyhow!("trigger agent unavailable"))?
+                    .ok_or(TriggerEngineError::TriggerAgentUnavailable)?
                     .node_did()
                     .to_string();
                 let (source_collection, source_doc_id) = if targeted_schedule {
@@ -604,7 +607,7 @@ impl TriggerEngine {
                 };
                 let source_doc_id = source_doc_id
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("fire lacks source document ID"))?;
+                    .ok_or(TriggerEngineError::FireSourceDocMissing)?;
                 let identity = gents_protocol::trigger_delivery::FireIdentity {
                     owner_did: owner,
                     trigger_id: intent.trigger_id.clone().expect("configured trigger"),
@@ -615,16 +618,15 @@ impl TriggerEngine {
                 let session_id = match session_template {
                     Some(template) => {
                         let value = crate::template::render_template(template, &scope)?;
-                        anyhow::ensure!(
-                            !value.trim().is_empty(),
-                            "session template rendered an empty ID"
-                        );
-                        anyhow::ensure!(
-                            graph_session_id
-                                .as_ref()
-                                .is_none_or(|session| session == &value),
-                            "trigger session template disagrees with pinned graph session"
-                        );
+                        if value.trim().is_empty() {
+                            return Err(TriggerEngineError::SessionTemplateEmpty);
+                        }
+                        if !graph_session_id
+                            .as_ref()
+                            .is_none_or(|session| session == &value)
+                        {
+                            return Err(TriggerEngineError::SessionTemplateMismatch);
+                        }
                         value
                     }
                     None => graph_session_id
@@ -667,14 +669,14 @@ impl TriggerEngine {
                         .and_then(serde_json::Value::as_i64),
                     created_at: now.clone(),
                 };
-                anyhow::ensure!(
-                    !fire.emit_outcome
-                        || fire
-                            .source_handoff_id
-                            .as_ref()
-                            .is_some_and(|s| !s.is_empty()),
-                    "emit_outcome requires a source handoff_id"
-                );
+                if fire.emit_outcome
+                    && !fire
+                        .source_handoff_id
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty())
+                {
+                    return Err(TriggerEngineError::OutcomeHandoffMissing);
+                }
                 Ok(fire)
             })();
             match prepared {
@@ -1011,29 +1013,25 @@ pub(crate) fn validate_task_delivery_options(
     emit_outcome: bool,
     concurrency: crate::runtime_snapshot::ConcurrencyMode,
     target_existing: bool,
-) -> anyhow::Result<()> {
+) -> Result<(), TriggerEngineError> {
     if kind == TriggerKind::Event {
         return Ok(());
     }
-    anyhow::ensure!(
-        !emit_outcome,
-        "emit_outcome requires document-triggered delivery or explicit CLI/desktop Task admission"
-    );
+    if emit_outcome {
+        return Err(TriggerEngineError::EmitOutcomeNeedsDelivery);
+    }
     if kind == TriggerKind::Schedule {
-        anyhow::ensure!(
-            target_existing
-                || concurrency != crate::runtime_snapshot::ConcurrencyMode::QueuedSerial,
-            "queued_serial requires an explicit session_id_template for scheduled delivery"
-        );
+        if !target_existing && concurrency == crate::runtime_snapshot::ConcurrencyMode::QueuedSerial
+        {
+            return Err(TriggerEngineError::QueuedSerialScheduleNeedsSession);
+        }
     } else {
-        anyhow::ensure!(
-            concurrency != crate::runtime_snapshot::ConcurrencyMode::QueuedSerial,
-            "queued_serial requires a document event source"
-        );
-        anyhow::ensure!(
-            !target_existing,
-            "session_id_template requires a document event source"
-        );
+        if concurrency == crate::runtime_snapshot::ConcurrencyMode::QueuedSerial {
+            return Err(TriggerEngineError::QueuedSerialNeedsEventSource);
+        }
+        if target_existing {
+            return Err(TriggerEngineError::SessionTemplateNeedsEventSource);
+        }
     }
     Ok(())
 }

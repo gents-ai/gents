@@ -138,8 +138,12 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
             let guard = if case.guarded {
                 let (stored, candidate) = typed();
                 match target {
-                    SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
-                    SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
+                    SelfConfigTarget::Tools => {
+                        guard_tools_keep_control(&stored, &candidate).map_err(anyhow::Error::from)
+                    }
+                    SelfConfigTarget::Agent => {
+                        guard_agent_keeps_reach(&stored, &candidate).map_err(anyhow::Error::from)
+                    }
                     SelfConfigTarget::InferenceBackend => guard_backend_auth(&stored, &candidate),
                     SelfConfigTarget::InferenceProfile => {
                         let backend = |doc: &Map<String, Value>| {
@@ -164,7 +168,7 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 Ok(())
             };
             assert_eq!(
-                grants.and(guard).is_ok(),
+                grants.is_ok() && guard.is_ok(),
                 case.accepted,
                 "{}: runtime guard",
                 case.name

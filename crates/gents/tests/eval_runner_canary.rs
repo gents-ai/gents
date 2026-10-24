@@ -634,7 +634,7 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
     )
     .await
     .unwrap_err();
-    let refusal = freeze_refused(&error)
+    let refusal = freeze_refused(error.as_ref())
         .unwrap_or_else(|| panic!("expected a FreezeRefused: {error:#}"))
         .0
         .clone();
@@ -668,7 +668,7 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
     )
     .await
     .unwrap_err();
-    let refusal = freeze_refused(&error)
+    let refusal = freeze_refused(error.as_ref())
         .unwrap_or_else(|| panic!("expected a FreezeRefused: {error:#}"))
         .0
         .clone();

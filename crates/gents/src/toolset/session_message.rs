@@ -1,6 +1,5 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::anyhow;
 
 use crate::background_tools::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
 use crate::background_tools::{
@@ -742,5 +741,11 @@ fn structured_error(error: serde_json::Value) -> ToolError {
         ],
     )
     .unwrap_or_else(|_| error.to_string());
-    anyhow!(message).into()
+    SessionMessageError::Structured { message }.into()
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SessionMessageError {
+    #[error("{message}")]
+    Structured { message: String },
 }

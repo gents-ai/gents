@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 
 use crate::config_client::DesiredStateApplyPlan;
@@ -101,7 +102,7 @@ pub fn text_gate(
     }
     if baseline.target == TargetField::TaskPromptTemplate {
         let current = baseline_text(baseline)
-            .map_err(|error| reject("unexpected_change", format!("{error:#}")))?;
+            .map_err(|error| reject("unexpected_change", ErrorChain(&error).to_string()))?;
         let (current, candidate) = (template_variables(&current)?, template_variables(text)?);
         let dropped: Vec<&String> = current.difference(&candidate).collect();
         if !dropped.is_empty() {

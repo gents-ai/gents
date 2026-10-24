@@ -11,6 +11,7 @@ use crate::lifecycle::materialize::{
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
 };
 use crate::lifecycle::ExecutionOrigin;
+use crate::lifecycle::LifecycleError;
 
 use super::queue::{row_queue, RequestQueue};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};
@@ -156,15 +157,18 @@ async fn load_candidates(
     ))
 }
 
-fn required_str<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
-    value.ok_or_else(|| anyhow::anyhow!("failed background wake is missing {field}"))
+fn required_str<'a>(
+    value: Option<&'a str>,
+    field: &'static str,
+) -> Result<&'a str, LifecycleError> {
+    value.ok_or(LifecycleError::BackgroundWakeFieldMissing { field })
 }
 
-fn required_i64(value: Option<i64>, field: &str) -> Result<i64> {
-    value.ok_or_else(|| anyhow::anyhow!("failed background wake is missing {field}"))
+fn required_i64(value: Option<i64>, field: &'static str) -> Result<i64, LifecycleError> {
+    value.ok_or(LifecycleError::BackgroundWakeFieldMissing { field })
 }
 
-fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
+fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<(), LifecycleError> {
     required_str(candidate.doc_id.as_deref(), "_docID")?;
     required_str(candidate.node_did.as_deref(), "node_did")?;
     required_str(candidate.agent_id.as_deref(), "agent_id")?;
@@ -175,7 +179,7 @@ fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
         .request_hop
         .map(u32::try_from)
         .transpose()
-        .context("failed background wake request_hop must fit in u32")?;
+        .map_err(LifecycleError::BackgroundWakeRequestHop)?;
     Ok(())
 }
 
@@ -190,7 +194,7 @@ fn automated_queue_key(queue: &RequestQueue) -> Option<String> {
         .flatten()
 }
 
-fn eligible_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>> {
+fn eligible_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>, LifecycleError> {
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
     let max_retries = required_i64(candidate.max_retries, "max_retries")?;
     if retry_count < 0 || retry_count >= max_retries {
@@ -225,7 +229,10 @@ pub fn background_wake_next_retry_at(
     Some(terminalized_at + background_wake_retry_delay(retry_count))
 }
 
-fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>) -> Result<bool> {
+fn retry_is_due(
+    candidate: &AgentRequestRow,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, LifecycleError> {
     Ok(background_wake_next_retry_at(
         candidate.terminalized_at.as_deref(),
         required_i64(candidate.retry_count, "retry_count")?,

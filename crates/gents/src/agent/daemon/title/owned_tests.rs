@@ -1437,7 +1437,7 @@ impl TitleFixture {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<anyhow::Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         (rows, data["AgentMessage"].as_array().unwrap().len())
     }

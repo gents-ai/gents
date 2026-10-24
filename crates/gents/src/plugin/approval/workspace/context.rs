@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context as _, Result};
-
 use super::WorkspaceKey;
+use crate::plugin::approval::PluginApprovalError;
+
+type Result<T, E = PluginApprovalError> = std::result::Result<T, E>;
 use gents_loop::tool_policy::access_review::History;
 
 pub(crate) struct ReviewInvocation {
@@ -16,7 +17,7 @@ pub(crate) struct ReviewInvocation {
 }
 
 pub(crate) type Reviewer = Arc<
-    dyn Fn(ReviewInvocation) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+    dyn Fn(ReviewInvocation) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send>>
         + Send
         + Sync,
 >;
@@ -56,7 +57,7 @@ pub(crate) fn for_request(
     let home = match home.canonicalize() {
         Ok(home) => home,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("resolving the approval home"),
+        Err(error) => return Err(PluginApprovalError::ResolveApprovalHome(error)),
     };
     Ok(Some(Context {
         home,
@@ -102,7 +103,7 @@ pub(super) async fn resolve_review(
                 payload: decision
                     .review_payload
                     .clone()
-                    .context("access review input is missing")?,
+                    .ok_or(PluginApprovalError::ReviewInputMissing)?,
             };
             match reviewer(invocation).await {
                 Ok(Some(reply)) => {
@@ -180,10 +181,13 @@ pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
     let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
         return Ok(None);
     };
-    anyhow::ensure!(
-        home.canonicalize().context("resolving the approval home")? == context.home,
-        "the plugin and request have different approval homes"
-    );
+    if home
+        .canonicalize()
+        .map_err(PluginApprovalError::ResolveApprovalHome)?
+        != context.home
+    {
+        return Err(PluginApprovalError::ApprovalHomeMismatch);
+    }
     let settings = super::get(&context.home, &context.workspace)?;
     if settings.is_some() {
         crate::plugin::allowed::canonical_target(&context.workspace.path, Some(true))?;
@@ -198,9 +202,11 @@ mod review_tests;
 mod tests {
     use super::*;
 
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     #[tokio::test]
     async fn background_calls_retain_the_original_scope_without_leaking_it_to_other_requests(
-    ) -> Result<()> {
+    ) -> TestResult {
         let home = tempfile::tempdir()?;
         let first = tempfile::tempdir()?;
         let second = tempfile::tempdir()?;
@@ -232,7 +238,7 @@ mod tests {
                 .await
                 .is_none());
             check(CURRENT.with(Clone::clone));
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
         assert!(CURRENT.try_with(Clone::clone).is_err());
@@ -260,7 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_history_is_shared_with_background_calls_but_not_a_new_request() -> Result<()> {
+    async fn review_history_is_shared_with_background_calls_but_not_a_new_request() -> TestResult {
         use super::super::{BindingAction, Grant, Input, Mode, Review, Route, Scope};
 
         let home = tempfile::tempdir()?;
@@ -317,7 +323,7 @@ mod tests {
                 Route::Allow
             );
             assert_eq!(review_route(&input, Review::Allow, &grant), Route::Ask);
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
         assert_eq!(review_route(&input, Review::Allow, &grant), Route::Deny);

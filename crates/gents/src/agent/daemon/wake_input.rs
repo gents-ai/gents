@@ -103,7 +103,7 @@ pub(super) async fn load(
             let mut headers = Vec::new();
             for batch in keys.chunks(128) {
                 let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}, sequence: {{_le: {cutoff}}}, message_key: {{_in: {}}}}}) {{{}}}}}", graphql_string_list_literal(batch.iter().map(String::as_str)), crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?;
-                headers.extend(rows(&response, "AgentMessage")?.iter().map(crate::session::canonical_rows::decode_transcript_message_row).collect::<Result<Vec<_>>>()?);
+                headers.extend(rows(&response, "AgentMessage")?.iter().map(crate::session::canonical_rows::decode_transcript_message_row).collect::<Result<Vec<_>, _>>()?);
             }
             anyhow::ensure!(headers.len() == keys.len() && headers.iter().map(|row| &row.message.message_key).collect::<BTreeSet<_>>().len() == keys.len(), "current wake notifications are missing or ambiguous");
             headers.sort_by_key(|row| row.message.sequence);

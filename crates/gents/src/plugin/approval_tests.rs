@@ -180,7 +180,9 @@ async fn an_unanswered_question_times_out_and_is_removed() {
     let error = ask(home.path(), &request, Duration::from_millis(60))
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("did not answer"));
+    assert!(gents_protocol::error_chain::ErrorChain(&error)
+        .to_string()
+        .contains("did not answer"));
     assert!(pending(home.path()).unwrap().is_empty());
 }
 
@@ -238,7 +240,9 @@ fn questions_without_a_waiter_deadline_fail_with_a_version_error() {
     )
     .unwrap();
     let error = pending_requests(home.path()).unwrap_err();
-    assert!(format!("{error:#}").contains("matching runtime and client versions"));
+    assert!(gents_protocol::error_chain::ErrorChain(&error)
+        .to_string()
+        .contains("matching runtime and client versions"));
     assert!(decide(home.path(), &request.id, Answer::AlwaysFolder).is_err());
     assert!(allowed::list(home.path()).unwrap().is_empty());
 }
@@ -355,7 +359,7 @@ async fn a_call_with_nobody_listening_fails_at_once_naming_the_command() {
     let error = ask(home.path(), &request, Duration::from_secs(60))
         .await
         .unwrap_err();
-    let message = format!("{error:#}");
+    let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
     assert!(message.contains("gents plugin dirs add"), "{message}");
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(pending(home.path()).unwrap().is_empty());

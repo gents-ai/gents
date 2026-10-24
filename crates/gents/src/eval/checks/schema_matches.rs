@@ -114,12 +114,13 @@ impl Check for SchemaMatches {
             Err(error) => return grader("bad_params", error.to_string()),
         };
         let expected: Vec<Value> = match query::parse_sdl(&params.sdl)
-            .map_err(anyhow::Error::from)
+            .map_err(|error| error.to_string())
             .and_then(|versions| {
-                Ok(versions
+                versions
                     .iter()
                     .map(serde_json::to_value)
-                    .collect::<Result<Vec<Value>, _>>()?)
+                    .collect::<Result<Vec<Value>, _>>()
+                    .map_err(|error| error.to_string())
             }) {
             Ok(versions) if !versions.is_empty() => versions,
             Ok(_) => return grader("bad_params", "SDL must declare a collection"),

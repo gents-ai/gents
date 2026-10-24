@@ -1,15 +1,39 @@
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents_protocol::job::{JobOrigin, JobPin, JobPolicy, PROJECT_MOUNT_CLASS};
 
 use crate::pack::home_install::recorded_provenance;
 use crate::pack::{list_home_installs, read_home_install, InstalledVia, PackKind};
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin_job::admit::Refusal;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginJobError {
+    #[error(
+        "job is not a valid block; its fields are agent_targets, max_live, max_spawns, \
+         max_messages_per_slot, result_bytes, max_wall_secs and policy"
+    )]
+    InvalidBlock(#[source] serde_json::Error),
+    #[error(
+        "plugin {plugin:?} ships a job block this install cannot grant. A pack-shipped job \
+         block needs an operator install, job.agent_targets that name AgentTargets shipped \
+         by {coordinate} or its dependencies, job.policy.trusted_packs within {coordinate} \
+         and its dependencies, job.policy.dynamic off or check, and no \
+         job.policy.project_roots. Next: drop the job block from the pack, or install the \
+         pack with `gents pack install` and wire the block into Tools as the operator"
+    )]
+    JobBlockNotAdmissible { plugin: String, coordinate: String },
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// The files every resolved mount of one call holds, with the provenance
 /// facts [`classify_origin`] reads.
@@ -126,7 +150,11 @@ pub fn script_index(
 /// digest-addressed dir that never changes in place, so its hashes are cached
 /// by `(pack coordinate, digest, path)`; a project mount has no digest and is
 /// hashed on every call.
-fn mount_files(pack: &str, digest: &str, path: &str) -> Result<Vec<(String, String)>> {
+fn mount_files(
+    pack: &str,
+    digest: &str,
+    path: &str,
+) -> Result<Vec<(String, String)>, PluginJobError> {
     type Cache = Mutex<RapidHashMap<(String, String, String), Vec<(String, String)>>>;
     static CACHE: LazyLock<Cache> = LazyLock::new(Default::default);
     let key = (pack.to_owned(), digest.to_owned(), path.to_owned());
@@ -147,18 +175,25 @@ fn mount_files(pack: &str, digest: &str, path: &str) -> Result<Vec<(String, Stri
 }
 
 /// Symlinks are skipped, so a mount never indexes a file outside itself.
-fn hash_dir(dir: &Path, files: &mut Vec<(String, String)>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+fn hash_dir(dir: &Path, files: &mut Vec<(String, String)>) -> Result<(), PluginJobError> {
+    let read = |source| PluginJobError::Read {
+        path: dir.to_path_buf(),
+        source,
+    };
+    for entry in std::fs::read_dir(dir).map_err(read)? {
+        let entry = entry.map_err(read)?;
         let path = entry.path();
-        let kind = entry
-            .file_type()
-            .with_context(|| format!("reading {}", path.display()))?;
+        let kind = entry.file_type().map_err(|source| PluginJobError::Read {
+            path: path.clone(),
+            source,
+        })?;
         if kind.is_dir() {
             hash_dir(&path, files)?;
         } else if kind.is_file() {
-            let bytes =
-                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            let bytes = std::fs::read(&path).map_err(|source| PluginJobError::Read {
+                path: path.clone(),
+                source,
+            })?;
             files.push((sha256(&bytes), path.to_string_lossy().into_owned()));
         }
     }

@@ -95,7 +95,7 @@ impl AttachmentApprovals {
                 "the runtime home changed; close and reopen access requests",
             ));
         }
-        approval::prepare_listener(&home).map_err(super::backend_error)?;
+        approval::prepare_listener(&home).map_err(|error| super::backend_error(error.into()))?;
         let scope = subscriptions
             .nodes
             .entry(node_did.to_owned())
@@ -179,7 +179,7 @@ impl AttachmentApprovals {
         let requests = tokio::task::spawn_blocking(move || approval::pending_requests(&home))
             .await
             .map_err(|error| super::backend_error(error.into()))?
-            .map_err(super::backend_error)?;
+            .map_err(|error| super::backend_error(error.into()))?;
         Ok(PluginApprovalsView {
             requests: requests.iter().map(PluginApprovalView::from).collect(),
         })
@@ -199,7 +199,7 @@ impl AttachmentApprovals {
         tokio::task::spawn_blocking(move || approval::decide(&home, &id, answer))
             .await
             .map_err(|error| super::backend_error(error.into()))?
-            .map_err(super::backend_error)
+            .map_err(|error| super::backend_error(error.into()))
     }
 
     pub fn close(&self) {

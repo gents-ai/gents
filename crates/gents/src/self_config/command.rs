@@ -1813,7 +1813,7 @@ impl ConfigCommandTool {
             }
             _ => unreachable!("patch verb"),
         };
-        outcome_text(&outcome)
+        Ok(outcome_text(&outcome)?)
     }
 
     async fn bound_read(&self, core: &SelfConfigCore, target: SelfConfigTarget) -> Result<String> {

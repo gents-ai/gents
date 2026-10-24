@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use crate::eval::documents::EvalError;
 use serde::{Deserialize, Serialize};
 
 use crate::eval::report::EvalReport;
@@ -31,9 +31,14 @@ pub fn read_evidence_record(trial_dir: &Path) -> Option<EvidenceRecord> {
     serde_json::from_slice(&bytes).ok()
 }
 
-pub(crate) fn write_evidence_record(trial_dir: &Path, record: &EvidenceRecord) -> Result<()> {
-    std::fs::create_dir_all(trial_dir)
-        .with_context(|| format!("creating {}", trial_dir.display()))?;
+pub(crate) fn write_evidence_record(
+    trial_dir: &Path,
+    record: &EvidenceRecord,
+) -> Result<(), EvalError> {
+    std::fs::create_dir_all(trial_dir).map_err(|source| EvalError::CreateDir {
+        path: trial_dir.to_path_buf(),
+        source,
+    })?;
     write_json_atomically(&trial_dir.join(EVIDENCE_FILE), record)
 }
 
@@ -69,6 +74,6 @@ pub fn read_run_view(run_dir: &Path) -> Option<RunView> {
     serde_json::from_slice(&bytes).ok()
 }
 
-pub(crate) fn write_run_view(run_dir: &Path, view: &RunView) -> Result<()> {
+pub(crate) fn write_run_view(run_dir: &Path, view: &RunView) -> Result<(), EvalError> {
     write_json_atomically(&run_dir.join(REPORT_FILE), view)
 }

@@ -52,6 +52,50 @@ pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the run
      the resulting generation swap; the current turn keeps its existing \
      configuration.";
 
+/// Display text is model-facing recovery text; keep it stable.
+#[derive(Debug, thiserror::Error)]
+pub enum GuardError {
+    #[error("no-lockout guard: agent must remain enabled")]
+    AgentDisabled,
+    #[error("no-lockout guard: the Engineer tag must remain on the configurator")]
+    EngineerTagRemoved,
+    #[error("no-lockout guard: self-config must remain enabled in Tools.self_config.enable_self_config. Read tools get and preserve that group when updating Tools or selecting a replacement Context")]
+    SelfConfigDisabled,
+    #[error("no-lockout guard: the agents tools must remain enabled")]
+    AgentsToolsDisabled,
+    #[error("no-lockout guard: self_config_no_lockout must remain enabled")]
+    NoLockoutDisabled,
+    #[error("no-lockout guard: self-config must keep the tools category")]
+    ToolsCategoryRemoved,
+    #[error("config agent tools may only narrow network_mode to disabled")]
+    NetworkModeWidened,
+    #[error("Tools.self_config does not decode; its operator grants cannot be read")]
+    SelfConfigGroup(#[source] serde_json::Error),
+    #[error("Tools.integrations does not decode; its operator grants cannot be read")]
+    IntegrationsGroup(#[source] serde_json::Error),
+    #[error("Tools.integrations.plugins names {plugin:?} twice; its job grant cannot be read")]
+    DuplicatePluginJob { plugin: String },
+    #[error("{refusal}")]
+    JobGrantRefused { refusal: String },
+    #[error("pack installation is operator-managed and cannot be self-granted")]
+    PackInstallSelfGrant,
+    #[error("{collection} field {path}: {found}; expected {shape}")]
+    FieldShape {
+        collection: String,
+        path: String,
+        found: String,
+        shape: String,
+    },
+    #[error("{collection} field {path}: {inner}")]
+    Field {
+        collection: String,
+        path: String,
+        inner: String,
+    },
+    #[error("merged {collection} document is not valid: {inner}")]
+    MergedDocument { collection: String, inner: String },
+}
+
 #[derive(Clone)]
 pub struct SelfConfigCore {
     node: Arc<EmbeddedNode>,
@@ -617,11 +661,12 @@ pub fn apply_tool_grant_selection(
     }
 }
 
-pub fn validate_tool_network_selection(network_mode: Option<CommandNetworkMode>) -> Result<()> {
-    anyhow::ensure!(
-        network_mode.is_none_or(|mode| mode == CommandNetworkMode::Disabled),
-        "config agent tools may only narrow network_mode to disabled"
-    );
+pub fn validate_tool_network_selection(
+    network_mode: Option<CommandNetworkMode>,
+) -> Result<(), GuardError> {
+    if !network_mode.is_none_or(|mode| mode == CommandNetworkMode::Disabled) {
+        return Err(GuardError::NetworkModeWidened);
+    }
     Ok(())
 }
 
@@ -687,7 +732,10 @@ impl<'a> ApplyRequest<'a> {
     }
 }
 
-pub(crate) fn decode_merged<T>(collection: &str, merged: &Map<String, Value>) -> Result<T>
+pub(crate) fn decode_merged<T>(
+    collection: &str,
+    merged: &Map<String, Value>,
+) -> Result<T, GuardError>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -701,10 +749,22 @@ where
                     .as_str()
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| shape.to_string());
-                anyhow!("{collection} field {path}: {found}; expected {shape}")
+                GuardError::FieldShape {
+                    collection: collection.to_owned(),
+                    path,
+                    found: found.to_owned(),
+                    shape,
+                }
             }
-            None if path != "." => anyhow!("{collection} field {path}: {inner}"),
-            None => anyhow!("merged {collection} document is not valid: {inner}"),
+            None if path != "." => GuardError::Field {
+                collection: collection.to_owned(),
+                path,
+                inner,
+            },
+            None => GuardError::MergedDocument {
+                collection: collection.to_owned(),
+                inner,
+            },
         }
     })
 }
@@ -713,7 +773,7 @@ where
 pub fn guard_agent_keeps_reach(
     stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
-) -> Result<()> {
+) -> Result<(), GuardError> {
     let engineer_tag = |doc: &Map<String, Value>| {
         doc.get("tags")
             .and_then(Value::as_array)
@@ -722,14 +782,12 @@ pub fn guard_agent_keeps_reach(
                     .any(|tag| tag.as_str() == Some(crate::self_config::ENGINEER_AGENT_TAG))
             })
     };
-    anyhow::ensure!(
-        candidate.get("enabled").and_then(Value::as_bool) != Some(false),
-        "no-lockout guard: agent must remain enabled"
-    );
-    anyhow::ensure!(
-        !engineer_tag(stored) || engineer_tag(candidate),
-        "no-lockout guard: the Engineer tag must remain on the configurator"
-    );
+    if candidate.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Err(GuardError::AgentDisabled);
+    }
+    if engineer_tag(stored) && !engineer_tag(candidate) {
+        return Err(GuardError::EngineerTagRemoved);
+    }
     Ok(())
 }
 
@@ -738,7 +796,7 @@ pub fn guard_agent_keeps_reach(
 pub fn guard_tools_keep_control(
     stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
-) -> Result<()> {
+) -> Result<(), GuardError> {
     let control = |tools: Tools| {
         let config = tools.self_config.unwrap_or_default();
         [
@@ -758,22 +816,18 @@ pub fn guard_tools_keep_control(
     };
     let [_, had_agents, had_guard, had_tools] = control(decode_merged("Tools", stored)?);
     let [self_config, agents, guard, tools] = control(decode_merged("Tools", candidate)?);
-    anyhow::ensure!(
-        self_config,
-        "no-lockout guard: self-config must remain enabled in Tools.self_config.enable_self_config. Read tools get and preserve that group when updating Tools or selecting a replacement Context"
-    );
-    anyhow::ensure!(
-        !had_agents || agents,
-        "no-lockout guard: the agents tools must remain enabled"
-    );
-    anyhow::ensure!(
-        !had_guard || guard,
-        "no-lockout guard: self_config_no_lockout must remain enabled"
-    );
-    anyhow::ensure!(
-        !had_tools || tools,
-        "no-lockout guard: self-config must keep the tools category"
-    );
+    if !self_config {
+        return Err(GuardError::SelfConfigDisabled);
+    }
+    if had_agents && !agents {
+        return Err(GuardError::AgentsToolsDisabled);
+    }
+    if had_guard && !guard {
+        return Err(GuardError::NoLockoutDisabled);
+    }
+    if had_tools && !tools {
+        return Err(GuardError::ToolsCategoryRemoved);
+    }
     Ok(())
 }
 
@@ -789,26 +843,25 @@ pub struct OperatorGrants {
 }
 
 impl OperatorGrants {
-    pub fn from_tools_json(tools: &Map<String, Value>) -> Result<Self> {
+    pub fn from_tools_json(tools: &Map<String, Value>) -> Result<Self, GuardError> {
         let config = match tools.get("self_config") {
             None | Some(Value::Null) => SelfConfigTools::default(),
             Some(group) => serde_json::from_value::<SelfConfigTools>(group.clone())
-                .context("Tools.self_config does not decode; its operator grants cannot be read")?,
+                .map_err(GuardError::SelfConfigGroup)?,
         };
         let integrations = match tools.get("integrations") {
             None | Some(Value::Null) => IntegrationTools::default(),
-            Some(group) => serde_json::from_value::<IntegrationTools>(group.clone()).context(
-                "Tools.integrations does not decode; its operator grants cannot be read",
-            )?,
+            Some(group) => serde_json::from_value::<IntegrationTools>(group.clone())
+                .map_err(GuardError::IntegrationsGroup)?,
         };
         let mut plugin_jobs = BTreeMap::new();
         for plugin in integrations.plugins.into_iter().flatten() {
             let Some(job) = plugin.job else { continue };
-            anyhow::ensure!(
-                plugin_jobs.insert(plugin.plugin.clone(), job).is_none(),
-                "Tools.integrations.plugins names {:?} twice; its job grant cannot be read",
-                plugin.plugin
-            );
+            if plugin_jobs.insert(plugin.plugin.clone(), job).is_some() {
+                return Err(GuardError::DuplicatePluginJob {
+                    plugin: plugin.plugin,
+                });
+            }
         }
         Ok(Self {
             pack_install: config.enable_pack_install.unwrap_or(false),
@@ -867,19 +920,18 @@ pub fn guard_tools_keep_grants(
     held: &OperatorGrants,
     stored: Option<&Map<String, Value>>,
     candidate: &Map<String, Value>,
-) -> Result<()> {
+) -> Result<(), GuardError> {
     let candidate = OperatorGrants::from_tools_json(candidate)?;
     let stored = stored
         .map(OperatorGrants::from_tools_json)
         .transpose()?
         .unwrap_or_default();
     if let Some(refusal) = candidate.job_refusal(&stored) {
-        bail!(refusal);
+        return Err(GuardError::JobGrantRefused { refusal });
     }
-    anyhow::ensure!(
-        candidate.bounded_by(&stored, held),
-        "pack installation is operator-managed and cannot be self-granted"
-    );
+    if !candidate.bounded_by(&stored, held) {
+        return Err(GuardError::PackInstallSelfGrant);
+    }
     Ok(())
 }
 
@@ -888,7 +940,7 @@ pub fn reselection_keeps_grants(
     held: &OperatorGrants,
     before: Option<&Map<String, Value>>,
     after: Option<&Map<String, Value>>,
-) -> Result<()> {
+) -> Result<(), GuardError> {
     match after {
         None => Ok(()),
         Some(after) => guard_tools_keep_grants(held, before, after),

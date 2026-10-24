@@ -236,7 +236,7 @@ async fn messages(
     let headers = rows(&response, "AgentMessage")?
         .iter()
         .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let tool_calls = load_tool_call_summaries(txn, &scope, &headers, limit).await?;
     let mut reader =
         TxnCanonicalReader::new(txn, &target.node_did, target.requester_did.as_deref());

@@ -4,7 +4,7 @@ use std::pin::Pin;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
+use super::{FireIntent, FireResult, TriggerEngineError, TriggerKind, TriggerSource};
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode};
 
 const MANUAL_CHANNEL_CAPACITY: usize = 32;
@@ -33,15 +33,13 @@ impl ManualTriggerHandle {
         snapshot: &ActiveRuntimeSnapshot,
         task_id: &str,
         args: serde_json::Value,
-    ) -> anyhow::Result<oneshot::Receiver<FireResult>> {
+    ) -> Result<oneshot::Receiver<FireResult>, TriggerEngineError> {
         let resolved_task = snapshot
             .active_tasks()
             .get(task_id)
             .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "task {task_id} is not in the active snapshot (check the task exists, is enabled, and its agent is available)"
-                )
+            .ok_or_else(|| TriggerEngineError::TaskNotActive {
+                task_id: task_id.to_owned(),
             })?;
 
         let (result_tx, result_rx) = oneshot::channel();
@@ -72,9 +70,10 @@ impl ManualTriggerHandle {
             }),
         };
 
-        self.tx.send(intent).await.map_err(|_| {
-            anyhow::anyhow!("manual trigger channel is closed; engine has shut down")
-        })?;
+        self.tx
+            .send(intent)
+            .await
+            .map_err(|_| TriggerEngineError::ManualChannelClosed)?;
         Ok(result_rx)
     }
 }

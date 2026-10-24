@@ -85,7 +85,8 @@ async fn sessions(access: &ConfigAccess, filter: &str) -> Result<Vec<AgentSessio
     .await?
     .iter()
     .map(|row| decode_session_row(row).map(|row| row.session))
-    .collect()
+    .collect::<Result<_, _>>()
+    .map_err(Into::into)
 }
 
 fn provenance_parent(session: &AgentSession) -> Option<&str> {

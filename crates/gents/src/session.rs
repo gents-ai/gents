@@ -5,6 +5,63 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    #[error("session {field} is invalid")]
+    InvalidTimestamp {
+        field: &'static str,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("session {name} must be nonblank")]
+    BlankField { name: &'static str },
+    #[error("session requester_did must be nonblank when present")]
+    BlankRequester,
+    #[error("session preview exceeds the 240-character bound")]
+    PreviewTooLong,
+    #[error("session title text must be nonblank")]
+    BlankTitle,
+    #[error("AgentSession row omitted _docID")]
+    MissingDocId,
+    #[error("AgentSession row is not an object")]
+    RowNotAnObject,
+    #[error("decoding canonical AgentSession")]
+    DecodeRow(#[source] serde_json::Error),
+    #[error("compaction sequence overflow")]
+    CompactionSequenceOverflow(#[source] std::num::TryFromIntError),
+    #[error("ambiguous compaction chain for session {session_id}: expected {expected_key}, found {found_key} at sequence {sequence}")]
+    AmbiguousCompactionChain {
+        session_id: String,
+        expected_key: String,
+        found_key: String,
+        sequence: u32,
+    },
+    #[error(
+        "compaction entry for session {session_id} at sequence {sequence} has no canonical cursor"
+    )]
+    CompactionMissingCursor { session_id: String, sequence: u32 },
+    #[error("compaction cursor regression for session {session_id} at sequence {sequence}")]
+    CompactionCursorRegression { session_id: String, sequence: u32 },
+    #[error(transparent)]
+    FilePathJson(serde_json::Error),
+    #[error("unsupported compaction file-list version")]
+    UnsupportedFilePathVersion,
+    #[error("request facts query omitted AgentRequest rows")]
+    RequestFactsOmitted,
+    #[error("decoding request fact rows")]
+    RequestFactsNotArray,
+    #[error("request row omitted {field}")]
+    RequestRowOmitted { field: &'static str },
+    #[error("invalid request created_at")]
+    InvalidRequestCreatedAt(#[source] chrono::ParseError),
+    #[error("decoding request lifecycle_state")]
+    DecodeLifecycleState(#[source] serde_json::Error),
+    #[error("request-head selection found duplicate logical request roots")]
+    DuplicateRequestRoot,
+    #[error("incoming request does not match the session owner/session/requester/agent scope")]
+    IncomingScopeMismatch,
+}
+
 pub mod canonical_rows;
 mod compaction_entries;
 mod control;

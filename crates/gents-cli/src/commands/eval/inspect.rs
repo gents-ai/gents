@@ -70,7 +70,7 @@ pub(super) async fn list(
                         .collect(),
                     None,
                 ),
-                Err(error) => match report_refused(&error) {
+                Err(error) => match report_refused(error.as_ref()) {
                     Some(refusal) => (Vec::new(), Some(refusal.to_string())),
                     None => return Err(error),
                 },

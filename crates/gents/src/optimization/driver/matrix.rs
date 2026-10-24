@@ -1785,7 +1785,7 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
         .await
         .unwrap_err();
     assert!(
-        crate::eval::runner::freeze_refused(&error).is_some(),
+        crate::eval::runner::freeze_refused(error.as_ref()).is_some(),
         "{error:#}"
     );
     let outcome = settle(

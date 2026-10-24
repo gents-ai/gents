@@ -276,7 +276,7 @@ async fn related_session_metadata<'a>(
                 .await?
                 .iter()
                 .map(gents::session::decode_session_row)
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .map(|row| row.session)
                 .filter(|session| {

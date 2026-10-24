@@ -31,7 +31,7 @@ pub struct PoolKey {
 impl PoolKey {
     fn validate_operator_guard(&self) -> Result<(), String> {
         let current = crate::plugin::approval::workspace::command_guard_home()
-            .map_err(|error| format!("{error:#}"))?;
+            .map_err(|error| gents_protocol::error_chain::ErrorChain(&error).to_string())?;
         if current != self.operator_guard_home {
             return Err("language-server operator protection changed; retry the action".into());
         }
@@ -40,7 +40,7 @@ impl PoolKey {
                 home,
                 crate::toolset::workspace_write_sandbox_enforced(),
             )
-            .map_err(|error| format!("{error:#}"))?;
+            .map_err(|error| gents_protocol::error_chain::ErrorChain(&error).to_string())?;
         }
         Ok(())
     }
@@ -587,14 +587,14 @@ impl LspPool {
         digest: &str,
     ) -> Result<RapidHashMap<String, PoolServerState>, String> {
         let operator_guard_home = crate::plugin::approval::workspace::command_guard_home()
-            .map_err(|error| format!("{error:#}"))?;
+            .map_err(|error| gents_protocol::error_chain::ErrorChain(&error).to_string())?;
         let guard_error = operator_guard_home.as_ref().and_then(|home| {
             crate::plugin::allowed::CommandProtection::capture(
                 home,
                 crate::toolset::workspace_write_sandbox_enforced(),
             )
             .err()
-            .map(|error| format!("{error:#}"))
+            .map(|error| gents_protocol::error_chain::ErrorChain(&error).to_string())
         });
         let map = self.inner.lock().await;
         let mut states = RapidHashMap::new();

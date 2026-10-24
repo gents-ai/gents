@@ -769,7 +769,7 @@ async fn run_stages(
             let feedback = stages
                 .last()
                 .ok_or_else(|| anyhow::anyhow!("no previous stage"))
-                .and_then(|previous| spec.review.feedback(previous));
+                .and_then(|previous| spec.review.feedback(previous).map_err(anyhow::Error::from));
             match feedback {
                 Ok(feedback) => reviewed.prompt.push_str(&format!("\n\n{feedback}")),
                 Err(error) => {

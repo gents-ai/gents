@@ -1182,7 +1182,7 @@ async fn canonical_partial_streams(
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let observed = segments
         .iter()

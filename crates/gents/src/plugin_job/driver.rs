@@ -43,7 +43,7 @@ use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::job_calls::{job_state, JobCaller};
 use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
-use crate::plugin::{GuestTrap, PluginVerdict};
+use crate::plugin::{PluginError, PluginVerdict};
 use crate::session_origin::SessionScope;
 use crate::tool_call_lifecycle::query::load_tool_call_arguments_in_txn;
 use crate::tool_call_lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
@@ -347,9 +347,11 @@ async fn step_on(
     let call = match call {
         Ok(call) => call,
         Err(error) => {
-            let trapped = error
-                .chain()
-                .any(|cause| cause.downcast_ref::<GuestTrap>().is_some());
+            let trapped = error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<PluginError>()
+                    .is_some_and(|error| matches!(error, PluginError::Trap(_)))
+            });
             let error = if trapped {
                 anyhow::Error::new(StepFailure::Trap(format!("{error:#}")))
             } else {

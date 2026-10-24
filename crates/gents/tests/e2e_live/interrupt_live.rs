@@ -285,14 +285,14 @@ async fn observe_request(
         .context("canonical output facts query omitted segments")?
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let headers = data
         .get("AgentMessage")
         .and_then(Value::as_array)
         .context("canonical output facts query omitted headers")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     let observed = segments
         .iter()

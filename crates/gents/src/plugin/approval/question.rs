@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use super::PluginApprovalError;
+
+type Result<T, E = PluginApprovalError> = std::result::Result<T, E>;
 use serde::{Deserialize, Serialize};
 
 use super::{allowed, now_ms, workspace, Answer, WAIT};
@@ -210,30 +212,27 @@ struct WireRequest {
 }
 
 impl TryFrom<WireRequest> for Request {
-    type Error = anyhow::Error;
+    type Error = PluginApprovalError;
     fn try_from(wire: WireRequest) -> Result<Self> {
         let subject = if let Some(binding) = wire.binding {
-            anyhow::ensure!(
-                wire.plugin.is_none()
-                    && wire.path.is_none()
-                    && wire.folder.is_none()
-                    && wire.is_dir.is_none()
-                    && wire.access.is_none(),
-                "a workspace approval cannot contain a second filesystem target"
-            );
+            if !(wire.plugin.is_none()
+                && wire.path.is_none()
+                && wire.folder.is_none()
+                && wire.is_dir.is_none()
+                && wire.access.is_none())
+            {
+                return Err(PluginApprovalError::SecondFilesystemTarget);
+            }
             Subject::Workspace(Box::new(binding))
         } else {
-            let plugin = wire.plugin.context("the approval question has no plugin")?;
-            let path = wire.path.context("the approval question has no path")?;
+            let plugin = wire.plugin.ok_or(PluginApprovalError::NoPlugin)?;
+            let path = wire.path.ok_or(PluginApprovalError::NoPath)?;
             let is_dir = wire.is_dir.unwrap_or(false);
-            let access = wire
-                .access
-                .context("the approval question has no access level")?;
+            let access = wire.access.ok_or(PluginApprovalError::NoAccess)?;
             let file = FilesystemApproval::new(&plugin, &path, is_dir, access);
-            anyhow::ensure!(
-                wire.folder.as_deref() == Some(file.folder),
-                "the approval question's folder does not match its target"
-            );
+            if wire.folder.as_deref() != Some(file.folder) {
+                return Err(PluginApprovalError::FolderMismatch);
+            }
             Subject::Plugin {
                 plugin,
                 path,

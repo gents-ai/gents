@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -7,6 +7,20 @@ use crate::config_client::{
     DesiredStateApplyPlan, DesiredStateExpectation,
 };
 use crate::Collection;
+
+#[derive(Debug, thiserror::Error)]
+pub enum TargetError {
+    #[error("target {collection} {owner:?}/{id:?} is not in the baseline closure")]
+    NotInClosure {
+        collection: &'static str,
+        owner: String,
+        id: String,
+    },
+    #[error("target document is not an object")]
+    NotAnObject,
+}
+
+type Result<T, E = TargetError> = std::result::Result<T, E>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -84,7 +98,7 @@ pub(crate) fn is_closure_collection(collection: Collection) -> bool {
     collection != Collection::EvalDefinition
 }
 
-pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Closure> {
+pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> anyhow::Result<Closure> {
     let references = crate::ConfigReferences::load_in_txn(txn, owner).await?;
     let mut closure: Closure = references
         .documents()
@@ -111,7 +125,7 @@ fn document_owner(value: &Value) -> Option<String> {
     value.get("node_did")?.as_str().map(str::to_owned)
 }
 
-pub fn closure_digests(closure: &Closure) -> Result<Vec<FrozenDocument>> {
+pub fn closure_digests(closure: &Closure) -> anyhow::Result<Vec<FrozenDocument>> {
     closure
         .iter()
         .map(|(collection, value)| {
@@ -134,13 +148,10 @@ fn target_index(closure: &Closure, target: &Target) -> Result<usize> {
                 && document_id(*collection, value).as_deref() == Some(target.id.as_str())
                 && document_owner(value).as_deref() == Some(target.owner.as_str())
         })
-        .with_context(|| {
-            format!(
-                "target {} {:?}/{:?} is not in the baseline closure",
-                target.field.collection().graphql_type(),
-                target.owner,
-                target.id
-            )
+        .ok_or_else(|| TargetError::NotInClosure {
+            collection: target.field.collection().graphql_type(),
+            owner: target.owner.clone(),
+            id: target.id.clone(),
         })
 }
 
@@ -159,7 +170,7 @@ pub fn apply_text(closure: &Closure, target: &Target, text: &str) -> Result<Clos
     patched[index]
         .1
         .as_object_mut()
-        .context("target document is not an object")?
+        .ok_or(TargetError::NotAnObject)?
         .insert(
             target.field.field_name().to_owned(),
             Value::String(text.to_owned()),
@@ -167,7 +178,7 @@ pub fn apply_text(closure: &Closure, target: &Target, text: &str) -> Result<Clos
     Ok(patched)
 }
 
-pub fn target_digest(closure: &Closure, target: &Target) -> Result<String> {
+pub fn target_digest(closure: &Closure, target: &Target) -> anyhow::Result<String> {
     desired_state_document_digest(&closure[target_index(closure, target)?].1)
 }
 
@@ -187,7 +198,7 @@ pub fn target_plan(
     closure: &Closure,
     target: &Target,
     frozen: &[FrozenDocument],
-) -> Result<DesiredStateApplyPlan> {
+) -> anyhow::Result<DesiredStateApplyPlan> {
     let (collection, value) = &closure[target_index(closure, target)?];
     DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: *collection,
@@ -239,7 +250,11 @@ fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document:
     }
 }
 
-fn comparable(collection: Collection, document: &Value, pack_document: &Value) -> Result<Value> {
+fn comparable(
+    collection: Collection,
+    document: &Value,
+    pack_document: &Value,
+) -> anyhow::Result<Value> {
     let (_, projected) = crate::config_client::config_projection(collection, Some(document))?;
     let mut projected = projected.context("canonical projection missing")?;
     if let Some(object) = projected.as_object_mut() {
@@ -248,7 +263,7 @@ fn comparable(collection: Collection, document: &Value, pack_document: &Value) -
     Ok(projected)
 }
 
-pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> Result<()> {
+pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> anyhow::Result<()> {
     for document in pack.documents() {
         let collection = document.collection;
         if !is_closure_collection(collection) || remapped_by_trial(collection, None, &document.add)

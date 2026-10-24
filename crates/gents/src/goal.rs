@@ -61,6 +61,18 @@ pub use reset_resume::resume_at_reset;
 pub(crate) use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;
 
+#[derive(Debug, thiserror::Error)]
+pub enum GoalError {
+    #[error("goal token budget requires a goal objective template")]
+    BudgetRequiresObjective,
+    #[error("goal objective must be non-empty")]
+    ObjectiveEmpty,
+    #[error("goal token budget must be positive")]
+    BudgetNotPositive,
+    #[error("provide objective or token_budget to edit the goal")]
+    EditFieldRequired,
+}
+
 /// Resume only a paused Goal; an interrupted/claimed execution must settle
 /// before a fresh continuation can be staged.
 pub(crate) async fn stage_session_resume_in_txn(
@@ -838,21 +850,17 @@ pub(crate) fn task_goal_fire_key<'a>(request_id: &'a str, expected_owner: &str) 
 pub fn validate_task_goal_declaration(
     objective: Option<&str>,
     token_budget: Option<i64>,
-) -> Result<()> {
+) -> Result<(), GoalError> {
     match objective {
-        None => anyhow::ensure!(
-            token_budget.is_none(),
-            "goal token budget requires a goal objective template"
-        ),
+        None if token_budget.is_some() => return Err(GoalError::BudgetRequiresObjective),
+        None => {}
         Some(objective) => {
-            anyhow::ensure!(
-                !objective.trim().is_empty(),
-                "goal objective must be non-empty"
-            );
-            anyhow::ensure!(
-                token_budget.is_none_or(|budget| budget > 0),
-                "goal token budget must be positive"
-            );
+            if objective.trim().is_empty() {
+                return Err(GoalError::ObjectiveEmpty);
+            }
+            if token_budget.is_some_and(|budget| budget <= 0) {
+                return Err(GoalError::BudgetNotPositive);
+            }
         }
     }
     Ok(())

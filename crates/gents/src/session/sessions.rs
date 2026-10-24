@@ -350,7 +350,7 @@ pub(crate) async fn load_agent_session_owner_in_txn(
         rows.len() <= 1,
         "duplicate AgentSession rows for session_id={session_id}"
     );
-    rows.first().map(decode_session_row).transpose()
+    Ok(rows.first().map(decode_session_row).transpose()?)
 }
 
 pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str) -> String {

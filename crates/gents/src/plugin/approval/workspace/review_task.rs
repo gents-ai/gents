@@ -1,4 +1,6 @@
-use anyhow::Result;
+use crate::plugin::approval::PluginApprovalError;
+
+type Result<T, E = PluginApprovalError> = std::result::Result<T, E>;
 use sha2::{Digest, Sha256};
 
 use crate::document_config::Task;
@@ -68,16 +70,14 @@ pub fn review_task_policy(
     agent: &str,
     session: &str,
 ) -> Result<String> {
-    anyhow::ensure!(
-        review_task_is_eligible(task, node, task_id, agent),
-        "access review requires an enabled policy Task for this agent without execution side effects"
-    );
+    if !review_task_is_eligible(task, node, task_id, agent) {
+        return Err(PluginApprovalError::ReviewTaskIneligible);
+    }
     let rendered = crate::session_message::render_task_body(task, node, agent, session, None)
-        .map_err(anyhow::Error::msg)?;
-    anyhow::ensure!(
-        rendered.goal.is_none() && !rendered.content.trim().is_empty(),
-        "access review Task did not render a policy"
-    );
+        .map_err(|message| PluginApprovalError::TaskRender { message })?;
+    if !(rendered.goal.is_none() && !rendered.content.trim().is_empty()) {
+        return Err(PluginApprovalError::NoPolicyRendered);
+    }
     Ok(rendered.content)
 }
 

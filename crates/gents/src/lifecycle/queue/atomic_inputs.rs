@@ -214,7 +214,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                         let close = rows
                             .iter()
                             .map(crate::session::canonical_rows::decode_output_segment_row)
-                            .collect::<Result<Vec<_>>>()?
+                            .collect::<Result<Vec<_>, _>>()?
                             .into_iter()
                             .find(|row| row.segment.source == source && row.segment.close.is_some())
                             .context("fixture tool closure")?;

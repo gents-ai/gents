@@ -16,7 +16,7 @@ use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDelivery
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::UpdateSubscriptionSource;
 
-use super::{FireIntent, TriggerKind, TriggerSource};
+use super::{FireIntent, TriggerEngineError, TriggerKind, TriggerSource};
 
 mod durable;
 
@@ -28,12 +28,17 @@ const GROUP_DUE_RECONCILE_BUDGET: usize = 16;
 const MAX_ACTIVE_GROUP_TIMERS: usize = 4096;
 const MAX_DORMANT_GROUP_TIMERS: usize = 4096;
 
-fn captured_source_field(doc: &serde_json::Value, field: &str) -> anyhow::Result<Option<String>> {
+fn captured_source_field(
+    doc: &serde_json::Value,
+    field: &str,
+) -> Result<Option<String>, TriggerEngineError> {
     let Some(value) = doc.get(field) else {
         if field == "requester_did" {
             return Ok(None);
         }
-        anyhow::bail!("source document is missing runtime-filled field `{field}`");
+        return Err(TriggerEngineError::CapturedFieldMissing {
+            field: field.to_owned(),
+        });
     };
     let canonical = match value {
         serde_json::Value::Null if field == "requester_did" => return Ok(None),
@@ -43,12 +48,14 @@ fn captured_source_field(doc: &serde_json::Value, field: &str) -> anyhow::Result
         {
             value.to_string()
         }
-        _ => anyhow::bail!(
-            "runtime-filled source field `{field}` must be a string or integral number"
-        ),
+        _ => {
+            return Err(TriggerEngineError::CapturedFieldType {
+                field: field.to_owned(),
+            })
+        }
     };
     if field == "requester_did" && canonical.trim().is_empty() {
-        anyhow::bail!("runtime-filled source field `requester_did` must be non-empty");
+        return Err(TriggerEngineError::RequesterDidEmpty);
     }
     Ok(Some(canonical))
 }
@@ -266,14 +273,19 @@ async fn enrich_native_outcome_provenance(
     Ok(())
 }
 
-fn required_source_string(source: &serde_json::Value, field: &str) -> anyhow::Result<String> {
+fn required_source_string(
+    source: &serde_json::Value,
+    field: &str,
+) -> Result<String, TriggerEngineError> {
     source
         .get(field)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("native event source has no {field}"))
+        .ok_or_else(|| TriggerEngineError::NativeSourceFieldMissing {
+            field: field.to_owned(),
+        })
 }
 
 impl SourceSchemaCache {
@@ -318,13 +330,15 @@ pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
 pub(crate) fn source_fields_from(
     data: Option<&serde_json::Value>,
     collection: &str,
-) -> anyhow::Result<Vec<String>> {
+) -> Result<Vec<String>, TriggerEngineError> {
     let Some(fields) = data
         .and_then(|d| d.get("__type"))
         .and_then(|t| t.get("fields"))
         .and_then(serde_json::Value::as_array)
     else {
-        anyhow::bail!("introspection returned no fields for {}", collection);
+        return Err(TriggerEngineError::IntrospectionEmpty {
+            collection: collection.to_owned(),
+        });
     };
     Ok(fields
         .iter()

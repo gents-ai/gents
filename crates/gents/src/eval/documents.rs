@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
@@ -7,6 +9,122 @@ use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
 use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalSplit, EvalTier};
 use crate::graphql::escape_graphql_string;
+
+/// Display text is shown to operators and the model; keep it stable.
+#[derive(Debug, thiserror::Error)]
+pub enum EvalError {
+    #[error(transparent)]
+    ReportRefused(#[from] super::report::ReportRefused),
+    #[error(transparent)]
+    FreezeRefused(#[from] super::runner::freeze::FreezeRefused),
+    #[error(transparent)]
+    ProviderDown(#[from] super::runner::ProviderDown),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{} has no parent directory", path.display())]
+    NoParentDirectory { path: PathBuf },
+    #[error("{} has no cell directory", path.display())]
+    NoCellDirectory { path: PathBuf },
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading {}", path.display())]
+    ReadPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing {}", path.display())]
+    ParsePath {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("writing {}", path.display())]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}", path.display())]
+    WriteRecord {
+        path: PathBuf,
+        #[source]
+        source: Box<EvalError>,
+    },
+    #[error("removing {}", path.display())]
+    RemovePath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("renaming {} to {}", from.display(), to.display())]
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("staging {}", path.display())]
+    StageSnapshot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("encoding {}", path.display())]
+    EncodeSnapshot {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("replacing {}", path.display())]
+    ReplaceSnapshot {
+        path: PathBuf,
+        #[source]
+        source: tempfile::PersistError,
+    },
+    #[error("no eval run {run_id:?} for {owner}")]
+    NoRun { run_id: String, owner: String },
+    #[error("trial budget closed")]
+    TrialBudgetClosed {
+        #[source]
+        source: tokio::sync::AcquireError,
+    },
+    #[error("run {run_id} froze no case {case_id:?}")]
+    UnfrozenCase { run_id: String, case_id: String },
+    #[error("run {run_id} froze no cell {cell_id:?}")]
+    UnfrozenCell { run_id: String, cell_id: String },
+    #[error("review checks unavailable")]
+    ReviewChecksUnavailable,
+    #[error("review check failed: {check}")]
+    ReviewCheckFailed { check: serde_json::Value },
+    #[error("trial concurrency must be between 1 and {max}")]
+    TrialConcurrency { max: usize },
+    #[error("fixture asset {asset:?} must be a path inside the pack")]
+    FixtureAssetInvalid { asset: String },
+    #[error("reading fixture asset {}", path.display())]
+    ReadFixture {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading fixture asset directory {}", path.display())]
+    ReadFixtureDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not UTF-8", path.display())]
+    NotUtf8 { path: PathBuf },
+    #[error("fixture asset outside the pack")]
+    FixtureOutsidePack {
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+}
 
 pub const DENOMINATOR_POLICY_V1: &str = "exclude_not_evidence_v1";
 

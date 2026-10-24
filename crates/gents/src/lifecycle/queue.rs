@@ -89,6 +89,12 @@ pub use position::validate_position;
 pub(crate) use position::{effective_slots, InvalidQueuePosition};
 pub use submission::prepare_user_message_input;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum QueueError {
+    #[error("goal continuation sequence must be positive")]
+    NonPositiveGoalContinuationSequence,
+}
+
 #[derive(Debug)]
 pub(crate) struct EnqueuedBackgroundCompletionInput {
     pub(crate) request: Option<EnqueuedAgentRequest>,

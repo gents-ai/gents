@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use serde_json::Value;
 
@@ -6,6 +6,28 @@ use crate::background_tools::WaitToolArgs;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use crate::tool_call_lifecycle::{query, ToolCallState};
+
+#[derive(Debug, thiserror::Error)]
+enum WaitObservationError {
+    #[error("Goal wait observation omitted {name} rows")]
+    MissingRows { name: String },
+    #[error("Goal wait observation omitted {field}")]
+    MissingField { field: String },
+    #[error("decode canonical wait_process result")]
+    DecodeResult(#[source] serde_json::Error),
+    #[error("malformed canonical wait_process tool error")]
+    MalformedArgumentError,
+    #[error("canonical wait_process reply conflicts with accepted handle")]
+    ConflictsWithAcceptedHandle,
+    #[error("canonical wait_process reply has unknown status")]
+    UnknownStatus,
+    #[error("canonical wait_process reply conflicts with target state")]
+    ConflictsWithTargetState,
+    #[error("canonical wait_process reply has unknown outcome")]
+    UnknownOutcome,
+}
+
+type Result<T, E = WaitObservationError> = std::result::Result<T, E>;
 
 pub(super) enum WaitEvidence {
     Absent,
@@ -19,14 +41,18 @@ fn rows<'a>(response: &'a Value, name: &str) -> Result<&'a Vec<Value>> {
         .get("data")
         .and_then(|data| data.get(name))
         .and_then(Value::as_array)
-        .with_context(|| format!("Goal wait observation omitted {name} rows"))
+        .ok_or_else(|| WaitObservationError::MissingRows {
+            name: name.to_owned(),
+        })
 }
 
 fn required<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
     row.get(field)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .with_context(|| format!("Goal wait observation omitted {field}"))
+        .ok_or_else(|| WaitObservationError::MissingField {
+            field: field.to_owned(),
+        })
 }
 
 fn valid_argument_error(value: &Value) -> bool {
@@ -44,48 +70,46 @@ fn valid_argument_error(value: &Value) -> bool {
 /// Only the canonical bounded-timeout envelope says that the agent deliberately
 /// waited for this exact handle while it was running.
 fn timed_out_running_handle(result: &str, accepted_handle: &str) -> Result<bool> {
-    let value: Value =
-        serde_json::from_str(result).context("decode canonical wait_process result")?;
+    let value: Value = serde_json::from_str(result).map_err(WaitObservationError::DecodeResult)?;
     if value["failure_class"] == "argument_invalid" {
-        anyhow::ensure!(
-            valid_argument_error(&value),
-            "malformed canonical wait_process tool error"
-        );
+        if !valid_argument_error(&value) {
+            return Err(WaitObservationError::MalformedArgumentError);
+        }
         return Ok(false);
     }
-    anyhow::ensure!(
-        value["tool_call_id"].as_str() == Some(accepted_handle)
-            && value["await_mode"] == "background"
-            && value["tool_name"]
-                .as_str()
-                .is_some_and(|name| !name.is_empty())
-            && value["result"].is_string(),
-        "canonical wait_process reply conflicts with accepted handle"
-    );
+    if !(value["tool_call_id"].as_str() == Some(accepted_handle)
+        && value["await_mode"] == "background"
+        && value["tool_name"]
+            .as_str()
+            .is_some_and(|name| !name.is_empty())
+        && value["result"].is_string())
+    {
+        return Err(WaitObservationError::ConflictsWithAcceptedHandle);
+    }
     let status = value["status"]
         .as_str()
         .and_then(ToolCallState::from_persisted)
-        .context("canonical wait_process reply has unknown status")?;
-    anyhow::ensure!(
-        value["ok"] == (status == ToolCallState::Completed)
-            && if status == ToolCallState::Completed {
-                value["error"].is_null()
-            } else {
-                value["error"]["failure_class"] == "external"
-            },
-        "canonical wait_process reply conflicts with target state"
-    );
+        .ok_or(WaitObservationError::UnknownStatus)?;
+    if !(value["ok"] == (status == ToolCallState::Completed)
+        && if status == ToolCallState::Completed {
+            value["error"].is_null()
+        } else {
+            value["error"]["failure_class"] == "external"
+        })
+    {
+        return Err(WaitObservationError::ConflictsWithTargetState);
+    }
     let reason = value["error"].get("reason").and_then(Value::as_str);
     if status == ToolCallState::Running && reason == Some("wait_timeout") {
         return Ok(true);
     }
-    anyhow::ensure!(
-        matches!(
-            reason,
-            Some("caller_interrupted" | "caller_deadline_exceeded" | "wait_timeout" | "terminal")
-        ) || (status == ToolCallState::Completed && value["error"].is_null()),
-        "canonical wait_process reply has unknown outcome"
-    );
+    if !(matches!(
+        reason,
+        Some("caller_interrupted" | "caller_deadline_exceeded" | "wait_timeout" | "terminal")
+    ) || (status == ToolCallState::Completed && value["error"].is_null()))
+    {
+        return Err(WaitObservationError::UnknownOutcome);
+    }
     Ok(false)
 }
 
@@ -114,7 +138,7 @@ async fn observe_waits(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<bool> {
+) -> anyhow::Result<bool> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let headers = crate::session::load_request_headers_in_txn(
         txn,

@@ -222,10 +222,10 @@ async fn changing_permissions_during_review_cannot_authorize_the_old_action() {
         assert!(futures::poll!(consent.as_mut()).is_pending());
         workspace::save_mode(&fixture.home, &fixture.key, 1, Mode::Ask, None).unwrap();
         release.notify_one();
-        assert!(consent
-            .await
-            .unwrap_err()
-            .is::<workspace::SelectionChanged>());
+        assert!(matches!(
+            consent.await.unwrap_err(),
+            approval::PluginApprovalError::SelectionChanged
+        ));
         assert!(approval::pending_requests(&fixture.home)
             .unwrap()
             .is_empty());

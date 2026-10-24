@@ -7,12 +7,184 @@ use queue::Queue;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::allowed;
+use super::allowed::PluginAllowedError;
 #[cfg(test)]
 use crate::pack::BindAccess;
+
+type Result<T, E = PluginApprovalError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginApprovalError {
+    #[error("creating the approval home")]
+    CreateHome(#[source] std::io::Error),
+    #[error("opening the approval lock")]
+    OpenLock(#[source] std::io::Error),
+    #[error("locking plugin approvals")]
+    Lock(#[source] std::io::Error),
+    #[error("approval file has no folder")]
+    FileWithoutFolder,
+    #[error("creating {}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: tempfile::PersistError,
+    },
+    #[error("creating the approval queue")]
+    CreateQueue(#[source] std::io::Error),
+    #[error("preparing the approval listener mark")]
+    ListenerMark(#[source] tempfile::PersistError),
+    #[error("marking {} as listening", path.display())]
+    Mark {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid plugin approval question id")]
+    InvalidQuestionId,
+    #[error("the plugin approval question has expired")]
+    Expired,
+    #[error("approval wait is too long")]
+    WaitTooLong,
+    #[error("the plugin approval question id is already in use")]
+    IdInUse,
+    #[error("the operator did not answer in time")]
+    TimedOut,
+    #[error("no matching client on this runtime's home is listening to answer; open access requests in an updated client and retry")]
+    NoWorkspaceListener,
+    #[error("the unscoped approval has no filesystem target")]
+    NoFilesystemTarget,
+    #[error("no chat or desktop on this server's home is listening to answer; allow it with `gents plugin dirs add {}`", folder.display())]
+    NoListener { folder: PathBuf },
+    #[error("the plugin approval question format is unsupported or invalid; use matching runtime and client versions")]
+    QuestionFormat(#[source] serde_json::Error),
+    #[error(
+        "the approval question is in the wrong queue; use matching runtime and client versions"
+    )]
+    WrongQueue,
+    #[error("the approval queue contains duplicate question identities")]
+    DuplicateIdentity,
+    #[error("listing plugin approval requests")]
+    ListQueue(#[source] std::io::Error),
+    #[error("reading the approval question")]
+    ReadQuestion(#[source] std::io::Error),
+    #[error("the question is unreadable")]
+    UnreadableQuestion(#[source] serde_json::Error),
+    #[error("the approval question is in the wrong queue")]
+    QuestionWrongQueue,
+    #[error("question {id} is not waiting for an answer")]
+    NotWaiting { id: String },
+    #[error("reading the operator's answer")]
+    ReadAnswer(#[source] std::io::Error),
+    #[error("the operator's answer is unreadable")]
+    UnreadableAnswer(#[source] serde_json::Error),
+    #[error("the operator's answer does not match the approval scope")]
+    AnswerScopeMismatch,
+    #[error("{id:?} is not a question id")]
+    NotQuestionId { id: String },
+    #[error("the plugin approval question identity changed")]
+    IdentityChanged,
+    #[error("the plugin approval question was already answered")]
+    AlreadyAnswered,
+    #[error("this action only supports allow once or deny")]
+    AnswerUnsupported,
+    #[error("this approval cannot remember filesystem access")]
+    CannotRemember,
+    #[error("Workspace permissions changed. Retry the action with the current permissions.")]
+    SelectionChanged,
+    #[error("Choose a runtime and agent before changing permissions.")]
+    ChooseRuntime,
+    #[error("Choose an absolute workspace folder.")]
+    AbsoluteWorkspace,
+    #[error("resolving the workspace folder")]
+    ResolveWorkspace(#[source] std::io::Error),
+    #[error("Choose a workspace folder.")]
+    NotWorkspaceFolder,
+    #[error("the command approval has no executable")]
+    NoExecutable,
+    #[error("the writable root exceeds the tool root")]
+    WritableRootOutside,
+    #[error("the command working directory is outside its tool root")]
+    CwdOutsideRoot,
+    #[error("the file approval path is not valid UTF-8")]
+    PathNotUtf8,
+    #[error("The file approval target changed. Retry the file change.")]
+    FileTargetChanged,
+    #[error("The file approval target is not a regular file.")]
+    FileTargetNotRegular,
+    #[error("The plugin invocation changed after approval. Retry the action.")]
+    PluginChanged,
+    #[error("action cancelled while awaiting approval")]
+    Cancelled,
+    #[error("action approval exceeded the request deadline")]
+    RequestDeadline,
+    #[error("action approval exceeded the request deadline")]
+    ApprovalTimeout(#[source] tokio::time::error::Elapsed),
+    #[error("approval deadline is missing")]
+    DeadlineMissing,
+    #[error("{message}")]
+    NotApproved { message: String },
+    #[error("workspace permissions are unavailable")]
+    WorkspaceUnavailable,
+    #[error("the workspace permissions file is unreadable")]
+    UnreadableWorkspaceFile(#[source] serde_json::Error),
+    #[error("the workspace permissions file contains duplicate scopes")]
+    DuplicateScopes,
+    #[error("reading workspace permissions")]
+    ReadWorkspace(#[source] std::io::Error),
+    #[error("Choose a valid access reviewer task.")]
+    InvalidReviewTask,
+    #[error(transparent)]
+    Selection(#[from] gents_loop::tool_policy::workspace_permissions::SelectionError),
+    #[error("unchanged workspace permissions are missing")]
+    UnchangedMissing,
+    #[error("preparing workspace permissions")]
+    PrepareWorkspace(#[source] std::io::Error),
+    #[error("opening the workspace permissions lock")]
+    WorkspaceLockOpen(#[source] std::io::Error),
+    #[error("locking workspace permissions")]
+    WorkspaceLock(#[source] std::io::Error),
+    #[error("encoding workspace permissions")]
+    EncodeWorkspace(#[source] serde_json::Error),
+    #[error("access review requires an enabled policy Task for this agent without execution side effects")]
+    ReviewTaskIneligible,
+    #[error("{message}")]
+    TaskRender { message: String },
+    #[error("access review Task did not render a policy")]
+    NoPolicyRendered,
+    #[error("access review input is missing")]
+    ReviewInputMissing,
+    #[error("resolving the approval home")]
+    ResolveApprovalHome(#[source] std::io::Error),
+    #[error("the plugin and request have different approval homes")]
+    ApprovalHomeMismatch,
+    #[error("a workspace approval cannot contain a second filesystem target")]
+    SecondFilesystemTarget,
+    #[error("the approval question has no plugin")]
+    NoPlugin,
+    #[error("the approval question has no path")]
+    NoPath,
+    #[error("the approval question has no access level")]
+    NoAccess,
+    #[error("the approval question's folder does not match its target")]
+    FolderMismatch,
+    #[error(transparent)]
+    Context(#[from] crate::toolset::ContextError),
+    #[error(transparent)]
+    Allowed(#[from] PluginAllowedError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+}
 
 // Consent gates plugin calls inside the existing OS-user trust boundary; it does not isolate same-user shell commands.
 pub const WAIT: Duration = Duration::from_secs(10 * 60);
@@ -100,7 +272,7 @@ pub fn prepare_listener(home: &Path) -> Result<PathBuf> {
 
 fn prepare_queue_listener(home: &Path, format: Queue) -> Result<()> {
     let queue = format.directory(home);
-    std::fs::create_dir_all(&queue).context("creating the approval queue")?;
+    std::fs::create_dir_all(&queue).map_err(PluginApprovalError::CreateQueue)?;
     let mark = format.listener_file(home);
     if !mark.try_exists()? {
         let file = tempfile::NamedTempFile::new_in(&queue)?;
@@ -108,7 +280,7 @@ fn prepare_queue_listener(home: &Path, format: Queue) -> Result<()> {
         match file.persist_noclobber(&mark) {
             Ok(_) => {}
             Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error).context("preparing the approval listener mark"),
+            Err(error) => return Err(PluginApprovalError::ListenerMark(error)),
         }
     }
     Ok(())
@@ -124,7 +296,10 @@ pub fn mark_listening(home: &Path) -> Result<()> {
             .truncate(false)
             .open(&path)
             .and_then(|file| file.set_modified(std::time::SystemTime::now()))
-            .with_context(|| format!("marking {} as listening", path.display()))?;
+            .map_err(|source| PluginApprovalError::Mark {
+                path: path.clone(),
+                source,
+            })?;
     }
     Ok(())
 }
@@ -160,15 +335,15 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
-    std::fs::create_dir_all(home).context("creating the approval home")?;
+    std::fs::create_dir_all(home).map_err(PluginApprovalError::CreateHome)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(lock_file(home))
-        .context("opening the approval lock")?;
-    crate::file_lock::FileLock::exclusive(file).context("locking plugin approvals")
+        .map_err(PluginApprovalError::OpenLock)?;
+    crate::file_lock::FileLock::exclusive(file).map_err(PluginApprovalError::Lock)
 }
 
 pub(super) fn lock_file(home: &Path) -> PathBuf {
@@ -176,12 +351,20 @@ pub(super) fn lock_file(home: &Path) -> PathBuf {
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().context("approval file has no folder")?;
-    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let parent = path
+        .parent()
+        .ok_or(PluginApprovalError::FileWithoutFolder)?;
+    std::fs::create_dir_all(parent).map_err(|source| PluginApprovalError::CreateDir {
+        path: parent.to_path_buf(),
+        source,
+    })?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
     std::io::Write::write_all(&mut temp, bytes)?;
     temp.persist(path)
-        .with_context(|| format!("writing {}", path.display()))?;
+        .map_err(|source| PluginApprovalError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok(())
 }
 
@@ -203,7 +386,9 @@ impl Drop for Cleanup<'_> {
 }
 
 pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool> {
-    anyhow::ensure!(valid_id(&request.id), "invalid plugin approval question id");
+    if !valid_id(&request.id) {
+        return Err(PluginApprovalError::InvalidQuestionId);
+    }
     let queue = Queue::for_request(request);
     let started = tokio::time::Instant::now();
     let now = now_ms();
@@ -211,22 +396,21 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
     filed.expires_at_ms = filed
         .expires_at_ms
         .min(now.saturating_add(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)));
-    anyhow::ensure!(
-        filed.created_at_ms <= now && now < filed.expires_at_ms,
-        "the plugin approval question has expired"
-    );
+    if !(filed.created_at_ms <= now && now < filed.expires_at_ms) {
+        return Err(PluginApprovalError::Expired);
+    }
     let remaining = Duration::from_millis(filed.expires_at_ms - now).min(wait);
     let deadline = started
         .checked_add(remaining)
-        .context("approval wait is too long")?;
+        .ok_or(PluginApprovalError::WaitTooLong)?;
     {
         let _lock = lock(home)?;
         for format in Queue::ALL {
-            anyhow::ensure!(
-                !format.request_file(home, &request.id).try_exists()?
-                    && !format.decision_file(home, &request.id).try_exists()?,
-                "the plugin approval question id is already in use"
-            );
+            if format.request_file(home, &request.id).try_exists()?
+                || format.decision_file(home, &request.id).try_exists()?
+            {
+                return Err(PluginApprovalError::IdInUse);
+            }
         }
         if let Some(binding) = request.binding() {
             workspace::validate_binding(home, binding)?;
@@ -249,18 +433,19 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
         if let Some(allowed) = read_decision(home, request)? {
             return Ok(allowed);
         }
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "the operator did not answer in time"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            return Err(PluginApprovalError::TimedOut);
+        }
         if started.elapsed() >= LISTENER_GRACE && !listener_fresh(home, queue) {
             if queue == Queue::Workspace {
-                anyhow::bail!("no matching client on this runtime's home is listening to answer; open access requests in an updated client and retry");
+                return Err(PluginApprovalError::NoWorkspaceListener);
             }
             let file = request
                 .filesystem()
-                .context("the unscoped approval has no filesystem target")?;
-            anyhow::bail!("no chat or desktop on this server's home is listening to answer; allow it with `gents plugin dirs add {}`", file.folder.display());
+                .ok_or(PluginApprovalError::NoFilesystemTarget)?;
+            return Err(PluginApprovalError::NoListener {
+                folder: file.folder.to_path_buf(),
+            });
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(Duration::from_millis(250));
@@ -280,10 +465,10 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
         let entries = match std::fs::read_dir(queue.directory(home)) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).context("listing plugin approval requests"),
+            Err(error) => return Err(PluginApprovalError::ListQueue(error)),
         };
         for entry in entries {
-            let path = entry.context("listing plugin approval requests")?.path();
+            let path = entry.map_err(PluginApprovalError::ListQueue)?.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
@@ -298,17 +483,21 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
             {
                 continue;
             }
-            let request: Request = serde_json::from_value(value).context("the plugin approval question format is unsupported or invalid; use matching runtime and client versions")?;
-            anyhow::ensure!(queue.matches(&request), "the approval question is in the wrong queue; use matching runtime and client versions");
-            anyhow::ensure!(
-                ids.insert(request.id.clone()),
-                "the approval queue contains duplicate question identities"
-            );
+            let request: Request =
+                serde_json::from_value(value).map_err(PluginApprovalError::QuestionFormat)?;
+            if !queue.matches(&request) {
+                return Err(PluginApprovalError::WrongQueue);
+            }
+            if !ids.insert(request.id.clone()) {
+                return Err(PluginApprovalError::DuplicateIdentity);
+            }
             if let Some(binding) = request.binding() {
                 if let Err(error) = workspace::validate_binding(home, binding) {
-                    if error.is::<workspace::SelectionChanged>()
-                        || error.is::<allowed::PathChanged>()
-                    {
+                    if matches!(
+                        error,
+                        PluginApprovalError::SelectionChanged
+                            | PluginApprovalError::Allowed(PluginAllowedError::PathChanged { .. })
+                    ) {
                         continue;
                     }
                     return Err(error);
@@ -333,21 +522,19 @@ fn read_question(home: &Path, id: &str) -> Result<(Queue, Request)> {
         let bytes = match std::fs::read(queue.request_file(home, id)) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).context("reading the approval question"),
+            Err(error) => return Err(PluginApprovalError::ReadQuestion(error)),
         };
         let request: Request =
-            serde_json::from_slice(&bytes).context("the question is unreadable")?;
-        anyhow::ensure!(
-            queue.matches(&request),
-            "the approval question is in the wrong queue"
-        );
-        anyhow::ensure!(
-            found.is_none(),
-            "the approval queue contains duplicate question identities"
-        );
+            serde_json::from_slice(&bytes).map_err(PluginApprovalError::UnreadableQuestion)?;
+        if !queue.matches(&request) {
+            return Err(PluginApprovalError::QuestionWrongQueue);
+        }
+        if found.is_some() {
+            return Err(PluginApprovalError::DuplicateIdentity);
+        }
         found = Some((queue, request));
     }
-    found.with_context(|| format!("question {id} is not waiting for an answer"))
+    found.ok_or_else(|| PluginApprovalError::NotWaiting { id: id.to_owned() })
 }
 
 fn read_decision(home: &Path, request: &Request) -> Result<Option<bool>> {
@@ -355,16 +542,16 @@ fn read_decision(home: &Path, request: &Request) -> Result<Option<bool>> {
     let bytes = match std::fs::read(queue.decision_file(home, &request.id)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("reading the operator's answer"),
+        Err(error) => return Err(PluginApprovalError::ReadAnswer(error)),
     };
     let decision: Decision =
-        serde_json::from_slice(&bytes).context("the operator's answer is unreadable")?;
+        serde_json::from_slice(&bytes).map_err(PluginApprovalError::UnreadableAnswer)?;
     let allowed = match (request.binding(), decision.binding.as_ref()) {
         (Some(expected), Some(received)) => {
             workspace::consume_decision(home, expected, received, decision.allow)?
         }
         (None, None) => decision.allow,
-        _ => anyhow::bail!("the operator's answer does not match the approval scope"),
+        _ => return Err(PluginApprovalError::AnswerScopeMismatch),
     };
     Ok(Some(allowed))
 }
@@ -379,33 +566,31 @@ fn decide_with_clock(
     answer: Answer,
     clock: impl FnOnce() -> u64,
 ) -> Result<()> {
-    anyhow::ensure!(valid_id(id), "{id:?} is not a question id");
+    if !valid_id(id) {
+        return Err(PluginApprovalError::NotQuestionId { id: id.to_owned() });
+    }
     let _lock = lock(home)?;
     let (queue, request) = read_question(home, id)?;
     let now = clock();
-    anyhow::ensure!(
-        request.id == id,
-        "the plugin approval question identity changed"
-    );
-    anyhow::ensure!(
-        request.created_at_ms <= now && now < request.expires_at_ms,
-        "the plugin approval question has expired"
-    );
-    anyhow::ensure!(
-        !queue.decision_file(home, id).try_exists()?,
-        "the plugin approval question was already answered"
-    );
+    if request.id != id {
+        return Err(PluginApprovalError::IdentityChanged);
+    }
+    if !(request.created_at_ms <= now && now < request.expires_at_ms) {
+        return Err(PluginApprovalError::Expired);
+    }
+    if queue.decision_file(home, id).try_exists()? {
+        return Err(PluginApprovalError::AlreadyAnswered);
+    }
     if let Some(binding) = request.binding() {
         workspace::validate_binding(home, binding)?;
     }
-    anyhow::ensure!(
-        request.allows_answer(answer),
-        "this action only supports allow once or deny"
-    );
+    if !request.allows_answer(answer) {
+        return Err(PluginApprovalError::AnswerUnsupported);
+    }
     if answer.remembered() {
         let file = request
             .filesystem()
-            .context("this approval cannot remember filesystem access")?;
+            .ok_or(PluginApprovalError::CannotRemember)?;
         let path = if answer == Answer::AlwaysPath && !file.is_dir {
             file.path
         } else {

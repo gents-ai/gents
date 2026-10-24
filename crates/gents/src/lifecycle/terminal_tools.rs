@@ -24,11 +24,19 @@ struct ToolDocument {
     row: AgentToolCallRow,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TerminalToolsError {
+    #[error("tool has ambiguous accepted header membership")]
+    AmbiguousHeaderMembership,
+    #[error("physical tool disagrees with accepted native intent")]
+    NativeIntentMismatch,
+}
+
 fn directly_bound<'a>(
     headers: &'a [TranscriptMessageRow],
     tool: &ToolDocument,
     generation: &str,
-) -> Result<Option<(&'a TranscriptMessageRow, &'a str)>> {
+) -> Result<Option<(&'a TranscriptMessageRow, &'a str)>, TerminalToolsError> {
     let mut found = None;
     for header in headers {
         let message = &header.message;
@@ -52,15 +60,14 @@ fn directly_bound<'a>(
             } = block
             {
                 if tool_call_doc_id == &tool.doc_id {
-                    anyhow::ensure!(
-                        found.is_none(),
-                        "tool has ambiguous accepted header membership"
-                    );
-                    anyhow::ensure!(
-                        tool.row.tool_call_id.as_deref() == Some(id.as_str())
-                            && tool.row.tool_name.as_deref() == Some(name.as_str()),
-                        "physical tool disagrees with accepted native intent"
-                    );
+                    if found.is_some() {
+                        return Err(TerminalToolsError::AmbiguousHeaderMembership);
+                    }
+                    if !(tool.row.tool_call_id.as_deref() == Some(id.as_str())
+                        && tool.row.tool_name.as_deref() == Some(name.as_str()))
+                    {
+                        return Err(TerminalToolsError::NativeIntentMismatch);
+                    }
                     found = Some((header, name.as_str()));
                 }
             }

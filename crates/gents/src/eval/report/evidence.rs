@@ -4,7 +4,9 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+
+use crate::eval::documents::EvalError;
 
 use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalCase, EvalDefinition};
@@ -27,7 +29,10 @@ pub struct RunRows {
 pub async fn load_run_rows(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<RunRows> {
     let record = load_run(access, owner, run_id)
         .await?
-        .with_context(|| format!("no eval run {run_id:?} for {owner}"))?;
+        .ok_or_else(|| EvalError::NoRun {
+            run_id: run_id.to_owned(),
+            owner: owner.to_owned(),
+        })?;
     Ok(RunRows {
         run_id: run_id.to_owned(),
         case_ids: record.origin.case_ids.clone(),

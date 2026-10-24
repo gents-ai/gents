@@ -200,24 +200,28 @@ fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
     let world = world();
     let directory = world.gents.join(crate::home::PERMISSION_STAGING_DIR_NAME);
     let context = crate::toolset::ToolContext::new(world.root.clone(), false).unwrap();
-    write_permission_file(&world.gents, &file(&world.gents), |output| {
-        output.write_all(b"new permissions")?;
-        let staged = std::fs::read_dir(&directory)?.next().unwrap()?.path();
-        let alias = world.root.join("work/permission-alias");
-        std::fs::hard_link(&staged, &alias)?;
-        assert!(context.resolve_path(staged.to_str().unwrap()).is_err());
-        assert!(context.resolve_path(alias.to_str().unwrap()).is_err());
-        assert!(context
-            .resolve_path_allow_create(staged.to_str().unwrap())
-            .is_err());
-        assert!(context
-            .resolve_path_allow_create(alias.to_str().unwrap())
-            .is_err());
-        assert!(ensure_mount_safe(&directory).is_err());
-        assert!(ensure_mount_safe(&world.root.join("work")).is_err());
-        std::fs::remove_file(alias)?;
-        Ok(())
-    })
+    write_permission_file(
+        &world.gents,
+        &file(&world.gents),
+        |output| -> std::result::Result<(), PluginAllowedError> {
+            output.write_all(b"new permissions")?;
+            let staged = std::fs::read_dir(&directory)?.next().unwrap()?.path();
+            let alias = world.root.join("work/permission-alias");
+            std::fs::hard_link(&staged, &alias)?;
+            assert!(context.resolve_path(staged.to_str().unwrap()).is_err());
+            assert!(context.resolve_path(alias.to_str().unwrap()).is_err());
+            assert!(context
+                .resolve_path_allow_create(staged.to_str().unwrap())
+                .is_err());
+            assert!(context
+                .resolve_path_allow_create(alias.to_str().unwrap())
+                .is_err());
+            assert!(ensure_mount_safe(&directory).is_err());
+            assert!(ensure_mount_safe(&world.root.join("work")).is_err());
+            std::fs::remove_file(alias)?;
+            Ok(())
+        },
+    )
     .unwrap();
     assert_eq!(
         std::fs::read(file(&world.gents)).unwrap(),
@@ -241,7 +245,7 @@ fn failed_permission_encoding_keeps_the_prior_file_and_removes_staging() {
     std::fs::write(&target, "prior permissions").unwrap();
     let result = write_permission_file(&world.gents, &target, |output| {
         output.write_all(b"incomplete")?;
-        anyhow::bail!("fixture encoding failure")
+        Err::<(), PluginAllowedError>(std::io::Error::other("fixture encoding failure").into())
     });
     assert!(result.is_err());
     assert_eq!(std::fs::read(&target).unwrap(), b"prior permissions");
@@ -302,17 +306,25 @@ fn a_retargeted_staging_directory_cannot_publish_permissions() {
     let directory = world.gents.join(crate::home::PERMISSION_STAGING_DIR_NAME);
     let outside = world.root.join("outside");
     std::os::unix::fs::symlink(&outside, &directory).unwrap();
-    assert!(write_permission_file(&world.gents, &target, |_| {
-        panic!("an aliased staging directory reached the writer")
-    })
+    assert!(write_permission_file(
+        &world.gents,
+        &target,
+        |_| -> std::result::Result<(), PluginAllowedError> {
+            panic!("an aliased staging directory reached the writer")
+        }
+    )
     .is_err());
     std::fs::remove_file(&directory).unwrap();
-    assert!(write_permission_file(&world.gents, &target, |output| {
-        output.write_all(b"unpublished permissions")?;
-        std::fs::rename(&directory, world.root.join("moved-staging"))?;
-        std::fs::create_dir(&directory)?;
-        Ok(())
-    })
+    assert!(write_permission_file(
+        &world.gents,
+        &target,
+        |output| -> std::result::Result<(), PluginAllowedError> {
+            output.write_all(b"unpublished permissions")?;
+            std::fs::rename(&directory, world.root.join("moved-staging"))?;
+            std::fs::create_dir(&directory)?;
+            Ok(())
+        }
+    )
     .is_err());
     assert_eq!(std::fs::read(&target).unwrap(), b"prior permissions");
     assert_eq!(std::fs::read_dir(outside).unwrap().count(), 1);

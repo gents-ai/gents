@@ -313,6 +313,80 @@ pub enum ClaimOutcome {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum LifecycleError {
+    #[error("workspace source is not authenticated")]
+    WorkspaceSourceUnauthenticated,
+    #[error(transparent)]
+    WorkspaceReference(#[from] gents_protocol::request_admission::RequestAdmissionError),
+    #[error("workspace reference differs from its authenticated source")]
+    WorkspaceReferenceMismatch,
+    #[error(transparent)]
+    WorkspaceAuthority(#[from] gents_loop::tool_policy::ToolPolicyError),
+    #[error("workspace authority exceeds its authenticated source")]
+    WorkspaceAuthorityExceeded,
+    #[error("workspace authority differs from its authenticated source")]
+    WorkspaceAuthorityMismatch,
+    #[error("trigger execution context exceeds {MAX_TRIGGER_CONTEXT_BYTES} bytes")]
+    TriggerContextTooLarge,
+    #[error(transparent)]
+    TriggerContextJson(#[from] serde_json::Error),
+    #[error("unsupported trigger execution context version {version}")]
+    UnsupportedTriggerContextVersion { version: u8 },
+    #[error("cannot {action} request_id={request_id} while lifecycle is in {state}")]
+    LifecycleStateRejected {
+        action: String,
+        request_id: String,
+        state: String,
+    },
+    #[error("Automated trigger lineage requires trigger_doc_id")]
+    AutomatedTriggerDocMissing,
+    #[error("Only automated trigger lineage may carry trigger_doc_id")]
+    TriggerDocOnNonAutomated,
+    #[error("Event trigger lineage requires source_doc_id")]
+    EventSourceMissing,
+    #[error("Only Event trigger lineage may carry source_doc_id")]
+    EventSourceOnNonEvent,
+    #[error("Manual trigger enqueue must not carry trigger_id")]
+    ManualTriggerCarriesId,
+    #[error("request_id must be non-empty")]
+    EmptyRequestId,
+    #[error("session_id must be non-empty")]
+    EmptySessionId,
+    #[error("retry_key must be non-empty when supplied")]
+    EmptyRetryKey,
+    #[error("runtime trigger request requires a durable trigger id")]
+    RuntimeTriggerIdMissing,
+    #[error("unsupported runtime request trigger kind {kind}")]
+    UnsupportedTriggerKind { kind: String },
+    #[error("request has no active execution generation")]
+    NoActiveExecutionGeneration,
+    #[error("failed background wake is missing {field}")]
+    BackgroundWakeFieldMissing { field: &'static str },
+    #[error("failed background wake request_hop must fit in u32")]
+    BackgroundWakeRequestHop(#[source] std::num::TryFromIntError),
+    #[error("AgentSession row under the claimed session label failed canonical decode")]
+    SessionRowUndecodable(#[source] crate::session::SessionError),
+    #[error("cursor query omitted _cursor")]
+    CursorMissing,
+    #[error("cursor query omitted collection rows")]
+    CursorRowsMissing,
+    #[error("decode {collection} cursor page")]
+    CursorPageDecode {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("cursor query omitted _pageInfo")]
+    CursorPageInfoMissing,
+    #[error("cursor query omitted hasNext")]
+    CursorHasNextMissing,
+    #[error("cursor query returned an empty page with hasNext")]
+    CursorEmptyPageWithNext,
+    #[error("cursor query omitted endCursor")]
+    CursorEndMissing,
+}
+
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaimAdmissionError {
     #[error("mailbox reply {item_id} rejected: {reason}")]
     MailboxReplyRejected { item_id: String, reason: String },
@@ -439,7 +513,7 @@ impl WorkspaceLineage {
             .is_some_and(|value| !value.is_empty())
     }
 
-    pub fn require_authority_if_workspace_id(&self) -> Result<()> {
+    pub fn require_authority_if_workspace_id(&self) -> Result<(), LifecycleError> {
         Ok(
             gents_protocol::request_admission::validate_workspace_reference(
                 self.workspace_id.as_deref(),
@@ -450,19 +524,22 @@ impl WorkspaceLineage {
         )
     }
 
-    pub fn validate_source(&self, source: &Self, source_authenticated: bool) -> Result<()> {
-        anyhow::ensure!(
-            source_authenticated,
-            "workspace source is not authenticated"
-        );
+    pub fn validate_source(
+        &self,
+        source: &Self,
+        source_authenticated: bool,
+    ) -> Result<(), LifecycleError> {
+        if !source_authenticated {
+            return Err(LifecycleError::WorkspaceSourceUnauthenticated);
+        }
         self.require_authority_if_workspace_id()?;
         source.require_authority_if_workspace_id()?;
-        anyhow::ensure!(
-            self.workspace_id == source.workspace_id
-                && self.workspace_owner_node_did == source.workspace_owner_node_did
-                && self.workspace_seal_hash == source.workspace_seal_hash,
-            "workspace reference differs from its authenticated source"
-        );
+        if !(self.workspace_id == source.workspace_id
+            && self.workspace_owner_node_did == source.workspace_owner_node_did
+            && self.workspace_seal_hash == source.workspace_seal_hash)
+        {
+            return Err(LifecycleError::WorkspaceReferenceMismatch);
+        }
         match (
             self.workspace_authority.as_deref(),
             source.workspace_authority.as_deref(),
@@ -471,13 +548,12 @@ impl WorkspaceLineage {
             (Some(requested), Some(granted)) => {
                 let requested = crate::toolset::WorkspaceAuthority::parse(requested)?;
                 let granted = crate::toolset::WorkspaceAuthority::parse(granted)?;
-                anyhow::ensure!(
-                    requested.infimum(granted) == requested,
-                    "workspace authority exceeds its authenticated source"
-                );
+                if requested.infimum(granted) != requested {
+                    return Err(LifecycleError::WorkspaceAuthorityExceeded);
+                }
                 Ok(())
             }
-            _ => anyhow::bail!("workspace authority differs from its authenticated source"),
+            _ => Err(LifecycleError::WorkspaceAuthorityMismatch),
         }
     }
 }
@@ -492,19 +568,18 @@ pub struct TriggerExecutionContext {
 }
 
 impl TriggerExecutionContext {
-    pub fn parse(value: Option<&str>) -> anyhow::Result<Self> {
+    pub fn parse(value: Option<&str>) -> Result<Self, LifecycleError> {
         let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(Self::default());
         };
         if value.len() > MAX_TRIGGER_CONTEXT_BYTES {
-            anyhow::bail!("trigger execution context exceeds {MAX_TRIGGER_CONTEXT_BYTES} bytes");
+            return Err(LifecycleError::TriggerContextTooLarge);
         }
         let context: Self = serde_json::from_str(value)?;
         if context.version != 1 {
-            anyhow::bail!(
-                "unsupported trigger execution context version {}",
-                context.version
-            );
+            return Err(LifecycleError::UnsupportedTriggerContextVersion {
+                version: context.version,
+            });
         }
         Ok(context)
     }

@@ -1269,7 +1269,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         .unwrap()
         .iter()
         .map(crate::session::canonical_rows::decode_output_segment_row)
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let close = rows.iter().find(|row| row.segment.close.is_some()).unwrap();
     assert!(

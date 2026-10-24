@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::{anyhow, Context as _, Result};
 use gents_fs_runner::protocol::{
     GlobArgs as NativeGlobArgs, GrepArgs as NativeGrepArgs, ListFilesArgs as NativeListFilesArgs,
     NativeFsRunnerRequest,
 };
+use gents_protocol::error_chain::ErrorChain;
 use serde::Serialize;
 
 use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
@@ -17,6 +17,40 @@ use super::edit_match::{self, EditOutcome, EditRequest, MatchMode, Operation};
 use super::native_runner::NativeFsRunner;
 use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
 use crate::tool_call_lifecycle::FailureClass;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FileToolError {
+    #[error("expected_content_hash and overwrite=true conflict: pass the hash to replace only the content you read, or overwrite=true to replace it regardless, not both.")]
+    HashWithOverwrite,
+    #[error("{display} has changed since it was read: expected {expected}, but the file no longer exists. Re-read the directory, or omit expected_content_hash to create a new file.")]
+    CreatedSinceRead { display: String, expected: String },
+    #[error("{display} has changed since it was read (expected {expected}). Re-read it and rebuild the write from its current content.")]
+    WriteChangedSinceRead { display: String, expected: String },
+    #[error("{display} already exists and write_file will not replace it blindly. read_file it and pass its content_hash as expected_content_hash (write_file and edit_file results also report the latest hash), use edit_file for a targeted change, or set overwrite=true to replace it regardless of its current content.")]
+    AlreadyExists { display: String },
+    #[error("{display} has changed since it was read (expected {expected}). Re-read it and rebuild the edit from its current content.")]
+    EditChangedSinceRead { display: String, expected: String },
+    #[error(
+        "unknown operation {operation:?}; valid: replace, insert_after, insert_before, delete"
+    )]
+    UnknownOperation { operation: String },
+    #[error("unknown match_mode {mode:?}; valid: ladder, regex")]
+    UnknownMatchMode { mode: String },
+    #[error("{display} is not valid UTF-8 (first invalid byte at offset {valid_up_to}); edit_file only edits UTF-8 text files")]
+    NotUtf8 { display: String, valid_up_to: usize },
+    #[error("post-write verification failed for {display}: the bytes on disk do not match the edited content")]
+    PostWriteVerification { display: String },
+    #[error("{message}")]
+    EditNotFound { message: String },
+    #[error("{message}")]
+    EditAmbiguous { message: String },
+    #[error("the edit would produce identical content in {display}; nothing was written. old_text and new_text are equivalent at the matched site.")]
+    EditNoop { display: String },
+    #[error("match_mode=\"regex\": pattern failed to parse: {error}")]
+    InvalidRegex { error: String },
+    #[error("serializing tool output")]
+    SerializeOutput(#[source] serde_json::Error),
+}
 
 fn deny_workspace_file_writes() -> Result<(), ToolError> {
     if crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
@@ -51,16 +85,14 @@ async fn guard_existing_file_overwrite(
     overwrite: bool,
 ) -> Result<(), ToolError> {
     if expected.is_some() && overwrite {
-        return Err(anyhow!(
-            "expected_content_hash and overwrite=true conflict: pass the hash to replace only the content you read, or overwrite=true to replace it regardless, not both."
-        )
-        .into());
+        return Err(FileToolError::HashWithOverwrite.into());
     }
     if created {
         if let Some(expected) = expected {
-            return Err(anyhow!(
-                "{display} has changed since it was read: expected {expected}, but the file no longer exists. Re-read the directory, or omit expected_content_hash to create a new file."
-            )
+            return Err(FileToolError::CreatedSinceRead {
+                display: display.to_owned(),
+                expected: expected.to_owned(),
+            }
             .into());
         }
         return Ok(());
@@ -68,9 +100,10 @@ async fn guard_existing_file_overwrite(
     if let Some(expected) = expected {
         let current = content_hash(&tokio::fs::read(path).await?);
         if expected != current {
-            return Err(anyhow!(
-                "{display} has changed since it was read (expected {expected}). Re-read it and rebuild the write from its current content."
-            )
+            return Err(FileToolError::WriteChangedSinceRead {
+                display: display.to_owned(),
+                expected: expected.to_owned(),
+            }
             .into());
         }
         return Ok(());
@@ -78,9 +111,9 @@ async fn guard_existing_file_overwrite(
     if overwrite {
         return Ok(());
     }
-    Err(anyhow!(
-        "{display} already exists and write_file will not replace it blindly. read_file it and pass its content_hash as expected_content_hash (write_file and edit_file results also report the latest hash), use edit_file for a targeted change, or set overwrite=true to replace it regardless of its current content."
-    )
+    Err(FileToolError::AlreadyExists {
+        display: display.to_owned(),
+    }
     .into())
 }
 
@@ -341,8 +374,10 @@ impl Tool for ListFilesTool {
             )
             .await?;
         if args.raw_json {
-            crate::tool_output::render_json_text(output, &["entries", "matches"])
-                .map_err(|error| anyhow::Error::from(error).into())
+            Ok(crate::tool_output::render_json_text(
+                output,
+                &["entries", "matches"],
+            )?)
         } else {
             Ok(output)
         }
@@ -431,12 +466,12 @@ impl Tool for ReadFileTool {
             content,
         };
 
-        Ok(render_tool_output(
+        render_tool_output(
             &output.metadata,
             format!("content:\n{}", output.content),
             &output,
             args.raw_json,
-        )?)
+        )
     }
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
@@ -504,8 +539,10 @@ impl Tool for GlobTool {
             )
             .await?;
         if args.raw_json {
-            crate::tool_output::render_json_text(output, &["entries", "matches"])
-                .map_err(|error| anyhow::Error::from(error).into())
+            Ok(crate::tool_output::render_json_text(
+                output,
+                &["entries", "matches"],
+            )?)
         } else {
             Ok(output)
         }
@@ -583,8 +620,10 @@ impl Tool for GrepTool {
             )
             .await?;
         if args.raw_json {
-            crate::tool_output::render_json_text(output, &["entries", "matches"])
-                .map_err(|error| anyhow::Error::from(error).into())
+            Ok(crate::tool_output::render_json_text(
+                output,
+                &["entries", "matches"],
+            )?)
         } else {
             Ok(output)
         }
@@ -648,13 +687,16 @@ impl Tool for WriteFileTool {
         )
         .await
         .map_err(|error| {
-            ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+            ToolError::reported_failure(FailureClass::PolicyDenied, ErrorChain(&error).to_string())
         })?;
         let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
         if let Some(consent) = consent {
             consent.validate().map_err(|error| {
-                ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+                ToolError::reported_failure(
+                    FailureClass::PolicyDenied,
+                    ErrorChain(&error).to_string(),
+                )
             })?;
         }
         let created = !path.exists();
@@ -724,12 +766,7 @@ impl Tool for WriteFileTool {
             body.push_str(&note);
         }
 
-        Ok(render_tool_output(
-            &output.metadata,
-            body,
-            &output,
-            args.raw_json,
-        )?)
+        render_tool_output(&output.metadata, body, &output, args.raw_json)
     }
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
@@ -816,7 +853,10 @@ impl Tool for EditFileTool {
             )
             .await
             .map_err(|error| {
-                ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+                ToolError::reported_failure(
+                    FailureClass::PolicyDenied,
+                    ErrorChain(&error).to_string(),
+                )
             })?
         };
         let display = self.context.display_path(&path);
@@ -824,7 +864,10 @@ impl Tool for EditFileTool {
         let _guard = lock.lock().await;
         if let Some(consent) = consent {
             consent.validate().map_err(|error| {
-                ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+                ToolError::reported_failure(
+                    FailureClass::PolicyDenied,
+                    ErrorChain(&error).to_string(),
+                )
             })?;
         }
         let raw = tokio::fs::read(&path).await?;
@@ -832,9 +875,10 @@ impl Tool for EditFileTool {
 
         if let Some(expected) = &args.expected_content_hash {
             if expected != &pre_edit_hash {
-                return Err(anyhow!(
-                    "{display} has changed since it was read (expected {expected}). Re-read it and rebuild the edit from its current content."
-                )
+                return Err(FileToolError::EditChangedSinceRead {
+                    display: display.clone(),
+                    expected: expected.clone(),
+                }
                 .into());
             }
         }
@@ -845,9 +889,9 @@ impl Tool for EditFileTool {
             Some("insert_before") => Operation::InsertBefore,
             Some("delete") => Operation::Delete,
             Some(other) => {
-                return Err(anyhow!(
-                "unknown operation {other:?}; valid: replace, insert_after, insert_before, delete"
-            )
+                return Err(FileToolError::UnknownOperation {
+                    operation: other.to_owned(),
+                }
                 .into())
             }
         };
@@ -855,17 +899,18 @@ impl Tool for EditFileTool {
             None | Some("ladder") => MatchMode::Ladder,
             Some("regex") => MatchMode::Regex,
             Some(other) => {
-                return Err(anyhow!("unknown match_mode {other:?}; valid: ladder, regex").into());
+                return Err(FileToolError::UnknownMatchMode {
+                    mode: other.to_owned(),
+                }
+                .into());
             }
         };
 
         // A lossy conversion followed by a full-file rewrite would silently
         // replace every invalid byte with U+FFFD.
-        let raw_text = String::from_utf8(raw).map_err(|error| {
-            anyhow!(
-                "{display} is not valid UTF-8 (first invalid byte at offset {}); edit_file only edits UTF-8 text files",
-                error.utf8_error().valid_up_to()
-            )
+        let raw_text = String::from_utf8(raw).map_err(|error| FileToolError::NotUtf8 {
+            display: display.clone(),
+            valid_up_to: error.utf8_error().valid_up_to(),
         })?;
         let normalized = edit_match::normalize_content(&raw_text);
         let old_text = args.old_text.replace("\r\n", "\n");
@@ -897,9 +942,9 @@ impl Tool for EditFileTool {
                         tokio::fs::write(&path, post_text.as_bytes()).await?;
                         let verify = tokio::fs::read(&path).await?;
                         if verify != post_text.as_bytes() {
-                            return Err(anyhow!(
-                                "post-write verification failed for {display}: the bytes on disk do not match the edited content"
-                            )
+                            return Err(FileToolError::PostWriteVerification {
+                                display: display.clone(),
+                            }
                             .into());
                         }
                         if let Some(writethrough) = &self.writethrough {
@@ -966,12 +1011,7 @@ impl Tool for EditFileTool {
                     body.push('\n');
                     body.push_str(&note);
                 }
-                Ok(render_tool_output(
-                    &output.metadata,
-                    body,
-                    &output,
-                    args.raw_json,
-                )?)
+                render_tool_output(&output.metadata, body, &output, args.raw_json)
             }
             EditOutcome::NotFound { closest } => {
                 let mut message = format!("old_text was not found in {display}.");
@@ -991,7 +1031,7 @@ impl Tool for EditFileTool {
                 message.push_str(
                     "\nRe-read the file and build old_text from its CURRENT content; do not retry the same call.",
                 );
-                Err(anyhow!(message).into())
+                Err(FileToolError::EditNotFound { message }.into())
             }
             EditOutcome::Ambiguous {
                 strategy,
@@ -1008,16 +1048,15 @@ impl Tool for EditFileTool {
                 message.push_str(
                     "\nAdd surrounding context to make it unique, or set replace_all=true.",
                 );
-                Err(anyhow!(message).into())
+                Err(FileToolError::EditAmbiguous { message }.into())
             }
-            EditOutcome::Noop { .. } => Err(anyhow!(
-                "the edit would produce identical content in {display}; nothing was written. old_text and new_text are equivalent at the matched site."
-            )
+            EditOutcome::Noop { .. } => Err(FileToolError::EditNoop {
+                display: display.clone(),
+            }
             .into()),
-            EditOutcome::InvalidRegex { error } => Err(anyhow!(
-                "match_mode=\"regex\": pattern failed to parse: {error}"
-            )
-            .into()),
+            EditOutcome::InvalidRegex { error } => {
+                Err(FileToolError::InvalidRegex { error }.into())
+            }
         }
     }
 
@@ -1100,7 +1139,7 @@ fn render_tool_output(
     body: String,
     raw_value: &impl Serialize,
     raw_json: bool,
-) -> Result<String> {
+) -> Result<String, ToolError> {
     if raw_json {
         return Ok(crate::tool_output::render(
             raw_value,
@@ -1117,6 +1156,6 @@ fn render_tool_output(
     Ok(out)
 }
 
-fn render_json(value: &impl Serialize) -> Result<String> {
-    serde_json::to_string(value).context("serializing tool output")
+fn render_json(value: &impl Serialize) -> Result<String, FileToolError> {
+    serde_json::to_string(value).map_err(FileToolError::SerializeOutput)
 }

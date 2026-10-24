@@ -14,13 +14,12 @@ pub(crate) fn goal_continuation_identity(
     goal_id: &str,
     parent_request_id: &str,
     continuation_sequence: i64,
-) -> Result<GoalContinuationIdentity> {
+) -> Result<GoalContinuationIdentity, QueueError> {
     use sha2::{Digest, Sha256};
 
-    anyhow::ensure!(
-        continuation_sequence > 0,
-        "goal continuation sequence must be positive"
-    );
+    if continuation_sequence <= 0 {
+        return Err(QueueError::NonPositiveGoalContinuationSequence);
+    }
     let digest = Sha256::digest(format!("{goal_id}\0{parent_request_id}").as_bytes());
     let digest_hex = digest[..16]
         .iter()
