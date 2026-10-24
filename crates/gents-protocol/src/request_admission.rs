@@ -260,6 +260,7 @@ pub struct AgentRequestSigningFields<'a> {
 }
 
 pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyhow::Result<()> {
+    request.input.validate_attachments()?;
     for (name, value) in [
         ("request_id", request.request_id),
         ("node_did", request.node_did),
@@ -782,6 +783,15 @@ fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::R
         push_text(fields, "goal-assignment");
         push_text(fields, &reference.goal_id);
         push_input_option(fields, reference.root_request_doc_id.as_deref());
+    }
+    if !input.attachments.is_empty() {
+        push_text(fields, "attachments");
+        push_text(fields, &input.attachments.len().to_string());
+        for attachment in &input.attachments {
+            push_text(fields, &attachment.name);
+            push_text(fields, &attachment.media_type);
+            push_text(fields, &attachment.data);
+        }
     }
 }
 

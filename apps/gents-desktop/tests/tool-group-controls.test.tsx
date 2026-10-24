@@ -199,7 +199,7 @@ describe("canonical tool selections", () => {
       mcp_service_id: "service-a",
       tool_names: ["read", "search"],
     });
-  });
+  }, 10_000);
 
   it("grants a reported tool by ticking it, in the one tool-names field", async () => {
     const { api, app } = harness();

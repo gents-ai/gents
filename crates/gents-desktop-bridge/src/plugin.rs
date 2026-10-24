@@ -1,5 +1,6 @@
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime};
+use tauri_plugin_fs::FsExt;
 
 use crate::config::BridgeConfig;
 use crate::state::{resolve_policy, DesktopAppState};
@@ -11,6 +12,9 @@ where
 {
     Builder::<R>::new("gents-desktop-bridge")
         .setup(move |app, _api| {
+            if app.try_fs_scope().is_none() {
+                app.plugin(tauri_plugin_fs::init())?;
+            }
             let app_data_dir = app.path().app_data_dir().ok();
             let policy = resolve_policy(&config, app_data_dir)
                 .map_err(Box::<dyn std::error::Error>::from)?;
@@ -160,6 +164,8 @@ where
             tauri_commands::chat::desktop_request_timeline,
             tauri_commands::tools_explain::desktop_tool_surface_explain,
             tauri_commands::chat::desktop_chat_send,
+            tauri_commands::attachments::desktop_attachment_read,
+            tauri_commands::attachments::desktop_request_attachments,
             tauri_commands::chat::desktop_pending_queue_edit,
             tauri_commands::chat::desktop_pending_message_steer,
             tauri_commands::chat::desktop_session_goal,

@@ -281,8 +281,19 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
                         document.additional_params.clone(),
                     )));
                 }
+                gents_protocol::message::UserContent::Image(image) => {
+                    plans.push(BlockPlan::Media(media_plan(
+                        &mut streams,
+                        block,
+                        MediaKind::Image,
+                        &image.data,
+                        image.media_type.clone().map(MediaType::Image),
+                        image.detail.clone(),
+                        image.additional_params.clone(),
+                    )));
+                }
                 _ => anyhow::bail!(
-                    "authored publication requires native user text or document blocks"
+                    "authored publication requires native user text, image or document blocks"
                 ),
             }
         }

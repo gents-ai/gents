@@ -21,8 +21,73 @@ pub fn captured_context_for_provider(
 ) -> Result<gents_protocol::message::Message> {
     use gents_protocol::message::{Message, UserContent};
     use gents_protocol::request_input::CapturedContext;
+    let attached = gents_protocol::request_input::RequestAttachment::from_message(&message);
+    let tagged = match &message {
+        Message::User { content } => content
+            .iter()
+            .filter(|part| {
+                let params = match part {
+                    UserContent::Image(i) => &i.additional_params,
+                    UserContent::Document(d) => &d.additional_params,
+                    _ => return false,
+                };
+                params
+                    .as_ref()
+                    .is_some_and(|p| p.get("gents_attachment").is_some())
+            })
+            .count(),
+        _ => 0,
+    };
+    anyhow::ensure!(
+        tagged == attached.len(),
+        "Invalid attachment representation in the transcript"
+    );
+    gents_protocol::request_input::RequestInput {
+        attachments: attached,
+        ..Default::default()
+    }
+    .validate_attachments()?;
     if let Message::User { content } = &mut message {
         for part in content {
+            if let UserContent::Document(document) = part {
+                if document.media_type == Some(gents_protocol::message::DocumentMediaType::TXT)
+                    && document
+                        .additional_params
+                        .as_ref()
+                        .is_some_and(|p| p.get("gents_attachment").is_some())
+                {
+                    use base64::Engine;
+                    let gents_protocol::message::DocumentSourceKind::Base64(data) = &document.data
+                    else {
+                        anyhow::bail!("Text attachment is not base64 encoded");
+                    };
+                    let name = document
+                        .additional_params
+                        .as_ref()
+                        .and_then(|p| p.get("gents_attachment"))
+                        .and_then(serde_json::Value::as_str)
+                        .context("Text attachment has no name")?;
+                    let text =
+                        String::from_utf8(base64::engine::general_purpose::STANDARD.decode(data)?)?;
+                    *part = UserContent::text(format!(
+                        "Attached file {}:\n\n{text}",
+                        serde_json::to_string(name)?
+                    ));
+                    continue;
+                }
+            }
+            let params = match part {
+                UserContent::Image(i) => &mut i.additional_params,
+                UserContent::Document(d) => &mut d.additional_params,
+                _ => continue,
+            };
+            if let Some(serde_json::Value::Object(object)) = params {
+                object.remove("gents_attachment");
+                if object.is_empty() {
+                    *params = None;
+                }
+            }
+
             if let UserContent::Document(document) = part {
                 if let Some(context) = CapturedContext::from_document(document)? {
                     *part = UserContent::text(format!(
@@ -34,6 +99,12 @@ pub fn captured_context_for_provider(
         }
     }
     Ok(message)
+}
+
+/// The chat-completions DTO flattens documents to prose, so binary PDFs must
+/// fail before that conversion rather than becoming base64 text for the model.
+pub fn chat_completions_attachment_supported(media_type: &str) -> bool {
+    media_type != "application/pdf"
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -197,6 +268,16 @@ impl ProviderInputCounter {
     pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         let mut body = match self.profile {
             ProviderInputProfile::OpenAiChatCompletions => {
+                use rig::message::MimeType;
+                for message in request.chat_history.iter() {
+                    if let rig::completion::Message::User { content } = message {
+                        for part in content.iter() {
+                            if let rig::message::UserContent::Document(document) = part {
+                                anyhow::ensure!(document.media_type.as_ref().is_none_or(|media| chat_completions_attachment_supported(media.to_mime_type())), "PDF attachments are not supported by the OpenAI Chat Completions transport; use a provider with document support");
+                            }
+                        }
+                    }
+                }
                 let dto = rig::providers::openai::completion::CompletionRequest::try_from((
                     self.model.clone(),
                     request.clone(),

@@ -141,7 +141,7 @@ fn folds_into(
         && blank(row.caused_by_trigger_id.as_deref())
         && blank(row.caused_by_source_doc_id.as_deref())
         && blank(row.caused_by_parent_tool_call_doc_id.as_deref())
-        && (!blank(row.content.as_deref()) || !input.captured_context.is_empty())
+        && input.has_authored_input(row.content.as_deref().unwrap_or_default())
 }
 
 pub(crate) async fn fold_candidates(

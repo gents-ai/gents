@@ -222,7 +222,12 @@ export function PendingTray({
               row.turn.origin && (
                 <AutomatedInput
                   origin={row.turn.origin}
-                  content={row.turn.content}
+                  content={
+                    row.turn.content ||
+                    (row.turn.attachments?.length
+                      ? `${row.turn.attachments.length} attachment(s)`
+                      : "")
+                  }
                   state="Queued"
                 />
               )
@@ -314,6 +319,9 @@ function TakenRow({ row }: { row: PendingRow }) {
       />
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
         {row.turn.content}
+        {row.turn.attachments?.length
+          ? ` · ${row.turn.attachments.length} attachment(s)`
+          : ""}
       </span>
       <span className="shrink-0 text-xs text-muted-foreground">Picked up</span>
     </div>
@@ -379,6 +387,9 @@ function MessageRow({
         title="Applies at the next safe step"
       >
         {row.turn.content}
+        {row.turn.attachments?.length
+          ? ` · ${row.turn.attachments.length} attachment(s)`
+          : ""}
       </span>
       {editing ? (
         <span className="shrink-0 text-xs text-muted-foreground">Editing…</span>
