@@ -18,6 +18,58 @@ mod title;
 mod wake_input;
 
 #[derive(Debug, thiserror::Error)]
+enum DaemonError {
+    #[error("request {request_id} lost its execution generation before terminalization")]
+    TerminalizationLost { request_id: String },
+    #[error("owned auxiliary task join failed: {error}")]
+    AuxiliaryJoin { error: tokio::task::JoinError },
+    #[error("claimed AgentRequest {request_doc_id} has no exact DefraDB commit CID")]
+    RequestCommitCidMissing { request_doc_id: String },
+    #[error("session reduction changed its exact provider source")]
+    ReductionSourceChanged,
+    #[error("provider repair changed its sourced projection")]
+    ProviderRepairChanged,
+    #[error("request_token cancelled without interrupt latch")]
+    CancelledWithoutInterrupt,
+    #[error("retry has no durable provider frontier")]
+    RetryFrontierMissing,
+    #[error("request deadline exceeded while {context}; deadline={deadline}")]
+    DeadlineExceeded { context: String, deadline: String },
+    #[error("request deadline exceeded while {context}")]
+    DeadlineExceededUnbounded { context: String },
+    #[error("shutdown requested during inference")]
+    ShutdownDuringInference,
+    #[error("request interrupted during inference")]
+    RequestInterruptedDuringInference,
+    #[error("shutdown requested before inference stream started")]
+    ShutdownBeforeStream,
+    #[error("shutdown requested during inference stream")]
+    ShutdownDuringStream,
+    #[error("durable provider-context checkpoint crossed its current request scope")]
+    CheckpointScopeCrossed,
+    #[error("durable provider-context checkpoint has no current prompt")]
+    CheckpointPromptMissing,
+    #[error("durable provider-context checkpoint has invalid turn index")]
+    CheckpointTurnIndexInvalid {
+        #[source]
+        source: std::num::TryFromIntError,
+    },
+    #[error("{reason}")]
+    StreamFailed { reason: String },
+    #[error("provider stream ended without an explicit terminal response")]
+    ProviderStreamEndedWithoutTerminal,
+    #[error("request targets agent {requested_agent_id} but runtime is serving agent {runtime_agent_id}")]
+    AgentMismatch {
+        requested_agent_id: String,
+        runtime_agent_id: String,
+    },
+    #[error("resolving the runtime cwd for a task hook: {error}")]
+    TaskHookCwd { error: std::io::Error },
+    #[error("agent stream completed without producing any visible response content")]
+    NoVisibleResponse,
+}
+
+#[derive(Debug, thiserror::Error)]
 #[error("graceful shutdown could not confirm received provider output was retained: {reason}")]
 pub(super) struct ShutdownDrainFailure {
     pub(super) reason: String,
@@ -76,10 +128,10 @@ async fn terminalize_request(
     {
         TerminalizeResult::Won => Ok(true),
         TerminalizeResult::AlreadySame => Ok(false),
-        TerminalizeResult::Lost => anyhow::bail!(
-            "request {} lost its execution generation before terminalization",
-            lifecycle.request().request_id,
-        ),
+        TerminalizeResult::Lost => Err(DaemonError::TerminalizationLost {
+            request_id: lifecycle.request().request_id.clone(),
+        }
+        .into()),
     }
 }
 
@@ -220,7 +272,7 @@ fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>
             tracing::warn!(error = %error, "failed to resume owned auxiliary request");
             Ok(())
         }
-        Err(error) => Err(anyhow::anyhow!("owned auxiliary task join failed: {error}")),
+        Err(error) => Err(DaemonError::AuxiliaryJoin { error }.into()),
     }
 }
 
@@ -754,11 +806,10 @@ where
 
         let requested_agent_id = request.agent_id.as_str();
         if requested_agent_id != self.agent_config.agent_id {
-            let error = anyhow::anyhow!(
-                "request targets agent {} but runtime is serving agent {}",
-                requested_agent_id,
-                self.agent_config.agent_id
-            );
+            let error = DaemonError::AgentMismatch {
+                requested_agent_id: requested_agent_id.to_owned(),
+                runtime_agent_id: self.agent_config.agent_id.clone(),
+            };
             record_current_request_outcome("rejected_agent_mismatch");
             record_current_failure_class(&error);
             tracing::warn!(
@@ -1149,8 +1200,7 @@ where
                 return Ok(root);
             }
         }
-        std::env::current_dir()
-            .map_err(|error| anyhow::anyhow!("resolving the runtime cwd for a task hook: {error}"))
+        std::env::current_dir().map_err(|error| DaemonError::TaskHookCwd { error }.into())
     }
 
     /// Runs the owned work and its workspace completion; terminalization stays

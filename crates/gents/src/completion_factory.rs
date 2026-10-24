@@ -21,6 +21,8 @@ pub enum CompletionFactoryError {
     ExecutionOrigin(#[from] gents_loop::execution_origin::ExecutionOriginError),
     #[error(transparent)]
     ProviderSettings(#[from] crate::config::ConfigError),
+    #[error(transparent)]
+    Graphql(#[from] crate::config_client::ConfigClientError),
     #[error("pinned max_total_tokens must not be negative")]
     NegativeTokenLimit,
     #[error("budget rehydration requires the physical request document ID")]
@@ -270,12 +272,9 @@ struct PriorUsageRow {
     completion_tokens: Option<i64>,
 }
 
-async fn load_prior_charged_tokens(
-    node: &EmbeddedNode,
-    request_doc_id: &str,
-) -> anyhow::Result<u64> {
+async fn load_prior_charged_tokens(node: &EmbeddedNode, request_doc_id: &str) -> Result<u64> {
     if request_doc_id.trim().is_empty() {
-        return Err(CompletionFactoryError::MissingRequestDocId.into());
+        return Err(CompletionFactoryError::MissingRequestDocId);
     }
     let query = format!(
         r#"{{

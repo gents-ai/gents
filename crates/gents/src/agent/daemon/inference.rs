@@ -3,13 +3,13 @@ use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use gents_loop::output_obligation::OutputObligationCheck;
 use tracing::Instrument;
 
-use super::{AgentDaemon, HandleRequestOutcome, ShutdownDrainFailure};
+use super::{AgentDaemon, DaemonError, HandleRequestOutcome, ShutdownDrainFailure};
 use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::compaction::{CompactionError, ReductionOptions};
@@ -67,9 +67,7 @@ pub(super) fn request_entry(
             RETRY_CONTINUATION.to_owned(),
         )));
     }
-    let prompt = history
-        .pop()
-        .context("retry has no durable provider frontier")?;
+    let prompt = history.pop().ok_or(DaemonError::RetryFrontierMissing)?;
     Ok((history, prompt))
 }
 
@@ -103,20 +101,21 @@ fn request_deadline_remaining(deadline: RequestDeadline) -> Option<Duration> {
     Some((deadline - now).to_std().unwrap_or(Duration::ZERO))
 }
 
-fn request_deadline_error(deadline: RequestDeadline, context: &str) -> anyhow::Error {
+fn request_deadline_error(deadline: RequestDeadline, context: &str) -> DaemonError {
     match deadline {
-        Some(deadline) => anyhow!(
-            "request deadline exceeded while {}; deadline={}",
-            context,
-            deadline.to_rfc3339()
-        ),
-        None => anyhow!("request deadline exceeded while {}", context),
+        Some(deadline) => DaemonError::DeadlineExceeded {
+            context: context.to_owned(),
+            deadline: deadline.to_rfc3339(),
+        },
+        None => DaemonError::DeadlineExceededUnbounded {
+            context: context.to_owned(),
+        },
     }
 }
 
 fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Result<()> {
     if request_deadline_remaining(deadline).is_some_and(|remaining| remaining.is_zero()) {
-        return Err(request_deadline_error(deadline, context));
+        return Err(request_deadline_error(deadline, context).into());
     }
     Ok(())
 }
@@ -158,10 +157,12 @@ where
     let future = future.into_future();
     match request_deadline_remaining(deadline) {
         None => Ok(future.await),
-        Some(remaining) if remaining.is_zero() => Err(request_deadline_error(deadline, context)),
+        Some(remaining) if remaining.is_zero() => {
+            Err(request_deadline_error(deadline, context).into())
+        }
         Some(remaining) => tokio::time::timeout(remaining, future)
             .await
-            .map_err(|_| request_deadline_error(deadline, context)),
+            .map_err(|_| request_deadline_error(deadline, context).into()),
     }
 }
 
@@ -207,11 +208,11 @@ where
 
         ensure_request_deadline_open(request_deadline, "starting inference")?;
         if *shutdown.borrow() {
-            return Err(anyhow!("shutdown requested during inference"));
+            return Err(DaemonError::ShutdownDuringInference.into());
         }
         if interrupt_rx.borrow().is_some() {
             request_token.cancel();
-            return Err(anyhow!("request interrupted during inference"));
+            return Err(DaemonError::RequestInterruptedDuringInference.into());
         }
 
         let attempt_index = 1_i64;
@@ -464,17 +465,17 @@ where
                     .await?;
                     let (loop_history, loop_prompt) = if let Some((row, lineage_keys)) = restored {
                         let mut messages = row.checkpoint_tagged_messages()?;
-                        let prompt = messages.pop().context(
-                            "durable provider-context checkpoint has no current prompt",
-                        )?;
-                        anyhow::ensure!(
-                            row.node_did == request.node_did
-                                && row.requester_did == request.requester_did
-                                && row.session_id == request.session_id
-                                && row.request_id == request.request_id
-                                && row.request_doc_id == request.doc_id,
-                            "durable provider-context checkpoint crossed its current request scope"
-                        );
+                        let prompt = messages
+                            .pop()
+                            .ok_or(DaemonError::CheckpointPromptMissing)?;
+                        if !(row.node_did == request.node_did
+                            && row.requester_did == request.requester_did
+                            && row.session_id == request.session_id
+                            && row.request_id == request.request_id
+                            && row.request_doc_id == request.doc_id)
+                        {
+                            return Err(DaemonError::CheckpointScopeCrossed.into());
+                        }
                         let boundary = row.source_boundary()?;
                         let replay_scope = crate::session::CanonicalReplayScope {
                             expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
@@ -498,7 +499,7 @@ where
                         loop_config.active_reduction_keys = row.active_reduction_keys();
                         loop_config.reduction_chain_keys = lineage_keys;
                         loop_config.initial_turn_index = usize::try_from(row.turn_index)
-                            .context("durable provider-context checkpoint has invalid turn index")?;
+                            .map_err(|source| DaemonError::CheckpointTurnIndexInvalid { source })?;
                         tracing::info!(
                             request_id = %request.request_id,
                             reduction_key = %row.reduction_key,
@@ -543,7 +544,7 @@ where
                     super::request::prepare_unless_interrupted(interrupt_rx, prepared).await
                 else {
                     request_token.cancel();
-                    return Err(anyhow!("request interrupted during inference"));
+                    return Err(DaemonError::RequestInterruptedDuringInference.into());
                 };
                 let (
                     hook,
@@ -569,7 +570,7 @@ where
                         tokio::select! {
                             biased;
                             _ = shutdown.changed() => {
-                                Err(anyhow!("shutdown requested before inference stream started"))
+                                Err(anyhow::Error::from(DaemonError::ShutdownBeforeStream))
                             }
                             _ = interrupt_rx.changed() => {
                                 request_token.cancel();
@@ -582,7 +583,7 @@ where
                                         "failed to cancel in-flight tool calls before inference stream started"
                                     );
                                 }
-                                Err(anyhow!("request interrupted during inference"))
+                                Err(anyhow::Error::from(DaemonError::RequestInterruptedDuringInference))
                             }
                             stream = std::future::ready(Box::pin(crate::agent::loop_stream::run_loop_stream(
                                 model,
@@ -643,7 +644,7 @@ where
                                     ).await {
                                         Ok(Ok(false)) => return Err(anyhow::Error::new(crate::lifecycle::ExecutionOwnershipLost)
                                             .context("shutdown drain was not attempted")),
-                                        Ok(Ok(true)) => return Err(anyhow!("shutdown requested during inference stream")),
+                                        Ok(Ok(true)) => return Err(DaemonError::ShutdownDuringStream.into()),
                                         Ok(Err(error)) => return Err(ShutdownDrainFailure {
                                             reason: format!("partial-turn persistence failed: {}", ErrorChain(error.as_ref())),
                                         }.into()),
@@ -683,7 +684,7 @@ where
                                         );
                                         return Err(anyhow::Error::new(error).context("persisting received provider audit during interrupt"));
                                     }
-                                    return Err(anyhow!("request interrupted during inference"));
+                                    return Err(DaemonError::RequestInterruptedDuringInference.into());
                                 }
                                 _ = lease_poll.tick() => {
                                     if let Err(error) = processor.validate_execution().await {
@@ -854,9 +855,9 @@ where
                                 error.cause(),
                                 max_turns_provenance,
                             );
-                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
-                                error_reason
-                            )));
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(
+                                DaemonError::StreamFailed { reason: error_reason }.into(),
+                            ));
                         }
 
                         if processor.final_text.is_none() {
@@ -864,9 +865,9 @@ where
                                 .persist_received_partial_turn("persist unterminated assistant turn")
                                 .await
                                 .context("persisting received provider audit after stream EOF")?;
-                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
-                                "provider stream ended without an explicit terminal response"
-                            )));
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(
+                                DaemonError::ProviderStreamEndedWithoutTerminal.into(),
+                            ));
                         }
 
                         if processor.natural_finished {
@@ -893,11 +894,9 @@ where
                             &streamed_text,
                             final_text.as_deref(),
                         ) {
-                            let error_reason =
-                                "agent stream completed without producing any visible response content";
-                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
-                                error_reason
-                            )));
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(
+                                DaemonError::NoVisibleResponse.into(),
+                            ));
                         }
 
                         if let Err(error) = ensure_request_deadline_open(

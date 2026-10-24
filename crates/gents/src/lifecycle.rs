@@ -545,7 +545,7 @@ fn source_string_field(source_doc: &serde_json::Value, name: &str) -> Option<Str
 }
 
 impl WorkspaceLineage {
-    pub fn from_trigger_context(trigger_context: Option<&str>) -> Result<Self> {
+    pub fn from_trigger_context(trigger_context: Option<&str>) -> Result<Self, LifecycleError> {
         let context = TriggerExecutionContext::parse(trigger_context)?;
         let field = |name: &str| {
             context

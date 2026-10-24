@@ -135,8 +135,24 @@ fn title_max_tokens(
     }
 }
 
-fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
-    find_source::<crate::agent::loop_stream::OneShotError>(error.as_ref()).is_some_and(|error| {
+#[derive(Debug, thiserror::Error)]
+enum AuxiliaryRequestError {
+    #[error("expected access review")]
+    ExpectedAccessReview,
+    #[error("expected auxiliary request")]
+    ExpectedAuxiliary,
+    #[error("title inference timed out after {TITLE_GENERATION_TIMEOUT_SECS}s")]
+    TitleTimedOut,
+    #[error("auxiliary request lacks parent document")]
+    ParentDocumentMissing,
+    #[error("request parent request disappeared")]
+    ParentDisappeared,
+    #[error("request parent receipt does not match signed provenance")]
+    ParentReceiptMismatch,
+}
+
+fn title_attempt_is_retryable(error: &(dyn std::error::Error + 'static)) -> bool {
+    find_source::<crate::agent::loop_stream::OneShotError>(error).is_some_and(|error| {
         matches!(
             error,
             crate::agent::loop_stream::OneShotError::ProviderFailure(_)
@@ -170,10 +186,9 @@ where
         shutdown: watch::Receiver<bool>,
         tasks: &super::auxiliary_tasks::AuxiliaryTasks,
     ) -> Result<Option<String>> {
-        anyhow::ensure!(
-            request.purpose == RequestPurpose::AccessReview,
-            "expected access review"
-        );
+        if request.purpose != RequestPurpose::AccessReview {
+            return Err(AuxiliaryRequestError::ExpectedAccessReview.into());
+        }
         let cancellation = execution.cancellation.child_token();
         let guard = cancellation.clone().drop_guard();
         execution.cancellation = cancellation;
@@ -208,7 +223,9 @@ where
         shutdown: watch::Receiver<bool>,
         review: Option<review::ReviewExecution>,
     ) -> Result<Option<String>> {
-        anyhow::ensure!(request.purpose.is_auxiliary(), "expected auxiliary request");
+        if !request.purpose.is_auxiliary() {
+            return Err(AuxiliaryRequestError::ExpectedAuxiliary.into());
+        }
         let Some(request) = super::verify_request_at_claim_boundary(
             &self.verifier,
             Arc::clone(&self.node),
@@ -520,17 +537,14 @@ where
                 Ok(Err(error)) => {
                     flush_received_title_partial("provider error").await?;
                     let error = anyhow::Error::new(error);
-                    if !title_attempt_is_retryable(&error) {
+                    if !title_attempt_is_retryable(error.as_ref()) {
                         return Err(error.context("title audit provider/output invariant failed"));
                     }
                     last_error = Some(error);
                 }
                 Err(_) => {
                     flush_received_title_partial("provider timeout").await?;
-                    last_error = Some(anyhow::anyhow!(
-                        "title inference timed out after {}s",
-                        TITLE_GENERATION_TIMEOUT_SECS
-                    ));
+                    last_error = Some(AuxiliaryRequestError::TitleTimedOut.into());
                 }
             }
             tracing::warn!(request_id, attempt, error = %last_error.as_ref().expect("failed attempt has error"), "title inference failed");
@@ -551,7 +565,7 @@ async fn load_auxiliary_parent(
     let parent_doc_id = request
         .caused_by_parent_request_doc_id
         .as_deref()
-        .context("auxiliary request lacks parent document")?;
+        .ok_or(AuxiliaryRequestError::ParentDocumentMissing)?;
     let escaped = crate::graphql::escape_graphql_string(parent_doc_id);
     let query = format!(
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
@@ -565,18 +579,18 @@ async fn load_auxiliary_parent(
     .await?;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&response, "AgentRequest")?
-            .context("request parent request disappeared")?;
+            .ok_or(AuxiliaryRequestError::ParentDisappeared)?;
     crate::request_admission::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;
-    anyhow::ensure!(
-        parent.purpose == RequestPurpose::Normal
-            && parent.doc_id == parent_doc_id
-            && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && parent.node_did == request.node_did
-            && parent.session_id == request.session_id
-            && parent.agent_id == request.agent_id,
-        "request parent receipt does not match signed provenance"
-    );
+    if !(parent.purpose == RequestPurpose::Normal
+        && parent.doc_id == parent_doc_id
+        && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
+        && parent.node_did == request.node_did
+        && parent.session_id == request.session_id
+        && parent.agent_id == request.agent_id)
+    {
+        return Err(AuxiliaryRequestError::ParentReceiptMismatch.into());
+    }
     Ok(parent)
 }
 

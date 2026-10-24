@@ -802,11 +802,9 @@ async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
         ),
         "expected typed request error, got {error}"
     );
-    let reduction = std::iter::successors(
-        Some(&error as &(dyn std::error::Error + 'static)),
-        |cause| cause.source(),
-    )
-    .find_map(|cause| cause.downcast_ref::<crate::compaction::ReductionError>());
+    let reduction = gents_protocol::error_chain::find_source::<crate::compaction::ReductionError>(
+        &error,
+    );
     assert!(matches!(
         reduction,
         Some(crate::compaction::ReductionError::CannotFit)

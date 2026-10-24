@@ -1,3 +1,4 @@
+use super::DaemonError;
 use anyhow::{Context, Result};
 use gents_protocol::error_chain::ErrorChain;
 use tracing::Instrument;
@@ -181,11 +182,8 @@ where
         // on `(turn 0, attempt 0)` lives in the scope.
         let request_commit_cid = lifecycle
             .request_commit_cid()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "claimed AgentRequest {} has no exact DefraDB commit CID",
-                    request.doc_id
-                )
+            .ok_or_else(|| DaemonError::RequestCommitCidMissing {
+                request_doc_id: request.doc_id.clone(),
             })?
             .to_string();
         let capture_context = crate::rendered_request::context_for_claimed_request(
@@ -456,8 +454,9 @@ where
                         .await?;
 
                         history = if let Some(exact) = result.exact_reduction() {
-                            anyhow::ensure!(projected_native == exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>(),
-                                "session reduction changed its exact provider source");
+                            if projected_native != exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>() {
+                                return Err(DaemonError::ReductionSourceChanged.into());
+                            }
                             let (prefix, suffix) = projected.split_at(exact.compacted_prefix.len());
                             let associations = crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
                                 replay.required.clone(), prefix, suffix,
@@ -470,8 +469,9 @@ where
                             )?;
                             suffix.to_vec()
                         } else {
-                            anyhow::ensure!(projected_native == result.provider_messages()?,
-                                "provider repair changed its sourced projection");
+                            if projected_native != result.provider_messages()? {
+                                return Err(DaemonError::ProviderRepairChanged.into());
+                            }
                             projected
                         };
                         if let Some(exact) = result.exact_reduction() {
@@ -703,9 +703,9 @@ where
                     "request_token was cancelled without an interrupt latch; \
                      treating as failure rather than interrupt"
                 );
-                return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow::anyhow!(
-                    "request_token cancelled without interrupt latch"
-                )));
+                return Ok(HandleRequestOutcome::FailedAfterResponse(
+                    DaemonError::CancelledWithoutInterrupt.into(),
+                ));
             }
 
             if let Some(interrupt_at) = interrupt_at {
@@ -718,9 +718,9 @@ where
                         "request_token was cancelled without an interrupt latch; \
                          treating as failure rather than interrupt"
                     );
-                    return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow::anyhow!(
-                        "request_token cancelled without interrupt latch"
-                    )));
+                    return Ok(HandleRequestOutcome::FailedAfterResponse(
+                        DaemonError::CancelledWithoutInterrupt.into(),
+                    ));
                 }
 
                 let flow_span = tracing::info_span!(

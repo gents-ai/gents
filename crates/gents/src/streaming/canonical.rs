@@ -30,57 +30,81 @@ pub(crate) struct ProviderPublicationPlan {
     pub(crate) consumes_folded: Option<crate::lifecycle::queue::FoldedConsumption>,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum CanonicalError {
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error("create AgentToolCall omitted response data")]
+    ToolCallResponseDataMissing,
+    #[error("create AgentToolCall omitted its mutation field")]
+    ToolCallMutationMissing,
+    #[error("create AgentToolCall returned {rows} rows for {expected} tool calls")]
+    ToolCallRowCount { rows: usize, expected: usize },
+    #[error("provider publication contains duplicate physical tool-call keys")]
+    DuplicateToolCallKeys,
+    #[error("create AgentToolCall omitted tool_call_key")]
+    ToolCallKeyMissing,
+    #[error("create AgentToolCall returned an unexpected tool_call_key")]
+    UnexpectedToolCallKey,
+    #[error("create AgentToolCall omitted its physical identity")]
+    ToolCallIdentityMissing,
+    #[error("create AgentToolCall returned a duplicate tool_call_key")]
+    DuplicateToolCallKey,
+    #[error("create AgentToolCall omitted tool_call_key {key:?}")]
+    ToolCallKeyUnanswered { key: String },
+    #[error("provider close candidate changed immutable source identity")]
+    CloseCandidateIdentityChanged,
+    #[error("provider close candidate must be terminal-only")]
+    CloseCandidateNotTerminal,
+}
+
 fn created_tool_call_doc_ids(
     response: &serde_json::Value,
     expected_keys: &[String],
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>, CanonicalError> {
     let rows = mutation_documents(response, "create_AgentToolCall")?
-        .context("create AgentToolCall omitted response data")?;
-    anyhow::ensure!(
-        !rows.is_empty(),
-        "create AgentToolCall omitted its mutation field"
-    );
-    anyhow::ensure!(
-        rows.len() == expected_keys.len(),
-        "create AgentToolCall returned {} rows for {} tool calls",
-        rows.len(),
-        expected_keys.len()
-    );
+        .ok_or(CanonicalError::ToolCallResponseDataMissing)?;
+    if rows.is_empty() {
+        return Err(CanonicalError::ToolCallMutationMissing);
+    }
+    if rows.len() != expected_keys.len() {
+        return Err(CanonicalError::ToolCallRowCount {
+            rows: rows.len(),
+            expected: expected_keys.len(),
+        });
+    }
     let expected = expected_keys
         .iter()
         .map(String::as_str)
         .collect::<rapidhash::RapidHashSet<_>>();
-    anyhow::ensure!(
-        expected.len() == expected_keys.len(),
-        "provider publication contains duplicate physical tool-call keys"
-    );
+    if expected.len() != expected_keys.len() {
+        return Err(CanonicalError::DuplicateToolCallKeys);
+    }
     let mut doc_ids =
         rapidhash::RapidHashMap::with_capacity_and_hasher(rows.len(), Default::default());
     for row in rows {
         let key = row
             .get("tool_call_key")
             .and_then(serde_json::Value::as_str)
-            .context("create AgentToolCall omitted tool_call_key")?;
-        anyhow::ensure!(
-            expected.contains(key),
-            "create AgentToolCall returned an unexpected tool_call_key"
-        );
+            .ok_or(CanonicalError::ToolCallKeyMissing)?;
+        if !expected.contains(key) {
+            return Err(CanonicalError::UnexpectedToolCallKey);
+        }
         let doc_id = row
             .get("_docID")
             .and_then(serde_json::Value::as_str)
             .filter(|id| !id.trim().is_empty())
-            .context("create AgentToolCall omitted its physical identity")?;
-        anyhow::ensure!(
-            doc_ids.insert(key.to_owned(), doc_id.to_owned()).is_none(),
-            "create AgentToolCall returned a duplicate tool_call_key"
-        );
+            .ok_or(CanonicalError::ToolCallIdentityMissing)?;
+        if doc_ids.insert(key.to_owned(), doc_id.to_owned()).is_some() {
+            return Err(CanonicalError::DuplicateToolCallKey);
+        }
     }
     expected_keys
         .iter()
         .map(|key| {
             doc_ids
                 .remove(key)
-                .with_context(|| format!("create AgentToolCall omitted tool_call_key {key:?}"))
+                .ok_or_else(|| CanonicalError::ToolCallKeyUnanswered { key: key.clone() })
         })
         .collect()
 }
@@ -475,20 +499,22 @@ pub(crate) async fn close_provider_attempt_at(
     .await
 }
 
-fn validate_closing_shape(prepared: &OutputSegment, closing: &OutputSegment) -> Result<()> {
-    anyhow::ensure!(
-        closing.node_did == prepared.node_did
-            && closing.requester_did == prepared.requester_did
-            && closing.session_id == prepared.session_id
-            && closing.request_doc_id == prepared.request_doc_id
-            && closing.source == prepared.source
-            && closing.writer == prepared.writer,
-        "provider close candidate changed immutable source identity"
-    );
-    anyhow::ensure!(
-        closing.ordinal.is_none() && closing.runs.is_empty() && closing.payload.is_empty(),
-        "provider close candidate must be terminal-only"
-    );
+fn validate_closing_shape(
+    prepared: &OutputSegment,
+    closing: &OutputSegment,
+) -> Result<(), CanonicalError> {
+    if !(closing.node_did == prepared.node_did
+        && closing.requester_did == prepared.requester_did
+        && closing.session_id == prepared.session_id
+        && closing.request_doc_id == prepared.request_doc_id
+        && closing.source == prepared.source
+        && closing.writer == prepared.writer)
+    {
+        return Err(CanonicalError::CloseCandidateIdentityChanged);
+    }
+    if !(closing.ordinal.is_none() && closing.runs.is_empty() && closing.payload.is_empty()) {
+        return Err(CanonicalError::CloseCandidateNotTerminal);
+    }
     Ok(())
 }
 

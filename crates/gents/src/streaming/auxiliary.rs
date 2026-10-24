@@ -15,6 +15,24 @@ use tokio::sync::Mutex;
 
 use super::{canonical::ProviderAttemptClose, DefraStreamWriter, StreamWriter};
 
+#[derive(Debug, thiserror::Error)]
+enum AuxiliaryError {
+    #[error("auxiliary output sink received a non-audit source")]
+    NonAuditSource,
+    #[error("auxiliary attempt overlaps an open source")]
+    AttemptOverlaps,
+    #[error("auxiliary output belongs to another attempt")]
+    AttemptMismatch,
+    #[error("Claude audit reached another auxiliary provider")]
+    ClaudeAuditMisrouted,
+    #[error("auxiliary continuation preceded accepted turn closure")]
+    ContinuationPrecededClosure,
+    #[error("auxiliary deadline belongs to another attempt")]
+    DeadlineAttemptMismatch,
+    #[error("auxiliary flush belongs to another attempt")]
+    FlushAttemptMismatch,
+}
+
 fn sink_failure(error: anyhow::Error) -> AuxiliaryOutputError {
     AuxiliaryOutputError::Sink {
         source: error.into(),
@@ -91,21 +109,19 @@ pub(crate) fn sink_with_writer(
                     observation.turn,
                     observation.attempt,
                 );
-                anyhow::ensure!(
-                    OutputSource::ProviderTurn {
-                        scope: observation.capture_scope,
-                        turn_index: u32::try_from(observation.turn)?,
-                        attempt: observation.attempt,
-                    }
-                    .is_auxiliary_audit(),
-                    "auxiliary output sink received a non-audit source"
-                );
+                let source = OutputSource::ProviderTurn {
+                    scope: observation.capture_scope,
+                    turn_index: u32::try_from(observation.turn)?,
+                    attempt: observation.attempt,
+                };
+                if !source.is_auxiliary_audit() {
+                    return Err(AuxiliaryError::NonAuditSource.into());
+                }
                 let mut state = state.lock().await;
                 if matches!(observation.event, AuxiliaryOutputEvent::AttemptStarted) {
-                    anyhow::ensure!(
-                        state.active.is_none(),
-                        "auxiliary attempt overlaps an open source"
-                    );
+                    if state.active.is_some() {
+                        return Err(AuxiliaryError::AttemptOverlaps.into());
+                    }
                     writer.initialize_request_buffer(&request.doc_id).await?;
                     writer
                         .start_provider_attempt(
@@ -136,10 +152,9 @@ pub(crate) fn sink_with_writer(
                         _ => {}
                     }
                 }
-                anyhow::ensure!(
-                    state.active == Some(coordinate),
-                    "auxiliary output belongs to another attempt"
-                );
+                if state.active != Some(coordinate) {
+                    return Err(AuxiliaryError::AttemptMismatch.into());
+                }
                 let mut close = None;
                 let pending = match &observation.event {
                     AuxiliaryOutputEvent::Audit(event) => PendingOutput::of_audit(event),
@@ -150,11 +165,11 @@ pub(crate) fn sink_with_writer(
                 match observation.event {
                     AuxiliaryOutputEvent::AttemptStarted => unreachable!(),
                     AuxiliaryOutputEvent::Audit(event) => {
-                        anyhow::ensure!(
-                            profile
-                                == gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-                            "Claude audit reached another auxiliary provider"
-                        );
+                        if profile
+                            != gents_loop::provider_input::ProviderInputProfile::ClaudeMessages
+                        {
+                            return Err(AuxiliaryError::ClaudeAuditMisrouted.into());
+                        }
                         state.content.apply_provider_audit(&event)?;
                         state.audit_seen = true;
                     }
@@ -184,7 +199,7 @@ pub(crate) fn sink_with_writer(
                         });
                     }
                     AuxiliaryOutputEvent::OutputObligationPending { .. } => {
-                        anyhow::bail!("auxiliary continuation preceded accepted turn closure");
+                        return Err(AuxiliaryError::ContinuationPrecededClosure.into());
                     }
                     AuxiliaryOutputEvent::ClosePartial => {
                         close = Some(ProviderAttemptClose::Partial)
@@ -233,9 +248,9 @@ pub(crate) fn sink_with_writer(
             Box::pin(async move {
                 let state = state.lock().await;
                 if state.active != Some((scope, turn, attempt)) {
-                    return Err(sink_failure(anyhow::anyhow!(
-                        "auxiliary deadline belongs to another attempt"
-                    )));
+                    return Err(AuxiliaryOutputError::Sink {
+                        source: Box::new(AuxiliaryError::DeadlineAttemptMismatch),
+                    });
                 }
                 Ok(writer.next_flush_deadline(&request.doc_id).await)
             })
@@ -248,10 +263,9 @@ pub(crate) fn sink_with_writer(
             Box::pin(async move {
                 let flushed: anyhow::Result<()> = async move {
                     let state = state.lock().await;
-                    anyhow::ensure!(
-                        state.active == Some((scope, turn, attempt)),
-                        "auxiliary flush belongs to another attempt"
-                    );
+                    if state.active != Some((scope, turn, attempt)) {
+                        return Err(AuxiliaryError::FlushAttemptMismatch.into());
+                    }
                     if let Some(message) = state.content.message_snapshot() {
                         writer
                             .flush_owned_partial(&request, &generation, &message)

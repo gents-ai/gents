@@ -51,6 +51,14 @@ pub enum CanonicalOutputReadError {
     RowsOmitted { collection: String },
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ReplayRequestFactsError {
+    #[error(transparent)]
+    Violation(#[from] gents_loop::loop_stream::ReplayEvidenceViolation),
+    #[error("canonical replay request batch omitted {request_doc_id}")]
+    Omitted { request_doc_id: String },
+}
+
 /// The physical request and node scope supplied by the owned restore.
 /// Its commit CID is a historical request version, not the latest lease write.
 #[derive(Clone, Copy)]
@@ -1576,11 +1584,11 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
                     candidate.requester_did.as_deref(),
                     &candidate.session_id,
                     facts,
-                ),
-                None => Err(anyhow::anyhow!(
-                    "canonical replay request batch omitted {}",
-                    candidate.request_doc_id
-                )),
+                )
+                .map_err(ReplayRequestFactsError::Violation),
+                None => Err(ReplayRequestFactsError::Omitted {
+                    request_doc_id: candidate.request_doc_id.clone(),
+                }),
             },
         };
         let (request_id, request_commits) = match loaded {
@@ -1589,20 +1597,20 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             // makes only its turn non-replayable; the current request is
             // validated above. A failed store read says nothing about the
             // request and must not silently strip reasoning, so it propagates.
-            Err(error)
-                if candidate.request_doc_id != scope.request_doc_id
-                    && error
-                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-                        .is_some() =>
+            Err(ReplayRequestFactsError::Violation(violation))
+                if candidate.request_doc_id != scope.request_doc_id =>
             {
                 tracing::warn!(
                     header_doc_id = %candidate.header_doc_id,
-                    error = %ErrorChain(error.as_ref()),
+                    error = %ErrorChain(&violation),
                     "accepted turn request is unverifiable; its reasoning is not replayed"
                 );
                 continue;
             }
-            Err(error) => return Err(error),
+            Err(ReplayRequestFactsError::Violation(violation)) => {
+                return Err(anyhow::Error::from(violation));
+            }
+            Err(error @ ReplayRequestFactsError::Omitted { .. }) => return Err(error.into()),
         };
         request_facts
             .entry(request_scope)
@@ -2001,6 +2009,7 @@ async fn load_replay_physical_request(
         .remove(request_doc_id)
         .with_context(|| format!("canonical replay request batch omitted {request_doc_id}"))?;
     validate_replay_request_facts(request_doc_id, node_did, requester_did, session_id, &facts)
+        .map_err(anyhow::Error::from)
 }
 
 fn validate_replay_request_facts(
@@ -2009,22 +2018,26 @@ fn validate_replay_request_facts(
     requester_did: Option<&str>,
     session_id: &str,
     facts: &ReplayRequestFacts,
-) -> Result<(String, BTreeSet<String>)> {
+) -> std::result::Result<(String, BTreeSet<String>), gents_loop::loop_stream::ReplayEvidenceViolation>
+{
     let rows = &facts.rows;
-    replay_ensure!(
-        rows.len() == 1,
-        "canonical replay request is missing or ambiguous"
-    );
+    if rows.len() != 1 {
+        return Err(gents_loop::loop_stream::ReplayEvidenceViolation(
+            "canonical replay request is missing or ambiguous".to_owned(),
+        ));
+    }
     let row = &rows[0];
-    replay_ensure!(
-        required_row_str(row, "_docID")? == request_doc_id
-            && required_row_str(row, "purpose")? == "normal"
-            && required_row_str(row, "session_id")? == session_id
-            && required_row_str(row, "node_did")? == node_did
-            && row.get("requester_did").is_some()
-            && row["requester_did"].as_str() == requester_did,
-        "canonical replay request crossed its physical node/session scope"
-    );
+    let scoped = required_row_str(row, "_docID")? == request_doc_id
+        && required_row_str(row, "purpose")? == "normal"
+        && required_row_str(row, "session_id")? == session_id
+        && required_row_str(row, "node_did")? == node_did
+        && row.get("requester_did").is_some()
+        && row["requester_did"].as_str() == requester_did;
+    if !scoped {
+        return Err(gents_loop::loop_stream::ReplayEvidenceViolation(
+            "canonical replay request crossed its physical node/session scope".to_owned(),
+        ));
+    }
     let commits = facts
         .commits
         .iter()
@@ -2033,10 +2046,17 @@ fn validate_replay_request_facts(
     Ok((required_row_str(row, "request_id")?.to_owned(), commits))
 }
 
-fn required_row_str<'a>(row: &'a serde_json::Value, field: &str) -> Result<&'a str> {
+fn required_row_str<'a>(
+    row: &'a serde_json::Value,
+    field: &str,
+) -> std::result::Result<&'a str, gents_loop::loop_stream::ReplayEvidenceViolation> {
     row.get(field)
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| replay_violation(format!("canonical replay row omitted {field}")))
+        .ok_or_else(|| {
+            gents_loop::loop_stream::ReplayEvidenceViolation(format!(
+                "canonical replay row omitted {field}"
+            ))
+        })
 }
 
 fn provider_coordinate_for_candidate(
