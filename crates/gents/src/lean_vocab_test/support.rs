@@ -116,6 +116,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) file_inventory_order_window_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_resolution_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_comparison_cases: Vec<serde_json::Value>,
+    pub(crate) file_inventory_order_entry_cases: Vec<serde_json::Value>,
     pub(crate) file_image_hydration_cases: Vec<serde_json::Value>,
     pub(crate) file_image_hydration_route_cases: Vec<serde_json::Value>,
     pub(crate) file_review_subscription_cases: Vec<serde_json::Value>,

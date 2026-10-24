@@ -101,7 +101,16 @@ def sequentialHeaders : List MessageEnvelope :=
   [call 12 6 secondTool, delivered 13 8 secondTool, delivered 11 4, call 10 1]
 
 def capturedSnapshot : Snapshot :=
-  { snapshot sequentialHeaders with tools := [captured secondTool, captured tool] }
+  let initial := { snapshot sequentialHeaders with tools := [captured secondTool, captured tool] }
+  { initial with ordering := initial.tools.map fun fact => window initial (input sequentialHeaders) fact.tool }
+
+theorem physical_page_order_preserves_canonical_resource_ordinals :
+    capturedSnapshot.entries.map (fun entry => (entry.tool, entry.order)) =
+      [(2, .ordered 1 2), (90, .ordered 0 2)] := by native_decide
+
+theorem changing_only_ordering_invalidates_the_receipt :
+    (VerifiedReceipt.metadata capturedSnapshot).proves
+      { capturedSnapshot with ordering := [] } = false := by native_decide
 
 theorem interleaved_physical_inventory_uses_one_resource_and_canonical_session :
     comparison capturedSnapshot (input sequentialHeaders) "node" "workspace" "file.rs" =
@@ -167,5 +176,20 @@ def comparisonCases : List (String × Snapshot × ClosureInput × String × Stri
   , ("other_source", capturedSnapshot, input sequentialHeaders, "other-node", "workspace", "file.rs")
   , ("missing_intermediate_delivery", { capturedSnapshot with documents },
       input sequentialHeaders, "node", "workspace", "file.rs") ]
+
+def entryCases : List (String × List Entry) :=
+  let entries := capturedSnapshot.entries
+  [ ("canonical_ordinals_in_physical_page_order", entries)
+  , ("repeated_ordinal", entries.map fun entry => { entry with order := .ordered 0 2 })
+  , ("inconsistent_resource_count", entries.map fun entry =>
+      if entry.tool == 90 then { entry with order := .ordered 0 3 } else entry)
+  , ("mixed_resolved_and_unknown", entries.map fun entry =>
+      if entry.tool == 90 then { entry with order := .unresolved } else entry)
+  , ("out_of_range_ordinal", entries.map fun entry => { entry with order := .ordered 2 2 })
+  , ("unknown_order_is_explicit", entries.map fun entry => { entry with order := .unresolved }) ]
+
+theorem ordinal_representation_checks :
+    entryCases.map (fun value => coherentEntries value.2) =
+      [true, false, false, false, false, true] := by native_decide
 
 end SessionHydration.FileInventory.Order.Examples
