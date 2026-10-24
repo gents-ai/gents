@@ -1500,7 +1500,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                         .map_err(|error| ErrorChain(error.as_ref()).to_string());
                     assert_eq!(single, bulk, "single/bulk mismatch for {case}");
                     assert_eq!(single.is_err(), case == "key", "{case}");
-                    Ok(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             },
         )

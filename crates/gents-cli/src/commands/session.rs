@@ -180,7 +180,7 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigA
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
     let node = Arc::new(node);
-    ConfigAccess::claimed_local(node, claim)
+    Ok(ConfigAccess::claimed_local(node, claim)?)
 }
 
 async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {

@@ -686,7 +686,7 @@ mod job_control {
                             pause_reason: None,
                         };
                         write_progress_in_txn(txn, row, 0, guest, host).await?;
-                        Ok(())
+                        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                     })
                 },
             )

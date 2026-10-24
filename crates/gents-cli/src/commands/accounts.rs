@@ -251,7 +251,7 @@ pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Sn
     let (backends, profiles) = access
         .transact_write("accounts.config", |txn| {
             Box::pin(async move {
-                Ok((
+                Ok::<_, anyhow::Error>((
                     gents::config_client::list_inference_backends_in_txn(txn, node_did).await?,
                     gents::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
                 ))
@@ -781,7 +781,7 @@ pub async fn remove_account(
                     &deleted,
                 )
                 .await?;
-                Ok((deleted, kept))
+                Ok::<_, anyhow::Error>((deleted, kept))
             })
         })
         .await?;

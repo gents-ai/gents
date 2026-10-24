@@ -56,10 +56,10 @@ pub async fn request_enrollment(
                     candidate_ticket,
                 )
                 .await?;
-                let document_id =
-                    match write_enrollment_request(node, &request).await {
-                        Ok(document_id) => document_id,
-                        Err(write_error) => persisted_request(
+                let document_id = match write_enrollment_request(node, &request).await {
+                    Ok(document_id) => document_id,
+                    Err(write_error) => {
+                        persisted_request(
                             node,
                             identity,
                             &offer,
@@ -74,8 +74,9 @@ pub async fn request_enrollment(
                                 ErrorChain(write_error.as_ref())
                             )
                         })?
-                        .1,
-                    };
+                        .1
+                    }
+                };
                 (request, document_id)
             }
         };
@@ -287,7 +288,7 @@ pub async fn confirm_network_admin_pin(
         anyhow::ensure!(
             matches!(rows::<AdminPinRow>(&response, "NetworkAdminPin")?.as_slice(), [pin] if &pin.admin_did == admin_did),
             "admin pin commit was not observably recovered after: {}",
-            ErrorChain(commit_error.as_ref())
+            ErrorChain(&commit_error)
         );
     }
     Ok(())

@@ -103,7 +103,7 @@ impl<'a> LiveObserver<'a> {
 }
 
 async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSet<String>> {
-    ConfigAccess::local(node.clone()).collection_names().await
+    Ok(ConfigAccess::local(node.clone()).collection_names().await?)
 }
 
 async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
@@ -169,7 +169,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
     let response = graphql_with_transaction_retry(node, query, "eval trial last tool call")
         .await
         .map_err(|error| {
-            tracing::debug!(error = %ErrorChain(error.as_ref()), "eval trial last tool call was not read");
+            tracing::debug!(error = %ErrorChain(&error), "eval trial last tool call was not read");
         })
         .ok()?;
     let row = response
@@ -220,7 +220,7 @@ async fn count(node: &EmbeddedNode, query: &str, collection: &str) -> Option<u64
         ),
         Err(error) => {
             tracing::debug!(
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 collection,
                 "eval trial live count was not read"
             );

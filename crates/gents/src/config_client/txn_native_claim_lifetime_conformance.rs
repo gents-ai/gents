@@ -195,6 +195,7 @@ async fn run_paused_owned_read(
         )
         .await
         .map_err(anyhow::Error::from)?
+        .map_err(anyhow::Error::from)
     })
     .await
 }
@@ -216,6 +217,7 @@ async fn run_paused_owned_schema(
             )
             .await
             .map_err(anyhow::Error::from)?
+            .map_err(anyhow::Error::from)
         },
     )
     .await

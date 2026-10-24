@@ -1775,7 +1775,9 @@ impl DbCredentialBearer {
                 }
             }
         }
-        Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
+        Err(last_error
+            .expect("persist_with_retry ran at least one failing attempt")
+            .into())
     }
 
     fn auth_error(

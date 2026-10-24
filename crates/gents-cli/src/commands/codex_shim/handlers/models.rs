@@ -96,7 +96,7 @@ async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocu
                         agent_id: agent_id.to_owned(),
                         node_did: node_did.to_owned(),
                     })?;
-            Ok(value)
+            Ok::<_, anyhow::Error>(value)
         })
     })
     .await?;

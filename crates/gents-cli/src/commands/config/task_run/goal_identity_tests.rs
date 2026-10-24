@@ -124,7 +124,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                     &json!({"input": {"session_id":session, "node_did":signer.did(),
                         "requester_did":signer.did(), "agent_id":"engineer", "created_at":NOW}}),
                 ).await?;
-                Ok(())
+                Ok::<_, gents::config_client::ConfigClientError>(())
             })
         }).await?;
         let selected =

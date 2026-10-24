@@ -1181,15 +1181,17 @@ impl ConfigCommandTool {
                         let owner = owner.clone();
                         let target_id = target_id.clone();
                         Box::pin(async move {
-                            Ok(ops::read_owned_doc(
-                                txn,
-                                SelfConfigTarget::AgentTarget,
-                                &owner,
-                                &target_id,
+                            Ok::<_, anyhow::Error>(
+                                ops::read_owned_doc(
+                                    txn,
+                                    SelfConfigTarget::AgentTarget,
+                                    &owner,
+                                    &target_id,
+                                )
+                                .await?
+                                .and_then(|(_, doc)| doc.get("target_node_did").cloned())
+                                    == Some(json!(owner)),
                             )
-                            .await?
-                            .and_then(|(_, doc)| doc.get("target_node_did").cloned())
-                                == Some(json!(owner)))
                         })
                     },
                 )
@@ -1666,7 +1668,7 @@ impl ConfigCommandTool {
                             .await?
                             .is_some()
                         {
-                            return Ok(Ok(candidate));
+                            return Ok::<_, anyhow::Error>(Ok(candidate));
                         }
                     }
                     Ok(Err(txn.execute(&listing).await?))
@@ -1983,7 +1985,7 @@ impl ConfigCommandTool {
             "self_config.account_inventory",
             |txn| {
                 Box::pin(async move {
-                    Ok((
+                    Ok::<_, anyhow::Error>((
                         crate::config_client::list_inference_backends_in_txn(txn, node_did).await?,
                         crate::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
                     ))

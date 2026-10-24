@@ -79,7 +79,7 @@ pub(crate) async fn load_trigger_next_run_at_batch(
                 for (result_index, _) in aliases {
                     results[result_index] = Some(Err(anyhow!(
                         "query Trigger cursor failed: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     )));
                 }
                 continue;

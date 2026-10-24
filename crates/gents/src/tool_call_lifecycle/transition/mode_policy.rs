@@ -60,7 +60,7 @@ impl ToolCallLifecycle {
                         return Ok(());
                     }
                     crate::tool_call_lifecycle::delivery::publish_background_receipt_in_txn(txn, &binding, &receipt).await?;
-                    Ok(())
+                    Result::<()>::Ok(())
                 })
             },
         ).await?;

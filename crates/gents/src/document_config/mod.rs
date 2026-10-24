@@ -149,7 +149,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
                     owner,
                 )
                 .await?
-                .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
+                .map(|(_, value)| serde_json::from_value(value).map_err(anyhow::Error::from))
                 .transpose()
             })
         })

@@ -143,7 +143,7 @@ impl GraphqlPairingStateStore {
         }"#;
         let response =
             graphql_with_transaction_retry(&self.node, query, "query PeerPairingApplied").await?;
-        rows::<AppliedStateRow>(&response, "PeerPairingApplied")
+        Ok(rows::<AppliedStateRow>(&response, "PeerPairingApplied")?)
     }
 }
 
@@ -303,7 +303,8 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 &mutation,
             )
             .await
-            .map(|_| ());
+            .map(|_| ())
+            .map_err(Into::into);
         }
 
         let peer_id = escape_graphql_string(peer_id);
@@ -350,6 +351,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
         )
         .await
         .map(|_| ())
+        .map_err(Into::into)
     }
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {

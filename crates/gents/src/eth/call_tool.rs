@@ -673,7 +673,7 @@ async fn load_signing_key_with_store(
                     )
                     .await?
                     .ok_or_else(|| anyhow!("chain key binding {binding_id:?} does not exist"))?;
-                    Ok((
+                    Ok::<_, anyhow::Error>((
                         serde_json::from_value(tool)?,
                         serde_json::from_value(binding)?,
                     ))

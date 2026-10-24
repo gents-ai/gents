@@ -40,7 +40,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
                     "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
                     &json!({"input": value}),
                 ).await?;
-                Ok(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
             }) },
         ).await.unwrap()
     }

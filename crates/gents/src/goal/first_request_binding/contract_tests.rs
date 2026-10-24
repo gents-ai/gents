@@ -193,7 +193,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                             Some(identity),
                         )
                         .await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     })
                 })
                 .await
@@ -242,7 +242,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                         "2026-10-21T00:00:00Z",
                     )
                     .await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await

@@ -4610,7 +4610,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
                     )
                     .await?
                     .context("persisted Tools")?;
-                    Ok(serde_json::from_value(value)?)
+                    Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
                 })
             })
             .await
@@ -7775,7 +7775,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
                     )
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
-                    Ok(serde_json::from_value(value)?)
+                    Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
                 })
             })
             .await

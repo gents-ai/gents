@@ -423,9 +423,9 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
     ] {
         let error = gents::verify_request_receipt_signature(&tampered).expect_err(field);
         assert!(
-            ErrorChain(error.as_ref()).to_string().contains("signature"),
+            ErrorChain(&error).to_string().contains("signature"),
             "{field}: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
     gents::verify_request_receipt_signature(signed)

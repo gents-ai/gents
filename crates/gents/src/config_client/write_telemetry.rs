@@ -22,7 +22,7 @@ pub(super) fn record_slow_native_phase(
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum WriteTelemetryError {
+pub enum WriteTelemetryError {
     #[error("invalid static write operation name")]
     InvalidOperationName,
     #[error("invalid write attempt")]

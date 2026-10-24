@@ -20,8 +20,8 @@ enum ReadSource<'a, 'txn> {
 impl ReadSource<'_, '_> {
     async fn execute(self, query: &str) -> Result<Value> {
         match self {
-            Self::Access(access) => access.execute(query).await,
-            Self::Txn(txn) => txn.execute(query).await,
+            Self::Access(access) => Ok(access.execute(query).await?),
+            Self::Txn(txn) => Ok(txn.execute(query).await?),
         }
     }
 
@@ -1163,7 +1163,7 @@ mod tests {
                 txn.execute_with_variables(&format!(
                     r#"mutation($output: JSON) {{ update_AgentToolCall(docID: "{doc}", input: {{ terminal_output: $output }}) {{ _docID }} }}"#
                 ), &serde_json::json!({"output": foreign})).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
         assert!(
@@ -1343,7 +1343,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("ambiguous invocation reply"));
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
@@ -1387,7 +1387,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("carries no native tool-result"));
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

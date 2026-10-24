@@ -1255,6 +1255,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
                     &transcript_message_create_variables(&duplicate)?,
                 )
                 .await
+                .map_err(anyhow::Error::from)
             })
         })
         .await

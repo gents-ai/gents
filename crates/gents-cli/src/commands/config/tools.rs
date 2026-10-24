@@ -53,7 +53,7 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
                     read_desired_state_record_in_txn(txn, Collection::Tools, owner, id)
                         .await?
                         .context("committed Tools document is missing")?;
-                Ok(doc_id)
+                Ok::<_, anyhow::Error>(doc_id)
             })
         })
         .await?;

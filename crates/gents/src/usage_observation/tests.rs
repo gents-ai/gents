@@ -499,7 +499,7 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
                         ))
                         .await?;
                     }
-                    Ok((writer, fillers))
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>((writer, fillers))
                 })
             })
             .await

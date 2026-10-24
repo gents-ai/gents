@@ -432,7 +432,7 @@ pub(crate) async fn persist(
                     compacted_tokens = input.compacted_tokens,
                 );
                 txn.execute(&mutation).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

@@ -91,7 +91,7 @@ pub(crate) async fn apply_bound_desired_manifest(
             Box::pin(async move {
                 let applied_total =
                     apply_desired_state_changes(txn, desired_bundle_ref, planned_ref).await?;
-                Ok(split_apply_counts(applied_total, planned_ref, prune))
+                Ok::<_, anyhow::Error>(split_apply_counts(applied_total, planned_ref, prune))
             })
         })
         .await

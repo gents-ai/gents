@@ -981,7 +981,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
     let response =
         gents::graphql::graphql_with_transaction_retry(core.node(), query, "AgentToolCall query")
             .await
-            .map_err(|error| ErrorChain(error.as_ref()).to_string())?;
+            .map_err(|error| ErrorChain(&error).to_string())?;
 
     let data = response
         .data

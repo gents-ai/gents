@@ -1908,7 +1908,7 @@ pub(crate) mod tests {
                         pause_reason: None,
                     };
                     write_progress_in_txn(txn, row, 1, running_progress(), host).await?;
-                    Ok(read_step_row_in_txn(txn, row).await?.spent)
+                    Ok::<_, anyhow::Error>(read_step_row_in_txn(txn, row).await?.spent)
                 })
             })
             .await

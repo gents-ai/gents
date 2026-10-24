@@ -82,7 +82,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
                                     .context("duplicate wake has no physical identity")?,
                             )?
                         {
-                            return Ok(());
+                            return Ok::<_, anyhow::Error>(());
                         }
                     }
                     let response = txn.execute_local_response(mutation).await?;

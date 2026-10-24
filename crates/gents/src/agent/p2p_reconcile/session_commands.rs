@@ -315,7 +315,7 @@ mod tests {
                         "requester_did": identity.did(), "session_id":"session", "intent_json":intent}})).await?;
                 ids.push(crate::graphql::created_doc_id(&response, "AgentSessionGoalControl")?);
             }
-            Ok(ids)
+            Ok::<_, anyhow::Error>(ids)
         })).await.unwrap();
         let mut actual = unanswered_commands(
             CommandKind::GoalControl,

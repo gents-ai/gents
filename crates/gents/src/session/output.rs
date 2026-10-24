@@ -306,7 +306,7 @@ impl ReadAccess<'_, '_> {
                 crate::graphql::graphql_response_with_transaction_retry(node, document, operation)
                     .await?
             }
-            Self::Txn(txn) => return txn.execute(document).await,
+            Self::Txn(txn) => return Ok(txn.execute(document).await?),
             Self::Config(access) => {
                 let value = access.execute(document).await?;
                 anyhow::ensure!(

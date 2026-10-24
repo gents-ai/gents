@@ -1350,7 +1350,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
-            Ok(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })
     }).await.unwrap();
     let (_, rx) = watch::channel(snapshot);
@@ -1428,7 +1428,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
-            Ok(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })
     }).await.unwrap();
     let (_, rx) = watch::channel(snapshot);

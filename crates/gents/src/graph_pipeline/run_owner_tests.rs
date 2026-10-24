@@ -5,7 +5,7 @@ pub(super) async fn capture_failure_txn(
     view: &GraphRunView,
 ) -> Result<()> {
     match capture_failure_in_txn(&txn, view).await {
-        Ok(false) => txn.discard().await,
+        Ok(false) => Ok(txn.discard().await?),
         Ok(true) => match txn.commit().await {
             Ok(()) => Ok(()),
             Err(error) if crate::config_client::is_classified_transaction_conflict(&error) => {

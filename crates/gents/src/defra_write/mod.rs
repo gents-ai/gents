@@ -299,7 +299,11 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
         let types = self.resolved_field_types().await?;
         let mutation = self.build_mutation(&args.0, &types)?;
 
-        let resp = self.access.write("tool.defra_write", &mutation).await?;
+        let resp = self
+            .access
+            .write("tool.defra_write", &mutation)
+            .await
+            .map_err(anyhow::Error::from)?;
 
         let document = resp
             .get("data")

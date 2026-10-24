@@ -895,7 +895,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
             Ok(access) => access,
             Err(error) => {
                 node.shutdown().await;
-                return Err(error);
+                return Err(error.into());
             }
         };
     let mut runtime =

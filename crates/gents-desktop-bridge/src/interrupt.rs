@@ -43,12 +43,7 @@ async fn resolve(
     );
     let response = graphql_with_transaction_retry(core.node(), &query, "interrupt target")
         .await
-        .map_err(|error| {
-            format!(
-                "request {request_id} lookup failed: {}",
-                ErrorChain(error.as_ref())
-            )
-        })?;
+        .map_err(|error| format!("request {request_id} lookup failed: {}", ErrorChain(&error)))?;
     let rows = response
         .data
         .as_ref()

@@ -32,18 +32,24 @@ mod schema_management;
 mod txn;
 pub(crate) mod write_telemetry;
 
-pub(crate) fn is_transaction_step_unavailable(error: &anyhow::Error) -> bool {
+pub(crate) fn is_transaction_step_unavailable<E>(error: &E) -> bool
+where
+    E: TransactionFailure + ?Sized,
+{
     retry::classified_transaction_conflict(error).is_some()
         || retry::is_transaction_storage_failure(error)
 }
 
 #[cfg(test)]
-pub(crate) fn is_classified_transaction_conflict(error: &anyhow::Error) -> bool {
+pub(crate) fn is_classified_transaction_conflict<E>(error: &E) -> bool
+where
+    E: TransactionFailure + ?Sized,
+{
     retry::classified_transaction_conflict(error).is_some()
 }
 
 #[cfg(test)]
-pub(crate) fn classified_conflict_for_test() -> anyhow::Error {
+pub(crate) fn classified_conflict_for_test() -> ConfigClientError {
     retry::transaction_conflict(write_telemetry::ConflictSource::StructuredCode)
 }
 
@@ -85,24 +91,28 @@ pub use schema_install::{
     preview_schema_install, SchemaInstallPlan,
 };
 pub use tools::write_tools_document;
-#[cfg(test)]
-pub(crate) use txn::ReentrantEmbeddedWrite;
 pub(crate) use txn::TransactionOutcome;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
-pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess};
+pub use txn::{
+    ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess, NativeOperationAbandoned,
+    ReentrantEmbeddedWrite,
+};
 
-pub use error::ConfigClientError;
+pub use error::{ConfigClientError, TransactionConflict};
+pub use retry::TransactionFailure;
+pub use write_telemetry::WriteTelemetryError;
 
 mod tools;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use futures::future::BoxFuture;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::Value;
+
+type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphqlEndpoint {
@@ -162,11 +172,17 @@ impl GraphqlEndpoint {
         let Some(did) = self.principal_did.as_deref() else {
             return Ok(None);
         };
-        let url = reqwest::Url::parse(self.url.trim())
-            .with_context(|| format!("parsing GraphQL endpoint {}", self.url))?;
+        let url = reqwest::Url::parse(self.url.trim()).map_err(|source| {
+            ConfigClientError::ParseEndpoint {
+                url: self.url.clone(),
+                source,
+            }
+        })?;
         let host = url
             .host_str()
-            .ok_or_else(|| anyhow::anyhow!("GraphQL endpoint {} has no host", self.url))?;
+            .ok_or_else(|| ConfigClientError::EndpointHost {
+                url: self.url.clone(),
+            })?;
         // The DefraDB token audience is the `Host` header, which carries the port only when it is not the scheme default.
         let audience = match url.port() {
             Some(port) => format!("{host}:{port}"),
@@ -182,7 +198,7 @@ impl GraphqlEndpoint {
             return Ok(None);
         };
         let mut value = reqwest::header::HeaderValue::from_str(&authorization)
-            .context("encoding DefraDB bearer header")?;
+            .map_err(ConfigClientError::BearerHeader)?;
         value.set_sensitive(true);
         Ok(Some(value))
     }
@@ -262,15 +278,16 @@ impl ConfigAccess {
         }
     }
 
-    pub(crate) async fn run_local_owned<T, F, Fut>(&self, operation: F) -> Result<T>
+    pub(crate) async fn run_local_owned<T, E, F, Fut>(&self, operation: F) -> Result<T, E>
     where
         T: Send + 'static,
+        E: From<ConfigClientError> + Send + 'static,
         F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
     {
         match self {
             Self::Local(local) => local.run_owned(operation).await,
-            Self::Graphql(_) => anyhow::bail!("owned native operation requires local access"),
+            Self::Graphql(_) => Err(ConfigClientError::LocalAccessRequired.into()),
         }
     }
 
@@ -308,17 +325,23 @@ impl ConfigAccess {
                     .body(sdl.to_owned())
                     .send()
                     .await
-                    .with_context(|| format!("posting schema SDL to {url}"))?;
+                    .map_err(|source| ConfigClientError::PostSchema {
+                        url: url.clone(),
+                        source,
+                    })?;
                 let status = response.status();
-                let bytes = response
-                    .bytes()
-                    .await
-                    .with_context(|| format!("reading schema SDL response from {url}"))?;
+                let bytes = response.bytes().await.map_err(|source| {
+                    ConfigClientError::ReadSchemaResponse {
+                        url: url.clone(),
+                        source,
+                    }
+                })?;
                 if !status.is_success() {
-                    anyhow::bail!(
-                        "schema SDL request to {url} failed with {status}: {}",
-                        String::from_utf8_lossy(&bytes)
-                    );
+                    return Err(ConfigClientError::SchemaStatus {
+                        url,
+                        status,
+                        body: String::from_utf8_lossy(&bytes).into_owned(),
+                    });
                 }
                 Ok(())
             }
@@ -326,7 +349,9 @@ impl ConfigAccess {
                 let sdl = sdl.to_owned();
                 local
                     .run_owned(move |node| async move {
-                        node.add_schema(&sdl).await.context("adding schema SDL")
+                        node.add_schema(&sdl)
+                            .await
+                            .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
                     })
                     .await
             }
@@ -357,12 +382,21 @@ impl ConfigAccess {
                     .authorize(client.get(&url))?
                     .send()
                     .await
-                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .map_err(|source| ConfigClientError::FetchCollectionVersions {
+                        url: url.clone(),
+                        source,
+                    })?
                     .error_for_status()
-                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .map_err(|source| ConfigClientError::FetchCollectionVersions {
+                        url: url.clone(),
+                        source,
+                    })?
                     .json()
                     .await
-                    .with_context(|| format!("decoding collection versions from {url}"))?;
+                    .map_err(|source| ConfigClientError::DecodeCollectionVersions {
+                        url: url.clone(),
+                        source,
+                    })?;
                 Ok(versions
                     .as_array()
                     .into_iter()
@@ -388,7 +422,7 @@ impl ConfigAccess {
                 .get_collection(collection)?
                 .map(serde_json::to_value)
                 .transpose()
-                .context("serializing active collection version"),
+                .map_err(ConfigClientError::SerializeCollectionVersion),
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
                 let url = format!("{api_base}/collections/versions");
@@ -397,12 +431,21 @@ impl ConfigAccess {
                     .authorize(client.get(&url))?
                     .send()
                     .await
-                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .map_err(|source| ConfigClientError::FetchCollectionVersions {
+                        url: url.clone(),
+                        source,
+                    })?
                     .error_for_status()
-                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .map_err(|source| ConfigClientError::FetchCollectionVersions {
+                        url: url.clone(),
+                        source,
+                    })?
                     .json()
                     .await
-                    .with_context(|| format!("decoding collection versions from {url}"))?;
+                    .map_err(|source| ConfigClientError::DecodeCollectionVersions {
+                        url: url.clone(),
+                        source,
+                    })?;
                 Ok(versions.as_array().and_then(|versions| {
                     versions
                         .iter()
@@ -473,8 +516,8 @@ pub async fn query_graphql_with_options(
 ) -> Result<Value> {
     graphql::query_with_options(graphql, query, options)
         .await
-        .map_err(|error| {
-            let diagnostic = format!("{error}\n{}", graphql_diagnostic_hint(graphql.url()));
-            error.context(diagnostic)
+        .map_err(|error| ConfigClientError::HttpQuery {
+            endpoint: graphql.url().to_owned(),
+            source: Box::new(error),
         })
 }

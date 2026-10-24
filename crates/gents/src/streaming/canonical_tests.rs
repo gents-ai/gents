@@ -335,7 +335,7 @@ async fn provider_publication_request_size_benchmark() {
                     )
                     .await?;
                 }
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
@@ -634,7 +634,7 @@ async fn recovery_receipt_fixture(
                     )
                     .await?
                 );
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

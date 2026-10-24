@@ -1177,7 +1177,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
     )
     .await
     .expect_err("a committed session sequence cannot be claimed twice");
-    assert!(format!("{}", ErrorChain(duplicate.as_ref())).contains("unique index"));
+    assert!(format!("{}", ErrorChain(&duplicate)).contains("unique index"));
     for row_session in [session, "only-null-sequence"] {
         let indexed =
             super::super::atomic_inputs::append_sequence_query(db.node_did(), row_session);

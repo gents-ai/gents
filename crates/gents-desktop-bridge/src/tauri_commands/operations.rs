@@ -91,7 +91,7 @@ async fn fetch_background_tool_calls(
 
     let response = graphql_with_transaction_retry(core.node(), &query, "background tool calls")
         .await
-        .map_err(|error| BridgeError::untyped(ErrorChain(error.as_ref()).to_string()))?;
+        .map_err(|error| BridgeError::untyped(ErrorChain(&error).to_string()))?;
 
     let data = response
         .data

@@ -64,7 +64,7 @@ async fn names(access: &ConfigAccess) -> Result<Vec<String>> {
     let response = access
         .execute("{ NodeAccessProbe { name } }")
         .await
-        .map_err(|error| format!("reading probe rows: {}", ErrorChain(error.as_ref())))?;
+        .map_err(|error| format!("reading probe rows: {}", ErrorChain(&error)))?;
     let mut names: Vec<String> = response["data"]["NodeAccessProbe"]
         .as_array()
         .into_iter()
@@ -90,7 +90,7 @@ async fn assert_access_control(
     assert!(
         refused.to_string().contains("not authorized"),
         "unexpected refusal: {}",
-        ErrorChain(refused.as_ref())
+        ErrorChain(&refused)
     );
     let refused_schema = anonymous
         .add_schema("type NodeAccessIntruder { name: String }")
@@ -99,7 +99,7 @@ async fn assert_access_control(
     assert!(
         refused_schema.to_string().contains("401"),
         "unexpected schema refusal: {}",
-        ErrorChain(refused_schema.as_ref())
+        ErrorChain(&refused_schema)
     );
 
     let signed = ConfigAccess::graphql_as(endpoint, principal);

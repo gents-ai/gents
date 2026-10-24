@@ -269,9 +269,9 @@ pub async fn execute_command(
         let diagnostic = super::diagnose_failed_query(
             &params,
             Some(&schema),
-            &format!("{}", ErrorChain(error.as_ref())),
+            &format!("{}", ErrorChain(&error)),
         );
-        error.context(format!(
+        anyhow::Error::from(error).context(format!(
             "{diagnostic}; recovery: {}",
             json!({"tool":"query","args":{"argv":["help",command]}})
         ))

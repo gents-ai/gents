@@ -973,6 +973,7 @@ pub(crate) mod tests {
                         ))
                         .await
                         .map(|_| ())
+                        .map_err(anyhow::Error::from)
                     })
                 })
                 .await

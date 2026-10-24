@@ -787,7 +787,7 @@ pub(crate) trait CaptureBaseReader {
 #[async_trait::async_trait]
 impl CaptureBaseReader for crate::config_client::ConfigAccess {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
-        self.execute(query).await
+        Ok(self.execute(query).await?)
     }
 }
 

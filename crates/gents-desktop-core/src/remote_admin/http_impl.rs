@@ -117,7 +117,7 @@ impl HttpRemoteP2pAdmin {
             request = endpoint.authorize(request).map_err(|error| {
                 RemoteP2pAdminError::LocalError(format!(
                     "authenticating remote admin request: {}",
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 ))
             })?;
         }

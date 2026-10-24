@@ -114,7 +114,7 @@ impl StreamGuardLifecycle for NativeFinalizer {
                             "mutation { create_StreamGateFact(input: {value: \"finalizer\"}) { _docID } }",
                         )
                         .await?;
-                        Ok(())
+                        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                     })
                 },
             )

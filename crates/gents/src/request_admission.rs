@@ -20,6 +20,25 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::identity::NodeIdentity;
 use crate::watcher::AgentRequest;
 
+#[derive(Debug, thiserror::Error)]
+pub enum RequestReceiptError {
+    /// Admission wire-field or branch rule reported by `gents_protocol`.
+    #[error("{reason}")]
+    InvalidAdmission { reason: &'static str },
+    #[error(transparent)]
+    Protocol(#[from] gents_protocol::request_admission::RequestAdmissionError),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error("AgentRequest request_hop must fit in u32")]
+    RequestHop(#[source] std::num::TryFromIntError),
+    #[error("AgentRequest is missing {field}")]
+    MissingField { field: &'static str },
+    #[error("immutable request receipt signature is invalid")]
+    InvalidSignature,
+    #[error("runtime local-control receipt does not match expected target/source binding")]
+    LocalControlBinding,
+}
+
 #[derive(Debug)]
 pub(crate) enum AgentRequestAdmissionError {
     Denied(anyhow::Error),
@@ -960,22 +979,21 @@ async fn verify_automated_trigger_source(
     )
 }
 
-pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
+pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<(), RequestReceiptError> {
     let admission = row_admission(row)?;
     admission.validate_canonical_fields()?;
     admission
         .validate_branch_fields()
-        .map_err(anyhow::Error::msg)?;
+        .map_err(|reason| RequestReceiptError::InvalidAdmission { reason })?;
     let fields = row_signing_fields(row)?;
     validate_signing_fields(&fields)?;
-    anyhow::ensure!(
-        crate::identity::verify_did_signature(
-            &admission.signer_did,
-            &admission.signing_payload(&fields),
-            &admission.signature,
-        )?,
-        "immutable request receipt signature is invalid"
-    );
+    if !crate::identity::verify_did_signature(
+        &admission.signer_did,
+        &admission.signing_payload(&fields),
+        &admission.signature,
+    )? {
+        return Err(RequestReceiptError::InvalidSignature);
+    }
     Ok(())
 }
 
@@ -1007,31 +1025,33 @@ pub(crate) fn verify_runtime_local_control_receipt(
     expected_target_did: &str,
     expected_source_request_id: &str,
     expected_requester_did: &str,
-) -> Result<()> {
+) -> Result<(), RequestReceiptError> {
     let admission = row_admission(row)?;
     verify_request_receipt_signature(row)?;
-    anyhow::ensure!(
-        row.purpose == Some(RequestPurpose::Normal)
-            && admission.kind == AgentRequestAdmissionKind::RuntimeInternal
-            && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
-            && admission.signer_did == expected_target_did
-            && admission.runtime_issuer_did.as_deref() == Some(expected_target_did)
-            && row.node_did.as_deref() == Some(expected_target_did)
-            && row.requester_did.as_deref() == Some(expected_requester_did)
-            && admission.runtime_source_request_id.as_deref() == Some(expected_source_request_id)
-            && row.caused_by_parent_request_id.as_deref() == Some(expected_source_request_id)
-            && row
-                .caused_by_parent_request_doc_id
-                .as_deref()
-                .is_some_and(|id| !id.is_empty())
-            && row.caused_by_parent_tool_call_id.is_none()
-            && row.caused_by_parent_tool_call_doc_id.is_none(),
-        "runtime local-control receipt does not match expected target/source binding"
-    );
+    if !(row.purpose == Some(RequestPurpose::Normal)
+        && admission.kind == AgentRequestAdmissionKind::RuntimeInternal
+        && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
+        && admission.signer_did == expected_target_did
+        && admission.runtime_issuer_did.as_deref() == Some(expected_target_did)
+        && row.node_did.as_deref() == Some(expected_target_did)
+        && row.requester_did.as_deref() == Some(expected_requester_did)
+        && admission.runtime_source_request_id.as_deref() == Some(expected_source_request_id)
+        && row.caused_by_parent_request_id.as_deref() == Some(expected_source_request_id)
+        && row
+            .caused_by_parent_request_doc_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+        && row.caused_by_parent_tool_call_id.is_none()
+        && row.caused_by_parent_tool_call_doc_id.is_none())
+    {
+        return Err(RequestReceiptError::LocalControlBinding);
+    }
     Ok(())
 }
 
-fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
+fn row_admission(
+    row: &AgentRequestRow,
+) -> Result<AgentRequestAdmissionRecord, RequestReceiptError> {
     AgentRequestAdmissionRecord::from_wire_fields(
         row.admission_kind.as_deref(),
         row.admission_signer_did.as_deref(),
@@ -1045,43 +1065,37 @@ fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
         row.runtime_source_request_id.as_deref(),
         row.runtime_source_kind.as_deref(),
     )
-    .map_err(anyhow::Error::msg)
+    .map_err(|reason| RequestReceiptError::InvalidAdmission { reason })
 }
 
 static DEFAULT_REQUEST_INPUT: std::sync::LazyLock<gents_protocol::request_input::RequestInput> =
     std::sync::LazyLock::new(Default::default);
 
-fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields<'_>> {
+fn row_signing_fields(
+    row: &AgentRequestRow,
+) -> Result<AgentRequestSigningFields<'_>, RequestReceiptError> {
+    let missing = |field| RequestReceiptError::MissingField { field };
     let request_hop = row
         .request_hop
         .map(u32::try_from)
         .transpose()
-        .context("AgentRequest request_hop must fit in u32")?
+        .map_err(RequestReceiptError::RequestHop)?
         .unwrap_or(0);
     Ok(AgentRequestSigningFields {
         request_id: &row.request_id,
-        purpose: row.purpose.context("AgentRequest is missing purpose")?,
-        node_did: row
-            .node_did
-            .as_deref()
-            .context("AgentRequest is missing node_did")?,
+        purpose: row.purpose.ok_or_else(|| missing("purpose"))?,
+        node_did: row.node_did.as_deref().ok_or_else(|| missing("node_did"))?,
         requester_did: row.requester_did.as_deref(),
-        agent_id: row
-            .agent_id
-            .as_deref()
-            .context("AgentRequest is missing agent_id")?,
+        agent_id: row.agent_id.as_deref().ok_or_else(|| missing("agent_id"))?,
         session_id: row
             .session_id
             .as_deref()
-            .context("AgentRequest is missing session_id")?,
+            .ok_or_else(|| missing("session_id"))?,
         retry_parent_request: row.retry_parent_request.as_deref(),
         retry_parent_request_doc_id: row.retry_parent_request_doc_id.as_deref(),
         retry_root_request: row.retry_root_request.as_deref(),
         retry_key: row.retry_key.as_deref(),
-        content: row
-            .content
-            .as_deref()
-            .context("AgentRequest is missing content")?,
+        content: row.content.as_deref().ok_or_else(|| missing("content"))?,
         input: row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT),
         execution_origin: row.execution_origin.as_deref(),
         caused_by_trigger_id: row.caused_by_trigger_id.as_deref(),
@@ -1093,7 +1107,7 @@ fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields
         created_at: row
             .created_at
             .as_deref()
-            .context("AgentRequest is missing created_at")?,
+            .ok_or_else(|| missing("created_at"))?,
         retry_count: row.retry_count,
         max_retries: row.max_retries,
         valid_until: row.valid_until.as_deref(),

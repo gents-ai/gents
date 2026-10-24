@@ -671,7 +671,7 @@ mod tests {
                         &json!({ "input": value }),
                     )
                     .await?;
-                Ok(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
+                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
             })
         })
         .await

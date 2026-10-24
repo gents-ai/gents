@@ -193,7 +193,7 @@ async fn seed_live_agent_documents(
             let config: PackConfig = serde_json::from_value(config)?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
             apply_desired_state_plan(txn, &plan).await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     })
     .await?;

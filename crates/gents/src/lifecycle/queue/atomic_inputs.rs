@@ -808,5 +808,5 @@ pub(super) fn append_sequence_query(node_did: &str, session_id: &str) -> String 
 }
 
 pub(super) fn transaction_created_doc_id(response: &Value, collection: &str) -> Result<String> {
-    crate::graphql::created_doc_id(response, collection)
+    Ok(crate::graphql::created_doc_id(response, collection)?)
 }

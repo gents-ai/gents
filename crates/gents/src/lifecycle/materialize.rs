@@ -168,7 +168,7 @@ async fn publish_graph_root_request(
             Box::pin(async move {
                 crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
                 let response = txn.execute(mutation).await?;
-                crate::graphql::created_doc_id(&response, "AgentRequest")
+                Ok::<_, anyhow::Error>(crate::graphql::created_doc_id(&response, "AgentRequest")?)
             })
         },
     )

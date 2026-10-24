@@ -875,6 +875,7 @@ async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &
     )
     .await
     .map(|_| ())
+    .map_err(Into::into)
 }
 
 fn upsert_enrollment_route_mutation(

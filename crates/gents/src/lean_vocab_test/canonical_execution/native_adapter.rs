@@ -1759,9 +1759,15 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await;
                     match attempted {
                         Err(error)
-                            if error
-                                .downcast_ref::<crate::config_client::ReentrantEmbeddedWrite>()
-                                .is_some() =>
+                            if crate::config_client::TransactionFailure::config_client_error(
+                                &error,
+                            )
+                            .is_some_and(|error| {
+                                matches!(
+                                    error,
+                                    crate::config_client::ConfigClientError::Reentrant(_)
+                                )
+                            }) =>
                         {
                             native.observe(false).await
                         }
@@ -3053,7 +3059,7 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
             assert!(
                 error.to_string().contains("Invalid DateTime format"),
                 "malformed deadline must fail at the schema boundary: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
             assert_eq!(native.observe(true).await.unwrap(), before);
             continue;

@@ -119,7 +119,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -174,7 +174,7 @@ mod tests {
                 let plan = &target_plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -200,7 +200,7 @@ mod tests {
                 let plan = &remove_target;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -231,7 +231,7 @@ mod tests {
                             update: value,
                         }])?;
                         apply_desired_state_plan(txn, &plan).await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     })
                 })
                 .await?;

@@ -373,7 +373,7 @@ pub async fn message_attachments(
     let rows = access
         .execute(&query)
         .await
-        .map_err(|e| BridgeError::untyped(ErrorChain(e.as_ref()).to_string()))?;
+        .map_err(|e| BridgeError::untyped(ErrorChain(&e).to_string()))?;
     let rows = rows["data"]["AgentMessage"]
         .as_array()
         .ok_or_else(|| BridgeError::untyped("Message attachments are unavailable"))?;

@@ -830,7 +830,7 @@ async fn append_all(
                         append_in_txn(txn, &advanced, entry).await?;
                         advanced.journal.push(entry.clone());
                     }
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;

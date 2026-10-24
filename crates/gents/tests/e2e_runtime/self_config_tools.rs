@@ -52,7 +52,7 @@ async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Val
         .transact_write("test.self_config.read", |txn| {
             let id = id.clone();
             Box::pin(async move {
-                Ok(
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
                     read_desired_state_record_in_txn(txn, collection, NODE_DID, &id)
                         .await?
                         .unwrap()

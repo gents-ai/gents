@@ -528,7 +528,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         assert!(
             refused.to_string().contains("not authorized"),
             "{phase}: unexpected refusal: {}",
-            ErrorChain(refused.as_ref())
+            ErrorChain(&refused)
         );
         gents::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(&graphql))
             .write("test.nac.signed", &mutation)

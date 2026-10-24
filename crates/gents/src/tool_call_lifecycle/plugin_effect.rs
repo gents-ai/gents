@@ -97,7 +97,7 @@ impl ToolCallLifecycle {
                         deadline_at spawned_by_tool_call_doc_id }} }}"#)).await?;
                     let rows = result["data"]["AgentToolCall"].as_array().ok_or(ToolCallLifecycleError::PluginEffectLookupOmittedRows)?;
                     if rows.len() > 1 {
-                        return Err(ToolCallLifecycleError::PluginEffectConflictingIdentities.into());
+                        return Err(anyhow::Error::from(ToolCallLifecycleError::PluginEffectConflictingIdentities));
                     }
                     if let Some(row) = rows.first() {
                         let child = row["_docID"].as_str().ok_or(ToolCallLifecycleError::PluginEffectLacksPhysicalIdentity)?;
@@ -231,7 +231,7 @@ impl ToolCallLifecycle {
                     escape_graphql_string(&deadline.to_rfc3339_opts(SecondsFormat::Nanos, true)),
                     escape_graphql_string(&now.to_rfc3339_opts(SecondsFormat::Nanos, true)))).await?;
                 if !result["data"]["update_AgentToolCall"].as_array().is_some_and(|rows| rows.len() == 1) {
-                    return Err(ToolCallLifecycleError::PluginEffectNoLongerPending.into());
+                    return Err(anyhow::Error::from(ToolCallLifecycleError::PluginEffectNoLongerPending));
                 }
                 Ok(now)
             })

@@ -1341,7 +1341,7 @@ async fn trigger_failure(
         },
         Err(error) => {
             tracing::warn!(
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 trial_id = %trial_id,
                 stage_id = %stage_id,
                 "eval trial trigger status could not be read"
@@ -1534,7 +1534,7 @@ async fn run_captures(
                         Ok(Some(version)) => versions.push(version),
                         Ok(None) => {}
                         Err(error) => {
-                            tracing::warn!(error = %ErrorChain(error.as_ref()), capture = %name,
+                            tracing::warn!(error = %ErrorChain(&error), capture = %name,
                                 "eval schema capture failed; recording no capture");
                             failed = true;
                             break;

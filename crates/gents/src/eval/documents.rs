@@ -483,6 +483,7 @@ pub async fn invalidate_run(
                 )
                 .await
                 .map(|_| ())
+                .map_err(Into::into)
             })
         })
         .await?;
@@ -556,6 +557,7 @@ pub async fn complete_trial(
                 )
                 .await
                 .map(|_| ())
+                .map_err(Into::into)
             })
         })
         .await

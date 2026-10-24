@@ -19,6 +19,7 @@ pub async fn rename_session(
     gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation)
         .await
         .map(|_| ())
+        .map_err(Into::into)
 }
 
 fn build_rename_session_mutation(

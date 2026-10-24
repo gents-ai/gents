@@ -46,7 +46,7 @@ async fn create_schedule_cadence_doc(
                     &serde_json::json!({"input":input}),
                 )
                 .await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )
@@ -101,7 +101,7 @@ async fn create_schedule_with_next_run_at(
                     &serde_json::json!({"input":input}),
                 )
                 .await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

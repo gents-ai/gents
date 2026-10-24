@@ -213,7 +213,7 @@ impl Fixture {
                             records.insert(id.to_owned(), value);
                         }
                     }
-                    Ok(records)
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(records)
                 })
             })
             .await

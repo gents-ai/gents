@@ -95,7 +95,7 @@ impl ClientCore {
                 Ok(access) => access,
                 Err(error) => {
                     node.shutdown().await;
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
 

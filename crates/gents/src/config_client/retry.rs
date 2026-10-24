@@ -1,8 +1,8 @@
-use gents_protocol::error_chain::ErrorChain;
-use std::fmt;
 use std::time::Duration;
 
+use super::error::{ConfigClientError, TransactionConflict};
 use super::write_telemetry::ConflictSource;
+use crate::graphql::GraphqlResponseError;
 
 pub(super) const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
 pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
@@ -12,56 +12,83 @@ pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
 pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
     crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32 + 2;
 
-#[derive(Debug)]
-struct TransactionConflict {
-    source: ConflictSource,
+/// Exposes the DefraDB access error a transaction callback failed with, so the
+/// transaction owner classifies conflicts and storage failures by type. A
+/// caller error that wraps [`ConfigClientError`] or [`GraphqlResponseError`]
+/// returns it here; an `#[error(transparent)]` wrapper converted into
+/// `anyhow::Error` hides it from the source-chain search below.
+pub trait TransactionFailure {
+    fn config_client_error(&self) -> Option<&ConfigClientError>;
 }
 
-impl fmt::Display for TransactionConflict {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("DefraDB transaction conflict")
+impl TransactionFailure for ConfigClientError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        Some(self)
     }
 }
 
-impl std::error::Error for TransactionConflict {}
-
-#[derive(Debug)]
-struct TransactionStorageFailure {
-    error: anyhow::Error,
-}
-
-impl fmt::Display for TransactionStorageFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", ErrorChain(self.error.as_ref()))
+impl TransactionFailure for GraphqlResponseError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            GraphqlResponseError::Access(error) => Some(error),
+            _ => None,
+        }
     }
 }
 
-impl std::error::Error for TransactionStorageFailure {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.error.as_ref())
+impl TransactionFailure for anyhow::Error {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        self.chain().find_map(access_error_in)
     }
 }
 
-pub(super) fn transaction_conflict(source: ConflictSource) -> anyhow::Error {
-    anyhow::Error::new(TransactionConflict { source })
+impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        let root: &(dyn std::error::Error + 'static) = self.as_ref();
+        std::iter::successors(Some(root), |cause| cause.source()).find_map(access_error_in)
+    }
 }
 
-pub(super) fn classified_transaction_conflict(error: &anyhow::Error) -> Option<ConflictSource> {
-    error
-        .downcast_ref::<TransactionConflict>()
-        .map(|conflict| conflict.source)
+fn access_error_in<'a>(
+    cause: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a ConfigClientError> {
+    cause.downcast_ref::<ConfigClientError>().or_else(|| {
+        cause
+            .downcast_ref::<GraphqlResponseError>()
+            .and_then(TransactionFailure::config_client_error)
+    })
 }
 
-pub(super) fn transaction_storage_failure(error: anyhow::Error) -> anyhow::Error {
+pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {
+    ConfigClientError::TransactionConflict(TransactionConflict { origin })
+}
+
+pub(super) fn classified_transaction_conflict<E>(error: &E) -> Option<ConflictSource>
+where
+    E: TransactionFailure + ?Sized,
+{
+    match error.config_client_error()? {
+        ConfigClientError::TransactionConflict(conflict) => Some(conflict.origin),
+        _ => None,
+    }
+}
+
+pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigClientError {
     if classified_transaction_conflict(&error).is_some() {
         error
     } else {
-        anyhow::Error::new(TransactionStorageFailure { error })
+        ConfigClientError::StorageFailure(Box::new(error))
     }
 }
 
-pub(super) fn is_transaction_storage_failure(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<TransactionStorageFailure>().is_some()
+pub(super) fn is_transaction_storage_failure<E>(error: &E) -> bool
+where
+    E: TransactionFailure + ?Sized,
+{
+    matches!(
+        error.config_client_error(),
+        Some(ConfigClientError::StorageFailure(_))
+    )
 }
 
 pub(super) fn transaction_backoff(retry_index: u32) -> Duration {
@@ -77,8 +104,8 @@ pub(super) fn receipt_write_backoff(retry_index: u32) -> Duration {
     Duration::from_millis(50u64.saturating_mul(u64::from(retry_index) + 1))
 }
 
-pub(super) fn is_retryable_ambiguous_write(error: &anyhow::Error) -> bool {
-    gents_protocol::graphql::graphql_error_is_retryable(error.as_ref())
+pub(super) fn is_retryable_ambiguous_write(error: &(dyn std::error::Error + 'static)) -> bool {
+    gents_protocol::graphql::graphql_error_is_retryable(error)
 }
 
 pub(super) fn is_transaction_conflict_text(text: &str) -> bool {
@@ -101,6 +128,10 @@ mod tests {
         let typed = transaction_conflict(ConflictSource::StructuredCode);
         assert_eq!(
             classified_transaction_conflict(&typed),
+            Some(ConflictSource::StructuredCode)
+        );
+        assert_eq!(
+            classified_transaction_conflict(&anyhow::Error::from(typed)),
             Some(ConflictSource::StructuredCode)
         );
         assert_eq!(

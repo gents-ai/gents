@@ -257,7 +257,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
                         "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) {_docID} }",
                         &serde_json::json!({"input":before}),
                     ).await?;
-                    Ok(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             }).await.unwrap();
         let now = model_time(&case["now"]).as_str().unwrap().to_owned();

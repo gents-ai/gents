@@ -471,7 +471,7 @@ impl RequestLifecycle {
                         )
                         .await?;
                     }
-                    Ok(response)
+                    Ok::<_, anyhow::Error>(response)
                 })
             },
         )
@@ -554,7 +554,7 @@ impl RequestLifecycle {
                         )
                         .await?;
                     }
-                    Ok(response)
+                    Ok::<_, anyhow::Error>(response)
                 })
             },
         )
@@ -1308,7 +1308,7 @@ mod tests {
                         )
                         .await?;
                     }
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )
@@ -1391,7 +1391,7 @@ mod tests {
             Box::pin(async move {
                 txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
                     &serde_json::json!({"input": receipt})).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
                 let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -1450,7 +1450,7 @@ mod tests {
                         let finish = &finish;
                         Box::pin(async move {
                             txn.execute(finish).await?;
-                            Ok(())
+                            Ok::<_, anyhow::Error>(())
                         })
                     },
                 )
@@ -1554,7 +1554,7 @@ mod tests {
                             "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
                             &serde_json::json!({"input": input}),
                         ).await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     })
                 },
             ).await.unwrap();
@@ -1962,6 +1962,7 @@ mod tests {
                         )?,
                     )
                     .await
+                    .map_err(anyhow::Error::from)
                 })
             })
             .await

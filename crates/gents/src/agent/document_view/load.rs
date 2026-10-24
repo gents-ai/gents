@@ -129,7 +129,7 @@ pub(crate) async fn load_document_runtime_view(
                     callback_modules,
                     repository_placements,
                 );
-                Ok(view)
+                Ok::<_, anyhow::Error>(view)
             })
         },
     )

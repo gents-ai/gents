@@ -1006,7 +1006,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
                     "mutation {{ create_AgentSession(input: {session_input}) {{_docID}} }}"
                 ))
                 .await?;
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         })
         .await
@@ -1087,7 +1087,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
                     &serde_json::json!({"input": wake_input}),
                 )
                 .await?;
-                Ok(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         },
     )

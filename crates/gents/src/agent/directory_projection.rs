@@ -343,6 +343,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
         )
         .await
         .map(|_| ())
+        .map_err(Into::into)
     }
 
     async fn delete_directory_entry(&self, source_did: &str, node_did: &str) -> Result<()> {
@@ -354,6 +355,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
         )
         .await
         .map(|_| ())
+        .map_err(Into::into)
     }
 }
 

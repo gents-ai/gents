@@ -529,7 +529,7 @@ impl GraphqlEnrollmentStore {
                     .with_context(|| {
                         format!(
                             "revocation commit was not observably recovered after: {}",
-                            ErrorChain(commit_error.as_ref())
+                            ErrorChain(&commit_error)
                         )
                     })?
             }
@@ -695,7 +695,7 @@ impl GraphqlEnrollmentStore {
                     .with_context(|| {
                         format!(
                             "route receipt commit was not observably recovered after: {}",
-                            ErrorChain(commit_error.as_ref())
+                            ErrorChain(&commit_error)
                         )
                     })
             }

@@ -136,7 +136,7 @@ async fn check_filters(
                 "event source {} filter is not valid on {}: {}",
                 source.event_source_id,
                 source.source_collection,
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             ));
         }
     }

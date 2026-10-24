@@ -202,7 +202,7 @@ pub async fn load_job_view(
             "{{ AgentToolCall(filter: {{ {filter} }}) {{ {FIELDS} }} }}"
         ))
         .await
-        .map_err(unavailable)?;
+        .map_err(|error| unavailable(error.into()))?;
     let Some(row) = response
         .pointer("/data/AgentToolCall/0")
         .filter(|row| !row.is_null())
@@ -290,7 +290,7 @@ pub async fn list_jobs(
             clauses.join(", ")
         ))
         .await
-        .map_err(unavailable)?;
+        .map_err(|error| unavailable(error.into()))?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)

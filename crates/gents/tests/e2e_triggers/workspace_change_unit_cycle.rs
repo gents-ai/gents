@@ -1221,12 +1221,7 @@ async fn create_work_unit(
     access
         .write("workspace_cycle.seed_work", &mutation)
         .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "create work unit for {owner}: {}",
-                ErrorChain(error.as_ref())
-            )
-        });
+        .unwrap_or_else(|error| panic!("create work unit for {owner}: {}", ErrorChain(&error)));
 }
 
 async fn wait_integrator_outcome(

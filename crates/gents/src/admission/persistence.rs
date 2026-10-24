@@ -82,7 +82,7 @@ pub(super) async fn persist_call_started(
         &mutation,
     )
     .await
-    .map_err(completion_persistence_error)?;
+    .map_err(|error| completion_persistence_error(error.into()))?;
     extract_inference_call_doc_id(resp.data.as_ref())
         .map_err(|error| completion_persistence_error(error.into()))
 }

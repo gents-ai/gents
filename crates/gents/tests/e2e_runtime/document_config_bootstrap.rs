@@ -128,7 +128,7 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
                             "{owner} {collection:?}"
                         );
                     }
-                    Ok(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             })
             .await
@@ -172,7 +172,7 @@ async fn session_create_returns_its_physical_receipt() {
             assert_eq!(stored["data"]["AgentSession"].as_array().unwrap().len(), 1);
             assert_eq!(stored["data"]["AgentSession"][0]["_docID"], id);
             assert_eq!(stored["data"]["AgentSession"][0]["provenance"]["fork"]["at_user_turn"], 0);
-            Ok(())
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         })
     }).await.unwrap();
 }

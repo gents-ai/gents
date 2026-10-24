@@ -885,12 +885,16 @@ async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate(
                 r#"mutation { create_NestedWriteProbe(input: {value: "nested"}) { _docID } }"#,
             )
             .await?;
-            Ok(())
+            Ok::<_, crate::config_client::ConfigClientError>(())
         })
     })
     .await
     .expect_err("a canonical write cannot recursively acquire its transaction's gate");
-    let diagnostic = format!("{}", ErrorChain(error.as_ref()));
+    assert!(matches!(
+        error,
+        crate::config_client::ConfigClientError::Reentrant(_)
+    ));
+    let diagnostic = format!("{}", ErrorChain(&error));
     assert!(diagnostic.contains("test.inner_write"), "{diagnostic}");
     assert!(
         diagnostic.contains("test.outer_transaction"),
@@ -946,7 +950,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
                     "test.inner_idempotent_write",
                     move |_| {
                         inner_attempts.fetch_add(1, Ordering::SeqCst);
-                        Box::pin(async { Ok(()) })
+                        Box::pin(async { Ok::<_, crate::config_client::ConfigClientError>(()) })
                     },
                 )
                 .await
@@ -955,7 +959,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
         .await
         .expect_err("a nested idempotent write remains an ownership violation");
 
-    let diagnostic = format!("{}", ErrorChain(error.as_ref()));
+    let diagnostic = format!("{}", ErrorChain(&error));
     assert!(
         diagnostic.contains("test.inner_idempotent_write"),
         "{diagnostic}"
@@ -1014,7 +1018,7 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
         Ok(_) => panic!("waiting operation acquired a gate that is still owned"),
         Err(error) => error,
     };
-    let diagnostic = format!("{}", ErrorChain(error.as_ref()));
+    let diagnostic = format!("{}", ErrorChain(&error));
     assert!(
         diagnostic.contains("test.waiting_operation"),
         "{diagnostic}"
@@ -1194,8 +1198,8 @@ async fn failed_rollback_abandons_before_transaction_retry_backoff() {
             move |txn| {
                 *lock(&registered_for_callback) = Some(transaction_handle(txn));
                 Box::pin(async {
-                    Err::<(), anyhow::Error>(super::retry::transaction_storage_failure(
-                        anyhow::anyhow!("retry after a failed transaction callback"),
+                    Err::<(), _>(super::retry::transaction_storage_failure(
+                        crate::config_client::ConfigClientError::InjectedReadStorageFailure,
                     ))
                 })
             },
@@ -1605,7 +1609,7 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
                 r#"mutation {{ update_OwnedWriteFact(filter: {{value: {{_eq: "{observed}"}}}}, input: {{value: "canonical"}}) {{ _docID }} }}"#,
             ))
             .await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     })
     .await
@@ -1749,10 +1753,12 @@ resources:
                         r#"mutation { add_IdentityFact(input: {value: "secret"}) { _docID } }"#,
                     )
                     .await?;
-                Ok(response["data"]["add_IdentityFact"][0]["_docID"]
-                    .as_str()
-                    .expect("created document id")
-                    .to_owned())
+                Ok::<_, anyhow::Error>(
+                    response["data"]["add_IdentityFact"][0]["_docID"]
+                        .as_str()
+                        .expect("created document id")
+                        .to_owned(),
+                )
             })
         },
     )
@@ -1831,7 +1837,7 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
                     entered.notify_one();
                     resume.notified().await;
                     let second = txn.execute("{ ReadSnapshotProbe { value } }").await?;
-                    Ok((first, second))
+                    Ok::<_, crate::config_client::ConfigClientError>((first, second))
                 })
             },
         )
@@ -1869,10 +1875,10 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     .await
     .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref()))
+        format!("{}", ErrorChain(&error))
             .contains("cannot execute mutation in read-only transaction"),
         "mutation must reach DefraDB's native read-only transaction guard: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     let after =
         ConfigAccess::transact_local_readonly(&node, None, "test.readonly_new_snapshot", |txn| {
@@ -2015,7 +2021,7 @@ async fn http_commit_conflict_replays_callback_under_new_transaction_id() {
                     r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
                 )
                 .await?;
-                Ok(id)
+                Ok::<_, anyhow::Error>(id)
             })
         })
         .await
@@ -2046,7 +2052,7 @@ async fn non_conflict_commit_failure_does_not_replay_callback() {
                     r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
                 )
                 .await?;
-                Ok(())
+                Ok::<_, crate::config_client::ConfigClientError>(())
             })
         })
         .await
@@ -2055,7 +2061,7 @@ async fn non_conflict_commit_failure_does_not_replay_callback() {
     assert!(
         error.to_string().contains("HTTP 500"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(callbacks.load(Ordering::SeqCst), 1);
     assert_eq!(&*lock(&state.committed_ids), &["0"]);
@@ -2085,7 +2091,7 @@ async fn idempotent_transaction_replays_non_conflict_commit_failure() {
                         r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
                     )
                     .await?;
-                    Ok(id)
+                    Ok::<_, anyhow::Error>(id)
                 })
             },
         )
@@ -2116,9 +2122,9 @@ async fn idempotent_transaction_replays_complete_callback_after_callback_error()
                 let attempt = callbacks_for_attempt.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
                     if attempt == 0 {
-                        return Err(super::retry::transaction_storage_failure(anyhow::anyhow!(
-                            "injected storage failure"
-                        )));
+                        return Err(super::retry::transaction_storage_failure(
+                            crate::config_client::ConfigClientError::InjectedReadStorageFailure,
+                        ));
                     }
                     let id = transaction_id(txn);
                     txn.execute(
@@ -2182,7 +2188,7 @@ async fn observing_transaction_reports_conflict_without_replay() {
                     r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
                 )
                 .await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
