@@ -159,11 +159,12 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
     let source = root.path().join("fork_delay.c");
     let library = root.path().join("fork_delay.dylib");
     std::fs::write(&source, include_str!("fork_delay.c")).unwrap();
-    let compiler = std::process::Command::new("/usr/bin/cc")
+    let compiler = tokio::process::Command::new("/usr/bin/cc")
         .args(["-dynamiclib", "-o"])
         .arg(&library)
         .arg(&source)
         .output()
+        .await
         .unwrap();
     assert!(
         compiler.status.success(),
@@ -176,29 +177,78 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
         "DYLD_INSERT_LIBRARIES".into(),
         library.to_str().unwrap().into(),
     );
-    let outcome = run_managed_exec(ManagedExecRequest {
-        argv: vec![
-            std::env::current_exe().unwrap().to_str().unwrap().into(),
-            "--exact".into(),
+    let stdout_path = root.path().join("probe.stdout");
+    let stderr_path = root.path().join("probe.stderr");
+    let stdout = tokio::fs::File::create(&stdout_path)
+        .await
+        .unwrap()
+        .into_std()
+        .await;
+    let stderr = tokio::fs::File::create(&stderr_path)
+        .await
+        .unwrap()
+        .into_std()
+        .await;
+    let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
             if permission_search {
                 "managed_exec::process::spawn::tests::permission_search_releases_unrelated_output_writers"
             } else {
                 "managed_exec::process::spawn::tests::concurrent_spawns_release_unrelated_output_writers"
-            }.into(),
-            "--nocapture".into(),
-        ],
-        cwd: root.path().to_path_buf(),
-        deadline_at: Some(chrono::Utc::now() + chrono::Duration::seconds(30)),
-        cancellation_token: CancellationToken::new(),
-        max_output_bytes: 64 * 1024,
-        stdin: Vec::new(),
-        environment: Some(environment),
-        tool_name: None,
-        live_output: None,
-    })
-    .await;
-    complete_output(outcome);
-    assert!(root.path().join("verified").is_file());
+            },
+            "--nocapture",
+        ])
+        .current_dir(root.path())
+        .env_clear()
+        .envs(environment)
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .kill_on_drop(true)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut child = super::super::ManagedChild::new(child);
+    let status = tokio::time::timeout(std::time::Duration::from_secs(30), child.inner.wait()).await;
+    if matches!(&status, Ok(Ok(_))) {
+        child.mark_finished(true);
+    } else {
+        child.terminate_service().await;
+    }
+    let stdout = probe_output(&stdout_path).await;
+    let stderr = probe_output(&stderr_path).await;
+    assert!(
+        matches!(&status, Ok(Ok(status)) if status.success()),
+        "probe status: {status:?}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(
+        tokio::fs::read(root.path().join("verified")).await.unwrap(),
+        b"complete"
+    );
+}
+
+/// Other tests' native reference forks can retain the driver's pipe writers.
+/// File capture isolates that driver; the probe itself still checks managed
+/// stdout/stderr completeness before publishing its verified marker.
+#[cfg(target_os = "macos")]
+async fn probe_output(path: &Path) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    tokio::fs::File::open(path)
+        .await
+        .unwrap()
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .unwrap();
+    assert!(
+        bytes.len() <= 64 * 1024,
+        "isolated spawn probe output exceeded its bound"
+    );
+    bytes
 }
 
 #[cfg(target_os = "macos")]
