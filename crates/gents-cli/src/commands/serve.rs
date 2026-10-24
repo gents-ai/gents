@@ -829,6 +829,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
             .with_background_process_records(data_dir.join("background-processes"))
             .with_task_hook_records(data_dir.join("task-hooks"));
         let background_execution_registry = agent.background_execution_registry();
+        let usage_cache = agent.usage_cache().clone();
         let runtime_configuration_probe = agent.clone();
         activation_runtime
             .set(agent.clone())
@@ -877,6 +878,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
 
             let mut codex_shim_output = None;
             let codex_shim_bind_args = CodexShimBindArgs {
+                usage_cache: usage_cache.clone(),
                 home: home_dir.clone(),
                 fs_root: effective_tool_root.clone(),
                 node: node.clone(),

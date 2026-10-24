@@ -249,6 +249,7 @@ fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'
 
 #[derive(Clone)]
 pub struct ConfigCommandTool {
+    pub(super) usage_cache: Arc<crate::usage_observation::UsageCache>,
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) node_did: String,
     pub(super) identity: Option<Arc<dyn NodeIdentity>>,
@@ -1963,7 +1964,7 @@ impl ConfigCommandTool {
         ordered! {"resource": target.collection_name(), "document": document}.pretty()
     }
 
-    /// Store reads only: never contacts a provider or renews a sign-in, and
+    /// Cached limits only: never contacts a provider or renews a sign-in, and
     /// shows no token, sign-in identity, credential id or account reference.
     async fn account_inventory(&self) -> Result<String> {
         use crate::backend_provider::BackendProviderOauthExt;
@@ -2017,7 +2018,7 @@ impl ConfigCommandTool {
                         provider: account.provider.clone(),
                         account_ref: account.account_ref.clone(),
                     };
-                    let stored = load_usage(&access, &usage_account).await?;
+                    let stored = load_usage(&self.usage_cache, &access, &usage_account).await?;
                     Some(usage_view(stored.as_ref(), kind, now))
                 }
                 _ => None,
@@ -2042,8 +2043,11 @@ impl ConfigCommandTool {
                     node_did: node_did.to_string(),
                     provider: backend.provider_kind.as_str().to_string(),
                     backend_id: backend.backend_id.clone(),
+                    connection: crate::admission::backend_connection_fingerprint(
+                        &backend.backend_fields(),
+                    ),
                 };
-                let stored = load_usage(&access, &usage_account).await?;
+                let stored = load_usage(&self.usage_cache, &access, &usage_account).await?;
                 Some(usage_view(stored.as_ref(), backend.provider_kind, now))
             } else {
                 None
@@ -2059,7 +2063,7 @@ impl ConfigCommandTool {
         ordered! {
             "resource": "accounts",
             "items": items,
-            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage is the last stored observation; this view contacts no provider.",
+            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage is the last observation from this runtime; this view contacts no provider.",
         }
         .pretty()
     }

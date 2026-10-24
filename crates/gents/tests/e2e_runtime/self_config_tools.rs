@@ -155,6 +155,7 @@ async fn configure_context_and_profile_preserve_identity_and_reject_partial_comm
     let db = test_db("self-config-bindings").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -204,6 +205,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     let db = test_db("self-config-tools").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -235,6 +237,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     .expect_err("identity is protected");
     assert_eq!(read(&db.node, Collection::Tools, TOOLS_ID).await, before);
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -265,6 +268,7 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
         root: None,
     };
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -315,6 +319,7 @@ async fn typed_patch_values_reject_injection_and_protected_auth_without_writes()
     let db = test_db("self-config-injection").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -353,6 +358,7 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
     let db = test_db("self-config-source-injection").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -406,6 +412,7 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
     let db = test_db("self-config-automation").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -474,6 +481,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         NODE_DID.into(),
         None,
@@ -545,6 +553,7 @@ async fn writes_require_an_acp_addressable_agent_identity() {
     let db = test_db("self-config-identity").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         db.node.clone(),
         "not-a-did".into(),
         None,

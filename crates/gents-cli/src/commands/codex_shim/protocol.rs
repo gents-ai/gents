@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::usage_observation::account_usage::{visible_windows, Freshness, STALE_AFTER};
-use gents::usage_observation::StoredUsage;
+use gents::usage_observation::UsageObservation;
 use gents::InferenceBackend;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
@@ -273,7 +273,7 @@ pub(super) fn empty_rate_limits() -> codex::RateLimitSnapshot {
 }
 
 pub(super) fn rate_limits_from_usage(
-    stored: Option<&StoredUsage>,
+    stored: Option<&UsageObservation>,
     now: DateTime<Utc>,
 ) -> codex::RateLimitSnapshot {
     let Some(stored) = stored else {
@@ -314,7 +314,7 @@ pub(super) fn rate_limits_from_usage(
 
 /// `account/read` from stored usage: ChatGPT with a known plan, never with an
 /// email (no sign-in identity leaves the node); otherwise an API key.
-pub(super) fn account_from_usage(stored: Option<&StoredUsage>) -> codex::Account {
+pub(super) fn account_from_usage(stored: Option<&UsageObservation>) -> codex::Account {
     let plan_type = stored
         .and_then(|stored| stored.report.plan.as_ref())
         .and_then(|plan| serde_json::from_value(json!(plan.name)).ok())
@@ -465,13 +465,15 @@ mod tests {
         }
     }
 
-    fn stored(windows: Vec<gents::usage_observation::account_usage::UsageWindow>) -> StoredUsage {
-        StoredUsage {
+    fn stored(
+        windows: Vec<gents::usage_observation::account_usage::UsageWindow>,
+    ) -> UsageObservation {
+        UsageObservation {
             report: gents::usage_observation::account_usage::UsageReport {
                 windows,
                 ..Default::default()
             },
-            ..StoredUsage::default()
+            ..UsageObservation::default()
         }
     }
 

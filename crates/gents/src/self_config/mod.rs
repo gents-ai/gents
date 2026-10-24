@@ -2288,6 +2288,7 @@ fn cancel_graph_run_definition() -> ToolDefinition {
 }
 
 pub fn build_self_config_tools(
+    usage_cache: Arc<crate::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     node_did: String,
     identity: Option<Arc<dyn NodeIdentity>>,
@@ -2348,6 +2349,7 @@ pub fn build_self_config_tools(
         return tools;
     }
     tools.push(Box::new(command::ConfigCommandTool {
+        usage_cache,
         node,
         node_did,
         identity,

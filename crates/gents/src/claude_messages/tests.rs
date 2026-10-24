@@ -1225,10 +1225,13 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .expect("runtime")
         .block_on(async {
             let node = crate::oauth_credential::test_support::test_node().await;
+            let cache: std::sync::Arc<crate::usage_observation::UsageCache> =
+                std::sync::Arc::default();
             let account = crate::usage_observation::UsageAccount::Backend {
                 node_did: "did:key:z6MkUsageWireClaudeLive".into(),
                 provider: "ClaudeCliSubscription".into(),
                 backend_id: "backend-usage-claude".into(),
+                connection: "connection-claude".into(),
             };
             let url = crate::provider_http::tests::one_shot_server(
                 "200 OK",
@@ -1248,15 +1251,17 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
                 &bearer,
                 &ReqwestClient::new(),
                 Some(crate::usage_observation::UsageReporter::new(
+                    cache.clone(),
                     node.clone(),
                     account.clone(),
                 )),
             )
             .await;
 
-            let stored = crate::provider_http::tests::stored_usage_eventually(&node, &account)
-                .await
-                .expect("usage recorded");
+            let stored =
+                crate::provider_http::tests::stored_usage_eventually(&cache, &node, &account)
+                    .await
+                    .expect("usage recorded");
             let window = &stored.report.windows[0];
             assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
         });

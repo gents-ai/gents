@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
+    pub(crate) usage_cache: Arc<gents::usage_observation::UsageCache>,
     pub(crate) home: PathBuf,
     pub(crate) fs_root: Option<PathBuf>,
     pub(crate) node: Arc<EmbeddedNode>,
@@ -116,6 +117,7 @@ pub(crate) async fn bind_codex_shim(
         .map_err(CodexShimBindError::DependencyMissing)?;
 
     let state = ShimState {
+        usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
         cwd: std::env::current_dir()

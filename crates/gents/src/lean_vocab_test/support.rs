@@ -223,6 +223,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) title_text_cases: serde_json::Value,
     pub(crate) title_usage_cases: Vec<LeanTitleUsageCase>,
     pub(crate) provider_usage_cases: Vec<serde_json::Value>,
+    pub(crate) provider_limit_read_cases: Vec<serde_json::Value>,
     pub(crate) title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,

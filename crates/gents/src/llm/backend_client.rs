@@ -124,13 +124,14 @@ fn messages_replay_issuer(
 }
 
 fn api_key_http(
+    cache: &Arc<crate::usage_observation::UsageCache>,
     node: &Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
 ) -> crate::provider_http::ProviderHttpClient {
     match crate::usage_observation::UsageAccount::for_agent(agent) {
         Some(account) => crate::provider_http::ProviderHttpClient::with_usage(
             Default::default(),
-            crate::usage_observation::UsageReporter::new(node.clone(), account),
+            crate::usage_observation::UsageReporter::new(cache.clone(), node.clone(), account),
         ),
         None => crate::provider_http::ProviderHttpClient::default(),
     }
@@ -139,6 +140,7 @@ fn api_key_http(
 /// OAuth-branch construction hits DefraDB for the agent's `OAuthCredential`
 /// and is bounded by `build_timeout` so a wedged lookup cannot hang startup.
 pub(crate) async fn build_backend_client(
+    cache: Arc<crate::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
     api_key: &str,
@@ -156,7 +158,7 @@ pub(crate) async fn build_backend_client(
                     &agent.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
                         crate::rendered_request::RenderedRequestCapturingHttpClient::new(
-                            api_key_http(&node, agent),
+                            api_key_http(&cache, &node, agent),
                         ),
                     ),
                 )
@@ -169,7 +171,7 @@ pub(crate) async fn build_backend_client(
                     crate::inference_http::SessionTaggingHttpClient::new(
                         crate::inference_http::ResponsesNormalizingHttpClient::new(
                             crate::rendered_request::RenderedRequestCapturingHttpClient::new(
-                                api_key_http(&node, agent),
+                                api_key_http(&cache, &node, agent),
                             ),
                         )
                         .with_service_tier(agent.service_tier),
@@ -195,7 +197,7 @@ pub(crate) async fn build_backend_client(
                 .http_client(
                     crate::rendered_request::RenderedRequestCapturingHttpClient::<
                         crate::provider_http::ProviderHttpClient,
-                    >::default(),
+                    >::new(api_key_http(&cache, &node, agent)),
                 )
                 .build()
                 .with_context(|| build_context.clone())?;
@@ -205,6 +207,7 @@ pub(crate) async fn build_backend_client(
             let client = tokio::time::timeout(
                 build_timeout,
                 crate::chatgpt_codex::build_responses_client(
+                    cache.clone(),
                     node,
                     agent.node_did(),
                     agent.backend_auth.oauth_account_ref(),
@@ -273,6 +276,7 @@ pub(crate) async fn build_backend_client(
             let client = tokio::time::timeout(
                 build_timeout,
                 crate::claude_subscription::ClaudeSubscriptionClient::build(
+                    cache.clone(),
                     node,
                     agent.node_did(),
                     agent.backend_auth.oauth_account_ref(),
@@ -293,9 +297,14 @@ pub(crate) async fn build_backend_client(
             })?;
             Ok(BackendClient::ClaudeSubscription(client))
         }
-        BackendProviderKind::AnthropicApiKey => Ok(BackendClient::AnthropicApiKey(
-            crate::claude_subscription::ClaudeSubscriptionClient::with_api_key(api_key.to_owned()),
-        )),
+        BackendProviderKind::AnthropicApiKey => {
+            let mut client = crate::claude_subscription::ClaudeSubscriptionClient::with_api_key(
+                api_key.to_owned(),
+            );
+            client.usage = crate::usage_observation::UsageAccount::for_agent(agent)
+                .map(|account| crate::usage_observation::UsageReporter::new(cache, node, account));
+            Ok(BackendClient::AnthropicApiKey(client))
+        }
     }
 }
 
@@ -354,9 +363,15 @@ mod tests {
             BackendProviderKind::OpenAiCompatible,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        let client = build_backend_client(node.clone(), &chat, "key", Duration::from_secs(1))
-            .await
-            .expect("chat completions client builds without I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &chat,
+            "key",
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("chat completions client builds without I/O");
         assert!(matches!(&client, BackendClient::OpenAiChatCompletions(_)));
         assert_eq!(
             client.provider_family(),
@@ -371,9 +386,15 @@ mod tests {
             BackendProviderKind::OpenAiCompatible,
             crate::OpenAiWireApi::Responses,
         );
-        let client = build_backend_client(node.clone(), &responses, "key", Duration::from_secs(1))
-            .await
-            .expect("responses client builds without I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &responses,
+            "key",
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("responses client builds without I/O");
         assert!(matches!(&client, BackendClient::OpenAiResponses(_)));
         assert_eq!(
             client.provider_family(),
@@ -391,9 +412,15 @@ mod tests {
             crate::OpenAiWireApi::ChatCompletions,
         );
         openrouter.backend_endpoint = "https://openrouter.ai/api/v1".to_string();
-        let client = build_backend_client(node.clone(), &openrouter, "key", Duration::from_secs(1))
-            .await
-            .expect("openrouter client builds without I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &openrouter,
+            "key",
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("openrouter client builds without I/O");
         assert!(matches!(&client, BackendClient::OpenRouter(_)));
         assert_eq!(
             client.provider_family(),
@@ -408,9 +435,15 @@ mod tests {
             BackendProviderKind::AnthropicApiKey,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        let client = build_backend_client(node, &agent, "placeholder-key", Duration::from_secs(1))
-            .await
-            .expect("key client builds without I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node,
+            &agent,
+            "placeholder-key",
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("key client builds without I/O");
         assert!(matches!(&client, BackendClient::AnthropicApiKey(_)));
         assert_eq!(client.provider_family(), "AnthropicApiKey");
         let issuer = client.replay_issuer().expect("built URI").expect("route");
@@ -498,9 +531,15 @@ mod tests {
             agent.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
                 account_ref: Some("acct-b".into()),
             };
-            let client = build_backend_client(node.clone(), &agent, "key", Duration::from_secs(5))
-                .await
-                .unwrap_or_else(|error| panic!("{kind:?} {wire:?} with acct-b: {error:#}"));
+            let client = build_backend_client(
+                std::sync::Arc::default(),
+                node.clone(),
+                &agent,
+                "key",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{kind:?} {wire:?} with acct-b: {error:#}"));
             let built = match (&client, wire) {
                 (BackendClient::ChatGptCodex(_), _) => BackendProviderKind::ChatGptCodex,
                 (
@@ -561,9 +600,15 @@ mod tests {
                 (&on_a, original.clone(), "access-original"),
                 (&on_b, format!("{original}:acct-b"), "access-acct-b"),
             ] {
-                build_backend_client(node.clone(), agent, "key", Duration::from_secs(5))
-                    .await
-                    .unwrap_or_else(|error| panic!("{kind:?} {credential_id}: {error:#}"));
+                build_backend_client(
+                    std::sync::Arc::default(),
+                    node.clone(),
+                    agent,
+                    "key",
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{kind:?} {credential_id}: {error:#}"));
                 let bearer = crate::oauth_credential::test_support::bound_bearer(&credential_id)
                     .unwrap_or_else(|| panic!("{kind:?} did not bind {credential_id}"));
                 assert_eq!(bearer.current_bearer().await.unwrap(), token, "{kind:?}");
@@ -585,10 +630,16 @@ mod tests {
         codex.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
             account_ref: Some("acct-b".into()),
         };
-        let error = build_backend_client(node, &codex, "key", Duration::from_secs(5))
-            .await
-            .err()
-            .expect("an account reference must not build with the original credential");
+        let error = build_backend_client(
+            std::sync::Arc::default(),
+            node,
+            &codex,
+            "key",
+            Duration::from_secs(5),
+        )
+        .await
+        .err()
+        .expect("an account reference must not build with the original credential");
         let missing = crate::oauth_credential::classify_chatgpt_auth_error(
             codex.node_did(),
             crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
@@ -609,9 +660,15 @@ mod tests {
             crate::OpenAiWireApi::Responses,
         );
         seed_oauth_credential(&node, &codex, crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER).await;
-        let client = build_backend_client(node.clone(), &codex, "key", Duration::from_secs(5))
-            .await
-            .expect("Codex client builds from the seeded credential without network I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &codex,
+            "key",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("Codex client builds from the seeded credential without network I/O");
         assert!(matches!(&client, BackendClient::ChatGptCodex(_)));
         assert_eq!(
             client.provider_family(),
@@ -623,9 +680,15 @@ mod tests {
             crate::OpenAiWireApi::ChatCompletions,
         );
         seed_oauth_credential(&node, &xai_chat, crate::xai_grok_oauth::XAI_OAUTH_PROVIDER).await;
-        let client = build_backend_client(node.clone(), &xai_chat, "key", Duration::from_secs(5))
-            .await
-            .expect("Grok Chat Completions client builds without network I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &xai_chat,
+            "key",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("Grok Chat Completions client builds without network I/O");
         assert!(matches!(&client, BackendClient::XaiGrokChatCompletions(_)));
         assert_eq!(
             client.provider_family(),
@@ -642,10 +705,15 @@ mod tests {
             crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
         )
         .await;
-        let client =
-            build_backend_client(node.clone(), &xai_responses, "key", Duration::from_secs(5))
-                .await
-                .expect("Grok Responses client builds without network I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &xai_responses,
+            "key",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("Grok Responses client builds without network I/O");
         assert!(matches!(&client, BackendClient::XaiGrokResponses(_)));
         assert_eq!(
             client.provider_family(),
@@ -657,9 +725,15 @@ mod tests {
             crate::OpenAiWireApi::ChatCompletions,
         );
         seed_oauth_credential(&node, &claude, crate::claude_oauth::CLAUDE_OAUTH_PROVIDER).await;
-        let client = build_backend_client(node.clone(), &claude, "key", Duration::from_secs(5))
-            .await
-            .expect("Claude subscription client builds without network I/O");
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &claude,
+            "key",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("Claude subscription client builds without network I/O");
         assert!(matches!(&client, BackendClient::ClaudeSubscription(_)));
         assert_eq!(
             client.provider_family(),
