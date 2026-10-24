@@ -38,6 +38,32 @@ structure Facts where
   sessionDocument : String
   deriving DecidableEq, Repr
 
+/-- The native reader first authenticates the retained author signature and
+binds the full signed command to its digest. Observation then reads only that
+original command identity and digest. Current
+Goal revisions, authorization changes and time cannot turn a missing receipt
+into confirmed application or authorize publication of a replacement intent. -/
+def recoverReceipt (s : State) (command : Command) (identityUnique : Bool) : Option Receipt :=
+  if !identityUnique then none
+  else (s.receipts.find? fun receipt => receipt.commandId == command.id).filter
+    (fun receipt => receipt.digest == command.digest)
+
+theorem recovery_refuses_ambiguous_identity (s : State) (command : Command) :
+    recoverReceipt s command false = none := by
+  simp [recoverReceipt]
+
+theorem recovery_without_receipt_is_unconfirmed (s : State) (command : Command)
+    (h : s.receipts.find? (fun receipt => receipt.commandId == command.id) = none) :
+    recoverReceipt s command true = none := by
+  simp [recoverReceipt, h]
+
+theorem recovery_returns_exact_recorded_result (s : State) (command : Command)
+    (receipt : Receipt)
+    (h : s.receipts.find? (fun receipt => receipt.commandId == command.id) = some receipt)
+    (digest : receipt.digest = command.digest) :
+    recoverReceipt s command true = some receipt := by
+  simp [recoverReceipt, h, digest]
+
 def authorized (command : Command) (facts : Facts) (now : Nat) : Bool :=
   AgentSession.CommandAuthority.authorized facts.authority command.hasPeer now command.expiresAt &&
     facts.sessionDocument == command.sessionDocument

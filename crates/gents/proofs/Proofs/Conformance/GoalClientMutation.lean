@@ -122,7 +122,10 @@ def caseJson (c : Case) : String :=
     ",\"next_composite\":" ++ jsonString c.next ++
     ",\"commit\":" ++ (if c.commit then "true" else "false") ++
     ",\"expected\":" ++ stateJson c.after.1 ++ ",\"receipt\":" ++
-      (match c.after.2 with | none => "null" | some r => receiptJson r) ++ "}"
+      (match c.after.2 with | none => "null" | some r => receiptJson r) ++
+    ",\"recovered\":" ++
+      (match recoverReceipt c.before c.command c.facts.commandIdentityUnique with
+       | none => "null" | some r => receiptJson r) ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
 

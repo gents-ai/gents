@@ -25,6 +25,7 @@ struct Case {
     next_composite: String,
     commit: bool,
     expected: Value,
+    recovered: Value,
 }
 
 #[derive(Deserialize)]
@@ -118,7 +119,7 @@ impl Driver {
         }
     }
 
-    async fn command(&mut self, model: &Command) -> (String, SessionGoalControl) {
+    async fn prepared_command(&self, model: &Command) -> SessionGoalControl {
         assert!(!model.has_peer);
         assert_eq!(model.session_document, "session-document");
         assert_eq!(model.expected.document, "goal-document");
@@ -146,6 +147,11 @@ impl Driver {
             .sign(&command.signing_payload().unwrap())
             .await
             .unwrap();
+        command
+    }
+
+    async fn command(&mut self, model: &Command) -> (String, SessionGoalControl) {
+        let command = self.prepared_command(model).await;
         if let Some((digest, doc, original)) = self.commands.get(&model.id) {
             assert_eq!(*digest, model.digest);
             assert_eq!(
@@ -320,6 +326,37 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
                 Step::LoseReceipts => driver.lose_receipts().await,
             }
         }
+        driver.assert_state(&case.before, &case.name).await;
+        let access = ConfigAccess::local(driver.fixture.node.clone());
+        let query = "{ AgentSessionGoalControl { _docID intent_json receipt_json } }";
+        let before = access.execute(query).await.unwrap();
+        let command = driver.prepared_command(&case.command).await;
+        let recovered = crate::goal::recover_session_goal_control(
+            &access,
+            driver.fixture.identity.as_ref(),
+            &command,
+        )
+        .await
+        .unwrap();
+        match recovered {
+            Some(receipt) => {
+                assert_eq!(case.recovered["command_id"], case.command.id);
+                assert_eq!(case.recovered["digest"], case.command.digest);
+                receipt.validate_for(&command).unwrap();
+                let outcome = match receipt.outcome {
+                    GoalControlOutcome::Applied { .. } => "applied",
+                    GoalControlOutcome::Rejected { .. } => "rejected",
+                };
+                assert_eq!(case.recovered["outcome"], outcome, "{}", case.name);
+            }
+            None => assert!(case.recovered.is_null(), "{}", case.name),
+        }
+        assert_eq!(
+            access.execute(query).await.unwrap(),
+            before,
+            "{}: recovery cannot publish or mutate the original intent",
+            case.name
+        );
         driver.assert_state(&case.before, &case.name).await;
         driver
             .apply(
