@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::usage::{TokenUsage, TokenUsageColumns, TokenUsageSummary};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -20,14 +21,14 @@ struct UsageScope<'a> {
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(in crate::commands::codex_shim) struct TokenTotals {
-    pub(in crate::commands::codex_shim) input_tokens: i64,
-    pub(in crate::commands::codex_shim) output_tokens: i64,
-}
+pub(in crate::commands::codex_shim) struct TokenTotals(pub Option<TokenUsageSummary>);
 
 impl TokenTotals {
-    pub(in crate::commands::codex_shim) fn total(self) -> i64 {
-        self.input_tokens + self.output_tokens
+    fn from_observations<I>(observations: I) -> Self
+    where
+        I: IntoIterator<Item = TokenUsage>,
+    {
+        Self(TokenUsageSummary::from_observations(observations).ok())
     }
 }
 
@@ -37,21 +38,14 @@ pub(in crate::commands::codex_shim) struct InferenceUsageObservation {
     pub(in crate::commands::codex_shim) totals: TokenTotals,
 }
 
-#[derive(Debug, Default)]
-struct RequestUsageAccumulator {
-    input_tokens: i64,
-    output_tokens: i64,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
 struct InferenceCallUsageRow {
+    call_id: String,
     request_id: String,
     #[serde(default)]
     call_seq: Option<i64>,
-    #[serde(default)]
-    prompt_tokens: Option<i64>,
-    #[serde(default)]
-    completion_tokens: Option<i64>,
+    #[serde(flatten)]
+    usage: TokenUsageColumns,
 }
 
 async fn requests_token_usage_scoped(
@@ -60,13 +54,16 @@ async fn requests_token_usage_scoped(
     scope: UsageScope<'_>,
 ) -> Result<TokenTotals> {
     let usage = gather_request_usage(state, request_ids, scope).await?;
-    Ok(usage
-        .into_values()
-        .fold(TokenTotals::default(), |mut totals, usage| {
-            totals.input_tokens += usage.input_tokens;
-            totals.output_tokens += usage.output_tokens;
-            totals
-        }))
+    let Ok(usage) = coherent_usage(usage) else {
+        return Ok(TokenTotals::default());
+    };
+    let observations = usage
+        .into_iter()
+        .map(|row| row.usage.observation())
+        .collect::<Result<Vec<_>>>();
+    Ok(observations
+        .map(TokenTotals::from_observations)
+        .unwrap_or_default())
 }
 
 pub(in crate::commands::codex_shim) async fn submitted_token_usage(
@@ -103,23 +100,17 @@ pub(in crate::commands::codex_shim) fn latest_inference_usage_observation(
         })
         .filter_map(|row| {
             let call_id = row.get("call_id")?.as_str()?.to_string();
-            let prompt_tokens = row.get("prompt_tokens").and_then(Value::as_i64);
-            let completion_tokens = row.get("completion_tokens").and_then(Value::as_i64);
-            if prompt_tokens.is_none() && completion_tokens.is_none() {
-                return None;
-            }
+            let usage: TokenUsageColumns = serde_json::from_value(row.clone()).ok()?;
             Some((
                 row.get("call_seq")
                     .and_then(Value::as_i64)
                     .unwrap_or_default(),
                 InferenceUsageObservation {
                     call_id,
-                    totals: TokenTotals {
-                        input_tokens: prompt_tokens.and_then(nonnegative_i64).unwrap_or_default(),
-                        output_tokens: completion_tokens
-                            .and_then(nonnegative_i64)
-                            .unwrap_or_default(),
-                    },
+                    totals: usage
+                        .observation()
+                        .map(|usage| TokenTotals::from_observations([usage]))
+                        .unwrap_or_default(),
                 },
             ))
         })
@@ -133,14 +124,7 @@ pub(in crate::commands::codex_shim) async fn thread_record_token_usage(
 ) -> Result<(TokenTotals, TokenTotals)> {
     let scope = record_usage_scope(state, record);
     let request_ids = session_request_ids(state, &record.session_id, scope).await?;
-    let total = gather_request_usage(state, &request_ids, scope)
-        .await?
-        .into_values()
-        .fold(TokenTotals::default(), |mut totals, usage| {
-            totals.input_tokens += usage.input_tokens;
-            totals.output_tokens += usage.output_tokens;
-            totals
-        });
+    let total = requests_token_usage_scoped(state, &request_ids, scope).await?;
     let last = latest_requests_token_usage_scoped(state, &request_ids, scope).await?;
     Ok((total, last))
 }
@@ -149,12 +133,12 @@ pub(in crate::commands::codex_shim) fn thread_token_usage(
     total: TokenTotals,
     last: TokenTotals,
     model_context_window: i64,
-) -> codex::ThreadTokenUsage {
-    codex::ThreadTokenUsage {
-        total: token_breakdown(total),
-        last: token_breakdown(last),
+) -> Option<codex::ThreadTokenUsage> {
+    Some(codex::ThreadTokenUsage {
+        total: token_breakdown(total)?,
+        last: token_breakdown(last)?,
         model_context_window: Some(model_context_window),
-    }
+    })
 }
 
 async fn session_request_ids(
@@ -242,13 +226,13 @@ async fn gather_request_usage(
     state: &ShimState,
     request_ids: &[String],
     scope: UsageScope<'_>,
-) -> Result<BTreeMap<String, RequestUsageAccumulator>> {
+) -> Result<Vec<InferenceCallUsageRow>> {
     let request_ids = request_ids
         .iter()
         .filter(|request_id| !request_id.trim().is_empty())
         .collect::<BTreeSet<_>>();
     if request_ids.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(Vec::new());
     }
 
     let physical_ids = scoped_request_doc_ids(
@@ -271,36 +255,26 @@ async fn gather_request_usage(
                     request_doc_id: {{ _in: [{id_list}] }},
                     node_did: {{ _eq: "{escaped_node_did}" }},
                     agent_id: {{ _eq: "{escaped_agent_id}" }},
-                    call_kind: {{ _eq: "inference" }},
+                    call_kind: {{ _in: ["inference", "compaction", "oneoff"] }},
                     call_state: {{ _in: ["completed", "failed", "cancelled"] }}
                 }}
             ) {{
+                call_id
                 request_id
                 call_seq
                 prompt_tokens
                 completion_tokens
+                cached_input_tokens
+                cache_creation_input_tokens
+                reasoning_output_tokens
+                provider_total_tokens
+                usage_completeness
             }}
         }}"#
     );
     let response = query_node_json(&state.node, &query).await?;
-    let mut usage = request_ids
-        .into_iter()
-        .map(|request_id| (request_id.to_string(), RequestUsageAccumulator::default()))
-        .collect::<BTreeMap<_, _>>();
-
-    for row in rows::<InferenceCallUsageRow>(&response, "InferenceCall")
-        .context("decoding InferenceCall rows for token usage")?
-    {
-        let usage = usage.entry(row.request_id).or_default();
-        if let Some(tokens) = row.prompt_tokens.and_then(nonnegative_i64) {
-            usage.input_tokens += tokens;
-        }
-        if let Some(tokens) = row.completion_tokens.and_then(nonnegative_i64) {
-            usage.output_tokens += tokens;
-        }
-    }
-
-    Ok(usage)
+    rows::<InferenceCallUsageRow>(&response, "InferenceCall")
+        .context("decoding InferenceCall rows for token usage")
 }
 
 async fn latest_requests_token_usage_scoped(
@@ -337,10 +311,16 @@ async fn latest_requests_token_usage_scoped(
                     call_state: {{ _in: ["completed", "failed", "cancelled"] }}
                 }}
             ) {{
+                call_id
                 request_id
                 call_seq
                 prompt_tokens
                 completion_tokens
+                cached_input_tokens
+                cache_creation_input_tokens
+                reasoning_output_tokens
+                provider_total_tokens
+                usage_completeness
             }}
         }}"#
     );
@@ -354,33 +334,32 @@ fn latest_usage_from_rows(
     rows: Vec<InferenceCallUsageRow>,
     positions: &BTreeMap<&str, usize>,
 ) -> TokenTotals {
-    let mut latest = None::<((usize, i64), TokenTotals)>;
+    let Ok(rows) = coherent_usage(rows) else {
+        return TokenTotals::default();
+    };
+    rows.into_iter()
+        .filter_map(|row| {
+            positions
+                .get(row.request_id.as_str())
+                .map(|position| ((*position, row.call_seq.unwrap_or_default()), row.usage))
+        })
+        .max_by_key(|(ordering, _)| *ordering)
+        .and_then(|(_, usage)| usage.observation().ok())
+        .map(|usage| TokenTotals::from_observations([usage]))
+        .unwrap_or_default()
+}
+
+fn coherent_usage(rows: Vec<InferenceCallUsageRow>) -> Result<Vec<InferenceCallUsageRow>> {
+    let mut unique = BTreeMap::<String, InferenceCallUsageRow>::new();
     for row in rows {
-        let Some(request_position) = positions.get(row.request_id.as_str()).copied() else {
-            continue;
-        };
-        if row.prompt_tokens.is_none() && row.completion_tokens.is_none() {
-            continue;
-        }
-        let ordering = (request_position, row.call_seq.unwrap_or_default());
-        let totals = TokenTotals {
-            input_tokens: row
-                .prompt_tokens
-                .and_then(nonnegative_i64)
-                .unwrap_or_default(),
-            output_tokens: row
-                .completion_tokens
-                .and_then(nonnegative_i64)
-                .unwrap_or_default(),
-        };
-        if latest
-            .as_ref()
-            .is_none_or(|(latest_ordering, _)| ordering > *latest_ordering)
-        {
-            latest = Some((ordering, totals));
+        anyhow::ensure!(!row.call_id.is_empty(), "usage row has no call identity");
+        if let Some(existing) = unique.get(&row.call_id) {
+            anyhow::ensure!(existing == &row, "conflicting usage for one call identity");
+        } else {
+            unique.insert(row.call_id.clone(), row);
         }
     }
-    latest.map(|(_, totals)| totals).unwrap_or_default()
+    Ok(unique.into_values().collect())
 }
 
 fn root_usage_scope(state: &ShimState) -> UsageScope<'_> {
@@ -403,14 +382,21 @@ fn record_usage_scope<'a>(state: &'a ShimState, record: &'a CodexThreadRecord) -
         .unwrap_or_else(|| root_usage_scope(state))
 }
 
-fn token_breakdown(totals: TokenTotals) -> codex::TokenUsageBreakdown {
-    codex::TokenUsageBreakdown {
-        total_tokens: totals.total(),
-        input_tokens: totals.input_tokens,
-        cached_input_tokens: 0,
-        output_tokens: totals.output_tokens,
-        reasoning_output_tokens: 0,
+/// Codex requires integer breakdowns. Do not publish a complete-looking update
+/// when a call or a breakdown was unreported; the durable ledger retains the
+/// partial observation for clients that can represent missing counters.
+fn token_breakdown(totals: TokenTotals) -> Option<codex::TokenUsageBreakdown> {
+    let summary = totals.0?;
+    if summary.cache_read.reported != summary.calls || summary.reasoning.reported != summary.calls {
+        return None;
     }
+    Some(codex::TokenUsageBreakdown {
+        total_tokens: i64::try_from(summary.charged_total()?).ok()?,
+        input_tokens: i64::try_from(summary.input.known).ok()?,
+        cached_input_tokens: i64::try_from(summary.cache_read.known).ok()?,
+        output_tokens: i64::try_from(summary.output.known).ok()?,
+        reasoning_output_tokens: i64::try_from(summary.reasoning.known).ok()?,
+    })
 }
 
 fn rows<T>(response: &Value, name: &str) -> Result<Vec<T>>
@@ -428,85 +414,58 @@ where
         .map_err(Into::into)
 }
 
-fn nonnegative_i64(value: i64) -> Option<i64> {
-    (value >= 0).then_some(value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn row(request: &str, sequence: i64, input: i64, output: Option<i64>) -> InferenceCallUsageRow {
+        serde_json::from_value(json!({"call_id":format!("{request}-{sequence}"),"request_id":request,"call_seq":sequence,"prompt_tokens":input,"completion_tokens":output,"cached_input_tokens":20,"reasoning_output_tokens":2,"usage_completeness":"complete"})).unwrap()
+    }
 
     #[test]
     fn latest_usage_selects_newest_request_then_newest_call() {
         let rows = vec![
-            InferenceCallUsageRow {
-                request_id: "request-2".to_string(),
-                call_seq: Some(1),
-                prompt_tokens: Some(300),
-                completion_tokens: Some(20),
-            },
-            InferenceCallUsageRow {
-                request_id: "request-1".to_string(),
-                call_seq: Some(9),
-                prompt_tokens: Some(900),
-                completion_tokens: Some(90),
-            },
-            InferenceCallUsageRow {
-                request_id: "request-2".to_string(),
-                call_seq: Some(2),
-                prompt_tokens: Some(350),
-                completion_tokens: Some(25),
-            },
+            row("request-2", 1, 300, Some(20)),
+            row("request-1", 9, 900, Some(90)),
+            row("request-2", 2, 350, Some(25)),
         ];
         let positions = BTreeMap::from([("request-1", 0), ("request-2", 1)]);
+        let totals = token_breakdown(latest_usage_from_rows(rows, &positions)).unwrap();
+        assert_eq!(totals.input_tokens, 350);
+        assert_eq!(totals.output_tokens, 25);
+        assert_eq!(totals.cached_input_tokens, 20);
+        assert_eq!(totals.reasoning_output_tokens, 2);
+        assert_eq!(totals.total_tokens, 375);
+    }
 
-        assert_eq!(
-            latest_usage_from_rows(rows, &positions),
-            TokenTotals {
-                input_tokens: 350,
-                output_tokens: 25,
-            }
-        );
+    #[test]
+    fn latest_missing_usage_does_not_reuse_an_older_complete_call() {
+        let positions = BTreeMap::from([("request", 0)]);
+        let rows = vec![
+            row("request", 1, 300, Some(20)),
+            row("request", 2, 350, None),
+        ];
+        assert!(token_breakdown(latest_usage_from_rows(rows, &positions)).is_none());
     }
 
     #[test]
     fn live_context_observation_uses_latest_terminal_inference_call() {
-        let rows = vec![
-            serde_json::json!({
-                "call_id": "compact",
-                "call_kind": "compaction",
-                "call_state": "completed",
-                "call_seq": 3,
-                "prompt_tokens": 999,
-                "completion_tokens": 999,
-            }),
-            serde_json::json!({
-                "call_id": "inference-1",
-                "call_kind": "inference",
-                "call_state": "completed",
-                "call_seq": 1,
-                "prompt_tokens": 200,
-                "completion_tokens": 10,
-            }),
-            serde_json::json!({
-                "call_id": "inference-2",
-                "call_kind": "inference",
-                "call_state": "completed",
-                "call_seq": 2,
-                "prompt_tokens": 300,
-                "completion_tokens": 20,
-            }),
-        ];
-
-        assert_eq!(
-            latest_inference_usage_observation(&rows),
-            Some(InferenceUsageObservation {
-                call_id: "inference-2".to_string(),
-                totals: TokenTotals {
-                    input_tokens: 300,
-                    output_tokens: 20,
-                },
-            })
+        let mut first = serde_json::to_value(row("request", 1, 200, Some(10))).unwrap();
+        first.as_object_mut().unwrap().extend(
+            json!({"call_id":"first","call_kind":"inference","call_state":"completed"})
+                .as_object()
+                .unwrap()
+                .clone(),
         );
+        let mut latest = first.clone();
+        latest["call_id"] = json!("latest");
+        latest["call_seq"] = json!(2);
+        latest["usage_completeness"] = json!("missing");
+        latest["prompt_tokens"] = Value::Null;
+        latest["completion_tokens"] = Value::Null;
+        let observation = latest_inference_usage_observation(&[first, latest]).unwrap();
+        assert_eq!(observation.call_id, "latest");
+        assert!(token_breakdown(observation.totals).is_none());
     }
 }
