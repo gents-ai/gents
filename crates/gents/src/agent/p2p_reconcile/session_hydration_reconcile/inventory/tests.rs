@@ -543,6 +543,12 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         let before_later_parent_work = FileInventorySnapshot::load(&node, &child_admission)
             .await
             .unwrap();
+        assert_modeled_resource_order(
+            &contracts,
+            "forked_prefix_resource",
+            &before_later_parent_work,
+            &[(origin_tool.doc_id().unwrap(), 90)],
+        );
         let key_path = fixture.path.join("test-agent.key");
         let identity =
             tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
@@ -558,14 +564,24 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             0,
             "write_file",
             "later-parent-tool",
-            serde_json::json!({"path": "later.rs"}),
+            serde_json::json!({"path": "selected.rs"}),
             crate::tool_call_lifecycle::AwaitMode::Foreground,
             true,
         )
         .await
         .unwrap();
         later_tool.complete("later complete").await.unwrap();
-        retain_fork_fixture_capture(&node, &later_tool, "later.rs").await;
+        retain_fork_fixture_capture(&node, &later_tool, "selected.rs").await;
+        later_request
+            .terminalize_owned(
+                crate::lifecycle::RequestTerminalOutcome::Failed,
+                gents_protocol::output::TerminalOutput::Message {
+                    message_doc_id: later_tool.accepted_header_doc_id().unwrap().to_owned(),
+                },
+                Some("fixture finished"),
+            )
+            .await
+            .unwrap();
         let snapshot = FileInventorySnapshot::load(&node, &child_admission)
             .await
             .unwrap();
@@ -601,12 +617,102 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .entries
             .iter()
             .any(|entry| entry.tool_call_doc_id == later_tool.doc_id().unwrap()));
+        let physical_tools = [
+            (origin_tool.doc_id().unwrap(), 90),
+            (later_tool.doc_id().unwrap(), 2),
+        ];
+        assert_modeled_resource_order(
+            &contracts,
+            "sequential_resource",
+            &parent_snapshot,
+            &physical_tools,
+        );
+        assert_modeled_resource_order(
+            &contracts,
+            "forked_prefix_resource",
+            &snapshot,
+            &physical_tools[..1],
+        );
         assert_eq!(
             snapshot.binding, before_later_parent_work.binding,
             "unselected parent work must not alter the child's inventory snapshot"
         );
+        let headers = ConfigAccess::local(node.clone())
+            .execute(&format!(
+                "{{ AgentMessage(filter: {{ {} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
+                crate::session::session_scope_filter(&did, &parent, Some(&requester)),
+            ))
+            .await
+            .unwrap();
+        let turns = headers["data"]["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| crate::session::is_user_turn(row).unwrap())
+            .count();
+        let complete_child = fork(
+            &node,
+            ForkParams {
+                source_session_id: &parent,
+                boundary: ForkBoundary::UserTurn(turns as u32),
+                caller_node_did: &did,
+                caller_requester_did: Some(&requester),
+                target_agent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let complete = FileInventorySnapshot::load(
+            &node,
+            &load_admission(complete_child.session_id.clone()).await,
+        )
+        .await
+        .unwrap();
+        assert_modeled_resource_order(
+            &contracts,
+            "forked_repeated_resource",
+            &complete,
+            &physical_tools,
+        );
+        assert!(complete.entries.iter().all(|entry| {
+            entry.scope.session_id == parent && entry.scope.session_id != complete_child.session_id
+        }));
         node.shutdown().await;
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+    }
+}
+
+fn assert_modeled_resource_order(
+    contracts: &serde_json::Value,
+    name: &str,
+    snapshot: &FileInventorySnapshot,
+    physical_tools: &[(&str, u64)],
+) {
+    let case = contracts["file_inventory_order_comparison_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap();
+    let expected = case["expected"].as_array().unwrap();
+    assert_eq!(snapshot.entries.len(), expected.len(), "{name}");
+    for entry in &snapshot.entries {
+        let (_, label) = physical_tools
+            .iter()
+            .find(|(document, _)| *document == entry.tool_call_doc_id)
+            .unwrap();
+        let index = expected
+            .iter()
+            .position(|id| id.as_u64() == Some(*label))
+            .unwrap();
+        assert_eq!(
+            entry.order,
+            Some(gents_protocol::file_inventory::FileInventoryOrdinal {
+                index: index as u64,
+                entries: expected.len() as u64,
+            }),
+            "{name}"
+        );
     }
 }
 

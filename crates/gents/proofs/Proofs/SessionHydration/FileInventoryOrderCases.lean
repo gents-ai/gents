@@ -191,7 +191,38 @@ def resolutionCases : List (String × List Window) :=
   , ("duplicate_tool", [⟨90, 1, 3⟩, ⟨90, 5, 7⟩])
   , ("reversed_window", [⟨90, 3, 1⟩]) ]
 
+def repeatedFork (includeSecond includeDelivery : Bool) : Snapshot × ClosureInput :=
+  let selectedHeaders := sequentialHeaders.filter fun message =>
+    message.header.id < 12 || (includeSecond && (includeDelivery || message.header.id != 13))
+  let replayed : List MessageEnvelope := selectedHeaders.map fun message =>
+    { message with header := forkHeader message.header (message.header.id + 20) 2 }
+  let request := { admission with nativeSession := 2 }
+  let closure := { input (sequentialHeaders ++ replayed) with request }
+  let selected : Snapshot := { capturedSnapshot with
+    admission := request
+    documents := (replayed.map fun message => ⟨.agentMessage, message.header.id⟩)
+    tools := (capturedSnapshot.tools.filter fun fact => includeSecond || fact.tool.id == tool.id) }
+  ({ selected with ordering := selected.tools.map fun fact => window selected closure fact.tool }, closure)
+
+theorem inherited_repeated_edits_use_the_selected_session_order :
+    let selected := repeatedFork true true
+    comparison selected.1 selected.2 "node" "workspace" "file.rs" = some [90, 2] := by
+  native_decide
+
+theorem later_parent_edits_do_not_widen_the_selected_fork :
+    let selected := repeatedFork false false
+    comparison selected.1 selected.2 "node" "workspace" "file.rs" = some [90] := by
+  native_decide
+
+theorem a_cut_before_the_second_delivery_cannot_order_a_repeated_resource :
+    let selected := repeatedFork true false
+    comparison selected.1 selected.2 "node" "workspace" "file.rs" = none := by
+  native_decide
+
 def comparisonCases : List (String × Snapshot × ClosureInput × String × String × String) :=
+  let completeFork := repeatedFork true true
+  let prefixFork := repeatedFork false false
+  let cutFork := repeatedFork true false
   let documents := capturedSnapshot.documents.filter (fun key => key.id != 11)
   let receiptClosure := { input sequentialHeaders with segments :=
     ((terminalRecords tool).map fun segment =>
@@ -205,7 +236,10 @@ def comparisonCases : List (String × Snapshot × ClosureInput × String × Stri
   let notifiedClosure := input notifiedHeaders
   let notifiedSnapshot := { capturedSnapshot with ordering := (capturedSnapshot.tools.map fun fact =>
       window capturedSnapshot notifiedClosure fact.tool) }
-  [ ("background_completion_reference", notifiedSnapshot, notifiedClosure, "node", "workspace", "file.rs")
+  [ ("forked_repeated_resource", completeFork.1, completeFork.2, "node", "workspace", "file.rs")
+  , ("forked_prefix_resource", prefixFork.1, prefixFork.2, "node", "workspace", "file.rs")
+  , ("fork_cut_before_repeated_delivery", cutFork.1, cutFork.2, "node", "workspace", "file.rs")
+  , ("background_completion_reference", notifiedSnapshot, notifiedClosure, "node", "workspace", "file.rs")
   , ("background_receipt_resource", receiptSnapshot, receiptClosure, "node", "workspace", "file.rs")
   , ("sequential_resource", capturedSnapshot, input sequentialHeaders, "node", "workspace", "file.rs")
   , ("other_resource", capturedSnapshot, input sequentialHeaders, "node", "workspace", "other.rs")
