@@ -168,7 +168,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     }
 
     let background = include_str!("../../src/lifecycle/background_wake_recovery.rs");
-    assert!(background.contains("create.graphql_input_fields()"));
+    assert!(background.contains("let create = build_signed_request("));
+    assert_eq!(background.matches(".graphql_input_fields()").count(), 1);
     assert_eq!(background.matches("create_AgentRequest(input:").count(), 1);
 
     let materialize = include_str!("../../src/lifecycle/materialize.rs");
