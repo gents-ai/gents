@@ -82,6 +82,16 @@ pub struct ClientCoreOptions {
 /// a host cache must never be the only copy. Keys never enter product messages or logs.
 #[async_trait::async_trait]
 pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
+    /// Bootstrap invokes creation only while holding the store lock, after
+    /// preparing new custody for a home without metadata or an existing store.
+    /// Retained stores and pending upgrades always use `load`.
+    async fn create(
+        &self,
+        record: &gents::store_key::StoreEncryption,
+        key_file: &std::path::Path,
+        data_path: &std::path::Path,
+    ) -> Result<gents::store_key::StoreKey>;
+
     async fn load(
         &self,
         record: &gents::store_key::StoreEncryption,

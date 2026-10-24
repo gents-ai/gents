@@ -22,6 +22,7 @@ blake3 = "1"
 clap.workspace = true
 futures = "0.3"
 gents = { path = "../gents" }
+gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-desktop-core.workspace = true
 gents-protocol.workspace = true
 gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
