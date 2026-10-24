@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 const PROVIDER_FIXTURE_ROOT: &str = "tests/fixtures/providers";
 
@@ -46,9 +47,9 @@ struct ProviderFixtureReplayer {
 impl ProviderFixtureReplayer {
     fn from_file(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
-            .with_context(|| format!("reading provider fixture {}", path.display()))?;
+            .map_err(|error| format!("reading provider fixture {}: {error}", path.display()))?;
         let corpus: ProviderFixtureCorpus = serde_json::from_str(&raw)
-            .with_context(|| format!("parsing provider fixture {}", path.display()))?;
+            .map_err(|error| format!("parsing provider fixture {}: {error}", path.display()))?;
         Self::from_corpus(corpus)
     }
 
@@ -56,20 +57,20 @@ impl ProviderFixtureReplayer {
         let mut seen = BTreeSet::new();
         let mut pending: BTreeMap<String, Vec<_>> = BTreeMap::new();
         for exchange in corpus.exchanges {
-            anyhow::ensure!(
-                !exchange.request_key.trim().is_empty(),
-                "provider fixture {}:{} has an empty request key",
-                corpus.provider,
-                corpus.scenario
-            );
-            anyhow::ensure!(
-                seen.insert((exchange.request_key.clone(), exchange.ordinal)),
-                "provider fixture {}:{} repeats key {} ordinal {}",
-                corpus.provider,
-                corpus.scenario,
-                exchange.request_key,
-                exchange.ordinal
-            );
+            if exchange.request_key.trim().is_empty() {
+                return Err(format!(
+                    "provider fixture {}:{} has an empty request key",
+                    corpus.provider, corpus.scenario
+                )
+                .into());
+            }
+            if !seen.insert((exchange.request_key.clone(), exchange.ordinal)) {
+                return Err(format!(
+                    "provider fixture {}:{} repeats key {} ordinal {}",
+                    corpus.provider, corpus.scenario, exchange.request_key, exchange.ordinal
+                )
+                .into());
+            }
             pending
                 .entry(exchange.request_key.clone())
                 .or_default()
@@ -91,20 +92,18 @@ impl ProviderFixtureReplayer {
 
     fn next(&mut self, request_key: &str) -> Result<ProviderFixtureExchange> {
         let Some(exchanges) = self.pending.get_mut(request_key) else {
-            anyhow::bail!(
+            return Err(format!(
                 "no provider fixture for {}:{} request key {}",
-                self.provider,
-                self.scenario,
-                request_key
-            );
+                self.provider, self.scenario, request_key
+            )
+            .into());
         };
         let Some(exchange) = exchanges.pop_front() else {
-            anyhow::bail!(
+            return Err(format!(
                 "provider fixture {}:{} exhausted request key {}",
-                self.provider,
-                self.scenario,
-                request_key
-            );
+                self.provider, self.scenario, request_key
+            )
+            .into());
         };
         Ok(exchange)
     }
@@ -116,13 +115,15 @@ impl ProviderFixtureReplayer {
             .filter_map(|(key, exchanges)| (!exchanges.is_empty()).then_some((key, exchanges)))
             .map(|(key, exchanges)| format!("{key}:{} left", exchanges.len()))
             .collect::<Vec<_>>();
-        anyhow::ensure!(
-            leftovers.is_empty(),
-            "provider fixture {}:{} had unconsumed exchanges: {}",
-            self.provider,
-            self.scenario,
-            leftovers.join(", ")
-        );
+        if !leftovers.is_empty() {
+            return Err(format!(
+                "provider fixture {}:{} had unconsumed exchanges: {}",
+                self.provider,
+                self.scenario,
+                leftovers.join(", ")
+            )
+            .into());
+        }
         Ok(())
     }
 }

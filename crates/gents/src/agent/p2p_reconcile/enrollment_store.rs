@@ -28,6 +28,7 @@ use super::enrollment::{
     EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest,
     EnrollmentRouteDirection, EnrollmentRouteReceipt, NetworkAdminPin,
 };
+use super::error::P2pReconcileError;
 use super::graphql_helpers::rows;
 
 const ENROLLMENT_DOCUMENT_QUERY: &str = r#"{
@@ -113,14 +114,22 @@ impl EnrollmentProjection {
         }
     }
 
-    fn pending_for_decision(&self, request_id: &str) -> Result<&PendingEnrollment> {
+    fn pending_for_decision(
+        &self,
+        request_id: &str,
+    ) -> Result<&PendingEnrollment, P2pReconcileError> {
         if let Some(reason) = self.request_conflicts.get(request_id) {
-            anyhow::bail!("enrollment request {request_id} is conflicted: {reason}");
+            return Err(P2pReconcileError::EnrollmentRequestConflicted {
+                request_id: request_id.to_owned(),
+                reason: reason.clone(),
+            });
         }
         self.pending
             .iter()
             .find(|pending| pending.request.request_id == request_id)
-            .with_context(|| format!("no fresh pending enrollment request {request_id}"))
+            .ok_or_else(|| P2pReconcileError::NoFreshPendingEnrollmentRequest {
+                request_id: request_id.to_owned(),
+            })
     }
 }
 
@@ -1545,11 +1554,18 @@ impl GraphqlEnrollmentStore {
     }
 }
 
-fn required_raw_text<'a>(raw: &'a Value, field: &str, row_kind: &str) -> Result<&'a str> {
+fn required_raw_text<'a>(
+    raw: &'a Value,
+    field: &str,
+    row_kind: &str,
+) -> Result<&'a str, P2pReconcileError> {
     raw.get(field)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .with_context(|| format!("unattributable {row_kind} has no {field}"))
+        .ok_or_else(|| P2pReconcileError::UnattributableRowMissingField {
+            row_kind: row_kind.to_owned(),
+            field: field.to_owned(),
+        })
 }
 
 fn raw_text<'a>(raw: &'a Value, field: &str) -> Option<&'a str> {
@@ -1752,7 +1768,7 @@ struct VerifiedRequest {
 }
 
 impl VerifiedRequest {
-    fn is_fresh(&self, now: DateTime<Utc>) -> Result<bool> {
+    fn is_fresh(&self, now: DateTime<Utc>) -> Result<bool, P2pReconcileError> {
         let issued_at = DateTime::parse_from_rfc3339(&self.record.issued_at)?.with_timezone(&Utc);
         let expires_at = DateTime::parse_from_rfc3339(&self.record.expires_at)?.with_timezone(&Utc);
         Ok(issued_at <= now && now <= expires_at)
@@ -1884,25 +1900,32 @@ impl VerifiedRevision {
 fn unique_request<'a>(
     rows: &'a BTreeMap<String, Vec<&VerifiedRequest>>,
     request_id: &str,
-) -> Result<&'a VerifiedRequest> {
+) -> Result<&'a VerifiedRequest, P2pReconcileError> {
     match rows.get(request_id).map(Vec::as_slice) {
         Some([request]) => Ok(*request),
-        Some(rows) => anyhow::bail!("request {request_id} has {} conflicting rows", rows.len()),
-        None => anyhow::bail!("request {request_id} is missing"),
+        Some(rows) => Err(P2pReconcileError::ConflictingRequestRows {
+            request_id: request_id.to_owned(),
+            rows: rows.len(),
+        }),
+        None => Err(P2pReconcileError::RequestMissing {
+            request_id: request_id.to_owned(),
+        }),
     }
 }
 
 fn unique_approved_decision<'a>(
     rows: &'a BTreeMap<String, Vec<&VerifiedDecision>>,
     request_id: &str,
-) -> Result<&'a VerifiedDecision> {
+) -> Result<&'a VerifiedDecision, P2pReconcileError> {
     match rows.get(request_id).map(Vec::as_slice) {
         Some([decision]) if decision.record.decision == WireDecisionKind::Approved => Ok(*decision),
-        Some(rows) => anyhow::bail!(
-            "request {request_id} has no unique approval ({} terminal rows)",
-            rows.len()
-        ),
-        None => anyhow::bail!("request {request_id} has no approval"),
+        Some(rows) => Err(P2pReconcileError::NoUniqueApproval {
+            request_id: request_id.to_owned(),
+            terminal_rows: rows.len(),
+        }),
+        None => Err(P2pReconcileError::NoApproval {
+            request_id: request_id.to_owned(),
+        }),
     }
 }
 
@@ -2057,7 +2080,7 @@ struct NetworkRow {
 }
 
 impl NetworkRow {
-    fn to_record(&self) -> Result<NetworkRecord> {
+    fn to_record(&self) -> Result<NetworkRecord, P2pReconcileError> {
         Ok(NetworkRecord {
             network_id: self.network_id.clone(),
             admin_did: self.admin_did.clone(),
@@ -2094,7 +2117,7 @@ pub(super) struct RequestRow {
 }
 
 impl RequestRow {
-    pub(super) fn to_record(&self) -> Result<EnrollmentRequestRecord> {
+    pub(super) fn to_record(&self) -> Result<EnrollmentRequestRecord, P2pReconcileError> {
         Ok(EnrollmentRequestRecord {
             protocol_version: parse_protocol_version(self.protocol_version)?,
             request_id: self.request_id.clone(),
@@ -2143,7 +2166,7 @@ struct DecisionRow {
 }
 
 impl DecisionRow {
-    fn to_record(&self) -> Result<EnrollmentDecisionRecord> {
+    fn to_record(&self) -> Result<EnrollmentDecisionRecord, P2pReconcileError> {
         Ok(EnrollmentDecisionRecord {
             protocol_version: parse_protocol_version(self.protocol_version)?,
             decision_id: self.decision_id.clone(),
@@ -2157,10 +2180,15 @@ impl DecisionRow {
             decision: match self.decision.as_str() {
                 "approved" => WireDecisionKind::Approved,
                 "denied" => WireDecisionKind::Denied,
-                other => anyhow::bail!("unknown enrollment decision {other:?}"),
+                other => {
+                    return Err(P2pReconcileError::UnknownEnrollmentDecision {
+                        decision: other.to_owned(),
+                    })
+                }
             },
-            authorization_sequence: u64::try_from(self.authorization_sequence)
-                .context("negative enrollment authorization sequence")?,
+            authorization_sequence: u64::try_from(self.authorization_sequence).map_err(
+                |source| P2pReconcileError::NegativeEnrollmentAuthorizationSequence { source },
+            )?,
             authorization_expires_at: self.authorization_expires_at.clone(),
             decided_at: self.decided_at.clone(),
             signer_did: self.signer_did.clone(),
@@ -2213,7 +2241,7 @@ struct RouteReceiptRow {
 }
 
 impl RouteReceiptRow {
-    fn to_record(&self) -> Result<EnrollmentRouteReceiptRecord> {
+    fn to_record(&self) -> Result<EnrollmentRouteReceiptRecord, P2pReconcileError> {
         Ok(EnrollmentRouteReceiptRecord {
             protocol_version: parse_protocol_version(self.protocol_version)?,
             receipt_id: self.receipt_id.clone(),
@@ -2225,12 +2253,17 @@ impl RouteReceiptRow {
             member_peer: self.member_peer.clone(),
             server_peer: self.server_peer.clone(),
             owner_agent: self.owner_agent.clone(),
-            authorization_sequence: u64::try_from(self.authorization_sequence)
-                .context("negative route receipt authorization sequence")?,
+            authorization_sequence: u64::try_from(self.authorization_sequence).map_err(
+                |source| P2pReconcileError::NegativeRouteReceiptAuthorizationSequence { source },
+            )?,
             authorization_expires_at: self.authorization_expires_at.clone(),
             direction: match self.direction.as_str() {
                 "client_to_server" => WireReceiptDirection::ClientToServer,
-                other => anyhow::bail!("unknown enrollment route receipt direction {other:?}"),
+                other => {
+                    return Err(P2pReconcileError::UnknownRouteReceiptDirection {
+                        direction: other.to_owned(),
+                    })
+                }
             },
             applied_at: self.applied_at.clone(),
             signer_did: self.signer_did.clone(),
@@ -2243,7 +2276,7 @@ impl RouteReceiptRow {
 }
 
 impl RevisionRow {
-    fn to_record(&self) -> Result<AuthorizationRevisionRecord> {
+    fn to_record(&self) -> Result<AuthorizationRevisionRecord, P2pReconcileError> {
         Ok(AuthorizationRevisionRecord {
             protocol_version: parse_protocol_version(self.protocol_version)?,
             revision_id: self.revision_id.clone(),
@@ -2254,12 +2287,17 @@ impl RevisionRow {
             member_did: self.member_did.clone(),
             member_peer: self.member_peer.clone(),
             owner_agent: self.owner_agent.clone(),
-            sequence: u64::try_from(self.sequence).context("negative authorization sequence")?,
+            sequence: u64::try_from(self.sequence)
+                .map_err(|source| P2pReconcileError::NegativeAuthorizationSequence { source })?,
             authorization_expires_at: self.authorization_expires_at.clone(),
             kind: match self.kind.as_str() {
                 "active" => WireRevisionKind::Active,
                 "revoked" => WireRevisionKind::Revoked,
-                other => anyhow::bail!("unknown authorization revision kind {other:?}"),
+                other => {
+                    return Err(P2pReconcileError::UnknownAuthorizationRevisionKind {
+                        kind: other.to_owned(),
+                    })
+                }
             },
             issued_at: self.issued_at.clone(),
             signer_did: self.signer_did.clone(),
@@ -2268,22 +2306,27 @@ impl RevisionRow {
     }
 }
 
-fn parse_protocol_version(value: i64) -> Result<u8> {
-    let version = u8::try_from(value).context("invalid enrollment protocol version")?;
-    anyhow::ensure!(
-        version == ENROLLMENT_PROTOCOL_VERSION,
-        "unsupported enrollment protocol version {version}"
-    );
+fn parse_protocol_version(value: i64) -> Result<u8, P2pReconcileError> {
+    let version = u8::try_from(value)
+        .map_err(|source| P2pReconcileError::InvalidEnrollmentProtocolVersion { source })?;
+    if version != ENROLLMENT_PROTOCOL_VERSION {
+        return Err(P2pReconcileError::UnsupportedEnrollmentProtocolVersion { version });
+    }
     Ok(version)
 }
 
-fn decode_signature(field: &str, value: &str) -> Result<Vec<u8>> {
-    let signature = bs58::decode(value)
-        .into_vec()
-        .with_context(|| format!("decoding {field}"))?;
-    anyhow::ensure!(
-        signature.len() == 64,
-        "{field} must contain a 64-byte signature"
-    );
+fn decode_signature(field: &str, value: &str) -> Result<Vec<u8>, P2pReconcileError> {
+    let signature =
+        bs58::decode(value)
+            .into_vec()
+            .map_err(|source| P2pReconcileError::DecodeSignature {
+                field: field.to_owned(),
+                source,
+            })?;
+    if signature.len() != 64 {
+        return Err(P2pReconcileError::SignatureLength {
+            field: field.to_owned(),
+        });
+    }
     Ok(signature)
 }

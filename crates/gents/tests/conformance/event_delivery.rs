@@ -580,7 +580,7 @@ async fn admit_event_delivery(
     intent: &mut gents::FireIntent,
     trigger_doc_id: &str,
     doc_id: &str,
-) -> anyhow::Result<gents::lifecycle::TaskDeliveryAdmission> {
+) -> Result<gents::lifecycle::TaskDeliveryAdmission, Box<dyn std::error::Error + Send + Sync>> {
     use gents::lifecycle::{
         build_signed_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
         TriggerLineage,
@@ -636,7 +636,7 @@ async fn admit_event_delivery(
     spec.trigger_doc_id = Some(trigger_doc_id.into());
     let signer = crate::support::materialization_identity();
     let create = build_signed_request(spec, RequestSigner::Identity(signer.as_ref())).await?;
-    gents::lifecycle::write_task_delivery(access, &fire, false, &create).await
+    Ok(gents::lifecycle::write_task_delivery(access, &fire, false, &create).await?)
 }
 
 async fn poll_watcher(watcher: &mut DefraWatcher) -> Result<AgentRequest, String> {

@@ -9,6 +9,7 @@ use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
+use super::error::P2pReconcileError;
 use super::templates::{
     filter_conditions, live_filter_string_eq, to_replication_filters, FilterPredicate,
     PairingFilters,
@@ -410,18 +411,21 @@ pub(super) async fn push_documents_to_peer(
     node: &Arc<EmbeddedNode>,
     peer_id: &str,
     documents: Vec<P2pDocumentRequest>,
-) -> anyhow::Result<()> {
-    use anyhow::Context as _;
-
-    let p2p = crate::identity::node_p2p(node)
-        .context("embedded node has no P2P transport for hydration delivery")?;
+) -> Result<(), P2pReconcileError> {
+    let p2p = crate::identity::node_p2p(node).ok_or(P2pReconcileError::NoHydrationP2pTransport)?;
     timeout(
         DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
         p2p.push_documents_to_peer(peer_id, documents),
     )
     .await
-    .with_context(|| format!("push hydration documents to peer {peer_id} timed out"))?
-    .with_context(|| format!("push hydration documents to peer {peer_id}"))
+    .map_err(|source| P2pReconcileError::PushHydrationDocumentsTimedOut {
+        peer_id: peer_id.to_owned(),
+        source,
+    })?
+    .map_err(|source| P2pReconcileError::PushHydrationDocuments {
+        peer_id: peer_id.to_owned(),
+        source,
+    })
 }
 
 fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {

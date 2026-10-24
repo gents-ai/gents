@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+
+use super::error::P2pReconcileError;
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
@@ -1231,7 +1233,7 @@ fn applied_pairing_route(
 fn terminal_mutation(
     request: &HydrationRequestRow,
     receipt: &SessionHydrationReceipt,
-) -> Result<String> {
+) -> Result<String, P2pReconcileError> {
     let request_key = escape_graphql_string(&request.request_key);
     let requester_did = escape_graphql_string(&request.requester_did);
     let node_did = escape_graphql_string(&request.node_did);

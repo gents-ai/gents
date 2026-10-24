@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::{EmbeddedNode, HttpConfig, StorageBackend};
@@ -63,7 +63,7 @@ async fn names(access: &ConfigAccess) -> Result<Vec<String>> {
     let response = access
         .execute("{ NodeAccessProbe { name } }")
         .await
-        .context("reading probe rows")?;
+        .map_err(|error| format!("reading probe rows: {error:#}"))?;
     let mut names: Vec<String> = response["data"]["NodeAccessProbe"]
         .as_array()
         .into_iter()

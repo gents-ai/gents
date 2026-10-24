@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
 use p2p::iroh::parse_public_peer_addr;
 
+use super::super::error::{P2pReconcileError, Result};
 use super::super::{
     DiffOp, PairingActual, PairingDesired, RemoteP2pAdmin, RemoteP2pAdminError, RemoteReplicator,
     TransportEndpoint,
@@ -27,7 +27,7 @@ pub async fn teardown_owned_replicators_at_endpoint(
     let replicators = admin
         .list_replicators()
         .await
-        .context("list replicators for owned route teardown")?;
+        .map_err(|source| P2pReconcileError::ListReplicatorsForTeardown { source })?;
     let mut removed = 0;
     for replicator in replicators
         .iter()
@@ -37,8 +37,10 @@ pub async fn teardown_owned_replicators_at_endpoint(
         match admin.delete_replicator(id, &replicator.collections).await {
             Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => removed += 1,
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("teardown owned client replicator {id}"));
+                return Err(P2pReconcileError::TeardownOwnedClientReplicator {
+                    id: id.to_owned(),
+                    source: error,
+                });
             }
         }
     }
@@ -46,12 +48,11 @@ pub async fn teardown_owned_replicators_at_endpoint(
     let remaining = admin
         .list_replicators()
         .await
-        .context("verify owned route teardown")?;
+        .map_err(|source| P2pReconcileError::VerifyOwnedRouteTeardown { source })?;
     if remaining.iter().any(matches_endpoint) {
-        anyhow::bail!(
-            "owned client replicator at transport endpoint {} survived teardown",
-            endpoint.peer_id()
-        );
+        return Err(P2pReconcileError::OwnedReplicatorSurvivedTeardown {
+            peer_id: endpoint.peer_id().to_owned(),
+        });
     }
     Ok(removed)
 }
@@ -70,13 +71,14 @@ pub(super) async fn read_actual(
     for id in admin
         .list_p2p_collections()
         .await
-        .context("list remote P2P collections")?
+        .map_err(|source| P2pReconcileError::ListRemoteP2pCollections { source })?
     {
-        match admin
-            .resolve_collection_name(&id)
-            .await
-            .with_context(|| format!("resolve collection name for id {id}"))?
-        {
+        match admin.resolve_collection_name(&id).await.map_err(|source| {
+            P2pReconcileError::ResolveCollectionNameForId {
+                id: id.clone(),
+                source,
+            }
+        })? {
             Some(name) => {
                 collections.insert(name);
             }
@@ -94,7 +96,7 @@ pub(super) async fn read_actual(
     let remote_replicators = admin
         .list_replicators()
         .await
-        .context("list remote P2P replicators")?;
+        .map_err(|source| P2pReconcileError::ListRemoteP2pReplicators { source })?;
     let mut replicator_addresses = BTreeSet::new();
     let mut replicator_ids_by_addr: BTreeMap<String, String> = BTreeMap::new();
     let mut replicator_collections_by_addr: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -143,7 +145,12 @@ pub(super) async fn read_actual(
             let collection = admin
                 .resolve_collection_name(&collection_id)
                 .await
-                .with_context(|| format!("resolve replicator filter collection {collection_id}"))?
+                .map_err(
+                    |source| P2pReconcileError::ResolveReplicatorFilterCollection {
+                        collection_id: collection_id.clone(),
+                        source,
+                    },
+                )?
                 .unwrap_or(collection_id);
             named_filters.insert(collection, filter);
         }
@@ -157,11 +164,12 @@ pub(super) async fn read_actual(
     for (address, ids) in &replicator_collections_by_addr {
         let mut names = BTreeSet::new();
         for id in ids {
-            match admin
-                .resolve_collection_name(id)
-                .await
-                .with_context(|| format!("resolve replicator collection name for id {id}"))?
-            {
+            match admin.resolve_collection_name(id).await.map_err(|source| {
+                P2pReconcileError::ResolveReplicatorCollectionNameForId {
+                    id: id.clone(),
+                    source,
+                }
+            })? {
                 Some(name) => {
                     names.insert(name);
                 }
@@ -221,11 +229,17 @@ pub(super) async fn apply_op(
         DiffOp::InstallCollection(collection) => admin
             .add_p2p_collections(std::slice::from_ref(collection))
             .await
-            .with_context(|| format!("install P2P collection {collection}")),
+            .map_err(|source| P2pReconcileError::InstallP2pCollection {
+                collection: collection.clone(),
+                source,
+            }),
         DiffOp::TeardownCollection(collection) => admin
             .delete_p2p_collections(std::slice::from_ref(collection))
             .await
-            .with_context(|| format!("teardown P2P collection {collection}")),
+            .map_err(|source| P2pReconcileError::TeardownP2pCollection {
+                collection: collection.clone(),
+                source,
+            }),
         DiffOp::InstallReplicator(address) => {
             let addresses = vec![address.clone()];
             let collections = desired
@@ -236,7 +250,10 @@ pub(super) async fn apply_op(
             admin
                 .add_replicator(&addresses, &collections, &desired.replicator_filter)
                 .await
-                .with_context(|| format!("install P2P replicator {address}"))?;
+                .map_err(|source| P2pReconcileError::InstallP2pReplicator {
+                    address: address.clone(),
+                    source,
+                })?;
             if desired.uses_agent_target_template() {
                 tracing::debug!(
                     target: "gents::agent::p2p_reconcile::engine",
@@ -271,9 +288,10 @@ pub(super) async fn apply_op(
                 });
             match admin.delete_replicator(id, &collections).await {
                 Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => Ok(()),
-                Err(error) => {
-                    Err(error).with_context(|| format!("teardown P2P replicator {address}"))
-                }
+                Err(source) => Err(P2pReconcileError::TeardownP2pReplicator {
+                    address: address.clone(),
+                    source,
+                }),
             }
         }
     }
@@ -351,9 +369,11 @@ pub(super) async fn replay_replicator_after_reconnect(
         });
     match admin.delete_replicator(id, &old_collections).await {
         Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("remove P2P replicator {address} for reconnect replay"));
+        Err(source) => {
+            return Err(P2pReconcileError::RemoveP2pReplicatorForReconnectReplay {
+                address: address.to_owned(),
+                source,
+            });
         }
     }
 
@@ -366,6 +386,11 @@ pub(super) async fn replay_replicator_after_reconnect(
     admin
         .add_replicator(&addresses, &collections, &desired.replicator_filter)
         .await
-        .with_context(|| format!("reinstall P2P replicator {address} for reconnect replay"))?;
+        .map_err(
+            |source| P2pReconcileError::ReinstallP2pReplicatorForReconnectReplay {
+                address: address.to_owned(),
+                source,
+            },
+        )?;
     Ok(())
 }

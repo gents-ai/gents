@@ -112,7 +112,8 @@ where
     ) -> Result<()> {
         let task = self.auxiliary_task();
         self.auxiliary_tasks
-            .spawn(async move { task.run(request, shutdown).await })
+            .spawn(async move { task.run(request, shutdown).await })?;
+        Ok(())
     }
 }
 

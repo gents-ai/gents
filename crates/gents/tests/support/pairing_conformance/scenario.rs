@@ -53,7 +53,9 @@ pub struct Scenario {
 }
 
 impl Scenario {
-    pub fn from_json_file(path: &std::path::Path) -> anyhow::Result<Self> {
+    pub fn from_json_file(
+        path: &std::path::Path,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let bytes = std::fs::read(path)?;
         let scenario = serde_json::from_slice(&bytes)?;
         Ok(scenario)

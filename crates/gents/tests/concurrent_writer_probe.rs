@@ -3,12 +3,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Semaphore};
 use tokio::task::JoinSet;
+
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+type Result<T = (), E = BoxError> = std::result::Result<T, E>;
 
 const SCHEMA: &str = "type WriterCounter { key: String @index(unique: true) value: Int }
 type WriterReceipt { writer: Int iteration: Int }";
@@ -71,11 +74,11 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
                     let accepted = match result {
                         Ok(()) => true,
                         Err(error) if error.to_string() == "DefraDB transaction conflict" => false,
-                        Err(error) => return Err(error),
+                        Err(error) => return Err(error.into()),
                     };
                     observations.push(((writer, iteration), accepted, started.elapsed().as_secs_f64() * 1000.0));
                 }
-                Ok::<_, anyhow::Error>(observations)
+                Ok::<_, BoxError>(observations)
             });
         }
         next_writer += width as i64;
@@ -84,10 +87,10 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
             while let Some(worker) = workers.join_next().await {
                 observations.extend(worker??);
             }
-            Ok::<_, anyhow::Error>(observations)
+            Ok::<_, BoxError>(observations)
         })
         .await
-        .context("shared owner writers stalled")??;
+        .map_err(|_| "shared owner writers stalled")??;
         assert_eq!(observations.len(), width * 8);
         let accepted = observations.iter().filter(|row| row.1).count();
         assert!(accepted > 0, "at least one hot-counter update commits");
@@ -148,14 +151,16 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
             maximum.fetch_max(current, Ordering::SeqCst);
             tokio::task::yield_now().await;
             let response = transaction.execute(&format!("mutation {{ create_WriterReceipt(input: {{writer: {writer}, iteration: 0}}) {{_docID}} }}")).await;
-            anyhow::ensure!(!response.has_errors(), "native write: {:?}", response.errors);
+            if response.has_errors() {
+                return Err(format!("native write: {:?}", response.errors).into());
+            }
             let committed = match transaction.commit().await {
                 Ok(()) => true,
                 Err(query::TransactionError::Conflict(_)) => false,
                 Err(error) => return Err(error.into()),
             };
             active.fetch_sub(1, Ordering::SeqCst);
-            Ok::<_, anyhow::Error>(committed.then_some(writer as i64))
+            Ok::<_, BoxError>(committed.then_some(writer as i64))
         });
     }
     let committed = tokio::time::timeout(Duration::from_secs(60), async {
@@ -165,10 +170,10 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
                 committed.insert(writer);
             }
         }
-        Ok::<_, anyhow::Error>(committed)
+        Ok::<_, BoxError>(committed)
     })
     .await
-    .context("native concurrent writers stalled")??;
+    .map_err(|_| "native concurrent writers stalled")??;
     let rows = ConfigAccess::local(node.clone())
         .execute("{ WriterReceipt {writer} }")
         .await?;
@@ -250,7 +255,9 @@ async fn measure_encrypted_admission(
                         drop(transaction);
                         false
                     } else {
-                        anyhow::ensure!(!response.has_errors(), "native execute: {:?}", response.errors);
+                        if response.has_errors() {
+                            return Err(format!("native execute: {:?}", response.errors).into());
+                        }
                         match transaction.commit().await {
                             Ok(()) => true,
                             Err(query::TransactionError::Conflict(_)) => false,
@@ -267,7 +274,7 @@ async fn measure_encrypted_admission(
                         service_ms,
                     ));
                 }
-                Ok::<_, anyhow::Error>(observations)
+                Ok::<_, BoxError>(observations)
             });
         }
         let observations = tokio::time::timeout(Duration::from_secs(120), async {
@@ -275,10 +282,10 @@ async fn measure_encrypted_admission(
             while let Some(worker) = workers.join_next().await {
                 all.extend(worker??);
             }
-            Ok::<_, anyhow::Error>(all)
+            Ok::<_, BoxError>(all)
         })
         .await
-        .context("admitted native writers stalled")??;
+        .map_err(|_| "admitted native writers stalled")??;
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         let committed: BTreeSet<_> = observations
             .iter()
@@ -290,13 +297,13 @@ async fn measure_encrypted_admission(
             .await?;
         let rows = rows["data"]["AdmissionDocument"]
             .as_array()
-            .context("documents missing")?;
+            .ok_or("documents missing")?;
         let durable: BTreeSet<_> = rows
             .iter()
-            .map(|row| {
+            .map(|row| -> Result<(i64, i64)> {
                 Ok((
-                    row["writer"].as_i64().context("writer missing")?,
-                    row["iteration"].as_i64().context("iteration missing")?,
+                    row["writer"].as_i64().ok_or("writer missing")?,
+                    row["iteration"].as_i64().ok_or("iteration missing")?,
                 ))
             })
             .collect::<Result<_>>()?;

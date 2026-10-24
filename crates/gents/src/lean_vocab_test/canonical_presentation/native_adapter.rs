@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::message::{
     AssistantContent, DocumentSourceKind, Message, ReasoningContent, ToolResultContent, UserContent,
@@ -24,12 +23,50 @@ use super::{assert_native_payload_presentation_case, PayloadPresentationAdapter}
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NativePresentationError {
+    #[error(transparent)]
+    Integer(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    Utf8(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Scope(#[from] gents_protocol::rendered_request::CaptureScopeParseError),
+    #[error(transparent)]
+    Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+    #[error("modeled timestamp exceeds native range")]
+    TimestampExceedsRange,
+    #[error("modeled timestamp overflows native date")]
+    TimestampOverflowsDate,
+    #[error("native payload field has no composed presentation")]
+    NoComposedPresentation,
+    #[error("argument declaration lacks tool identity")]
+    ArgumentDeclarationLacksTool,
+    #[error("media declaration lacks kind")]
+    MediaDeclarationLacksKind,
+    #[error("modeled sequence overflow")]
+    SequenceOverflow,
+    #[error("fork origin differs from header origin")]
+    ForkOriginMismatch,
+    #[error("non-fork header carries origin")]
+    NonForkHeaderOrigin,
+    #[error("modeled header refs differ from native block refs")]
+    HeaderRefsMismatch,
+    #[error("presented argument length overflow")]
+    PresentedArgumentLengthOverflow,
+    #[error("presented payload length overflow")]
+    PresentedPayloadLengthOverflow,
+}
+
+type Result<T, E = NativePresentationError> = std::result::Result<T, E>;
+
 fn fixture_time(value: u64) -> Result<String> {
     let seconds = FIXTURE_EPOCH_SECONDS
         .checked_add(i64::try_from(value)?)
-        .context("modeled timestamp exceeds native range")?;
+        .ok_or(NativePresentationError::TimestampExceedsRange)?;
     Ok(DateTime::<Utc>::from_timestamp(seconds, 0)
-        .context("modeled timestamp overflows native date")?
+        .ok_or(NativePresentationError::TimestampOverflowsDate)?
         .to_rfc3339())
 }
 
@@ -57,10 +94,9 @@ fn reference(value: &super::super::LeanPayloadRef) -> Result<PayloadRef> {
 }
 
 fn full_reference(value: &LeanPayloadSpec) -> Result<PayloadRef> {
-    anyhow::ensure!(
-        matches!(&value.presentation, LeanPresentation::Full),
-        "native payload field has no composed presentation"
-    );
+    if !matches!(&value.presentation, LeanPresentation::Full) {
+        return Err(NativePresentationError::NoComposedPresentation);
+    }
     reference(&value.reference)
 }
 
@@ -165,10 +201,9 @@ fn segment(value: &LeanCanonicalSegment) -> Result<OutputSegment> {
                                 LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
                                 LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
                                 LeanPayloadKind::Arguments => {
-                                    let tool = decl
-                                        .tool
-                                        .as_ref()
-                                        .context("argument declaration lacks tool identity")?;
+                                    let tool = decl.tool.as_ref().ok_or(
+                                        NativePresentationError::ArgumentDeclarationLacksTool,
+                                    )?;
                                     StreamPayload::ToolArguments {
                                         id: tool.id.clone(),
                                         call_id: tool.call_id.clone(),
@@ -177,11 +212,9 @@ fn segment(value: &LeanCanonicalSegment) -> Result<OutputSegment> {
                                 }
                                 LeanPayloadKind::ToolOutput => StreamPayload::ToolOutput,
                                 LeanPayloadKind::Media => StreamPayload::Media {
-                                    media_kind: media_kind(
-                                        decl.media_kind
-                                            .as_ref()
-                                            .context("media declaration lacks kind")?,
-                                    ),
+                                    media_kind: media_kind(decl.media_kind.as_ref().ok_or(
+                                        NativePresentationError::MediaDeclarationLacksKind,
+                                    )?),
                                 },
                             };
                             Ok(StreamDeclaration {
@@ -380,10 +413,10 @@ fn message(value: &LeanCanonicalMessage<LeanPayloadSpec>) -> Result<TranscriptMe
         (LeanMessagePublication::Fork { origin }, Some(header_origin))
             if *origin == header_origin => {}
         (LeanMessagePublication::Fork { .. }, _) => {
-            anyhow::bail!("fork origin differs from header origin")
+            return Err(NativePresentationError::ForkOriginMismatch)
         }
         (_, None) => {}
-        (_, Some(_)) => anyhow::bail!("non-fork header carries origin"),
+        (_, Some(_)) => return Err(NativePresentationError::NonForkHeaderOrigin),
     }
     let publication = match &value.header.publication {
         LeanMessagePublication::RequestExecution { generation: owner } => {
@@ -416,7 +449,7 @@ fn message(value: &LeanCanonicalMessage<LeanPayloadSpec>) -> Result<TranscriptMe
             value
                 .sequence
                 .checked_add(1)
-                .context("modeled sequence overflow")?,
+                .ok_or(NativePresentationError::SequenceOverflow)?,
         )?,
         role: match &value.header.role {
             LeanMessageRole::System => MessageRole::System,
@@ -438,10 +471,9 @@ fn message(value: &LeanCanonicalMessage<LeanPayloadSpec>) -> Result<TranscriptMe
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        modeled_refs == native_refs,
-        "modeled header refs differ from native block refs"
-    );
+    if modeled_refs != native_refs {
+        return Err(NativePresentationError::HeaderRefsMismatch);
+    }
     Ok(converted)
 }
 
@@ -516,7 +548,7 @@ fn tool_argument_bytes(
             let stream = reconstruct_stream(observations, &[], &[], arguments)?;
             total
                 .checked_add(u64::try_from(stream.text.len())?)
-                .context("presented argument length overflow")
+                .ok_or(NativePresentationError::PresentedArgumentLengthOverflow)
         })
 }
 
@@ -524,7 +556,7 @@ fn tool_argument_bytes(
 pub(crate) struct NativePayloadPresentationAdapter;
 
 impl PayloadPresentationAdapter for NativePayloadPresentationAdapter {
-    type Error = anyhow::Error;
+    type Error = NativePresentationError;
 
     fn presented_payload_bytes<'a>(
         &'a mut self,
@@ -545,7 +577,7 @@ impl PayloadPresentationAdapter for NativePayloadPresentationAdapter {
                 Ok(native) => {
                     let bytes = presented_bytes(&native)?
                         .checked_add(tool_argument_bytes(&observations, &envelope)?)
-                        .context("presented payload length overflow")?;
+                        .ok_or(NativePresentationError::PresentedPayloadLengthOverflow)?;
                     Ok(Some(bytes))
                 }
                 Err(

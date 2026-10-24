@@ -12,7 +12,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-anyhow.workspace = true
 chrono.workspace = true
 defra-node = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true

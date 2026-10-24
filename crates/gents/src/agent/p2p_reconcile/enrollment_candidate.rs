@@ -22,8 +22,10 @@ use uuid::Uuid;
 use crate::config_client::ConfigAccess;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::identity::NodeIdentity;
+use gents_protocol::error_chain::ErrorChain;
 
 use super::enrollment_store::RequestRow;
+use super::error::P2pReconcileError;
 
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -131,49 +133,48 @@ pub async fn verify_enrollment_offer(
 pub fn validate_authenticated_server_did(
     expected_admin_did: &str,
     resolved_did: &str,
-) -> Result<()> {
-    anyhow::ensure!(
-        resolved_did == expected_admin_did,
-        "authenticated server DID does not match the signed enrollment admin"
-    );
+) -> Result<(), P2pReconcileError> {
+    if resolved_did != expected_admin_did {
+        return Err(P2pReconcileError::AuthenticatedServerDidMismatch);
+    }
     Ok(())
 }
 
-fn validate_fresh_window(issued_at: &str, expires_at: &str) -> Result<()> {
-    let issued = DateTime::parse_from_rfc3339(issued_at).context("parsing offer issued_at")?;
-    let expires = DateTime::parse_from_rfc3339(expires_at).context("parsing offer expires_at")?;
+fn validate_fresh_window(issued_at: &str, expires_at: &str) -> Result<(), P2pReconcileError> {
+    let issued = DateTime::parse_from_rfc3339(issued_at)
+        .map_err(|source| P2pReconcileError::ParseOfferIssuedAt { source })?;
+    let expires = DateTime::parse_from_rfc3339(expires_at)
+        .map_err(|source| P2pReconcileError::ParseOfferExpiresAt { source })?;
     let now = Utc::now();
-    anyhow::ensure!(
-        issued <= now + chrono::Duration::seconds(30),
-        "enrollment offer is from the future"
-    );
-    anyhow::ensure!(expires > now, "enrollment offer has expired");
-    anyhow::ensure!(
-        issued <= expires,
-        "enrollment offer expires before issuance"
-    );
-    anyhow::ensure!(
-        expires - issued <= super::enrollment_offer::MAX_OFFER_VALIDITY,
-        "enrollment offer validity window is too long"
-    );
+    if issued > now + chrono::Duration::seconds(30) {
+        return Err(P2pReconcileError::OfferFromFuture);
+    }
+    if expires <= now {
+        return Err(P2pReconcileError::OfferExpired);
+    }
+    if issued > expires {
+        return Err(P2pReconcileError::OfferExpiresBeforeIssuance);
+    }
+    if expires - issued > super::enrollment_offer::MAX_OFFER_VALIDITY {
+        return Err(P2pReconcileError::OfferValidityTooLong);
+    }
     Ok(())
 }
 
 pub async fn local_enrollment_ticket(
     p2p: &Arc<dyn P2POperations>,
     candidate_peer: &str,
-) -> Result<String> {
+) -> Result<String, P2pReconcileError> {
     let ticket = timeout(ENROLLMENT_P2P_TIMEOUT, p2p.shareable_address())
         .await
-        .context("timed out reading local enrollment ticket")?
-        .map_err(anyhow::Error::msg)?
-        .context("enrollment candidate has no shareable P2P address")?;
+        .map_err(|source| P2pReconcileError::ReadLocalEnrollmentTicketTimedOut { source })?
+        .map_err(|source| P2pReconcileError::ShareableP2pAddressUnreadable { source })?
+        .ok_or(P2pReconcileError::NoShareableP2pAddress)?;
     let (ticket_peer, _) = parse_public_peer_addr(&ticket)
-        .context("enrollment candidate produced an invalid shareable Iroh ticket")?;
-    anyhow::ensure!(
-        ticket_peer.to_string() == candidate_peer,
-        "enrollment candidate shareable ticket does not match its local peer ID"
-    );
+        .map_err(|source| P2pReconcileError::InvalidShareableIrohTicket { source })?;
+    if ticket_peer.to_string() != candidate_peer {
+        return Err(P2pReconcileError::ShareableTicketPeerMismatch);
+    }
     Ok(ticket)
 }
 
@@ -424,13 +425,8 @@ pub async fn push_enrollment_request(
     .await;
     let install_error = match install {
         Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(
-            anyhow::Error::msg(error)
-                .context("installing authenticated enrollment bootstrap route"),
-        ),
-        Err(_) => Some(anyhow::anyhow!(
-            "timed out installing authenticated enrollment bootstrap route"
-        )),
+        Ok(Err(source)) => Some(P2pReconcileError::InstallBootstrapRoute { source }),
+        Err(_) => Some(P2pReconcileError::InstallBootstrapRouteTimedOut),
     };
 
     let delivery_error = if install_error.is_none() {
@@ -447,12 +443,8 @@ pub async fn push_enrollment_request(
         .await
         {
             Ok(Ok(())) => None,
-            Ok(Err(error)) => {
-                Some(anyhow::Error::msg(error).context("pushing enrollment request to server"))
-            }
-            Err(_) => Some(anyhow::anyhow!(
-                "timed out pushing enrollment request to server"
-            )),
+            Ok(Err(source)) => Some(P2pReconcileError::PushEnrollmentRequest { source }),
+            Err(_) => Some(P2pReconcileError::PushEnrollmentRequestTimedOut),
         }
     } else {
         None
@@ -465,20 +457,21 @@ pub async fn push_enrollment_request(
     .await
     {
         Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(
-            anyhow::Error::msg(error).context("removing authenticated enrollment bootstrap route"),
-        ),
-        Err(_) => Some(anyhow::anyhow!(
-            "timed out removing authenticated enrollment bootstrap route"
-        )),
+        Ok(Err(source)) => Some(P2pReconcileError::RemoveBootstrapRoute { source }),
+        Err(_) => Some(P2pReconcileError::RemoveBootstrapRouteTimedOut),
     };
 
-    match (install_error.or(delivery_error), cleanup_error) {
-        (None, None) => Ok(()),
-        (Some(operation), None) => Err(operation),
-        (None, Some(cleanup)) => Err(cleanup),
-        (Some(operation), Some(cleanup)) => Err(operation.context(format!(
-            "enrollment bootstrap route cleanup also failed: {cleanup:#}"
-        ))),
-    }
+    let outcome: Result<(), P2pReconcileError> =
+        match (install_error.or(delivery_error), cleanup_error) {
+            (None, None) => Ok(()),
+            (Some(operation), None) => Err(operation),
+            (None, Some(cleanup)) => Err(cleanup),
+            (Some(operation), Some(cleanup)) => {
+                Err(P2pReconcileError::BootstrapRouteCleanupAlsoFailed {
+                    operation: Box::new(operation),
+                    cleanup: ErrorChain(&cleanup).to_string(),
+                })
+            }
+        };
+    outcome.map_err(anyhow::Error::from)
 }

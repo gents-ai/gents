@@ -2,8 +2,9 @@ use super::automation::resolve_automation;
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use crate::admission::BackendAvailability;
@@ -12,7 +13,7 @@ use crate::document_config::Agent as AgentDocument;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tool_surface::ResolvedToolSelection;
 
-use super::DocumentRuntimeView;
+use super::{DocumentRuntimeView, DocumentViewError};
 
 use crate::agent::{
     agent_config_from_documents, assemble_node_and_agents, tool_selection_from_document,
@@ -23,31 +24,23 @@ use crate::tool_surface::AgentToolConfig;
 
 macro_rules! owned_doc {
     ($map:expr, $id:expr, $owner:expr) => {{
-        (|| -> anyhow::Result<_> {
+        (|| -> Result<_, DocumentViewError> {
             let id = $id;
-            anyhow::ensure!(
-                !id.trim().is_empty(),
-                "explicit configuration reference is blank"
-            );
+            if id.trim().is_empty() {
+                return Err(DocumentViewError::BlankReference);
+            }
             let record = $map
                 .get(id)
-                .ok_or_else(|| anyhow!("missing {} reference {id:?}", stringify!($map)))?;
-            anyhow::ensure!(
-                record.value.node_did == $owner,
-                "foreign configuration reference {id:?}"
-            );
+                .ok_or_else(|| DocumentViewError::MissingReference {
+                    kind: stringify!($map),
+                    id: id.to_owned(),
+                })?;
+            if record.value.node_did != $owner {
+                return Err(DocumentViewError::ForeignReference { id: id.to_owned() });
+            }
             Ok(&record.value)
         })()
     }};
-}
-
-/// An agent_config on a backend this build cannot run is unavailable, not
-/// pending: no arriving document repairs it.
-#[derive(Debug, thiserror::Error)]
-#[error("backend {backend_id} has provider kind {kind} this build does not know")]
-struct UnknownKindBackend {
-    backend_id: String,
-    kind: String,
 }
 
 struct AgentResolutionError {
@@ -56,8 +49,11 @@ struct AgentResolutionError {
 }
 
 impl AgentResolutionError {
-    fn new(code: AgentReadinessUnavailableReason, detail: anyhow::Error) -> Self {
-        Self { code, detail }
+    fn new(code: AgentReadinessUnavailableReason, detail: impl Into<anyhow::Error>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -67,7 +63,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     view: &DocumentRuntimeView,
 ) -> Result<ResolvedRuntimeSnapshot> {
     if !view.node.value.enabled {
-        anyhow::bail!("node {} is disabled", view.node.value.node_did);
+        return Err(DocumentViewError::NodeDisabled {
+            node_did: view.node.value.node_did.clone(),
+        }
+        .into());
     }
 
     let default_agent_id = view
@@ -129,7 +128,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 })?;
             ensure_inference_available(view, &inference, &backend_admission_configs)?;
             let context_result: Result<_> = (|| {
-                anyhow::ensure!(agent_config.node_did == scope, "agent owner mismatch");
+                if agent_config.node_did != scope {
+                    return Err(DocumentViewError::AgentOwnerMismatch.into());
+                }
                 let context = agent_config
                     .context_id
                     .as_deref()
@@ -349,7 +350,9 @@ fn ensure_inference_available(
     let admission = admission_configs.get(&backend.backend_id).ok_or_else(|| {
         AgentResolutionError::new(
             AgentReadinessUnavailableReason::BackendNotConfigured,
-            anyhow!("backend {} has no matching observation", backend.backend_id),
+            DocumentViewError::BackendObservationMissing {
+                backend_id: backend.backend_id.clone(),
+            },
         )
     })?;
     let unavailable = match admission.availability() {
@@ -362,11 +365,10 @@ fn ensure_inference_available(
     if let Some(code) = unavailable {
         return Err(AgentResolutionError::new(
             code,
-            anyhow!(
-                "backend {} is unavailable: {:?}",
-                backend.backend_id,
-                admission.availability()
-            ),
+            DocumentViewError::BackendUnavailable {
+                backend_id: backend.backend_id.clone(),
+                availability: admission.availability(),
+            },
         ));
     }
     if matches!(
@@ -386,7 +388,7 @@ fn ensure_inference_available(
             _ => {
                 return Err(AgentResolutionError::new(
                     AgentReadinessUnavailableReason::CredentialsRequired,
-                    anyhow!("provider has no node OAuth adapter"),
+                    DocumentViewError::ProviderWithoutOAuthAdapter,
                 ));
             }
         };
@@ -396,10 +398,10 @@ fn ensure_inference_available(
         ) {
             return Err(AgentResolutionError::new(
                 AgentReadinessUnavailableReason::CredentialsRequired,
-                anyhow!(
-                    "backend {} requires enabled OAuthCredential for {scope}",
-                    backend.backend_id
-                ),
+                DocumentViewError::OAuthCredentialRequired {
+                    backend_id: backend.backend_id.clone(),
+                    scope: scope.to_owned(),
+                },
             ));
         }
     }
@@ -412,8 +414,10 @@ pub(super) fn collect_unresolved_behavior_references(
     details: &mut Vec<String>,
 ) {
     let scope = view.node.value.node_did.as_str();
-    let result: Result<()> = (|| {
-        anyhow::ensure!(agent_config.node_did == scope, "agent owner mismatch");
+    let result: Result<(), DocumentViewError> = (|| {
+        if agent_config.node_did != scope {
+            return Err(DocumentViewError::AgentOwnerMismatch);
+        }
         select_inference_documents(view, &agent_config.inference_profile_id)?;
         if let Some(id) = &agent_config.context_id {
             let context = owned_doc!(&view.contexts, id.as_str(), scope)?;
@@ -433,8 +437,12 @@ pub(super) fn collect_unresolved_behavior_references(
         Ok(())
     })();
     if let Err(error) = result {
-        if error.downcast_ref::<UnknownKindBackend>().is_none() {
-            details.push(format!("agent {}: {error:#}", agent_config.agent_id));
+        if !matches!(error, DocumentViewError::UnknownKindBackend { .. }) {
+            details.push(format!(
+                "agent {}: {}",
+                agent_config.agent_id,
+                ErrorChain(&error)
+            ));
         }
     }
 }
@@ -455,15 +463,14 @@ struct SelectedInferenceDocuments<'a> {
 fn select_inference_documents<'a>(
     view: &'a DocumentRuntimeView,
     id: &str,
-) -> Result<SelectedInferenceDocuments<'a>> {
+) -> Result<SelectedInferenceDocuments<'a>, DocumentViewError> {
     let scope = view.node.value.node_did.as_str();
     let profile = owned_doc!(&view.inference_profiles, id, scope)?;
     if let Some(kind) = view.unknown_kind_backends.get(&profile.backend_id) {
-        return Err(UnknownKindBackend {
+        return Err(DocumentViewError::UnknownKindBackend {
             backend_id: profile.backend_id.clone(),
             kind: kind.clone(),
-        }
-        .into());
+        });
     }
     let backend = owned_doc!(&view.backends, profile.backend_id.as_str(), scope)?;
     let sampling = profile
@@ -496,11 +503,12 @@ fn resolve_inference(
     let selected = select_inference_documents(view, id)?;
     let profile = selected.profile.clone();
     let backend = selected.backend.clone();
-    anyhow::ensure!(
-        !profile.model_name.trim().is_empty(),
-        "profile {} has no model selection",
-        profile.profile_id
-    );
+    if profile.model_name.trim().is_empty() {
+        return Err(DocumentViewError::ProfileWithoutModel {
+            profile_id: profile.profile_id.clone(),
+        }
+        .into());
+    }
     let sampling = selected.sampling.cloned();
     let execution = selected.execution.cloned();
     let retry_policy = selected.retry_policy.cloned();

@@ -11,6 +11,7 @@ use gents::{
     ChainKeyMaterialStore, DocumentRuntimeOptions, Gents, KeyringChainKeyStore, NodeIdentity,
     ToolCeiling, KEY_BACKEND_KEYRING,
 };
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
@@ -200,7 +201,8 @@ async fn send_unlocked(
     wait_receipt(url, &hash).await
 }
 
-async fn spawn_hardhat() -> anyhow::Result<(Child, tempfile::TempDir, u16)> {
+async fn spawn_hardhat(
+) -> Result<(Child, tempfile::TempDir, u16), Box<dyn std::error::Error + Send + Sync>> {
     let workdir = tempfile::TempDir::new().expect("hardhat workdir");
     std::fs::write(
         workdir.path().join("package.json"),
@@ -218,12 +220,13 @@ async fn spawn_hardhat() -> anyhow::Result<(Child, tempfile::TempDir, u16)> {
         .stdin(Stdio::null())
         .status()
         .await
-        .map_err(|error| anyhow::anyhow!("npm install hardhat: {error}"))?;
+        .map_err(|error| format!("npm install hardhat: {error}"))?;
     if !install.success() {
-        anyhow::bail!(
+        return Err(format!(
             "npm install hardhat exited {}",
             install.code().unwrap_or(-1)
-        );
+        )
+        .into());
     }
     let port = ephemeral_port();
     let mut command = Command::new("npx");
@@ -270,7 +273,7 @@ fn which_bin(name: &str) -> Option<std::path::PathBuf> {
     })
 }
 
-fn spawn_anvil(bin: &std::path::Path, port: u16) -> anyhow::Result<Child> {
+fn spawn_anvil(bin: &std::path::Path, port: u16) -> std::io::Result<Child> {
     let mut command = Command::new(bin);
     command
         .args([
@@ -287,7 +290,7 @@ fn spawn_anvil(bin: &std::path::Path, port: u16) -> anyhow::Result<Child> {
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
-    Ok(command.spawn()?)
+    command.spawn()
 }
 
 async fn start_local_chain() -> LocalChain {
@@ -321,7 +324,10 @@ async fn start_local_chain() -> LocalChain {
                 drop(chain);
             }
             Err(error) => {
-                eprintln!("anvil spawn failed ({error:#}); trying hardhat");
+                eprintln!(
+                    "anvil spawn failed ({}); trying hardhat",
+                    ErrorChain(&error)
+                );
             }
         }
     }
@@ -342,7 +348,8 @@ async fn start_local_chain() -> LocalChain {
         }
         Err(error) => {
             panic!(
-                "could not start a local chain: anvil not ready and hardhat spawn failed: {error:#}"
+                "could not start a local chain: anvil not ready and hardhat spawn failed: {}",
+                ErrorChain(&*error)
             );
         }
     }
@@ -372,10 +379,13 @@ async fn provision_key(node: &Arc<EmbeddedNode>, identity: &dyn NodeIdentity) ->
     let _ = store.delete(&storage_key);
     store
         .store_new(&storage_key, &secret)
-        .unwrap_or_else(|error| panic!("store chain key {storage_key}: {error:#}"));
-    let loaded = store
-        .load(&storage_key)
-        .unwrap_or_else(|error| panic!("keyring round-trip load {storage_key}: {error:#}"));
+        .unwrap_or_else(|error| panic!("store chain key {storage_key}: {}", ErrorChain(&error)));
+    let loaded = store.load(&storage_key).unwrap_or_else(|error| {
+        panic!(
+            "keyring round-trip load {storage_key}: {}",
+            ErrorChain(&error)
+        )
+    });
     assert_eq!(
         loaded, secret,
         "stored chain key must round-trip for {storage_key}"

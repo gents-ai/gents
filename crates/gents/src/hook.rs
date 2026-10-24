@@ -21,6 +21,26 @@ pub(crate) mod persistence;
 #[cfg(test)]
 mod tests;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HookError {
+    #[error("duplicate accepted tool binding for internal call {internal_call_id}")]
+    DuplicateAcceptedToolBinding { internal_call_id: String },
+    #[error("active request changed while resolving document provenance")]
+    ActiveRequestChanged,
+    #[error("active request is missing its physical document id")]
+    ActiveRequestMissingDocId,
+    #[error("decode background row count")]
+    DecodeBackgroundRowCount(#[source] serde_json::Error),
+    #[error("session hook missing session id")]
+    MissingSessionId,
+    #[error("tool call is missing its active request id")]
+    MissingActiveRequestId,
+    #[error("tool call is missing its active request document id")]
+    MissingActiveRequestDocId,
+    #[error("tool call is missing its request deadline")]
+    MissingRequestDeadline,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FailurePolicy {
     FailOpen,
@@ -531,13 +551,14 @@ impl DefraSessionHook {
     pub(crate) async fn adopt_accepted_tool_calls(
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), HookError> {
         let mut pending = self.accepted_tool_calls.lock().await;
         for (internal_id, call) in calls {
-            anyhow::ensure!(
-                pending.insert(internal_id.clone(), call).is_none(),
-                "duplicate accepted tool binding for internal call {internal_id}"
-            );
+            if pending.insert(internal_id.clone(), call).is_some() {
+                return Err(HookError::DuplicateAcceptedToolBinding {
+                    internal_call_id: internal_id,
+                });
+            }
         }
         Ok(())
     }
@@ -872,18 +893,21 @@ impl DefraSessionHook {
         self.state.lock().await.current_request_doc_id.clone()
     }
 
-    async fn active_request_doc_id_for(&self, request_id: &str) -> anyhow::Result<Option<String>> {
+    async fn active_request_doc_id_for(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<String>, HookError> {
         if request_id.trim().is_empty() {
             return Ok(None);
         }
         let state = self.state.lock().await;
         if state.current_request_id.as_deref() != Some(request_id) {
-            anyhow::bail!("active request changed while resolving document provenance");
+            return Err(HookError::ActiveRequestChanged);
         }
         let doc_id = state
             .current_request_doc_id
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("active request is missing its physical document id"))?;
+            .ok_or(HookError::ActiveRequestMissingDocId)?;
         Ok(Some(doc_id))
     }
 
@@ -1084,7 +1108,7 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
     ) -> anyhow::Result<()> {
-        DefraSessionHook::adopt_accepted_tool_calls(self, calls).await
+        Ok(DefraSessionHook::adopt_accepted_tool_calls(self, calls).await?)
     }
 }
 

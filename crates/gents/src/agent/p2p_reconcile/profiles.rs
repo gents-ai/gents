@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::{bail, Result};
+use super::error::{P2pReconcileError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum P2pCollectionProfile {
@@ -66,15 +66,18 @@ pub fn expand_p2p_collection_profile_ids<'a>(
         if profile_id.is_empty() {
             continue;
         }
-        let profile = P2pCollectionProfile::from_id(profile_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown P2P collection profile {profile_id:?}"))?;
+        let profile = P2pCollectionProfile::from_id(profile_id).ok_or_else(|| {
+            P2pReconcileError::UnknownCollectionProfile {
+                id: profile_id.to_owned(),
+            }
+        })?;
         for collection in profile.collection_names() {
             collections.insert((*collection).to_string());
         }
     }
 
     if collections.is_empty() {
-        bail!("provide at least one --collection or --profile");
+        return Err(P2pReconcileError::NoCollectionsOrProfiles);
     }
 
     Ok(collections)

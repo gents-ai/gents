@@ -7,6 +7,8 @@ use acp::{
 };
 use identity::Did;
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 const PROJECTION_RUNTIME_RESOURCES: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -53,10 +55,10 @@ fn did(value: &str) -> Did {
 }
 
 #[tokio::test]
-async fn projection_acp_policy_resources_drive_document_decisions() -> anyhow::Result<()> {
+async fn projection_acp_policy_resources_drive_document_decisions() -> Result<()> {
     let yaml = projection_policy_yaml();
-    let parsed = parse_policy_yaml(&yaml).map_err(anyhow::Error::msg)?;
-    validate_policy_expressions(&parsed).map_err(anyhow::Error::msg)?;
+    let parsed = parse_policy_yaml(&yaml).map_err(|error| error.to_string())?;
+    validate_policy_expressions(&parsed).map_err(|error| error.to_string())?;
     let policy = build_policy(&parsed, 1)?;
     let policy_id = policy.id.clone();
 
@@ -68,7 +70,7 @@ async fn projection_acp_policy_resources_drive_document_decisions() -> anyhow::R
 
     for resource in PROJECTION_RUNTIME_RESOURCES {
         validate_resource_interface(&policy_id, resource, Some(&policy))
-            .map_err(anyhow::Error::msg)?;
+            .map_err(|error| error.to_string())?;
     }
 
     let acp = ZanzibarDocumentACP::new(store);

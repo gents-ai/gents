@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::BackendAuth;
 use gents::{ensure_runtime_schemas, BackendProviderKind};
 
 use crate::support::fixtures::{bind_agent_backend, test_agent};
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 #[tokio::test]
 #[ignore = "hits the live OpenRouter API and requires OPENROUTER_API_KEY"]
 async fn live_openrouter_oneshot_succeeds() -> Result<()> {
-    let api_key = std::env::var("OPENROUTER_API_KEY")
-        .context("set OPENROUTER_API_KEY to run the live OpenRouter smoke test")?;
+    let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|error| {
+        format!("set OPENROUTER_API_KEY to run the live OpenRouter smoke test: {error}")
+    })?;
     let model_name = std::env::var("GENTS_TEST_OPENROUTER_MODEL")
         .unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
 

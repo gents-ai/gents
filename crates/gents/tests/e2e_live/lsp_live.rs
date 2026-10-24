@@ -94,8 +94,9 @@ fn pack_lsp_config() -> String {
     serde_json::to_string(&config).expect("serialize live LSP server configuration")
 }
 
-fn load_pack_system_prompt(root: &std::path::Path) -> anyhow::Result<String> {
-    use anyhow::Context;
+fn load_pack_system_prompt(
+    root: &std::path::Path,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
 
     let manifest: PackManifest =
@@ -112,19 +113,20 @@ fn load_pack_system_prompt(root: &std::path::Path) -> anyhow::Result<String> {
         .agents
         .iter()
         .find(|agent| agent.agent_id == "lsp-coder")
-        .context("pack has no lsp-coder Agent")?;
+        .ok_or("pack has no lsp-coder Agent")?;
     let context_id = agent
         .context_id
         .as_deref()
-        .context("lsp-coder has no Context")?;
-    config
+        .ok_or("lsp-coder has no Context")?;
+    let system_prompt = config
         .contexts
         .iter()
         .find(|context| context.context_id == context_id)
-        .context("lsp-coder Context is missing")?
+        .ok_or("lsp-coder Context is missing")?
         .system_prompt
         .clone()
-        .context("lsp-coder Context has no system prompt")
+        .ok_or("lsp-coder Context has no system prompt")?;
+    Ok(system_prompt)
 }
 
 fn pack_system_prompt() -> String {

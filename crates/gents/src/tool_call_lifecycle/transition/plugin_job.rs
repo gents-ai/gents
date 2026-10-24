@@ -78,20 +78,19 @@ impl ToolCallLifecycle {
         progress: Option<(JobState, Option<JobPauseReason>)>,
         inline: bool,
     ) -> Result<PluginJobTerminal> {
-        anyhow::ensure!(
-            self.kind() == ToolRowKind::PluginJob,
-            "plugin job settlement requires a row with a job pin"
-        );
+        if self.kind() != ToolRowKind::PluginJob {
+            return Err(TransitionError::PluginJobSettlementNotPinned.into());
+        }
         self.ensure_state(&[ToolCallState::Running, state], "settle_plugin_job")?;
         let doc_id = self
             .doc_id
             .as_deref()
-            .context("plugin job row lacks physical identity")?;
+            .ok_or(TransitionError::PluginJobLacksPhysicalIdentity)?;
         let job_progress = match progress {
             Some((job_state, pause_reason)) => {
                 let stored = read_progress(txn, doc_id)
                     .await?
-                    .context("a paused or awaiting job row has no stored progress to update")?;
+                    .ok_or(TransitionError::PluginJobLacksStoredProgress)?;
                 Some(TerminalJobProgress {
                     expected_revision: stored.revision,
                     host: HostProgressFacts {
@@ -162,7 +161,7 @@ impl ToolCallLifecycle {
             let doc_id = self
                 .doc_id
                 .clone()
-                .context("plugin job row lacks physical identity")?;
+                .ok_or(TransitionError::PluginJobLacksPhysicalIdentity)?;
             let calling_request_id =
                 crate::session_message::calling_request_id(self.node.as_ref(), self).await?;
             let status = match terminal.state {

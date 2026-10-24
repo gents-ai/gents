@@ -11,6 +11,104 @@ use crate::document_config::*;
 use crate::oauth_credential::OAuthCredential;
 use rapidhash::RapidHashMap;
 
+use crate::admission::BackendAvailability;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DocumentViewError {
+    #[error("runtime view owner mismatch")]
+    OwnerMismatch,
+    #[error("runtime view requires an owner DID")]
+    OwnerDidRequired,
+    #[error("scoped principal is missing")]
+    ScopedPrincipalMissing,
+    #[error("OAuthCredential missing physical ID")]
+    OAuthCredentialMissingPhysicalId,
+    #[error("OAuthCredential owner mismatch")]
+    OAuthCredentialOwnerMismatch,
+    #[error("duplicate OAuthCredential {id}")]
+    DuplicateOAuthCredential { id: String },
+    #[error("decoding {name} {id:?}")]
+    Decode {
+        name: String,
+        id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{name} query did not return rows")]
+    QueryRowsMissing { name: String },
+    #[error("config row is not an object")]
+    ConfigRowNotObject,
+    #[error("config row missing physical ID")]
+    ConfigRowMissingPhysicalId,
+    #[error("config row has empty physical ID")]
+    ConfigRowEmptyPhysicalId,
+    #[error("foreign {name} row escaped owner filter")]
+    ForeignRowEscapedOwnerFilter { name: String },
+    #[error("{name} missing logical key")]
+    MissingLogicalKey { name: String },
+    #[error("missing canonical config")]
+    MissingCanonicalConfig,
+    #[error("ambiguous {name} reference {id:?} for {owner:?}")]
+    AmbiguousReference {
+        name: String,
+        id: String,
+        owner: String,
+    },
+    #[error("explicit configuration reference is blank")]
+    BlankReference,
+    #[error("missing {kind} reference {id:?}")]
+    MissingReference { kind: &'static str, id: String },
+    #[error("foreign configuration reference {id:?}")]
+    ForeignReference { id: String },
+    #[error("agent owner mismatch")]
+    AgentOwnerMismatch,
+    #[error("node {node_did} is disabled")]
+    NodeDisabled { node_did: String },
+    #[error("profile {profile_id} has no model selection")]
+    ProfileWithoutModel { profile_id: String },
+    /// An agent_config on a backend this build cannot run is unavailable, not
+    /// pending: no arriving document repairs it.
+    #[error("backend {backend_id} has provider kind {kind} this build does not know")]
+    UnknownKindBackend { backend_id: String, kind: String },
+    #[error("backend {backend_id} has no matching observation")]
+    BackendObservationMissing { backend_id: String },
+    #[error("backend {backend_id} is unavailable: {availability:?}")]
+    BackendUnavailable {
+        backend_id: String,
+        availability: BackendAvailability,
+    },
+    #[error("provider has no node OAuth adapter")]
+    ProviderWithoutOAuthAdapter,
+    #[error("backend {backend_id} requires enabled OAuthCredential for {scope}")]
+    OAuthCredentialRequired { backend_id: String, scope: String },
+    #[error("Tools {tools_id} has an empty eth_tool_ids entry")]
+    EthToolIdEmpty { tools_id: String },
+    #[error("Tools {tools_id} lists EthTool {tool_id} more than once")]
+    EthToolListedTwice { tools_id: String, tool_id: String },
+    #[error("Tools {tools_id} references missing EthTool {tool_id}")]
+    EthToolMissing { tools_id: String, tool_id: String },
+    #[error("Tools {tools_id} references EthTool {tool_id} owned by a different agent")]
+    EthToolForeignOwner { tools_id: String, tool_id: String },
+    #[error("duplicate eth tool name {tool_name:?} after expanding EthTool {tool_id} for Tools {tools_id}")]
+    DuplicateEthToolName {
+        tool_name: String,
+        tool_id: String,
+        tools_id: String,
+    },
+    #[error("EthTool {tool_id} has call tools but missing rpc_url or chain_id")]
+    EthToolCallsWithoutRpc { tool_id: String },
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
+    #[error(transparent)]
+    DocumentConfig(Box<crate::document_config::DocumentConfigError>),
+}
+
+impl From<crate::document_config::DocumentConfigError> for DocumentViewError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {
     pub(crate) doc_id: String,
@@ -136,7 +234,6 @@ fn expand_eth_tools_with<'a>(
     selection: &Tools,
     lookup: impl Fn(&str) -> Option<&'a crate::document_config::EthToolDocument>,
 ) -> anyhow::Result<ExpandedEthTools> {
-    use anyhow::{anyhow, bail};
     use rapidhash::{HashSetExt, RapidHashSet};
 
     let mut out = ExpandedEthTools::default();
@@ -150,43 +247,40 @@ fn expand_eth_tools_with<'a>(
     {
         let tool_id = tool_id.trim();
         if tool_id.is_empty() {
-            bail!(
-                "Tools {} has an empty eth_tool_ids entry",
-                selection.tools_id
-            );
+            return Err(DocumentViewError::EthToolIdEmpty {
+                tools_id: selection.tools_id.clone(),
+            }
+            .into());
         }
         if !linked_ids.insert(tool_id) {
-            bail!(
-                "Tools {} lists EthTool {} more than once",
-                selection.tools_id,
-                tool_id
-            );
+            return Err(DocumentViewError::EthToolListedTwice {
+                tools_id: selection.tools_id.clone(),
+                tool_id: tool_id.to_owned(),
+            }
+            .into());
         }
-        let doc = lookup(tool_id).ok_or_else(|| {
-            anyhow!(
-                "Tools {} references missing EthTool {}",
-                selection.tools_id,
-                tool_id
-            )
+        let doc = lookup(tool_id).ok_or_else(|| DocumentViewError::EthToolMissing {
+            tools_id: selection.tools_id.clone(),
+            tool_id: tool_id.to_owned(),
         })?;
         if doc.node_did.trim() != selection.node_did.trim() {
-            bail!(
-                "Tools {} references EthTool {} owned by a different agent",
-                selection.tools_id,
-                tool_id
-            );
+            return Err(DocumentViewError::EthToolForeignOwner {
+                tools_id: selection.tools_id.clone(),
+                tool_id: tool_id.to_owned(),
+            }
+            .into());
         }
         if !doc.enabled {
             continue;
         }
         if let Some(resolved) = crate::eth::ResolvedEthQuery::from_document(doc)? {
             if !tool_names.insert(resolved.tool_name()) {
-                bail!(
-                    "duplicate eth tool name {:?} after expanding EthTool {} for Tools {}",
-                    resolved.tool_name(),
-                    tool_id,
-                    selection.tools_id
-                );
+                return Err(DocumentViewError::DuplicateEthToolName {
+                    tool_name: resolved.tool_name(),
+                    tool_id: tool_id.to_owned(),
+                    tools_id: selection.tools_id.clone(),
+                }
+                .into());
             }
             out.queries.push(resolved);
         }
@@ -206,20 +300,20 @@ fn expand_eth_tools_with<'a>(
             )?;
             for call in calls {
                 if !tool_names.insert(call.tool_name.clone()) {
-                    bail!(
-                        "duplicate eth tool name {:?} after expanding EthTool {} for Tools {}",
-                        call.tool_name,
-                        tool_id,
-                        selection.tools_id
-                    );
+                    return Err(DocumentViewError::DuplicateEthToolName {
+                        tool_name: call.tool_name.clone(),
+                        tool_id: tool_id.to_owned(),
+                        tools_id: selection.tools_id.clone(),
+                    }
+                    .into());
                 }
                 out.calls.push(call);
             }
         } else if !decls.is_empty() {
-            bail!(
-                "EthTool {} has call tools but missing rpc_url or chain_id",
-                tool_id
-            );
+            return Err(DocumentViewError::EthToolCallsWithoutRpc {
+                tool_id: tool_id.to_owned(),
+            }
+            .into());
         }
     }
     Ok(out)

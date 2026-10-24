@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{bail, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use gents::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
 use gents::agent::p2p_reconcile::{
     compute_owned_pairing_diff, to_replication_filters, update_applied_after_success, DiffOp,
@@ -160,7 +160,7 @@ impl Harness {
         } else if node_id == "B" {
             "A"
         } else {
-            bail!("unknown node {node_id}");
+            return Err(format!("unknown node {node_id}").into());
         };
         let desired = {
             let node = self.node_mut(node_id)?;
@@ -194,12 +194,11 @@ impl Harness {
         if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
             Ok(())
         } else {
-            bail!(
+            Err(format!(
                 "convergence timeout: desired={:?} actual={:?} applied={:?}",
-                snapshot.desired,
-                snapshot.actual,
-                snapshot.applied
+                snapshot.desired, snapshot.actual, snapshot.applied
             )
+            .into())
         }
     }
 
@@ -209,7 +208,7 @@ impl Harness {
         } else if id == &self.b.id {
             Ok(&mut self.b)
         } else {
-            bail!("unknown node {id}")
+            Err(format!("unknown node {id}").into())
         }
     }
 
@@ -219,7 +218,7 @@ impl Harness {
         } else if id == &self.b.id {
             Ok(&self.b)
         } else {
-            bail!("unknown node {id}")
+            Err(format!("unknown node {id}").into())
         }
     }
 
@@ -443,7 +442,7 @@ async fn write_peer_pairing_desired(
     };
     let resp = node.db.node.execute(&mutation).await;
     if resp.has_errors() {
-        bail!("write PeerPairingDesired failed: {:?}", resp.errors);
+        return Err(format!("write PeerPairingDesired failed: {:?}", resp.errors).into());
     }
     Ok(())
 }
@@ -459,7 +458,7 @@ async fn delete_peer_pairing_desired(node: &HarnessNode, peer: &str) -> Result<(
     );
     let resp = node.db.node.execute(&mutation).await;
     if resp.has_errors() {
-        bail!("delete PeerPairingDesired failed: {:?}", resp.errors);
+        return Err(format!("delete PeerPairingDesired failed: {:?}", resp.errors).into());
     }
     Ok(())
 }
@@ -498,7 +497,7 @@ async fn read_peer_pairing_applied_row(
     );
     let resp = node.db.node.execute(&query).await;
     if resp.has_errors() {
-        bail!("read PeerPairingApplied failed: {:?}", resp.errors);
+        return Err(format!("read PeerPairingApplied failed: {:?}", resp.errors).into());
     }
     Ok(
         gents::graphql::rows::<AppliedRow>(&resp, "PeerPairingApplied")?
@@ -558,7 +557,7 @@ async fn write_peer_pairing_applied(
     };
     let resp = node.db.node.execute(&mutation).await;
     if resp.has_errors() {
-        bail!("write PeerPairingApplied failed: {:?}", resp.errors);
+        return Err(format!("write PeerPairingApplied failed: {:?}", resp.errors).into());
     }
     Ok(())
 }
@@ -569,7 +568,7 @@ fn peer_id_for_reconciler(node: &NodeId) -> Result<&'static str> {
     } else if node == "B" {
         Ok("A")
     } else {
-        bail!("unknown node {node}")
+        Err(format!("unknown node {node}").into())
     }
 }
 

@@ -6,6 +6,12 @@ use anyhow::Result;
 use tokio::sync::Notify;
 use tokio::task::{JoinError, JoinSet};
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum AuxiliaryTasksError {
+    #[error("auxiliary execution is shutting down")]
+    ShuttingDown,
+}
+
 #[derive(Default)]
 struct Tasks {
     jobs: JoinSet<Result<()>>,
@@ -24,12 +30,14 @@ struct State {
 pub(super) struct AuxiliaryTasks(Arc<State>);
 
 impl AuxiliaryTasks {
-    pub(super) fn spawn<F>(&self, job: F) -> Result<()>
+    pub(super) fn spawn<F>(&self, job: F) -> Result<(), AuxiliaryTasksError>
     where
         F: Future<Output = Result<()>> + Send + 'static,
     {
         let mut tasks = self.0.tasks.lock().expect("auxiliary task lock poisoned");
-        anyhow::ensure!(!tasks.closed, "auxiliary execution is shutting down");
+        if tasks.closed {
+            return Err(AuxiliaryTasksError::ShuttingDown);
+        }
         tasks.jobs.spawn(job);
         self.0.changed.notify_one();
         Ok(())

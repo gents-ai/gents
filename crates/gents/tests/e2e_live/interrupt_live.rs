@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{Agent, AgentContext, InferenceProfile, InferenceSampling};
@@ -37,6 +36,8 @@ use crate::support::live_inference::{live_target, InferenceTarget};
 use crate::support::test_db;
 use crate::support::TestDb;
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 const LIVE_AGENT_ID: &str = "live-interrupt";
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
 const LIVE_CONTEXT_ID: &str = "live-interrupt:context";
@@ -48,7 +49,7 @@ const MIN_VISIBLE_PREFIX_CHARS: usize = 40;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
-async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
+async fn live_interrupt_mid_stream_on_openai_compatible() -> Result {
     assert!(
         std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
         "set GENTS_LIVE_OPENAI=1 and pass --ignored to run the live interrupt smoke test"
@@ -164,7 +165,7 @@ async fn assert_terminal_partial(
     request_doc_id: &str,
     terminal_output: &TerminalOutput,
     before_interrupt: &str,
-) -> Result<()> {
+) -> Result {
     match terminal_output {
         TerminalOutput::Message { message_doc_id } => {
             let (header, native) = load_canonical_message_from_node(
@@ -172,19 +173,21 @@ async fn assert_terminal_partial(
                 message_doc_id,
                 row.node_did
                     .as_deref()
-                    .context("terminal row omitted node_did")?,
+                    .ok_or("terminal row omitted node_did")?,
                 row.requester_did.as_deref(),
             )
             .await
-            .context("reconstructing interrupted partial assistant header")?;
-            anyhow::ensure!(header.role == MessageRole::Assistant);
-            anyhow::ensure!(header.request_doc_id.as_deref() == Some(request_doc_id));
-            anyhow::ensure!(Some(header.node_did.as_str()) == row.node_did.as_deref());
-            anyhow::ensure!(header.requester_did.as_deref() == row.requester_did.as_deref());
-            anyhow::ensure!(Some(header.session_id.as_str()) == row.session_id.as_deref());
-            anyhow::ensure!(header.outcome == OutputOutcome::Partial);
+            .map_err(|error| {
+                format!("reconstructing interrupted partial assistant header: {error:#}")
+            })?;
+            assert!(header.role == MessageRole::Assistant);
+            assert!(header.request_doc_id.as_deref() == Some(request_doc_id));
+            assert!(Some(header.node_did.as_str()) == row.node_did.as_deref());
+            assert!(header.requester_did.as_deref() == row.requester_did.as_deref());
+            assert!(Some(header.session_id.as_str()) == row.session_id.as_deref());
+            assert!(header.outcome == OutputOutcome::Partial);
             let Message::Assistant { content, .. } = native else {
-                anyhow::bail!("interrupted partial is not an assistant message")
+                return Err("interrupted partial is not an assistant message".into());
             };
             let text = content
                 .iter()
@@ -193,12 +196,12 @@ async fn assert_terminal_partial(
                     _ => None,
                 })
                 .collect::<String>();
-            anyhow::ensure!(text.starts_with(before_interrupt));
+            assert!(text.starts_with(before_interrupt));
         }
         TerminalOutput::NoMessage => {
             let retained = observe_request(node, request_doc_id).await?;
-            anyhow::ensure!(retained.row.terminal_output == Some(TerminalOutput::NoMessage));
-            anyhow::ensure!(retained.text.starts_with(before_interrupt));
+            assert!(retained.row.terminal_output == Some(TerminalOutput::NoMessage));
+            assert!(retained.text.starts_with(before_interrupt));
         }
     }
     Ok(())
@@ -221,7 +224,7 @@ async fn fetch_request_row(node: &EmbeddedNode, request_doc_id: &str) -> Result<
             }} }}"#
         ))
         .await;
-    anyhow::ensure!(
+    assert!(
         !response.has_errors(),
         "canonical AgentRequest row query failed: {:?}",
         response.errors
@@ -231,14 +234,14 @@ async fn fetch_request_row(node: &EmbeddedNode, request_doc_id: &str) -> Result<
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
-        .context("AgentRequest row query omitted rows")?;
-    anyhow::ensure!(
+        .ok_or("AgentRequest row query omitted rows")?;
+    assert!(
         rows.len() == 1,
         "exact request doc id must resolve to exactly one row"
     );
-    let row: AgentRequestRow =
-        serde_json::from_value(rows[0].clone()).context("decoding canonical AgentRequest row")?;
-    anyhow::ensure!(
+    let row: AgentRequestRow = serde_json::from_value(rows[0].clone())
+        .map_err(|error| format!("decoding canonical AgentRequest row: {error}"))?;
+    assert!(
         row.doc_id.as_deref() == Some(request_doc_id),
         "request row crossed its physical identity"
     );
@@ -253,11 +256,11 @@ async fn observe_request(
     let node_did = row
         .node_did
         .as_deref()
-        .context("request row omitted node_did")?;
+        .ok_or("request row omitted node_did")?;
     let session_id = row
         .session_id
         .as_deref()
-        .context("request row omitted session_id")?;
+        .ok_or("request row omitted session_id")?;
 
     let physical = escape_graphql_string(request_doc_id);
     let scope =
@@ -270,7 +273,7 @@ async fn observe_request(
             }}"#
         ))
         .await;
-    anyhow::ensure!(
+    assert!(
         !response.has_errors(),
         "canonical output facts query failed: {:?}",
         response.errors
@@ -278,18 +281,18 @@ async fn observe_request(
     let data = response
         .data
         .as_ref()
-        .context("canonical output facts query omitted data")?;
+        .ok_or("canonical output facts query omitted data")?;
     let segments = data
         .get("AgentOutputSegment")
         .and_then(Value::as_array)
-        .context("canonical output facts query omitted segments")?
+        .ok_or("canonical output facts query omitted segments")?
         .iter()
         .map(decode_output_segment_row)
         .collect::<Result<Vec<_>, _>>()?;
     let headers = data
         .get("AgentMessage")
         .and_then(Value::as_array)
-        .context("canonical output facts query omitted headers")?
+        .ok_or("canonical output facts query omitted headers")?
         .iter()
         .map(decode_transcript_message_row)
         .collect::<Result<Vec<_>, _>>()?;
@@ -368,11 +371,11 @@ async fn observe_request(
             }
             LiveView::Loading | LiveView::Absent | LiveView::Retracted => {}
             LiveView::Published { .. } => {
-                anyhow::bail!("provider Inference turn published while the live interrupt polls mid-stream output")
+                return Err("provider Inference turn published while the live interrupt polls mid-stream output".into())
             }
-            LiveView::Denied => anyhow::bail!("canonical live output is denied"),
-            LiveView::Conflicted => anyhow::bail!("canonical live output is conflicted"),
-            LiveView::Invalid => anyhow::bail!("canonical live output is invalid"),
+            LiveView::Denied => return Err("canonical live output is denied".into()),
+            LiveView::Conflicted => return Err("canonical live output is conflicted".into()),
+            LiveView::Invalid => return Err("canonical live output is invalid".into()),
         }
     }
 
@@ -429,11 +432,11 @@ async fn wait_for_interrupted_terminal_row(
         let row = fetch_request_row(node, request_doc_id).await?;
         match row.lifecycle_state {
             Some(RequestLifecycleState::Interrupted) => {
-                anyhow::ensure!(
+                assert!(
                     row.terminal_output.is_some(),
                     "interrupted terminal request omitted its terminal_output selection"
                 );
-                anyhow::ensure!(
+                assert!(
                     row.terminalized_at
                         .as_deref()
                         .is_some_and(|value| !value.is_empty()),

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use gents::defra_node::EmbeddedNode;
 use gents::{ensure_runtime_schemas, run_openai_oneshot};
 

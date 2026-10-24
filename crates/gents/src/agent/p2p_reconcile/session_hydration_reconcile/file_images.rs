@@ -1,3 +1,4 @@
+use super::super::error::P2pReconcileError;
 use super::*;
 use crate::agent::p2p_reconcile::file_image_hydration::{
     completed_image_selection, image_attempt_delivery_target, record_image_outcome,
@@ -378,11 +379,10 @@ async fn decode_recorded_image_receipt(
 fn terminal_image_mutation(
     row: &ImageDemandRow,
     receipt: &FileImageHydrationReceipt,
-) -> Result<String> {
-    anyhow::ensure!(
-        row.demand == receipt.demand,
-        "file-image receipt crossed demand scope"
-    );
+) -> Result<String, P2pReconcileError> {
+    if row.demand != receipt.demand {
+        return Err(P2pReconcileError::FileImageReceiptScope);
+    }
     receipt.validate_shape()?;
     let mut filters = vec![format!(
         "_docID: {{ _eq: \"{}\" }}",

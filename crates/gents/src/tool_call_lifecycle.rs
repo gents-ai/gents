@@ -185,6 +185,81 @@ pub use transition::CausedRequestTerminal;
 pub use transition::IllegalToolCallTransition;
 pub(crate) use transition::PluginJobTerminal;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolCallLifecycleError {
+    #[error("invalid plugin effect provenance")]
+    InvalidPluginEffectProvenance,
+    #[error("dispatch await mode conflicts with the accepted background publication")]
+    DispatchAwaitModeConflict,
+    #[error("plugin effect lacks generation")]
+    PluginEffectLacksGeneration,
+    #[error("plugin effects require a running direct parent")]
+    PluginEffectRequiresRunningDirectParent,
+    #[error("plugin effect exceeds its invocation bounds")]
+    PluginEffectExceedsInvocationBounds,
+    #[error("plugin effect arguments must be a JSON object")]
+    PluginEffectArgumentsNotObject {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("plugin parent lacks accepted header")]
+    PluginParentLacksAcceptedHeader,
+    #[error("plugin parent lacks generation")]
+    PluginParentLacksGeneration,
+    #[error("plugin effect lookup omitted rows")]
+    PluginEffectLookupOmittedRows,
+    #[error("plugin effect has conflicting physical identities")]
+    PluginEffectConflictingIdentities,
+    #[error("plugin effect lacks physical identity")]
+    PluginEffectLacksPhysicalIdentity,
+    #[error("plugin effect replay changed immutable admission")]
+    PluginEffectReplayChangedAdmission,
+    #[error("plugin effect replay changed arguments")]
+    PluginEffectReplayChangedArguments,
+    #[error("admitted plugin effect disappeared")]
+    PluginEffectAdmittedDisappeared,
+    #[error("plugin effect lacks provenance")]
+    PluginEffectLacksProvenance,
+    #[error("plugin effect lacks request binding")]
+    PluginEffectLacksRequestBinding,
+    #[error("plugin effect lacks parent header")]
+    PluginEffectLacksParentHeader,
+    #[error("plugin effect is no longer pending")]
+    PluginEffectNoLongerPending,
+    #[error("plugin parent lookup omitted rows")]
+    PluginParentLookupOmittedRows,
+    #[error("plugin parent is missing or ambiguous")]
+    PluginParentMissingOrAmbiguous,
+    #[error("plugin parent lacks deadline")]
+    PluginParentLacksDeadline,
+    #[error("plugin effect deadline exceeds parent or has expired")]
+    PluginEffectDeadlineExceedsParent,
+    #[error("plugin effect has no exact accepted direct parent")]
+    PluginEffectNoExactAcceptedParent,
+    #[error("plugin request lookup omitted rows")]
+    PluginRequestLookupOmittedRows,
+    #[error("plugin request is missing or ambiguous")]
+    PluginRequestMissingOrAmbiguous,
+    #[error("plugin effect lost live request authority")]
+    PluginEffectLostRequestAuthority,
+    #[error("plugin request lacks logical identity")]
+    PluginRequestLacksLogicalIdentity,
+    #[error("plugin arguments lookup omitted segments")]
+    PluginArgumentsLookupOmittedSegments,
+    #[error("plugin effect requires one immutable arguments source")]
+    PluginEffectArgumentsSourceNotSingle,
+    #[error("invalid plugin arguments closure")]
+    PluginEffectInvalidArgumentsClosure,
+    #[error("plugin argument declaration changed tool identity")]
+    PluginEffectArgumentDeclarationChanged,
+    #[error("plugin arguments exceed their payload bound")]
+    PluginEffectArgumentsExceedBound,
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+}
+
 /// Which owner terminates a tool-call row. A [`Self::SessionMessage`] row
 /// (Lean `ToolOperation.sessionMessage`) has no host process: its terminal
 /// is the terminal output of the request it caused. A [`Self::PluginJob`] row
@@ -284,7 +359,7 @@ impl PluginEffectBinding {
         ordinal: Option<u32>,
         spawned: bool,
         tool_call_id: &str,
-    ) -> anyhow::Result<Option<Self>> {
+    ) -> Result<Option<Self>, ToolCallLifecycleError> {
         match (parent_tool_call_doc_id, ordinal) {
             (None, None) => Ok(None),
             (Some(parent), Some(ordinal))
@@ -298,7 +373,7 @@ impl PluginEffectBinding {
                     ordinal,
                 }))
             }
-            _ => anyhow::bail!("invalid plugin effect provenance"),
+            _ => Err(ToolCallLifecycleError::InvalidPluginEffectProvenance),
         }
     }
 }
@@ -326,11 +401,10 @@ impl ToolCallLifecycle {
         accepted: AcceptedToolCall,
         deadline_at: chrono::DateTime<chrono::Utc>,
         await_mode: AwaitMode,
-    ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            accepted.await_mode == AwaitMode::Foreground || await_mode == AwaitMode::Background,
-            "dispatch await mode conflicts with the accepted background publication"
-        );
+    ) -> Result<Self, ToolCallLifecycleError> {
+        if accepted.await_mode != AwaitMode::Foreground && await_mode != AwaitMode::Background {
+            return Err(ToolCallLifecycleError::DispatchAwaitModeConflict);
+        }
         Ok(Self {
             node,
             request_id: String::new(),

@@ -5012,7 +5012,6 @@ dependencies = [
 name = "gents-lean-contract"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "chrono",
  "defra-node",
  "gents-protocol",

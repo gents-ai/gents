@@ -4000,13 +4000,13 @@ async fn seed_goal_fields(
     node: &defra_node::EmbeddedNode,
     goal: &gents::goal::GoalDocument,
     fields: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let doc_id = gents::graphql::escape_graphql_string(&goal.doc_id);
     let node_did = gents::graphql::escape_graphql_string(&goal.node_did);
     let response = node.execute(&format!(
         r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     )).await;
-    anyhow::ensure!(
+    assert!(
         !response.has_errors(),
         "seed Goal fields: {:?}",
         response.errors

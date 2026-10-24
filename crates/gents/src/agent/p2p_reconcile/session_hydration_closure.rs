@@ -1,7 +1,8 @@
 use super::session_hydration::HydrationDocument;
 use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
-use anyhow::anyhow;
-use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
+use gents_protocol::output::origin::{
+    lookup_message, resolve_origin, ObservedMessage, OriginError,
+};
 use gents_protocol::output::reconstruction::{
     reconstruct_message, reconstruct_stream, DependencyDenial, ObservedSegment,
 };
@@ -59,51 +60,74 @@ pub struct CanonicalClosureInput<'a> {
     pub session_id: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CanonicalClosureError {
-    MissingObservation(anyhow::Error),
-    StructuralConflict(anyhow::Error),
-    Unclassified(anyhow::Error),
+    #[error("missing observation: {0}")]
+    MissingObservation(ClosureDetail),
+    #[error("structural conflict: {0}")]
+    StructuralConflict(ClosureDetail),
+    #[error("{0}")]
+    Unclassified(ClosureDetail),
 }
 
-impl std::fmt::Display for CanonicalClosureError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingObservation(error) => write!(formatter, "missing observation: {error}"),
-            Self::StructuralConflict(error) => write!(formatter, "structural conflict: {error}"),
-            Self::Unclassified(error) => error.fmt(formatter),
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum ClosureDetail {
+    #[error(transparent)]
+    Origin(OriginError),
+    #[error(transparent)]
+    Reconstruction(ReconstructionError),
+    #[error("hydration root is outside target session")]
+    RootOutsideSession,
+    #[error("cyclic hydration origin")]
+    CyclicOrigin,
+    #[error("validated closing segment disappeared")]
+    ClosingSegmentMissing,
+    #[error("validated closing segment is not closed")]
+    ClosingSegmentOpen,
+    #[error("validated reference names a retraction")]
+    ReferenceRetraction,
+    #[error("plugin effect {child} arguments are unavailable")]
+    EffectArgumentsUnavailable { child: String },
+    #[error("plugin effect {child} has conflicting argument closures")]
+    ConflictingEffectArguments { child: String },
+    #[error("plugin effect {child} terminal output is unavailable")]
+    EffectTerminalUnavailable { child: String },
+    #[error("plugin effect {child} terminal names a foreign source")]
+    ForeignEffectTerminal { child: String },
+    #[error("plugin effect {doc_id} shares a physical identity or slot")]
+    EffectIdentityConflict { doc_id: String },
+    #[error("missing authorized {collection:?} dependency {doc_id}")]
+    MissingDependency {
+        collection: SessionHydrationCollection,
+        doc_id: String,
+    },
 }
-
-impl std::error::Error for CanonicalClosureError {}
 
 type ClosureResult<T> = std::result::Result<T, CanonicalClosureError>;
 
-fn origin_failure(error: gents_protocol::output::origin::OriginError) -> CanonicalClosureError {
-    use gents_protocol::output::origin::OriginError;
+fn origin_failure(error: OriginError) -> CanonicalClosureError {
     match error {
         error @ OriginError::Unavailable { .. } => {
-            CanonicalClosureError::MissingObservation(anyhow::Error::new(error))
+            CanonicalClosureError::MissingObservation(ClosureDetail::Origin(error))
         }
         error @ OriginError::Conflict { .. } => {
-            CanonicalClosureError::StructuralConflict(anyhow::Error::new(error))
+            CanonicalClosureError::StructuralConflict(ClosureDetail::Origin(error))
         }
-        error => CanonicalClosureError::Unclassified(anyhow::Error::new(error)),
+        error => CanonicalClosureError::Unclassified(ClosureDetail::Origin(error)),
     }
 }
 
 fn reconstruction_failure(error: ReconstructionError) -> CanonicalClosureError {
     if error.is_incomplete() {
-        return CanonicalClosureError::MissingObservation(anyhow::Error::new(error));
+        return CanonicalClosureError::MissingObservation(ClosureDetail::Reconstruction(error));
     }
     match error {
         error @ (ReconstructionError::ConflictingSegments { .. }
         | ReconstructionError::ConflictingClosures { .. }
         | ReconstructionError::ConflictingMessages { .. }) => {
-            CanonicalClosureError::StructuralConflict(anyhow::Error::new(error))
+            CanonicalClosureError::StructuralConflict(ClosureDetail::Reconstruction(error))
         }
-        error => CanonicalClosureError::Unclassified(anyhow::Error::new(error)),
+        error => CanonicalClosureError::Unclassified(ClosureDetail::Reconstruction(error)),
     }
 }
 
@@ -147,9 +171,9 @@ pub fn build_canonical_closure(
         )
         .map_err(origin_failure)?;
         if root.message.session_id != input.session_id {
-            return Err(CanonicalClosureError::Unclassified(anyhow!(
-                "hydration root is outside target session"
-            )));
+            return Err(CanonicalClosureError::Unclassified(
+                ClosureDetail::RootOutsideSession,
+            ));
         }
         let origin = resolve_origin(
             &headers,
@@ -226,10 +250,11 @@ fn collect_effect_children(
                 .insert(row.document.doc_id.as_str(), *row)
                 .is_some_and(|other| other != *row)
         {
-            return Err(CanonicalClosureError::StructuralConflict(anyhow!(
-                "plugin effect {} shares a physical identity or slot",
-                row.document.doc_id
-            )));
+            return Err(CanonicalClosureError::StructuralConflict(
+                ClosureDetail::EffectIdentityConflict {
+                    doc_id: row.document.doc_id.clone(),
+                },
+            ));
         }
     }
     for (_, row) in children {
@@ -248,14 +273,18 @@ fn collect_effect_children(
                 stream: 0,
             },
             [] => {
-                return Err(CanonicalClosureError::MissingObservation(anyhow!(
-                    "plugin effect {child} arguments are unavailable"
-                )))
+                return Err(CanonicalClosureError::MissingObservation(
+                    ClosureDetail::EffectArgumentsUnavailable {
+                        child: child.to_owned(),
+                    },
+                ))
             }
             _ => {
-                return Err(CanonicalClosureError::StructuralConflict(anyhow!(
-                    "plugin effect {child} has conflicting argument closures"
-                )))
+                return Err(CanonicalClosureError::StructuralConflict(
+                    ClosureDetail::ConflictingEffectArguments {
+                        child: child.to_owned(),
+                    },
+                ))
             }
         };
         let mut references = vec![arguments];
@@ -264,18 +293,22 @@ fn collect_effect_children(
                 .iter()
                 .find(|segment| segment.doc_id == terminal.close_doc_id)
                 .ok_or_else(|| {
-                    CanonicalClosureError::MissingObservation(anyhow!(
-                        "plugin effect {child} terminal output is unavailable"
-                    ))
+                    CanonicalClosureError::MissingObservation(
+                        ClosureDetail::EffectTerminalUnavailable {
+                            child: child.to_owned(),
+                        },
+                    )
                 })?;
             if closing.segment.source
                 != (OutputSource::ToolCall {
                     tool_call_doc_id: child.to_owned(),
                 })
             {
-                return Err(CanonicalClosureError::Unclassified(anyhow!(
-                    "plugin effect {child} terminal names a foreign source"
-                )));
+                return Err(CanonicalClosureError::Unclassified(
+                    ClosureDetail::ForeignEffectTerminal {
+                        child: child.to_owned(),
+                    },
+                ));
             }
             references.push(terminal);
         }
@@ -305,9 +338,9 @@ fn collect_origin_chain(
     let mut visited = BTreeSet::new();
     loop {
         if !visited.insert(id.clone()) {
-            return Err(CanonicalClosureError::Unclassified(anyhow!(
-                "cyclic hydration origin"
-            )));
+            return Err(CanonicalClosureError::Unclassified(
+                ClosureDetail::CyclicOrigin,
+            ));
         }
         let row = lookup_message(headers, denied, &id, node_did, requester_did)
             .map_err(origin_failure)?;
@@ -397,20 +430,22 @@ fn retain_reference_extent<'a>(
         .iter()
         .copied()
         .find(|row| row.doc_id == reference.close_doc_id)
-        .ok_or_else(|| {
-            CanonicalClosureError::MissingObservation(anyhow!(
-                "validated closing segment disappeared"
-            ))
-        })?;
+        .ok_or(CanonicalClosureError::MissingObservation(
+            ClosureDetail::ClosingSegmentMissing,
+        ))?;
     let SourceClose::Closed {
         segments: extent, ..
-    } = closing.segment.close.as_ref().ok_or_else(|| {
-        CanonicalClosureError::Unclassified(anyhow!("validated closing segment is not closed"))
-    })?
+    } = closing
+        .segment
+        .close
+        .as_ref()
+        .ok_or(CanonicalClosureError::Unclassified(
+            ClosureDetail::ClosingSegmentOpen,
+        ))?
     else {
-        return Err(CanonicalClosureError::Unclassified(anyhow!(
-            "validated reference names a retraction"
-        )));
+        return Err(CanonicalClosureError::Unclassified(
+            ClosureDetail::ReferenceRetraction,
+        ));
     };
     retain_base(
         SessionHydrationCollection::AgentRequest,
@@ -442,9 +477,10 @@ fn retain_base(
     selected: &mut BTreeSet<HydrationDocument>,
 ) -> ClosureResult<()> {
     let document = bases.get(&(collection, doc_id)).ok_or_else(|| {
-        CanonicalClosureError::MissingObservation(anyhow!(
-            "missing authorized {collection:?} dependency {doc_id}"
-        ))
+        CanonicalClosureError::MissingObservation(ClosureDetail::MissingDependency {
+            collection,
+            doc_id: doc_id.to_owned(),
+        })
     })?;
     selected.insert((*document).clone().into_hydration());
     Ok(())

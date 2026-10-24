@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use gents::agent::p2p_reconcile::resolve_template;
 use gents::agent::p2p_reconcile::templates::{
     AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
@@ -40,6 +39,8 @@ use crate::support::live_inference::{
 use crate::support::{
     first_optional_row, snapshots::fetch_runtime_snapshot, test_db, test_p2p_db, TestDb,
 };
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 const RESEARCHER_AGENT_ID: &str = "live-researcher";
 const FAST_WORKER_AGENT_ID: &str = "live-fast-worker";

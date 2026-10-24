@@ -60,11 +60,13 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 async fn submit_edit(
     db: &TestDb,
     session_id: &str,
     edit: PendingQueueEdit,
-) -> anyhow::Result<SessionInputEditReceipt> {
+) -> Result<SessionInputEditReceipt> {
     submit_edit_inner(db, session_id, edit, None).await
 }
 
@@ -73,7 +75,7 @@ async fn submit_edit_inner(
     session_id: &str,
     edit: PendingQueueEdit,
     steer: Option<&str>,
-) -> anyhow::Result<SessionInputEditReceipt> {
+) -> Result<SessionInputEditReceipt> {
     let did = db.node_identity.did();
     let existing = ConfigAccess::local(db.node.clone())
         .execute(&format!(
@@ -130,7 +132,7 @@ async fn submit_edit_inner(
     };
     cancel.cancel();
     worker.await??;
-    result
+    Ok(result?)
 }
 
 pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {

@@ -11,6 +11,12 @@ use tokio::sync::oneshot;
 
 use super::http_mock::HttpRequestData;
 
+#[derive(Debug, thiserror::Error)]
+pub enum MockEndpointError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 #[derive(Clone)]
 struct MockState {
     model_name: String,
@@ -25,14 +31,14 @@ pub struct MockModelEndpoint {
 }
 
 impl MockModelEndpoint {
-    pub fn start(model_name: &str) -> anyhow::Result<Self> {
+    pub fn start(model_name: &str) -> Result<Self, MockEndpointError> {
         Self::start_with_required_bearer(model_name, None)
     }
 
     pub fn start_with_required_bearer(
         model_name: &str,
         required_bearer: Option<&str>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, MockEndpointError> {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         let state = MockState {
             model_name: model_name.to_string(),

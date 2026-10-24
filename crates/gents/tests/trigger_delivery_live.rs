@@ -2,7 +2,6 @@
 
 mod support;
 
-use anyhow::{ensure, Context, Result};
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
@@ -16,14 +15,17 @@ use std::{
 };
 use support::live_inference::{boot_live_agent, terminal_assistant_answer};
 
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 fn artifact_directory(label: &str) -> Result<std::path::PathBuf> {
     let root = std::env::var_os("GENTS_DELIVERY_ARTIFACT_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&root)?;
-    let source_sha = std::env::var("GENTS_DELIVERY_SOURCE_SHA")
-        .context("GENTS_DELIVERY_SOURCE_SHA must identify the committed source under test")?;
-    ensure!(
+    let source_sha = std::env::var("GENTS_DELIVERY_SOURCE_SHA").map_err(|error| {
+        format!("GENTS_DELIVERY_SOURCE_SHA must identify the committed source under test: {error}")
+    })?;
+    assert!(
         source_sha.len() == 40 && source_sha.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "GENTS_DELIVERY_SOURCE_SHA must be a full commit SHA"
     );
@@ -44,7 +46,7 @@ fn provider_peaks(calls: &[Value]) -> Result<BTreeMap<String, usize>> {
     for call in calls.iter().filter(|row| row["call_kind"] == "inference") {
         let start = chrono::DateTime::parse_from_rfc3339(string(call, "started_at")?)?;
         let end = chrono::DateTime::parse_from_rfc3339(string(call, "ended_at")?)?;
-        ensure!(end > start, "invalid provider interval: {call}");
+        assert!(end > start, "invalid provider interval: {call}");
         for key in [string(call, "backend_id")?, "all"] {
             events
                 .entry(key.into())
@@ -60,9 +62,9 @@ fn provider_peaks(calls: &[Value]) -> Result<BTreeMap<String, usize>> {
             active += delta;
             peak = peak.max(active);
         }
-        ensure!(active == 0, "provider interval imbalance");
+        assert!(active == 0, "provider interval imbalance");
         let bound = if backend == "all" { 64 } else { 32 };
-        ensure!(
+        assert!(
             peak <= bound,
             "backend admission exceeded configured capacity: {backend} peak={peak}"
         );
@@ -109,7 +111,8 @@ async fn apply(
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
-        .await
+        .await?;
+    Ok(())
 }
 
 async fn rows(
@@ -129,14 +132,14 @@ async fn rows(
     )).await?;
     Ok(result["data"][collection]
         .as_array()
-        .context("query rows")?
+        .ok_or("query rows")?
         .clone())
 }
 
 fn string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
     row[field]
         .as_str()
-        .with_context(|| format!("missing {field} in {row}"))
+        .ok_or_else(|| format!("missing {field} in {row}").into())
 }
 
 async fn configure(
@@ -232,15 +235,17 @@ async fn configure(
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1 and GENTS_DELIVERY_ENDPOINT_2"]
 async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> Result<()> {
-    ensure!(
+    assert!(
         std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
         "explicit live opt-in required"
     );
     let endpoints = [
-        std::env::var("GENTS_DELIVERY_ENDPOINT_1").context("first workstation /v1 endpoint")?,
-        std::env::var("GENTS_DELIVERY_ENDPOINT_2").context("second workstation /v1 endpoint")?,
+        std::env::var("GENTS_DELIVERY_ENDPOINT_1")
+            .map_err(|error| format!("first workstation /v1 endpoint: {error}"))?,
+        std::env::var("GENTS_DELIVERY_ENDPOINT_2")
+            .map_err(|error| format!("second workstation /v1 endpoint: {error}"))?,
     ];
-    ensure!(
+    assert!(
         endpoints[0] != endpoints[1],
         "two distinct inference endpoints required"
     );
@@ -283,7 +288,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         if leads.len() == 2 {
             break leads;
         }
-        ensure!(
+        assert!(
             tokio::time::Instant::now() < deadline,
             "lead admission timed out: {leads:?}"
         );
@@ -293,7 +298,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         .iter()
         .map(|row| string(row, "session_id").map(str::to_owned))
         .collect::<Result<Vec<_>>>()?;
-    ensure!(
+    assert!(
         sessions[0] != sessions[1],
         "independent lead fires reused a session"
     );
@@ -318,7 +323,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
             &owner,
         )
         .await?;
-        ensure!(
+        assert!(
             requests.iter().all(|row| {
                 !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
                     row["lifecycle_state"].as_str(),
@@ -335,7 +340,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
                 .iter()
                 .filter(|row| row["lifecycle_state"] == "processing")
                 .count();
-            ensure!(
+            assert!(
                 running <= 1,
                 "concurrent requests in one lead session: {scoped:?}"
             );
@@ -383,16 +388,16 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         {
             break (requests, fires, outcomes);
         }
-        ensure!(tokio::time::Instant::now() < deadline,
+        assert!(tokio::time::Instant::now() < deadline,
             "delivery timed out: {} requests, {} receipts, {} outcomes; requests={requests:?}; outcomes={outcomes:?}",
             requests.len(), fires.len(), outcomes.len());
-        ensure!(
+        assert!(
             outcomes.len() <= 64,
             "outcome consumer chained: {outcomes:?}"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     };
-    ensure!(
+    assert!(
         observed_busy_queue,
         "did not observe an inbox queued behind its busy lead; qualification incomplete"
     );
@@ -405,7 +410,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
             .iter()
             .map(|row| string(row, key))
             .collect::<Result<BTreeSet<_>>>()?;
-        ensure!(
+        assert!(
             keys.len() == records.len(),
             "duplicate {collection} identity"
         );
@@ -423,7 +428,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         } else {
             "delivery-backend-0"
         };
-        ensure!(
+        assert!(
             calls
                 .iter()
                 .any(|call| call["request_id"] == request["request_id"]
@@ -435,7 +440,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     }
     for lane in 0..2 {
         let behavior = format!("delivery-worker-{lane}");
-        ensure!(
+        assert!(
             requests
                 .iter()
                 .filter(|row| row["agent_id"] == behavior)
@@ -448,16 +453,16 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let handoff = string(outcome, "source_handoff_id")?;
         let target = expected
             .remove(handoff)
-            .context("duplicate or unknown outcome handoff")?;
-        ensure!(
+            .ok_or("duplicate or unknown outcome handoff")?;
+        assert!(
             outcome["reply_session_id"] == target,
             "outcome lost lead routing: {outcome}"
         );
-        ensure!(
+        assert!(
             outcome["terminal_state"] == "completed",
             "worker failed: {outcome}"
         );
-        ensure!(outcome["attempt"] == 1, "outcome lost attempt: {outcome}");
+        assert!(outcome["attempt"] == 1, "outcome lost attempt: {outcome}");
         let inboxes = requests
             .iter()
             .filter(|row| {
@@ -467,38 +472,38 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
                         .is_some_and(|text| text.contains(handoff))
             })
             .collect::<Vec<_>>();
-        ensure!(
+        assert!(
             inboxes.len() == 1,
             "handoff must enter exactly one lead inbox: {inboxes:?}"
         );
-        ensure!(
+        assert!(
             inboxes[0]["session_id"] == target,
             "handoff reached the other lead"
         );
         let answer = terminal_assistant_answer(&db.node, string(inboxes[0], "request_id")?).await;
-        ensure!(
+        assert!(
             answer.contains(&target) && answer.contains(handoff),
             "lead inference did not acknowledge its own rendered session: {answer}"
         );
     }
-    ensure!(expected.is_empty(), "missing outcomes: {expected:?}");
+    assert!(expected.is_empty(), "missing outcomes: {expected:?}");
     for lead in leads {
         let request = requests
             .iter()
             .find(|row| row["request_id"] == lead["request_id"])
-            .context("lead request missing")?;
-        ensure!(
+            .ok_or("lead request missing")?;
+        assert!(
             string(request, "content")?.contains(string(&lead, "session_id")?),
             "lead template rendered a different session"
         );
         let answer = terminal_assistant_answer(&db.node, string(&lead, "request_id")?).await;
-        ensure!(
+        assert!(
             answer.contains(string(&lead, "session_id")?),
             "lead did not receive its rendered session: {answer}"
         );
     }
     let peaks = provider_peaks(&calls)?;
-    ensure!(
+    assert!(
         peaks["delivery-backend-0"] > 1 && peaks["delivery-backend-1"] > 1,
         "both endpoints must demonstrate concurrent provider calls: {peaks:?}"
     );

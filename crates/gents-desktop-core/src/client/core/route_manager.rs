@@ -328,10 +328,10 @@ impl ClientRouteManager {
                 return RouteReconcileState::Unavailable;
             }
             Err(error) => {
-                let error_class = error
-                    .downcast_ref::<RemoteP2pAdminError>()
-                    .map(classify_remote_admin_error);
-                if let Some(remote_error) = error.downcast_ref::<RemoteP2pAdminError>() {
+                let remote_error =
+                    gents_protocol::error_chain::find_source::<RemoteP2pAdminError>(error.as_ref());
+                let error_class = remote_error.map(classify_remote_admin_error);
+                if let Some(remote_error) = remote_error {
                     record_failure(record, sync_state, &desired, remote_error);
                 }
                 record_pairing_error(record, sync_state, &error);

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
+use super::error::P2pReconcileError;
 use crate::graphql::escape_graphql_string;
 
 use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_list_literal};
@@ -41,7 +42,7 @@ pub fn resolve_network_id() -> String {
 
 pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["conversation", "agent-config"];
 
-pub fn validate_offered_templates<I, S>(offered: I) -> Result<Vec<String>>
+pub fn validate_offered_templates<I, S>(offered: I) -> Result<Vec<String>, P2pReconcileError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -52,10 +53,10 @@ where
     for id in offered {
         let id = id.as_ref().trim();
         if id.is_empty() {
-            anyhow::bail!("offered scope template must not be blank");
+            return Err(P2pReconcileError::BlankOfferedScopeTemplate);
         }
         if resolve_template(id).is_none() {
-            anyhow::bail!("unknown offered scope template {id:?}");
+            return Err(P2pReconcileError::UnknownOfferedScopeTemplate { id: id.to_owned() });
         }
         if seen.insert(id.to_string()) {
             out.push(id.to_string());

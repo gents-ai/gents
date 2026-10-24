@@ -2,11 +2,12 @@ use super::*;
 
 impl ToolCallLifecycle {
     pub(crate) async fn clear_background_request(&self, expected: Option<&str>) -> Result<()> {
-        let doc = escape_graphql_string(self.doc_id().context("tool has no physical row")?);
+        let doc =
+            escape_graphql_string(self.doc_id().ok_or(TransitionError::ToolHasNoPhysicalRow)?);
         let started = escape_graphql_string(
             &self
                 .started_at
-                .context("tool has not started")?
+                .ok_or(TransitionError::ToolNotStarted)?
                 .to_rfc3339(),
         );
         let deadline = escape_graphql_string(&self.deadline_at.to_rfc3339());
@@ -28,10 +29,9 @@ impl ToolCallLifecycle {
 
     pub(crate) async fn background_with_receipt(&mut self, receipt: &str) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
-        anyhow::ensure!(
-            self.await_mode == AwaitMode::Foreground && self.plugin_effect.is_none(),
-            "only a running direct foreground tool can be backgrounded"
-        );
+        if !(self.await_mode == AwaitMode::Foreground && self.plugin_effect.is_none()) {
+            return Err(TransitionError::NotDirectForegroundForBackground.into());
+        }
         let mut adopted = self.clone();
         adopted.await_mode = AwaitMode::Background;
         let binding = adopted.background_receipt_binding()?;
@@ -52,8 +52,10 @@ impl ToolCallLifecycle {
                 Box::pin(async move {
                     if original.background_in_txn(txn, original.deadline_at, crate::hook::persistence::BackgroundSlot::Occupied).await?.is_none() {
                         let existing = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key}" }} }}, limit: 2) {{ _docID }} }}"#)).await?;
-                        anyhow::ensure!(existing.pointer("/data/AgentMessage").and_then(serde_json::Value::as_array)
-                            .is_some_and(|rows| rows.len() == 1), "foreground tool changed before background handoff");
+                        if !existing.pointer("/data/AgentMessage").and_then(serde_json::Value::as_array)
+                            .is_some_and(|rows| rows.len() == 1) {
+                            return Err(TransitionError::ForegroundChangedBeforeHandoff.into());
+                        }
                         crate::tool_call_lifecycle::delivery::publish_background_receipt_in_txn(txn, &binding, &receipt).await?;
                         return Ok(());
                     }
@@ -68,10 +70,9 @@ impl ToolCallLifecycle {
 
     pub async fn background(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
-        anyhow::ensure!(
-            self.plugin_effect.is_none(),
-            "plugin effects cannot detach from their parent invocation"
-        );
+        if self.plugin_effect.is_some() {
+            return Err(TransitionError::PluginEffectDetach.into());
+        }
         if self.await_mode == AwaitMode::Background {
             return Err(IllegalToolCallTransition::ModeAlreadyBackground.into());
         }
@@ -115,17 +116,16 @@ impl ToolCallLifecycle {
         slot: crate::hook::persistence::BackgroundSlot,
     ) -> Result<Option<Self>> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
-        anyhow::ensure!(
-            self.plugin_effect.is_none() && self.await_mode == AwaitMode::Foreground,
-            "only a running foreground call can move to the background"
-        );
+        if !(self.plugin_effect.is_none() && self.await_mode == AwaitMode::Foreground) {
+            return Err(TransitionError::NotForegroundForBackground.into());
+        }
         let doc_id = self
             .doc_id
             .as_ref()
-            .ok_or_else(|| anyhow!("background called before start_running persisted a row"))?;
+            .ok_or(TransitionError::BackgroundBeforeStart)?;
         let started_at = self
             .started_at
-            .ok_or_else(|| anyhow!("background called without started_at set"))?;
+            .ok_or(TransitionError::BackgroundWithoutStartedAt)?;
         let escaped_doc_id = escape_graphql_string(doc_id);
         let response = txn
             .execute(&format!(
@@ -153,7 +153,7 @@ impl ToolCallLifecycle {
         let request_doc_id = self
             .request_doc_id
             .as_deref()
-            .ok_or_else(|| anyhow!("background called without parent request document"))?;
+            .ok_or(TransitionError::BackgroundWithoutRequestDoc)?;
         crate::hook::persistence::reserve_background_slot_in_txn(txn, request_doc_id, slot, "")
             .await?;
         let mut adopted = self.clone();
@@ -197,10 +197,10 @@ impl ToolCallLifecycle {
         let doc_id = self
             .doc_id
             .as_ref()
-            .ok_or_else(|| anyhow!("foreground called before start_running persisted a row"))?;
+            .ok_or(TransitionError::ForegroundBeforeStart)?;
         let started_at = self
             .started_at
-            .ok_or_else(|| anyhow!("foreground called without started_at set"))?;
+            .ok_or(TransitionError::ForegroundWithoutStartedAt)?;
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
 

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::{
     reconstruction::{reconstruct_stream, ObservedSegment},
@@ -13,7 +13,7 @@ use crate::session::canonical_rows::{
     request_output_segments_query, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 
-use super::{ToolCallLifecycle, ToolCallState};
+use super::{ToolCallLifecycle, ToolCallLifecycleError, ToolCallState};
 use crate::plugin::tool_calls::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 
 #[derive(Clone)]
@@ -24,7 +24,9 @@ pub(super) struct PluginEffectTerminal {
 }
 
 impl ToolCallLifecycle {
-    pub(super) fn plugin_effect_terminal(&self) -> Result<Option<PluginEffectTerminal>> {
+    pub(super) fn plugin_effect_terminal(
+        &self,
+    ) -> Result<Option<PluginEffectTerminal>, ToolCallLifecycleError> {
         self.plugin_effect
             .as_ref()
             .map(|effect| {
@@ -35,7 +37,7 @@ impl ToolCallLifecycle {
                     generation: self
                         .execution_generation
                         .clone()
-                        .context("plugin effect lacks generation")?,
+                        .ok_or(ToolCallLifecycleError::PluginEffectLacksGeneration)?,
                 })
             })
             .transpose()
@@ -47,29 +49,29 @@ impl ToolCallLifecycle {
         name: &str,
         arguments: &str,
     ) -> Result<Self> {
-        anyhow::ensure!(
-            self.state == ToolCallState::Running
-                && self.plugin_effect.is_none()
-                && self.spawned_by_tool_call_doc_id.is_none(),
-            "plugin effects require a running direct parent"
-        );
-        anyhow::ensure!(
-            (1..=MAX_EFFECTS).contains(&ordinal)
-                && !name.trim().is_empty()
-                && arguments.len() <= MAX_PAYLOAD_BYTES,
-            "plugin effect exceeds its invocation bounds"
-        );
+        if self.state != ToolCallState::Running
+            || self.plugin_effect.is_some()
+            || self.spawned_by_tool_call_doc_id.is_some()
+        {
+            return Err(ToolCallLifecycleError::PluginEffectRequiresRunningDirectParent.into());
+        }
+        if !((1..=MAX_EFFECTS).contains(&ordinal)
+            && !name.trim().is_empty()
+            && arguments.len() <= MAX_PAYLOAD_BYTES)
+        {
+            return Err(ToolCallLifecycleError::PluginEffectExceedsInvocationBounds.into());
+        }
         let _: serde_json::Map<String, serde_json::Value> = serde_json::from_str(arguments)
-            .context("plugin effect arguments must be a JSON object")?;
+            .map_err(|source| ToolCallLifecycleError::PluginEffectArgumentsNotObject { source })?;
         let binding = self.tool_output_binding()?;
         let header = self
             .accepted_header_doc_id
             .clone()
-            .context("plugin parent lacks accepted header")?;
+            .ok_or(ToolCallLifecycleError::PluginParentLacksAcceptedHeader)?;
         let generation = self
             .execution_generation
             .clone()
-            .context("plugin parent lacks generation")?;
+            .ok_or(ToolCallLifecycleError::PluginParentLacksGeneration)?;
         let name = name.to_owned();
         let arguments = arguments.to_owned();
         let sequence = self.message_sequence;
@@ -93,11 +95,13 @@ impl ToolCallLifecycle {
                         plugin_parent_tool_call_doc_id: {{ _eq: "{parent}" }}, plugin_effect_ordinal: {{ _eq: {ordinal} }}
                     }}, limit: 2) {{ _docID tool_call_key tool_call_id tool_name request_id request_doc_id message_sequence
                         deadline_at spawned_by_tool_call_doc_id }} }}"#)).await?;
-                    let rows = result["data"]["AgentToolCall"].as_array().context("plugin effect lookup omitted rows")?;
-                    anyhow::ensure!(rows.len() <= 1, "plugin effect has conflicting physical identities");
+                    let rows = result["data"]["AgentToolCall"].as_array().ok_or(ToolCallLifecycleError::PluginEffectLookupOmittedRows)?;
+                    if rows.len() > 1 {
+                        return Err(ToolCallLifecycleError::PluginEffectConflictingIdentities.into());
+                    }
                     if let Some(row) = rows.first() {
-                        let child = row["_docID"].as_str().context("plugin effect lacks physical identity")?;
-                        anyhow::ensure!(row["tool_call_key"].as_str() == Some(&key)
+                        let child = row["_docID"].as_str().ok_or(ToolCallLifecycleError::PluginEffectLacksPhysicalIdentity)?;
+                        let immutable = row["tool_call_key"].as_str() == Some(&key)
                             && row["tool_call_id"].as_str() == Some(&internal_id)
                             && row["tool_name"].as_str() == Some(&name)
                             && row["request_id"].as_str() == Some(&request_id)
@@ -105,10 +109,14 @@ impl ToolCallLifecycle {
                             && row["message_sequence"].as_u64() == Some(u64::from(sequence))
                             && row["spawned_by_tool_call_doc_id"].is_null()
                             && DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap_or(""))?
-                                .with_timezone(&Utc) == deadline,
-                            "plugin effect replay changed immutable admission");
+                                .with_timezone(&Utc) == deadline;
+                        if !immutable {
+                            return Err(ToolCallLifecycleError::PluginEffectReplayChangedAdmission.into());
+                        }
                         let (_, stored) = arguments_in_txn(txn, &binding, child, &generation, &internal_id, &name).await?;
-                        anyhow::ensure!(stored == arguments, "plugin effect replay changed arguments");
+                        if stored != arguments {
+                            return Err(ToolCallLifecycleError::PluginEffectReplayChangedArguments.into());
+                        }
                         return Ok(child.to_owned());
                     }
                     let created = txn.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
@@ -149,21 +157,24 @@ impl ToolCallLifecycle {
             self.requester_did.as_deref(),
         )
         .await?
-        .context("admitted plugin effect disappeared")
+        .ok_or(ToolCallLifecycleError::PluginEffectAdmittedDisappeared)
+        .map_err(anyhow::Error::from)
     }
 
-    fn plugin_effect_parent_binding(&self) -> Result<super::delivery::ToolOutputBinding> {
+    fn plugin_effect_parent_binding(
+        &self,
+    ) -> Result<super::delivery::ToolOutputBinding, ToolCallLifecycleError> {
         let effect = self
             .plugin_effect
             .as_ref()
-            .context("plugin effect lacks provenance")?;
+            .ok_or(ToolCallLifecycleError::PluginEffectLacksProvenance)?;
         Ok(super::delivery::ToolOutputBinding {
             node: self.node.clone(),
             tool_call_doc_id: effect.parent_tool_call_doc_id.clone(),
             request_doc_id: self
                 .request_doc_id
                 .clone()
-                .context("plugin effect lacks request binding")?,
+                .ok_or(ToolCallLifecycleError::PluginEffectLacksRequestBinding)?,
             session_id: self.session_id.clone(),
             node_did: self.node_did.clone(),
             requester_did: self.requester_did.clone(),
@@ -178,20 +189,20 @@ impl ToolCallLifecycle {
         let effect = self
             .plugin_effect
             .clone()
-            .context("plugin effect lacks provenance")?;
+            .ok_or(ToolCallLifecycleError::PluginEffectLacksProvenance)?;
         let parent = self.plugin_effect_parent_binding()?;
         let child = self
             .doc_id
             .clone()
-            .context("plugin effect lacks physical identity")?;
+            .ok_or(ToolCallLifecycleError::PluginEffectLacksPhysicalIdentity)?;
         let header = self
             .accepted_header_doc_id
             .clone()
-            .context("plugin effect lacks parent header")?;
+            .ok_or(ToolCallLifecycleError::PluginEffectLacksParentHeader)?;
         let generation = self
             .execution_generation
             .clone()
-            .context("plugin effect lacks generation")?;
+            .ok_or(ToolCallLifecycleError::PluginEffectLacksGeneration)?;
         let sequence = self.message_sequence;
         let deadline = self.deadline_at;
         let internal_id = self.tool_call_id.clone();
@@ -219,8 +230,9 @@ impl ToolCallLifecycle {
                     escape_graphql_string(&internal_id), escape_graphql_string(&name),
                     escape_graphql_string(&deadline.to_rfc3339_opts(SecondsFormat::Nanos, true)),
                     escape_graphql_string(&now.to_rfc3339_opts(SecondsFormat::Nanos, true)))).await?;
-                anyhow::ensure!(result["data"]["update_AgentToolCall"].as_array().is_some_and(|rows| rows.len() == 1),
-                    "plugin effect is no longer pending");
+                if !result["data"]["update_AgentToolCall"].as_array().is_some_and(|rows| rows.len() == 1) {
+                    return Err(ToolCallLifecycleError::PluginEffectNoLongerPending.into());
+                }
                 Ok(now)
             })
         }).await?;
@@ -257,20 +269,21 @@ pub(super) async fn validate_parent(
         escape_graphql_string(&binding.tool_call_doc_id), escape_graphql_string(&binding.request_doc_id))).await?;
     let rows = rows["data"]["AgentToolCall"]
         .as_array()
-        .context("plugin parent lookup omitted rows")?;
-    anyhow::ensure!(rows.len() == 1, "plugin parent is missing or ambiguous");
+        .ok_or(ToolCallLifecycleError::PluginParentLookupOmittedRows)?;
+    if rows.len() != 1 {
+        return Err(ToolCallLifecycleError::PluginParentMissingOrAmbiguous.into());
+    }
     let parent = &rows[0];
     let parent_deadline = DateTime::parse_from_rfc3339(
         parent["deadline_at"]
             .as_str()
-            .context("plugin parent lacks deadline")?,
+            .ok_or(ToolCallLifecycleError::PluginParentLacksDeadline)?,
     )?
     .with_timezone(&Utc);
-    anyhow::ensure!(
-        deadline <= parent_deadline && (!require_live || deadline > Utc::now()),
-        "plugin effect deadline exceeds parent or has expired"
-    );
-    anyhow::ensure!(parent["spawned_by_tool_call_doc_id"].is_null()
+    if !(deadline <= parent_deadline && (!require_live || deadline > Utc::now())) {
+        return Err(ToolCallLifecycleError::PluginEffectDeadlineExceedsParent.into());
+    }
+    let exact_parent = parent["spawned_by_tool_call_doc_id"].is_null()
         && parent["plugin_parent_tool_call_doc_id"].is_null() && parent["plugin_effect_ordinal"].is_null()
         && parent["message_sequence"].as_u64() == Some(u64::from(sequence))
         && (!require_live || parent["lifecycle_state"].as_str() == Some("running"))
@@ -282,8 +295,10 @@ pub(super) async fn validate_parent(
             if execution_generation == generation)
         && accepted.blocks.iter().any(|block| matches!(block, MessageBlock::ToolCall { tool_call_doc_id, id, name, .. }
             if tool_call_doc_id == &binding.tool_call_doc_id && Some(id.as_str()) == parent["tool_call_id"].as_str()
-                && Some(name.as_str()) == parent["tool_name"].as_str())),
-        "plugin effect has no exact accepted direct parent");
+                && Some(name.as_str()) == parent["tool_name"].as_str()));
+    if !exact_parent {
+        return Err(ToolCallLifecycleError::PluginEffectNoExactAcceptedParent.into());
+    }
     let rows = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -294,27 +309,30 @@ pub(super) async fn validate_parent(
         .await?;
     let rows = rows["data"]["AgentRequest"]
         .as_array()
-        .context("plugin request lookup omitted rows")?;
-    anyhow::ensure!(rows.len() == 1, "plugin request is missing or ambiguous");
+        .ok_or(ToolCallLifecycleError::PluginRequestLookupOmittedRows)?;
+    if rows.len() != 1 {
+        return Err(ToolCallLifecycleError::PluginRequestMissingOrAmbiguous.into());
+    }
     let request = &rows[0];
     if require_live {
-        anyhow::ensure!(
-            request["lifecycle_state"].as_str() == Some("processing")
-                && request["execution_generation"].as_str() == Some(generation)
-                && request["interrupt_requested_at"].is_null()
-                && DateTime::parse_from_rfc3339(
-                    request["execution_lease_expires_at"].as_str().unwrap_or("")
-                )?
-                .with_timezone(&Utc)
-                    > Utc::now(),
-            "plugin effect lost live request authority"
-        );
+        let live = request["lifecycle_state"].as_str() == Some("processing")
+            && request["execution_generation"].as_str() == Some(generation)
+            && request["interrupt_requested_at"].is_null()
+            && DateTime::parse_from_rfc3339(
+                request["execution_lease_expires_at"].as_str().unwrap_or(""),
+            )?
+            .with_timezone(&Utc)
+                > Utc::now();
+        if !live {
+            return Err(ToolCallLifecycleError::PluginEffectLostRequestAuthority.into());
+        }
     }
     request["request_id"]
         .as_str()
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
-        .context("plugin request lacks logical identity")
+        .ok_or(ToolCallLifecycleError::PluginRequestLacksLogicalIdentity)
+        .map_err(anyhow::Error::from)
 }
 
 pub(super) async fn arguments_in_txn(
@@ -330,8 +348,8 @@ pub(super) async fn arguments_in_txn(
         .await?;
     let rows = response["data"]["AgentOutputSegment"]
         .as_array()
-        .context("plugin arguments lookup omitted segments")?;
-    arguments_from_rows(
+        .ok_or(ToolCallLifecycleError::PluginArgumentsLookupOmittedSegments)?;
+    Ok(arguments_from_rows(
         rows,
         &binding.node_did,
         &binding.session_id,
@@ -341,7 +359,7 @@ pub(super) async fn arguments_in_txn(
         generation,
         internal_id,
         name,
-    )
+    )?)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -355,7 +373,7 @@ pub(super) fn arguments_from_rows(
     generation: &str,
     internal_id: &str,
     name: &str,
-) -> Result<(PayloadRef, String)> {
+) -> Result<(PayloadRef, String), ToolCallLifecycleError> {
     let records =
         decode_scoped_request_output_segments(rows, node_did, Some(session_id), requester_did)?;
     let source = OutputSource::ToolEffectArguments {
@@ -365,19 +383,18 @@ pub(super) fn arguments_from_rows(
         .iter()
         .filter(|row| row.segment.source == source)
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        records.len() == 1,
-        "plugin effect requires one immutable arguments source"
-    );
+    if records.len() != 1 {
+        return Err(ToolCallLifecycleError::PluginEffectArgumentsSourceNotSingle);
+    }
     let record = records[0];
-    anyhow::ensure!(
-        record.segment.request_doc_id == request_doc_id
-            && matches!(&record.segment.writer, OutputWriter::RequestExecution { execution_generation }
-            if execution_generation == generation)
-            && matches!(&record.segment.close, Some(SourceClose::Closed { outcome: OutputOutcome::Complete,
-            segments: 1, stream_bytes }) if stream_bytes.len() == 1),
-        "invalid plugin arguments closure"
-    );
+    let closed = record.segment.request_doc_id == request_doc_id
+        && matches!(&record.segment.writer, OutputWriter::RequestExecution { execution_generation }
+        if execution_generation == generation)
+        && matches!(&record.segment.close, Some(SourceClose::Closed { outcome: OutputOutcome::Complete,
+        segments: 1, stream_bytes }) if stream_bytes.len() == 1);
+    if !closed {
+        return Err(ToolCallLifecycleError::PluginEffectInvalidArgumentsClosure);
+    }
     let reference = PayloadRef {
         close_doc_id: record.doc_id.clone(),
         stream: 0,
@@ -391,26 +408,24 @@ pub(super) fn arguments_from_rows(
         &[],
         &reference,
     )?;
-    anyhow::ensure!(
-        reconstructed.declaration
-            == StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolArguments {
-                    id: internal_id.to_owned(),
-                    call_id: None,
-                    name: name.to_owned()
-                }
-            },
-        "plugin argument declaration changed tool identity"
-    );
-    anyhow::ensure!(
-        reconstructed.text.len() <= MAX_PAYLOAD_BYTES,
-        "plugin arguments exceed their payload bound"
-    );
+    let declaration = StreamDeclaration {
+        block_index: 0,
+        part_index: 0,
+        payload: StreamPayload::ToolArguments {
+            id: internal_id.to_owned(),
+            call_id: None,
+            name: name.to_owned(),
+        },
+    };
+    if reconstructed.declaration != declaration {
+        return Err(ToolCallLifecycleError::PluginEffectArgumentDeclarationChanged);
+    }
+    if reconstructed.text.len() > MAX_PAYLOAD_BYTES {
+        return Err(ToolCallLifecycleError::PluginEffectArgumentsExceedBound);
+    }
     let _: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&reconstructed.text)
-            .context("plugin effect arguments must be a JSON object")?;
+            .map_err(|source| ToolCallLifecycleError::PluginEffectArgumentsNotObject { source })?;
     Ok((reference, reconstructed.text))
 }
 
