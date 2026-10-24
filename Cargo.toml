@@ -169,8 +169,8 @@ debug = 0
 
 [profile.test]
 # At opt-level 1 Cargo's implicit `lto = false` still performs local ThinLTO.
-# CI enables incremental compilation on persistent runner target trees; keeping
-# codegen units independent avoids stale ThinLTO imports and shortens links.
+# Keep codegen units independent to shorten links. CI uses job-scoped target
+# trees and a size-capped compiler cache rather than persistent incremental state.
 lto = "off"
 opt-level = 1
 debug = 0
