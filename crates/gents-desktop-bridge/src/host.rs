@@ -318,7 +318,7 @@ impl ClientHost {
                 encode(
                     settings::catalog(&self.core, &node_did)
                         .await
-                        .map_err(backend_error)?,
+                        .map_err(|error| backend_error(error.into()))?,
                 )
             }
             ClientCommand::ConfigRead {
@@ -327,7 +327,8 @@ impl ClientHost {
                 id,
             } => {
                 self.require_configured_runtime(&node_did).await?;
-                let target = settings::target(&collection).map_err(backend_error)?;
+                let target =
+                    settings::target(&collection).map_err(|error| backend_error(error.into()))?;
                 encode(
                     self.core
                         .read_config_editor(&node_did, target, &id)
@@ -343,7 +344,8 @@ impl ClientHost {
                 content,
             } => {
                 self.require_configured_runtime(&node_did).await?;
-                let target = settings::target(&collection).map_err(backend_error)?;
+                let target =
+                    settings::target(&collection).map_err(|error| backend_error(error.into()))?;
                 encode(
                     self.core
                         .save_config_editor(&node_did, target, &id, &revision, &content)
@@ -356,7 +358,7 @@ impl ClientHost {
                 encode(
                     actions::catalog(&self.core, &node_did)
                         .await
-                        .map_err(backend_error)?,
+                        .map_err(|error| backend_error(error.into()))?,
                 )
             }
             ClientCommand::StartTask {

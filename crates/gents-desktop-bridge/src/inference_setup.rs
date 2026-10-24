@@ -199,7 +199,7 @@ pub async fn discover_inference_models_for_core(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did = %request.node_did.trim(),
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "reading provider accounts for model discovery failed"
             );
             BridgeError::new(
@@ -296,7 +296,10 @@ pub(crate) async fn discovery_account(
     node_did: &str,
     provider: &str,
     account_ref: Option<&str>,
-) -> anyhow::Result<(Option<OAuthCredential>, gents::document_config::BackendAuth)> {
+) -> Result<
+    (Option<OAuthCredential>, gents::document_config::BackendAuth),
+    gents::oauth_credential::OAuthCredentialError,
+> {
     let credential = gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,

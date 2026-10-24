@@ -585,16 +585,16 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
                    runtime is serving there, stop it or pass --http-port";
 
     assert!(support::process::is_address_in_use(
-        &format!("Error: {context}\n\nCaused by:\n    Address already in use (os error 48)\n"),
+        &format!("Error: {context}: Address already in use (os error 48)\n"),
         addr
     ));
     assert!(!support::process::is_address_in_use(
-        &format!("Error: {context}\n\nCaused by:\n    Permission denied (os error 13)\n"),
+        &format!("Error: {context}: Permission denied (os error 13)\n"),
         addr
     ));
     assert!(!support::process::is_address_in_use(
-        "Error: embedded HTTP listener cannot bind to 127.0.0.1:20002\n\nCaused by:\n    \
-         Address already in use (os error 48)\n",
+        "Error: embedded HTTP listener cannot bind to 127.0.0.1:20002: Address already in use \
+         (os error 48)\n",
         addr
     ));
 }

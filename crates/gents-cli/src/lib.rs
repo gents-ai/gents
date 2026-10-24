@@ -129,6 +129,18 @@ pub(crate) enum CliError {
     ContainsUserHome { home: PathBuf, resolved: PathBuf },
     #[error("{} is not a directory", home.display())]
     NotDirectory { home: PathBuf },
+    #[error("building tokio runtime")]
+    TokioRuntime(#[source] std::io::Error),
+    #[error("running the service command")]
+    ServiceTask(#[source] tokio::task::JoinError),
+    #[error("creating data directory {}", data_dir.display())]
+    CreateDataDir {
+        data_dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("gents home {} is not initialized; run `gents init --home {}` first", home.display(), home.display())]
+    HomeNotInitialized { home: PathBuf },
 }
 
 const DEFAULT_NODE_NAME: &str = "default";
@@ -469,16 +481,18 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 ];
 pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
-pub fn run_cli() -> anyhow::Result<()> {
+pub fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_WORKER_STACK_SIZE)
         .build()
-        .context("building tokio runtime")?;
+        .map_err(CliError::TokioRuntime)?;
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
-async fn async_main(runtime: tokio::runtime::Handle) -> anyhow::Result<()> {
+async fn async_main(
+    runtime: tokio::runtime::Handle,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
     let command = match cli.command {
         Command::NativeFsRunner(args) => {
@@ -499,65 +513,74 @@ async fn async_main(runtime: tokio::runtime::Handle) -> anyhow::Result<()> {
     }
 
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
-    let result = match command {
+    let result = run_command(command, runtime).await;
+    telemetry.shutdown();
+    result
+}
+
+async fn run_command(
+    command: Command,
+    runtime: tokio::runtime::Handle,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match command {
         Command::Version => {
             print!("{}", http::version::version_text());
             Ok(())
         }
-        Command::Init(args) => commands::init::init(args).await,
-        Command::Provision(args) => commands::provision::provision(args).await,
-        Command::Desktop { command } => commands::desktop::run(command).await,
-        Command::Reset(args) => commands::reset::reset(args).await,
-        Command::Server(args) => commands::serve::serve(args, runtime).await,
+        Command::Init(args) => Ok(commands::init::init(args).await?),
+        Command::Provision(args) => Ok(commands::provision::provision(args).await?),
+        Command::Desktop { command } => Ok(commands::desktop::run(command).await?),
+        Command::Reset(args) => Ok(commands::reset::reset(args).await?),
+        Command::Server(args) => Ok(commands::serve::serve(args, runtime).await?),
         Command::Service { command } => {
             Ok(
                 tokio::task::spawn_blocking(move || service_command(command))
                     .await
-                    .context("running the service command")??,
+                    .map_err(CliError::ServiceTask)??,
             )
         }
-        Command::Chat(args) => commands::chat::chat(args).await,
+        Command::Chat(args) => Ok(commands::chat::chat(args).await?),
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
-        Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
-        Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
-        Command::Accounts { command } => commands::accounts::dispatch(command).await,
-        Command::GrokLogin(args) => commands::grok_login::grok_login(args).await,
-        Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
-        Command::ClaudeLogin(args) => commands::claude_login::claude_login(args).await,
-        Command::Cloud { command } => commands::cloud::dispatch(command).await,
-        Command::P2p { command } => commands::p2p::dispatch(command).await,
-        Command::Schema { command } => commands::schema::dispatch(command).await,
-        Command::Trace { command } => commands::trace::dispatch(command).await,
+        Command::CodexLogin(args) => Ok(commands::codex_login::codex_login(args).await?),
+        Command::CodexAuthProbe(args) => {
+            Ok(commands::codex_auth_probe::codex_auth_probe(args).await?)
+        }
+        Command::Accounts { command } => Ok(commands::accounts::dispatch(command).await?),
+        Command::GrokLogin(args) => Ok(commands::grok_login::grok_login(args).await?),
+        Command::GrokAuthProbe(args) => Ok(commands::grok_auth_probe::grok_auth_probe(args).await?),
+        Command::ClaudeLogin(args) => Ok(commands::claude_login::claude_login(args).await?),
+        Command::Cloud { command } => Ok(commands::cloud::dispatch(command).await?),
+        Command::P2p { command } => Ok(commands::p2p::dispatch(command).await?),
+        Command::Schema { command } => Ok(commands::schema::dispatch(command).await?),
+        Command::Trace { command } => Ok(commands::trace::dispatch(command).await?),
         Command::Status(args) => Ok(commands::status::status(args).await?),
-        Command::Query(args) => commands::query::query(args).await,
-        Command::Write(args) => commands::write::write(args).await,
-        Command::Document { command } => commands::document::dispatch(command).await,
-        Command::Background { command } => commands::background::dispatch(command).await,
-        Command::Mcp { command } => commands::mcp::dispatch(command).await,
+        Command::Query(args) => Ok(commands::query::query(args).await?),
+        Command::Write(args) => Ok(commands::write::write(args).await?),
+        Command::Document { command } => Ok(commands::document::dispatch(command).await?),
+        Command::Background { command } => Ok(commands::background::dispatch(command).await?),
+        Command::Mcp { command } => Ok(commands::mcp::dispatch(command).await?),
         Command::Fleet { command } => Ok(commands::fleet::dispatch(command).await?),
-        Command::Task { command } => commands::task::dispatch(command).await,
-        Command::Graph { command } => commands::graph::dispatch(command).await,
-        Command::Pack { command } => commands::pack::dispatch(command).await,
-        Command::Plugin { command } => commands::plugin::dispatch(command).await,
-        Command::Ux { command } => commands::ux::dispatch(command).await,
-        Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
-        Command::Tools { command } => commands::tools::dispatch(command).await,
-        Command::Config { command } => commands::config::dispatch(command).await,
-        Command::Request { command } => commands::request::dispatch(command).await,
-        Command::Response { command } => commands::response::dispatch(command).await,
-        Command::Session { command } => commands::session::dispatch(command).await,
-        Command::Goal { command } => commands::goal::dispatch(command).await,
-        Command::Job { command } => commands::job::dispatch(command).await,
-        Command::Chain { command } => commands::chain::dispatch(command).await,
-        Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
-        Command::Eval { command } => commands::eval::dispatch(command, runtime).await,
+        Command::Task { command } => Ok(commands::task::dispatch(command).await?),
+        Command::Graph { command } => Ok(commands::graph::dispatch(command).await?),
+        Command::Pack { command } => Ok(commands::pack::dispatch(command).await?),
+        Command::Plugin { command } => Ok(commands::plugin::dispatch(command).await?),
+        Command::Ux { command } => Ok(commands::ux::dispatch(command).await?),
+        Command::Diagnose(args) => Ok(commands::diagnose::diagnose(args).await?),
+        Command::Tools { command } => Ok(commands::tools::dispatch(command).await?),
+        Command::Config { command } => Ok(commands::config::dispatch(command).await?),
+        Command::Request { command } => Ok(commands::request::dispatch(command).await?),
+        Command::Response { command } => Ok(commands::response::dispatch(command).await?),
+        Command::Session { command } => Ok(commands::session::dispatch(command).await?),
+        Command::Goal { command } => Ok(commands::goal::dispatch(command).await?),
+        Command::Job { command } => Ok(commands::job::dispatch(command).await?),
+        Command::Chain { command } => Ok(commands::chain::dispatch(command).await?),
+        Command::Mailbox { command } => Ok(commands::mailbox::dispatch(command).await?),
+        Command::Eval { command } => Ok(commands::eval::dispatch(command, runtime).await?),
         Command::Optimization { command } => {
-            commands::optimization::dispatch(command, runtime).await
+            Ok(commands::optimization::dispatch(command, runtime).await?)
         }
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
-    };
-    telemetry.shutdown();
-    result
+    }
 }
 
 fn service_command(command: ServiceCommand) -> Result<()> {
@@ -688,8 +711,10 @@ pub(crate) async fn resolve_config_access(
     }
 
     let data_dir = default_data_dir(&home_dir);
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    fs::create_dir_all(&data_dir).map_err(|source| CliError::CreateDataDir {
+        data_dir: data_dir.clone(),
+        source,
+    })?;
     let claim = gents::home::lock_store(&home_dir, &data_dir)?;
     let node = std::sync::Arc::new(
         persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
@@ -722,12 +747,8 @@ pub(crate) async fn persistent_node_builder_with_stored_identity(
     home_dir: &Path,
     data_dir: &Path,
 ) -> anyhow::Result<NodeBuilder> {
-    let config = read_init_config(home_dir)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "gents home {} is not initialized; run `gents init --home {}` first",
-            home_dir.display(),
-            home_dir.display()
-        )
+    let config = read_init_config(home_dir)?.ok_or_else(|| CliError::HomeNotInitialized {
+        home: home_dir.to_path_buf(),
     })?;
     let identity = load_initialized_home_identity(home_dir, &config)?;
     Ok(persistent_node_builder(home_dir, data_dir)

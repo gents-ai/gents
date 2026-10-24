@@ -5,6 +5,14 @@ use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
 
+#[derive(Debug, thiserror::Error)]
+enum PermissionsError {
+    #[error(transparent)]
+    Approval(#[from] gents::plugin::approval::PluginApprovalError),
+    #[error("The workspace path must be valid UTF-8.")]
+    NonUtf8Path,
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspacePermissionsRequest {
@@ -188,7 +196,7 @@ async fn target(
         .await
         .map_err(|error| super::backend_error(error.into()))?
         .map(|local| Target::Local(Box::new(local)))
-        .map_err(super::backend_error)
+        .map_err(|error| super::backend_error(error.into()))
 }
 
 fn local_target(
@@ -196,17 +204,16 @@ fn local_target(
     requester: &str,
     request: &WorkspacePermissionsRequest,
     support: Support,
-) -> anyhow::Result<LocalTarget> {
+) -> Result<LocalTarget, PermissionsError> {
     let key = WorkspaceKey::canonical(
         &request.node_did,
         requester,
         &request.agent_id,
         std::path::Path::new(&request.workspace_path),
     )?;
-    anyhow::ensure!(
-        key.path.to_str().is_some(),
-        "The workspace path must be valid UTF-8."
-    );
+    if key.path.to_str().is_none() {
+        return Err(PermissionsError::NonUtf8Path);
+    }
     let settings = workspace::get(home, &key)?;
     Ok(LocalTarget {
         support,
@@ -243,7 +250,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             })
             .await

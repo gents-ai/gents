@@ -244,20 +244,27 @@ where
         .register_window(window.label());
 }
 
+#[derive(Debug, thiserror::Error)]
+enum DesktopProcessError {
+    #[error(transparent)]
+    HomeReset(#[from] gents_desktop_core::home_reset::HomeResetError),
+    #[error("the desktop process lock is already held by this app")]
+    AlreadyHeld,
+}
+
 /// Holds the process lock across the reset reservation for the app lifetime.
 fn hold_desktop_process<R>(
     app: &tauri::AppHandle<R>,
     paths: &gents_desktop_core::client::DesktopPaths,
-) -> anyhow::Result<()>
+) -> Result<(), DesktopProcessError>
 where
     R: Runtime,
 {
     let reservation = gents_desktop_core::home_reset::lock_reset(paths)?;
     let process = gents_desktop_core::home_reset::lock_desktop_process(paths, false)?;
-    anyhow::ensure!(
-        app.manage(process),
-        "the desktop process lock is already held by this app"
-    );
+    if !app.manage(process) {
+        return Err(DesktopProcessError::AlreadyHeld);
+    }
     drop(reservation);
     Ok(())
 }
