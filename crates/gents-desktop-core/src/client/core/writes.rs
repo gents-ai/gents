@@ -263,11 +263,16 @@ fn request_in_scope(
     })
 }
 
-fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
+fn required_peer_generation<'a>(
+    name: &str,
+    value: Option<&'a str>,
+) -> Result<&'a str, ClientCoreError> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .with_context(|| format!("{name} is missing from the current peer authority"))
+        .ok_or_else(|| ClientCoreError::PeerAuthorityFieldMissing {
+            name: name.to_owned(),
+        })
 }
 
 fn row_matches_source(

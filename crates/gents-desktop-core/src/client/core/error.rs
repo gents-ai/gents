@@ -55,6 +55,8 @@ pub(crate) enum ClientCoreError {
     },
     #[error("timed out waiting for bootstrap peer {peer_id} to connect for {label}")]
     WaitBootstrapPeerTimedOut { peer_id: String, label: String },
+    #[error("{name} is missing from the current peer authority")]
+    PeerAuthorityFieldMissing { name: String },
     #[error("{field} must not be empty")]
     EmptyRequiredField { field: String },
     #[error("a simulated peer route requires ClientCoreOptions::local_simulated_route()")]
@@ -114,6 +116,10 @@ pub(crate) enum ClientCoreError {
     },
     #[error("timed out {operation}")]
     P2pOperationTimedOut { operation: String },
+    #[error(transparent)]
+    P2p(#[from] defra_p2p_adapter::P2PError),
+    #[error("desktop P2P transport has no dialable shareable address")]
+    P2pNoDialableAddress,
     #[error("P2P transport reported an empty peer id")]
     P2pEmptyPeerId,
     #[error("P2P transport reported no listen addresses")]

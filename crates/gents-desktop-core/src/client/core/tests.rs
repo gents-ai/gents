@@ -1790,9 +1790,9 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> Tes
         .submit_request("worker", owner.did(), "hello", Some("agent"))
         .await
         .expect_err("a send into a node-owned session must be refused");
-    let refusal = error
-        .downcast_ref::<crate::error::BridgeError>()
-        .expect("the refusal is a typed bridge error");
+    let refusal =
+        gents_protocol::error_chain::find_source::<crate::error::BridgeError>(error.as_ref())
+            .expect("the refusal is a typed bridge error");
     assert_eq!(refusal.code, crate::error::BridgeErrorCode::SessionNotOwned);
     assert_eq!(
         refusal.message,

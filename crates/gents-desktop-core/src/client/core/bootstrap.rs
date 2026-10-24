@@ -580,18 +580,45 @@ async fn client_store_key(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ClientStoreRecordError {
+    #[error("staging {}", path.display())]
+    Stage {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("writing {}", path.display())]
+    Persist {
+        path: std::path::PathBuf,
+        #[source]
+        source: tempfile::PersistError,
+    },
+}
+
 fn write_client_store_record(
     paths: &DesktopPaths,
     record: &gents::store_key::StoreEncryption,
-) -> Result<()> {
+) -> Result<(), ClientStoreRecordError> {
     let record_path = paths.store_encryption_path();
-    let staged = tempfile::NamedTempFile::new_in(paths.root())
-        .with_context(|| format!("staging {}", record_path.display()))?;
+    let staged = tempfile::NamedTempFile::new_in(paths.root()).map_err(|source| {
+        ClientStoreRecordError::Stage {
+            path: record_path.to_path_buf(),
+            source,
+        }
+    })?;
     serde_json::to_writer(staged.as_file(), record)?;
     staged.as_file().sync_all()?;
     staged
         .persist(record_path)
-        .with_context(|| format!("writing {}", record_path.display()))?;
+        .map_err(|error| ClientStoreRecordError::Persist {
+            path: record_path.to_path_buf(),
+            source: error,
+        })?;
     #[cfg(unix)]
     std::fs::File::open(paths.root())?.sync_all()?;
     Ok(())
@@ -818,8 +845,7 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            error
-                .downcast_ref::<gents::home::HomeError>()
+            gents_protocol::error_chain::find_source::<gents::home::HomeError>(error.as_ref())
                 .and_then(gents::home::HomeError::lock_held)
                 .is_some(),
             "{}",

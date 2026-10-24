@@ -43,16 +43,18 @@ use crate::client::peer_directory::RemovalCause;
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
     identity: &dyn NodeIdentity,
-) -> Result<EndpointRecord> {
+) -> Result<EndpointRecord, ClientCoreError> {
     let peer_id = timeout(P2P_OPERATION_TIMEOUT, p2p.local_peer_id())
         .await
-        .context("timed out reading desktop P2P peer id")?
-        .map_err(map_p2p_error)?;
+        .map_err(|_| ClientCoreError::P2pOperationTimedOut {
+            operation: "reading desktop P2P peer id".to_owned(),
+        })??;
     let address = timeout(P2P_OPERATION_TIMEOUT, p2p.shareable_address())
         .await
-        .context("timed out reading desktop shareable P2P address")?
-        .map_err(map_p2p_error)?
-        .context("desktop P2P transport has no dialable shareable address")?;
+        .map_err(|_| ClientCoreError::P2pOperationTimedOut {
+            operation: "reading desktop shareable P2P address".to_owned(),
+        })??
+        .ok_or(ClientCoreError::P2pNoDialableAddress)?;
     Ok(EndpointRecord {
         did: identity.did().to_string(),
         node_id: peer_id,
