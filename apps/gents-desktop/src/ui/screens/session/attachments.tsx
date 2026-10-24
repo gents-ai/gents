@@ -63,8 +63,8 @@ export function AttachmentTray({
                 </div>
               )}
               {item.error && (
-                <div className="max-w-40 text-destructive" role="alert">
-                  {item.error}
+                <div className="truncate text-destructive" title={item.error}>
+                  Could not attach
                 </div>
               )}
             </div>
@@ -83,6 +83,17 @@ export function AttachmentTray({
           </div>
         ))}
       </div>
+      {items
+        .filter((item) => item.error)
+        .map((item) => (
+          <p
+            key={item.id}
+            role="alert"
+            className="mt-1 break-words text-xs text-destructive"
+          >
+            {item.name}: {item.error}
+          </p>
+        ))}
       {error && (
         <p role="alert" className="mt-1 text-xs text-destructive">
           {error}
