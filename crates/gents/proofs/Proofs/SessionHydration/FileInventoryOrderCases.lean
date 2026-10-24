@@ -219,6 +219,19 @@ theorem a_cut_before_the_second_delivery_cannot_order_a_repeated_resource :
     comparison selected.1 selected.2 "node" "workspace" "file.rs" = none := by
   native_decide
 
+def withCoverageFact (fact : ToolFact) : Snapshot :=
+  let selected := { capturedSnapshot with tools := capturedSnapshot.tools ++ [fact] }
+  { selected with ordering := (selected.tools.map fun (fact : ToolFact) =>
+      window selected (input sequentialHeaders) fact.tool) }
+
+theorem another_request_does_not_poison_selected_coverage :
+    (withCoverageFact ⟨{tool with id := 3, request := 999}, .unknown⟩).requestCoverage
+      tool.scope tool.request = ⟨1, 0, 0⟩ := by native_decide
+
+theorem unknown_in_selected_request_prevents_completeness :
+    (withCoverageFact ⟨{tool with id := 3}, .unknown⟩).requestCoverage
+      tool.scope tool.request = ⟨1, 0, 1⟩ := by native_decide
+
 def comparisonCases : List (String × Snapshot × ClosureInput × String × String × String) :=
   let completeFork := repeatedFork true true
   let prefixFork := repeatedFork false false
@@ -236,7 +249,16 @@ def comparisonCases : List (String × Snapshot × ClosureInput × String × Stri
   let notifiedClosure := input notifiedHeaders
   let notifiedSnapshot := { capturedSnapshot with ordering := (capturedSnapshot.tools.map fun fact =>
       window capturedSnapshot notifiedClosure fact.tool) }
-  [ ("forked_repeated_resource", completeFork.1, completeFork.2, "node", "workspace", "file.rs")
+  [ ("unknown_other_request", withCoverageFact ⟨{tool with id := 3, request := 999}, .unknown⟩,
+      input sequentialHeaders, "node", "workspace", "file.rs")
+  , ("unknown_same_request", withCoverageFact ⟨{tool with id := 3}, .unknown⟩,
+      input sequentialHeaders, "node", "workspace", "file.rs")
+  , ("pending_same_request", withCoverageFact ⟨{tool with id := 3, state := .running}, .pending⟩,
+      input sequentialHeaders, "node", "workspace", "file.rs")
+  , ("unknown_other_source", withCoverageFact
+      ⟨{tool with id := 3, scope := {tool.scope with node := "other-node"}}, .unknown⟩,
+      input sequentialHeaders, "node", "workspace", "file.rs")
+  , ("forked_repeated_resource", completeFork.1, completeFork.2, "node", "workspace", "file.rs")
   , ("forked_prefix_resource", prefixFork.1, prefixFork.2, "node", "workspace", "file.rs")
   , ("fork_cut_before_repeated_delivery", cutFork.1, cutFork.2, "node", "workspace", "file.rs")
   , ("background_completion_reference", notifiedSnapshot, notifiedClosure, "node", "workspace", "file.rs")

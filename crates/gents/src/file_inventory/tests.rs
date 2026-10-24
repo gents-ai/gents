@@ -3,7 +3,8 @@ use crate::identity::KeyIdentity;
 use gents_protocol::file_changes::{FileChangeImages, FileImage, FilePermissions, ImageFailure};
 use gents_protocol::file_image_hydration::FileImageScope;
 use gents_protocol::file_inventory::{
-    FileChangeMetadata, FileImageMetadata, FileInventoryCursor, FileInventoryPage,
+    FileChangeMetadata, FileImageMetadata, FileInventoryCoverage, FileInventoryCursor,
+    FileInventoryPage,
 };
 use gents_protocol::session_hydration::HydrationRequest;
 use serde_json::Value;
@@ -45,6 +46,7 @@ impl Names {
 
     fn entry(&self, value: &Value) -> FileInventoryEntry {
         FileInventoryEntry {
+            request_coverage: serde_json::from_value(value["request_coverage"].clone()).unwrap(),
             order: match value["order"]["kind"].as_str().unwrap() {
                 "unresolved" => None,
                 "ordered" => Some(gents_protocol::file_inventory::FileInventoryOrdinal {
@@ -241,6 +243,9 @@ async fn absent_order_preserves_signed_receipts_and_cannot_gain_an_ordinal() {
         page: names.page(&case["initial_page"]),
         signature: Vec::new(),
     };
+    for entry in &mut receipt.page.entries {
+        entry.request_coverage = None;
+    }
     let payload = receipt.signing_payload().unwrap();
     receipt.signature = names.source.sign(&payload).await.unwrap();
     let stored = serde_json::to_value(&receipt).unwrap();
@@ -248,7 +253,7 @@ async fn absent_order_preserves_signed_receipts_and_cannot_gain_an_ordinal() {
         .as_array()
         .unwrap()
         .iter()
-        .all(|entry| entry.get("order").is_none()));
+        .all(|entry| entry.get("order").is_none() && entry.get("request_coverage").is_none()));
     let restored: FileInventoryPageReceipt = serde_json::from_value(stored).unwrap();
     assert_eq!(restored.signing_payload().unwrap(), payload);
     verify_reply(
@@ -258,6 +263,19 @@ async fn absent_order_preserves_signed_receipts_and_cannot_gain_an_ordinal() {
     )
     .await
     .unwrap();
+    let mut forged = receipt.clone();
+    forged.page.entries[0].request_coverage = Some(FileInventoryCoverage {
+        entries: 1,
+        pending: 0,
+        unknown: 0,
+    });
+    assert!(verify_reply(
+        &demand,
+        &gents_protocol::file_inventory::FileInventoryReply::Page(forged),
+        &names.source
+    )
+    .await
+    .is_err());
     receipt.page.entries[0].order = Some(gents_protocol::file_inventory::FileInventoryOrdinal {
         index: 0,
         entries: 1,

@@ -411,6 +411,25 @@ theorem denied_operator_cannot_select (source : Source)
     operatorSnapshot source owner actor signer admission = .error .rejected := by
   simp [operatorSnapshot, denied, Bind.bind, Except.bind]
 
+structure Coverage where
+  entries : Nat
+  pending : Nat
+  unknown : Nat
+  deriving DecidableEq, Repr
+
+/-- Coverage is derived from every selected physical tool in this exact source
+scope and request. Absence of a retained capture remains unknown; other requests
+cannot establish or invalidate completeness of this request. -/
+def Snapshot.requestCoverage (value : Snapshot) (scope : FileImages.Scope)
+    (request : DocId) : Coverage :=
+  let facts := value.tools.filter fun fact =>
+    fact.tool.scope == scope && fact.tool.request == request
+  ⟨(facts.flatMap fun fact => match fact.capture with
+      | .observed projection => projection.changes
+      | _ => []).length,
+    (facts.filter fun fact => fact.capture == .pending).length,
+    (facts.filter fun fact => fact.capture == .unknown).length⟩
+
 structure Entry where
   tool : DocId
   request : DocId
@@ -419,13 +438,15 @@ structure Entry where
   observation : DocId
   change : Change
   order : Order.Position := .unresolved
+  requestCoverage : Option Coverage := none
   deriving DecidableEq, Repr
 
 def Snapshot.rawEntries (value : Snapshot) : List Entry :=
   value.tools.flatMap fun fact => match fact.capture with
     | .observed projection => projection.changes.map fun change =>
         ⟨fact.tool.id, fact.tool.request, fact.tool.scope,
-          projection.id, projection.observation, change, .unresolved⟩
+          projection.id, projection.observation, change, .unresolved,
+          some (value.requestCoverage fact.tool.scope fact.tool.request)⟩
     | _ => []
 
 def Snapshot.orderedTools (value : Snapshot) (node root path : String) : Option (List DocId) := do
@@ -530,12 +551,6 @@ theorem changed_snapshot_invalidates_old_receipt (before after : Snapshot)
     (VerifiedReceipt.metadata before).proves after = false := by
   simp [VerifiedReceipt.proves, h]
 
-structure Coverage where
-  entries : Nat
-  pending : Nat
-  unknown : Nat
-  deriving DecidableEq, Repr
-
 def Snapshot.coverage (value : Snapshot) : Coverage :=
   ⟨value.entries.length, value.pending.length, value.unknown.length⟩
 
@@ -631,9 +646,12 @@ def coherentEntries (entries : List Entry) : Bool :=
   (entries.map Entry.key).Nodup &&
     entries.Pairwise (fun left right => left.tool ≤ right.tool) &&
     entries.all (fun entry => validScope entry.scope &&
-      !entry.change.root.isEmpty && !entry.change.path.isEmpty && entry.order.wellFormed) &&
+      !entry.change.root.isEmpty && !entry.change.path.isEmpty && entry.order.wellFormed &&
+      entry.requestCoverage.all (fun coverage => coverage.entries > 0)) &&
     entries.all (fun left => entries.all fun right =>
       left.orderCoherent right &&
+      (left.request != right.request || left.scope != right.scope ||
+        left.requestCoverage == right.requestCoverage) &&
       (left.tool != right.tool || (left.request == right.request && left.scope == right.scope &&
         left.projection == right.projection && left.observation == right.observation)) &&
       (left.projection != right.projection || (left.tool == right.tool &&
@@ -648,7 +666,11 @@ def WirePage.wellFormed (value : WirePage) : Bool :=
     value.entries.length == min pageLimit (value.binding.coverage.entries - value.offset) &&
     value.next == (if following < value.binding.coverage.entries then
       some ⟨value.binding, following⟩ else none) &&
-    value.entries.all (fun entry => entry.order.within value.binding.coverage.entries) &&
+    value.entries.all (fun entry => entry.order.within value.binding.coverage.entries &&
+      entry.requestCoverage.all (fun coverage =>
+        coverage.entries ≤ value.binding.coverage.entries &&
+        coverage.pending ≤ value.binding.coverage.pending &&
+        coverage.unknown ≤ value.binding.coverage.unknown)) &&
     coherentEntries value.entries
 
 /-- Correlation precedes the existing signed receiver checks. The native

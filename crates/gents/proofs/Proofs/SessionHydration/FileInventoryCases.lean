@@ -305,7 +305,7 @@ def receiverInputs : List ReceiverInput :=
   , {name := "incorrect_next_cursor", envelope :=
       {firstEnvelope with page := {firstEnvelope.page with next := none}}}
   , {name := "duplicate_entry_identity", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata, .unresolved⟩}}}
+      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata, .unresolved, none⟩}}}
   , {name := "contradictory_projection_binding", state := receivedFirst, requestKey := "page-1",
       envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
         (secondEnvelope.page.entries.map fun entry => {entry with projection := (projection 1).id})}}}
