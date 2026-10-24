@@ -129,7 +129,8 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
             .unwrap(),
     );
     let peer = core.local_peer_id().to_owned();
-    let did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let client_did = core.node_identity().did().to_owned();
+    let did = gents::graphql::escape_graphql_string(&client_did);
     gents::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "installation_upgrade.seed",
@@ -166,17 +167,18 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     let hello: Value = serde_json::from_slice(&previous.next().await.unwrap().unwrap()).unwrap();
     assert_eq!(hello["installationBuild"], "previous-build");
     let mut updated = Attachment::start(&paths).await;
-    assert_eq!(updated.snapshot(1).await["client"]["localPeerId"], peer);
+    let snapshot = updated.snapshot(1).await;
+    assert_eq!(snapshot["client"]["localPeerId"], peer);
+    assert_eq!(snapshot["client"]["clientDid"], client_did);
     tokio::time::timeout(Duration::from_secs(30), old)
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        tokio::time::timeout(Duration::from_secs(5), previous.next())
-            .await
-            .unwrap()
-            .is_none()
-    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while previous.next().await.is_some() {}
+    })
+    .await
+    .expect("the previous attachment did not close");
     updated.close().await;
 
     let mut current = LengthDelimitedCodec::builder()
@@ -191,6 +193,20 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
         .unwrap();
     let hello: Value = serde_json::from_slice(&current.next().await.unwrap().unwrap()).unwrap();
     assert_ne!(hello["installationBuild"], "previous-build");
+    let commands = hello["commands"]
+        .as_array()
+        .expect("running command inventory");
+    for name in protocol::ClientCommand::NAMES {
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.as_str() == Some(*name)),
+            "running installation does not advertise {name}"
+        );
+    }
+    assert!(commands
+        .iter()
+        .any(|command| command == "desktop_session_provenance"));
     assert_eq!(
         hello["installationControlVersion"],
         protocol::INSTALLATION_CONTROL_VERSION
@@ -228,6 +244,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
             .unwrap(),
     );
     assert_eq!(reopened.local_peer_id(), peer);
+    assert_eq!(reopened.node_identity().did(), client_did);
     let rows = gents::config_client::ConfigAccess::local(reopened.node_arc())
         .execute("{ AgentSession { session_id } }")
         .await

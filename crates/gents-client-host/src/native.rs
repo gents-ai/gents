@@ -130,7 +130,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
         }
         if let Installation::Outdated { build: previous, control } = observed {
             if control != u64::from(gents_desktop_bridge::host::protocol::INSTALLATION_CONTROL_VERSION) {
-                let message = "The application serving this history predates safe updates. Update that application, or close its clients and retry after it exits. Your history is unchanged.";
+                let message = "The application serving this history predates safe updates. Close its clients, allow up to three minutes for the shared process to stop, then reconnect. Your history is unchanged.";
                 if let Some(bootstrap) = &mut bootstrap {
                     crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
                         error: gents_desktop_bridge::BridgeError::new(
@@ -240,12 +240,19 @@ async fn installation_build() -> Result<String> {
 }
 
 async fn inspect_installation(paths: &DesktopPaths, build: &str) -> Result<Installation> {
-    use bytes::Bytes;
-    use futures::{SinkExt, StreamExt};
-    use gents_desktop_bridge::host::protocol::{MAX_FRAME_BYTES, PROTOCOL_VERSION};
     let Ok(connection) = local::connect(paths).await else {
         return Ok(Installation::Missing);
     };
+    inspect_connection(connection, build).await
+}
+
+async fn inspect_connection<S>(connection: S, build: &str) -> Result<Installation>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use gents_desktop_bridge::host::protocol::{MAX_FRAME_BYTES, PROTOCOL_VERSION};
     let mut frames = tokio_util::codec::LengthDelimitedCodec::builder()
         .max_frame_length(MAX_FRAME_BYTES)
         .new_framed(connection);
@@ -342,6 +349,64 @@ async fn wait_for_store_release(paths: &DesktopPaths) -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
             Err(error) => return Err(error).context("waiting for the previous client store owner"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use gents_desktop_bridge::host::protocol::{ClientCommand, MAX_FRAME_BYTES, PROTOCOL_VERSION};
+    use serde_json::{json, Value};
+    use tokio_util::codec::LengthDelimitedCodec;
+
+    #[tokio::test]
+    async fn the_running_handshake_distinguishes_current_embedded_legacy_and_outdated_hosts() {
+        for (metadata, usable) in [
+            (
+                json!({ "installationBuild": "expected", "installationControlVersion": 1 }),
+                true,
+            ),
+            (
+                json!({ "installationBuild": null, "installationControlVersion": 0 }),
+                true,
+            ),
+            (json!({}), false),
+            (
+                json!({ "installationBuild": "previous", "installationControlVersion": 1 }),
+                false,
+            ),
+        ] {
+            let (client, server) = tokio::io::duplex(64 * 1024);
+            let mut hello = json!({ "kind": "hello", "version": PROTOCOL_VERSION,
+                "commands": ClientCommand::NAMES, "maxFrameBytes": MAX_FRAME_BYTES });
+            hello
+                .as_object_mut()
+                .unwrap()
+                .extend(metadata.as_object().unwrap().clone());
+            let serve = async {
+                let mut server = LengthDelimitedCodec::builder()
+                    .max_frame_length(MAX_FRAME_BYTES)
+                    .new_framed(server);
+                let request: Value =
+                    serde_json::from_slice(&server.next().await.unwrap().unwrap()).unwrap();
+                assert_eq!(
+                    request,
+                    json!({ "kind": "hello", "version": PROTOCOL_VERSION })
+                );
+                server
+                    .send(Bytes::from(serde_json::to_vec(&hello).unwrap()))
+                    .await
+                    .unwrap();
+            };
+            let (observed, ()) = tokio::join!(inspect_connection(client, "expected"), serve);
+            assert_eq!(
+                matches!(observed.unwrap(), Installation::Current),
+                usable,
+                "{hello}"
+            );
         }
     }
 }
