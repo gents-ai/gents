@@ -26,7 +26,7 @@ pub(crate) async fn recover(node: &EmbeddedNode, intent: &Intent) -> Result<Opti
                     .is_some_and(|decision| decision != Decision::Refused),
                 "caller submission identity is already bound to different input"
             );
-            Ok(Some(record))
+            Ok(Some(*record))
         }
         Some((_, Entry::Uncorrelated(_))) => {
             anyhow::bail!("request identity has no caller binding")
@@ -46,7 +46,7 @@ pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Resu
         move |txn| Box::pin(async move {
             let existing = super::read_in_txn(txn, &proposal.intent.request_id).await?;
             let records = match existing {
-                Some((_, Entry::Caller(record))) => vec![record],
+                Some((_, Entry::Caller(record))) => vec![*record],
                 Some((_, Entry::Uncorrelated(_))) => anyhow::bail!("request identity has no caller binding"),
                 None => Vec::new(),
             };
@@ -104,7 +104,7 @@ pub(crate) async fn update(
                     "caller submission receipt binding was refused"
                 );
                 let before = encode(&record)?;
-                let mut records = [record];
+                let mut records = [*record];
                 if let Some(outcome) = observation {
                     correlated::observe(
                         &mut records,

@@ -12,7 +12,7 @@ fn digest(bytes: &[u8]) -> String {
 /// content-based lookup or authority to submit a different signed request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Intent {
+pub struct Intent {
     pub client_did: String,
     pub node_did: String,
     pub request_id: String,
@@ -32,7 +32,7 @@ impl Intent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Reference {
+pub struct Reference {
     pub request: SubmittedRequest,
     pub signed_payload_hash: String,
 }
@@ -114,6 +114,10 @@ impl Record {
             Outcome::Unresolved => Decision::Refused,
             outcome => Decision::Settled(self.reference.clone(), outcome),
         }
+    }
+
+    pub(crate) fn needs_reconciliation(&self) -> bool {
+        matches!(self.result(), Decision::Reconcile(_))
     }
 }
 

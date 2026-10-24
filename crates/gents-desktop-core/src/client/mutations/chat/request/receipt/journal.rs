@@ -17,8 +17,8 @@ enum Envelope {
 }
 
 enum Entry {
-    Uncorrelated(UnresolvedSubmission),
-    Caller(Record),
+    Uncorrelated(Box<UnresolvedSubmission>),
+    Caller(Box<Record>),
 }
 
 fn decode(payload: &str, request_id: &str) -> Result<Entry> {
@@ -32,12 +32,12 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
                 && record.result() != super::correlated::Decision::Refused,
             "retained caller receipt binding is invalid"
         );
-        Ok(Entry::Caller(record))
+        Ok(Entry::Caller(Box::new(record)))
     } else {
         let pending: UnresolvedSubmission =
             serde_json::from_value(value).context("decoding retained signed submission")?;
         pending.validate_binding(request_id)?;
-        Ok(Entry::Uncorrelated(pending))
+        Ok(Entry::Uncorrelated(Box::new(pending)))
     }
 }
 
@@ -106,7 +106,7 @@ pub(crate) async fn load(
         .as_ref()
         .context("pending submission query omitted data")?;
     Ok(row(data, request_id)?.and_then(|(_, entry)| match entry {
-        Entry::Uncorrelated(pending) => Some(pending),
+        Entry::Uncorrelated(pending) => Some(*pending),
         Entry::Caller(record) if record.outcome == Outcome::Unresolved => record.pending,
         Entry::Caller(_) => None,
     }))

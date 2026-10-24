@@ -9,7 +9,8 @@ pub use chat::{
 };
 pub use chat::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionOutcomeUnknown, UnresolvedSubmission,
+    SubmissionIntent, SubmissionNotDelivered, SubmissionOutcomeUnknown, SubmissionReference,
+    UnresolvedSubmission,
 };
 pub use manage::{
     apply_config_components_on, delete_agent_context_on, delete_agent_on, delete_event_source_on,
@@ -26,4 +27,5 @@ pub use manage::{
 pub use setup::PeerMutationResult;
 
 pub(crate) use chat::prepare_request_submission;
+pub(crate) use chat::submission_delivery;
 pub(crate) use chat::submission_journal;

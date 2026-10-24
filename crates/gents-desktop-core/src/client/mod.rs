@@ -24,6 +24,7 @@ pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{DeliveryUnconfirmed, SubmissionOutcomeUnknown, UnresolvedSubmission};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
+pub use mutations::{SubmissionIntent, SubmissionNotDelivered, SubmissionReference};
 pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
     StoreUpdateNotice,

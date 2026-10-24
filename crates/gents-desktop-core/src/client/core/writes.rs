@@ -440,6 +440,15 @@ impl ClientCore {
         agent_id: Option<&str>,
         mut options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
+        if let Some(intent) = options.caller_intent.as_ref() {
+            anyhow::ensure!(
+                intent.node_did == node_did,
+                "caller submission belongs to another node"
+            );
+            if let Some(receipt) = self.recover_caller_submission(intent).await? {
+                return Ok(receipt);
+            }
+        }
         let snapshot = self.store.snapshot();
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())

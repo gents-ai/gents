@@ -18,7 +18,23 @@ use serde_json::Value;
 use super::SubmittedRequest;
 
 pub(crate) mod correlated;
+pub(crate) mod delivery;
 pub(crate) mod journal;
+
+/// Confirmed rejection of the original caller-bound signed preparation.
+/// The original identity remains recoverable until the caller acknowledges it.
+#[derive(Debug)]
+pub struct SubmissionNotDelivered {
+    pub request: SubmittedRequest,
+}
+
+impl std::fmt::Display for SubmissionNotDelivered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "request {} was not delivered", self.request.request_id)
+    }
+}
+
+impl std::error::Error for SubmissionNotDelivered {}
 
 /// A prepared owner submission whose commit outcome could not be determined.
 ///

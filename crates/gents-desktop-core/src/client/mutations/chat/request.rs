@@ -30,6 +30,7 @@ pub struct SubmittedRequest {
 
 #[derive(Debug, Clone, Default)]
 pub struct SubmitRequestOptions {
+    pub caller_intent: Option<SubmissionIntent>,
     pub valid_until: Option<DateTime<Utc>>,
     pub retry_parent_request: Option<String>,
     pub input: RequestInput,
@@ -63,6 +64,16 @@ pub async fn submit_request(
     agent_id: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
+    let caller_intent = options.caller_intent.clone();
+    if let Some(intent) = caller_intent.as_ref() {
+        anyhow::ensure!(
+            intent.node_did == node_did,
+            "caller submission belongs to another node"
+        );
+        if let Some(record) = receipt::journal::caller::recover(node, intent).await? {
+            return receipt::delivery::reconcile(node, Some(access), record).await;
+        }
+    }
     let (result, create) = prepare_request_submission(
         node,
         store,
@@ -74,7 +85,9 @@ pub async fn submit_request(
         content,
         agent_id,
         options,
-        None,
+        caller_intent
+            .as_ref()
+            .map(|intent| intent.request_id.as_str()),
     )
     .await?;
     // Owner submissions, including resends routed through this function, are
@@ -82,6 +95,11 @@ pub async fn submit_request(
     // carrying the original signed payload, so reconciliation replays identical
     // bytes instead of minting a new request identity.
     let pending = receipt::UnresolvedSubmission::new(create, result)?;
+    if let Some(intent) = caller_intent {
+        let proposal = receipt::correlated::Record::proposal(intent, pending);
+        let record = receipt::journal::caller::reserve(node, &proposal).await?;
+        return receipt::delivery::reconcile(node, Some(access), record).await;
+    }
     receipt::journal::save(node, &pending).await?;
     let result = receipt::commit_signed_submission(access, pending.clone()).await;
     if !result
@@ -873,6 +891,7 @@ pub async fn resend_request(
         stale_content,
         stale.agent_id.as_deref(),
         SubmitRequestOptions {
+            caller_intent: None,
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
             input: stale.input.unwrap_or_default(),
@@ -1020,7 +1039,8 @@ mod tests;
 
 pub(crate) mod receipt;
 
+pub use receipt::correlated::{Intent as SubmissionIntent, Reference as SubmissionReference};
 pub use receipt::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionOutcomeUnknown, UnresolvedSubmission,
+    SubmissionNotDelivered, SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
