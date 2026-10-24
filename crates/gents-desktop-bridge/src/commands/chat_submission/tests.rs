@@ -18,6 +18,14 @@ fn original(node_did: &str, client_did: &str) -> Result<ChatSendRequest> {
     }))?)
 }
 
+fn query(request: &ChatSendRequest) -> ChatSubmissionQuery {
+    ChatSubmissionQuery {
+        client_did: request.client_did.clone().expect("caller identity"),
+        node_did: request.node_did.clone(),
+        request_id: request.request_id.clone().expect("request identity"),
+    }
+}
+
 async fn rows(core: &ClientCore) -> Result<Value> {
     ConfigAccess::local(core.node_arc())
         .execute("{ AgentRequest { request_id session_id } }")
@@ -28,7 +36,7 @@ async fn rows(core: &ClientCore) -> Result<Value> {
 fn submission_recovery_and_acknowledgement_are_mutating_wire_commands() -> Result<()> {
     let request = original("did:fixture:runtime", "did:fixture:client")?;
     let recover: ClientCommand = serde_json::from_value(json!({
-        "name":"desktop_chat_submission_recover", "args":{"request":request}
+        "name":"desktop_chat_submission_recover", "args":{"query":query(&request)}
     }))?;
     assert!(
         !recover.is_cancellable(),
@@ -51,11 +59,11 @@ async fn missing_preparation_is_unconfirmed_without_creating_a_session_or_reques
     let (core, _home) = crate::tests::support::boot_core().await;
     let request = original("did:fixture:runtime", core.node_identity().did())?;
     let result = async {
-        let reply = serde_json::to_value(recover_chat_submission(&core, request.clone()).await?)?;
+        let reply = serde_json::to_value(recover_chat_submission(&core, query(&request)).await?)?;
         assert_eq!(
             reply,
             json!({"kind":"unconfirmed", "nodeDid":request.node_did,
-            "requestId":request.request_id, "requestedSessionId":null})
+            "requestId":request.request_id})
         );
         assert_eq!(rows(&core).await?["data"]["AgentRequest"], json!([]));
         let sessions = ConfigAccess::local(core.node_arc())
@@ -121,7 +129,7 @@ async fn lost_send_reply_recovers_after_reopen_and_retains_its_result_after_ackn
         .set_focused_request_id(Some("another-chat-turn".into()));
     let result = async {
         let ChatSubmissionRecovery::Prepared { result: recovered } =
-            recover_chat_submission(&core, request.clone()).await?
+            recover_chat_submission(&core, query(&request)).await?
         else {
             anyhow::bail!("durable preparation disappeared after reopen");
         };
@@ -143,12 +151,14 @@ async fn lost_send_reply_recovers_after_reopen_and_retains_its_result_after_ackn
         assert!(acknowledge_chat_submission(&core, forged).await.is_err());
         let mut foreign = request.clone();
         foreign.client_did = Some("did:fixture:another-client".into());
-        assert!(recover_chat_submission(&core, foreign).await.is_err());
-        let mut changed = request.clone();
-        changed.content.push_str(" with different content");
-        assert!(recover_chat_submission(&core, changed.clone())
+        assert!(recover_chat_submission(&core, query(&foreign))
             .await
             .is_err());
+        let mut wrong_runtime = query(&request);
+        wrong_runtime.node_did = "did:fixture:another-runtime".into();
+        assert!(recover_chat_submission(&core, wrong_runtime).await.is_err());
+        let mut changed = request.clone();
+        changed.content.push_str(" with different content");
         assert!(crate::commands::send_chat_message(&core, changed)
             .await
             .is_err());

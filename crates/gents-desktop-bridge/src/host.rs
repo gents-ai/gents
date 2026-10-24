@@ -600,8 +600,8 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
-            ClientCommand::RecoverSubmission { request } => encode(
-                crate::commands::recover_chat_submission(&self.core, request)
+            ClientCommand::RecoverSubmission { query } => encode(
+                crate::commands::recover_chat_submission(&self.core, query)
                     .await
                     .map_err(backend_error)?,
             ),

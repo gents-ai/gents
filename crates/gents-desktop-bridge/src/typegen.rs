@@ -298,6 +298,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ChatSendResult,
         ChatSubmissionReceipt,
         ChatSubmissionRecovery,
+        ChatSubmissionQuery,
         ClientUpdateEvent,
         SessionHydrationView,
         SyncHealthView,

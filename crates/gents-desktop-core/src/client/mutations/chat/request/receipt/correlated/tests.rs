@@ -338,6 +338,18 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                     input["kind"]
                 );
                 for record in &records {
+                    let scoped = journal::caller::lookup(
+                        &node,
+                        &record.intent.client_did,
+                        &record.intent.node_did,
+                        &record.intent.request_id,
+                    )
+                    .await?
+                    .context("scoped durable caller binding")?;
+                    assert_eq!(
+                        facts.records_json(&[scoped])?,
+                        facts.records_json(std::slice::from_ref(record))?
+                    );
                     let recovered = journal::caller::recover(&node, &record.intent)
                         .await?
                         .context("durable caller binding")?;

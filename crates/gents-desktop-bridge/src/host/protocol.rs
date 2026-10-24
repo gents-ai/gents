@@ -4,8 +4,8 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingMessageSteerRequest,
-    PendingQueueEditRequest, SessionRenameRequest,
+    ChatSendRequest, ChatSubmissionQuery, DesktopInterruptRequest, EnrollmentStatusRequest,
+    PendingMessageSteerRequest, PendingQueueEditRequest, SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
@@ -256,7 +256,7 @@ pub enum ClientCommand {
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
     #[serde(rename = "desktop_chat_submission_recover")]
-    RecoverSubmission { request: ChatSendRequest },
+    RecoverSubmission { query: ChatSubmissionQuery },
     #[serde(rename = "desktop_chat_submission_acknowledge")]
     AcknowledgeSubmission {
         receipt: crate::types::ChatSubmissionReceipt,

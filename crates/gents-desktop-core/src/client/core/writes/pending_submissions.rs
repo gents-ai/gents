@@ -37,6 +37,27 @@ impl ClientCore {
         ))
     }
 
+    /// Recovery retrieves only the original authored binding; it cannot supply
+    /// replacement input or reinterpret a record owned by another runtime.
+    pub async fn retained_caller_submission_intent(
+        &self,
+        node_did: &str,
+        request_id: &str,
+    ) -> Result<Option<SubmissionIntent>> {
+        anyhow::ensure!(
+            !node_did.trim().is_empty() && !request_id.trim().is_empty(),
+            "caller recovery requires a node and canonical request identity"
+        );
+        Ok(submission_journal::caller::lookup(
+            &self.node,
+            self.node_identity().did(),
+            node_did,
+            request_id,
+        )
+        .await?
+        .map(|record| record.intent))
+    }
+
     fn ensure_caller_submission_actor(&self, intent: &SubmissionIntent) -> Result<()> {
         anyhow::ensure!(
             intent.client_did == self.node_identity().did(),

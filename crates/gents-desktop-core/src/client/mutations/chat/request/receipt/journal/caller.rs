@@ -7,10 +7,15 @@ use std::sync::Arc;
 use super::super::correlated::{self, Decision, Intent, Outcome, Record, Reference};
 use super::{Entry, Envelope};
 
-pub(crate) async fn recover(node: &EmbeddedNode, intent: &Intent) -> Result<Option<Record>> {
+pub(crate) async fn lookup(
+    node: &EmbeddedNode,
+    client_did: &str,
+    node_did: &str,
+    request_id: &str,
+) -> Result<Option<Record>> {
     let response = graphql_with_transaction_retry(
         node,
-        &super::query(&intent.request_id),
+        &super::query(request_id),
         "desktop.chat.recover_caller_receipt",
     )
     .await?;
@@ -18,13 +23,12 @@ pub(crate) async fn recover(node: &EmbeddedNode, intent: &Intent) -> Result<Opti
         .data
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("caller receipt query omitted data"))?;
-    match super::row(data, &intent.request_id)? {
+    match super::row(data, request_id)? {
         None => Ok(None),
         Some((_, Entry::Caller(record))) => {
             anyhow::ensure!(
-                correlated::recover(std::slice::from_ref(&record), intent)
-                    .is_some_and(|decision| decision != Decision::Refused),
-                "caller submission identity is already bound to different input"
+                record.intent.client_did == client_did && record.intent.node_did == node_did,
+                "caller submission belongs to another actor or runtime"
             );
             Ok(Some(*record))
         }
@@ -32,6 +36,24 @@ pub(crate) async fn recover(node: &EmbeddedNode, intent: &Intent) -> Result<Opti
             anyhow::bail!("request identity has no caller binding")
         }
     }
+}
+
+pub(crate) async fn recover(node: &EmbeddedNode, intent: &Intent) -> Result<Option<Record>> {
+    let record = lookup(
+        node,
+        &intent.client_did,
+        &intent.node_did,
+        &intent.request_id,
+    )
+    .await?;
+    if let Some(record) = &record {
+        anyhow::ensure!(
+            correlated::recover(std::slice::from_ref(record), intent)
+                .is_some_and(|decision| decision != Decision::Refused),
+            "caller submission identity is already bound to different input"
+        );
+    }
+    Ok(record)
 }
 
 /// The transaction owner reconciles a unique durable winner on every retry.

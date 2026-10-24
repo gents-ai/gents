@@ -69,7 +69,6 @@ pub enum ChatSubmissionRecovery {
     Unconfirmed {
         node_did: String,
         request_id: String,
-        requested_session_id: Option<String>,
     },
     Prepared {
         result: Box<ChatSendResult>,

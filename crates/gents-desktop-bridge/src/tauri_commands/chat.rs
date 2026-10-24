@@ -157,12 +157,12 @@ pub async fn desktop_chat_send(
 
 #[tauri::command]
 pub async fn desktop_chat_submission_recover(
-    request: ChatSendRequest,
+    query: crate::types::ChatSubmissionQuery,
     state: State<'_, DesktopAppState>,
 ) -> Result<crate::types::ChatSubmissionRecovery, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    crate::commands::recover_chat_submission(&core, request)
+    crate::commands::recover_chat_submission(&core, query)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

@@ -36,3 +36,5 @@ export type { PendingQueueEditResult } from "../generated/PendingQueueEditResult
 export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.js";
 
 export type { RequestTurnView } from "../generated/RequestTurnView.js";
+
+export type { ChatSubmissionQuery } from "../generated/ChatSubmissionQuery.js";

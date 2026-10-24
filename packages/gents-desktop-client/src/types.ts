@@ -105,6 +105,7 @@ export type {
   ChatSendResult,
   ChatSubmissionReceipt,
   ChatSubmissionRecovery,
+  ChatSubmissionQuery,
   CommandDenialView,
   DesktopSessionSnapshot,
   SessionHydrationView,

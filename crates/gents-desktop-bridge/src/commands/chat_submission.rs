@@ -4,7 +4,8 @@ use gents_desktop_core::client::{
 };
 
 use crate::types::{
-    ChatSendRequest, ChatSendResult, ChatSubmissionReceipt, ChatSubmissionRecovery,
+    ChatSendRequest, ChatSendResult, ChatSubmissionQuery, ChatSubmissionReceipt,
+    ChatSubmissionRecovery,
 };
 
 /// Durable caller bindings use sorted object keys and omit absent options,
@@ -72,29 +73,34 @@ pub(super) async fn sent(
 
 pub async fn recover_chat_submission(
     core: &ClientCore,
-    request: ChatSendRequest,
+    query: ChatSubmissionQuery,
 ) -> Result<ChatSubmissionRecovery> {
-    let intent = intent(core, &request)?
-        .context("recovery requires the original caller request identity")?;
-    match core.recover_caller_submission(&intent).await {
-        Ok(None) => Ok(ChatSubmissionRecovery::Unconfirmed {
-            node_did: intent.node_did,
-            request_id: intent.request_id,
-            requested_session_id: request.session_id,
-        }),
-        recovered => Ok(ChatSubmissionRecovery::Prepared {
-            result: Box::new(
-                sent(
-                    core,
-                    &intent,
-                    recovered.and_then(|result| {
-                        result.context("retained submission reply omitted its result")
-                    }),
-                )
-                .await?,
-            ),
-        }),
-    }
+    anyhow::ensure!(
+        query.client_did == core.node_identity().did(),
+        "caller submission belongs to another client identity"
+    );
+    let Some(intent) = core
+        .retained_caller_submission_intent(&query.node_did, &query.request_id)
+        .await?
+    else {
+        return Ok(ChatSubmissionRecovery::Unconfirmed {
+            node_did: query.node_did,
+            request_id: query.request_id,
+        });
+    };
+    let recovered = core.recover_caller_submission(&intent).await;
+    Ok(ChatSubmissionRecovery::Prepared {
+        result: Box::new(
+            sent(
+                core,
+                &intent,
+                recovered.and_then(|result| {
+                    result.context("retained submission reply omitted its result")
+                }),
+            )
+            .await?,
+        ),
+    })
 }
 
 pub async fn acknowledge_chat_submission(

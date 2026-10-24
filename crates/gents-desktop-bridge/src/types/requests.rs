@@ -72,6 +72,14 @@ pub struct EnrollmentStatusRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatSubmissionQuery {
+    pub client_did: String,
+    pub node_did: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {
     /// Allocated and retained by the caller before the first helper call.
