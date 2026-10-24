@@ -2,7 +2,7 @@ use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::io::Write;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use gents::eval::report::load_report;
@@ -86,10 +86,11 @@ pub(super) async fn run(
     out: &mut dyn Write,
 ) -> Result<()> {
     let budget = TrialBudget::new(args.concurrency as usize)?;
-    let parsed = parse_plan(
-        &std::fs::read(&args.plan)
-            .with_context(|| format!("reading batch plan {}", args.plan.display()))?,
-    )?;
+    let plan = std::fs::read(&args.plan).map_err(|source| EvalCommandError::ReadPlan {
+        path: args.plan.clone(),
+        source,
+    })?;
+    let parsed = parse_plan(&plan)?;
     let mut prepared = Vec::with_capacity(parsed.len());
     for mut run_args in parsed {
         run_args.json = args.json;
@@ -137,7 +138,7 @@ pub(super) async fn run(
     let mut output_error = None;
     while let Some((index, run_id, report, error, buffered)) = futures.next().await {
         if !args.json && output_error.is_none() {
-            let written = (|| -> Result<()> {
+            let written = (|| -> Result<(), EvalCommandError> {
                 writeln!(out, "run {run_id}")?;
                 if !buffered.is_empty() {
                     out.write_all(&buffered)?;
@@ -175,7 +176,7 @@ pub(super) async fn run(
         write_json(out, &result)?;
     }
     if let Some(error) = output_error {
-        return Err(error);
+        return Err(error.into());
     }
     if result.runs.iter().any(|run| run.error.is_some()) {
         return Err(EvalCommandError::BatchRunsFailed.into());

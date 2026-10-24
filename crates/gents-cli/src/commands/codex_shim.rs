@@ -184,7 +184,7 @@ mod state;
 #[allow(unused_imports)]
 pub(crate) use server::{
     bind_codex_shim, resolve_codex_shim_agent_id, BoundCodexShim, CodexShimBindArgs,
-    CodexShimBindError,
+    CodexShimBindError, ServerError,
 };
 #[cfg(test)]
 use server::{request_is_authorized, validate_bind_security};

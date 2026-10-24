@@ -45,6 +45,10 @@ pub(crate) enum ServeError {
     AppliedPackNoDefaultAgent,
     #[error("pack apply did not converge for {} (status={status})", root.display())]
     PackNotConverged { root: PathBuf, status: String },
+    #[error("Codex shim task failed")]
+    CodexShimTask(#[source] crate::commands::codex_shim::ServerError),
+    #[error("shutting down the Grok shim leader")]
+    ShutdownGrokShimLeader(#[source] crate::commands::grok_shim::server::GrokServerError),
     #[error("serializing pack apply report")]
     SerializePackReport(#[source] serde_json::Error),
     #[error("serializing durable node readiness")]
@@ -1363,7 +1367,9 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                     result = runtime.join() => result,
                     result = handle => {
                         match result {
-                            Ok(result) => result.context("Codex shim task failed"),
+                            Ok(result) => result.map_err(|source| {
+                                ServeError::CodexShimTask(source).into()
+                            }),
                             Err(error) => Err(ServeError::JoinCodexShimTask { error }.into()),
                         }
                     }
@@ -1385,9 +1391,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
         if let Some(handle) = grok_shim_handle.as_mut() {
             if let Err(error) = handle.shutdown().await {
                 if runtime_result.is_ok() {
-                    grok_shutdown_error = Some(
-                        anyhow::Error::new(error).context("shutting down the Grok shim leader"),
-                    );
+                    grok_shutdown_error = Some(ServeError::ShutdownGrokShimLeader(error).into());
                 } else {
                     tracing::warn!(
                         error = %ErrorChain(&error),

@@ -7,6 +7,7 @@ use gents::eval::checks::CheckRegistry;
 use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
 use self::dossier::Dossier;
 use self::draft::parse_reply;
+use self::error::EvalInitError;
 use self::turn::Turn;
 use self::validate::{assemble, validate, Assembled, Floors};
 use self::write::{case_table, commit, stage, Staged, Written};
@@ -100,9 +101,11 @@ pub(crate) async fn interview(
                 let listed = format!("- {}", messages.join("\n- "));
                 writeln!(out, "the draft did not validate:\n{listed}")?;
                 if rounds == MAX_VALIDATION_ROUNDS {
-                    return Err(anyhow::anyhow!(
-                        "the author's draft did not validate after {MAX_VALIDATION_ROUNDS} rounds; nothing was written; last messages:\n{listed}"
-                    ));
+                    return Err(EvalInitError::DraftRejected {
+                        rounds: MAX_VALIDATION_ROUNDS,
+                        listed,
+                    }
+                    .into());
                 }
                 reply = turn
                     .send(&format!("{VALIDATION_PREFIX}\n\n{listed}"))
@@ -164,7 +167,7 @@ fn print_written(
     assembled: &Assembled,
     written: &Written,
     out: &mut dyn Write,
-) -> Result<()> {
+) -> Result<(), EvalInitError> {
     let definition = &assembled.definition;
     writeln!(
         out,
@@ -204,11 +207,12 @@ fn scope_flags(scope: &crate::cli::EvalScopeArgs) -> String {
 }
 
 pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
-    anyhow::ensure!(
-        args.force || args.out.symlink_metadata().is_err(),
-        "{} already exists; pass --force to replace it",
-        args.out.display()
-    );
+    if !args.force && args.out.symlink_metadata().is_ok() {
+        return Err(EvalInitError::OutputExists {
+            out: args.out.clone(),
+        }
+        .into());
+    }
     let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let graphql = match args
         .scope
@@ -224,16 +228,16 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         Some(graphql) => crate::graphql_access::graphql_endpoint_available(&graphql).await,
         None => false,
     };
-    anyhow::ensure!(
-        served,
-        "start `gents server` for this home and retry: the author runs on a served home"
-    );
+    if !served {
+        return Err(EvalInitError::ServedHomeRequired.into());
+    }
     write::recover_output(&args.out, &home_dir)?;
-    anyhow::ensure!(
-        args.force || args.out.symlink_metadata().is_err(),
-        "{} already exists; pass --force to replace it",
-        args.out.display()
-    );
+    if !args.force && args.out.symlink_metadata().is_ok() {
+        return Err(EvalInitError::OutputExists {
+            out: args.out.clone(),
+        }
+        .into());
+    }
     Ok(())
 }
 
@@ -244,9 +248,7 @@ pub(crate) async fn run(
     out: &mut dyn Write,
 ) -> Result<()> {
     let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
-        anyhow::bail!(
-            "start `gents server` for this home and retry: the author runs on a served home"
-        );
+        return Err(EvalInitError::ServedHomeRequired.into());
     };
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &ctx.owner)?;
     // Held to the end: a materialized cache entry stays locked while read.

@@ -74,6 +74,20 @@ pub(crate) enum OptimizationCommandError {
     },
     #[error("{note}")]
     Stopped { note: String },
+    #[error(
+        "start `gents server` for this home and retry: an agent proposer runs on a served home"
+    )]
+    ProposerNeedsServedHome,
+    #[error("proposer agent {agent} has tools {tools:?}; a proposer must be tool-less")]
+    ProposerHasTools { agent: String, tools: Vec<String> },
+    #[error("proposer agent {agent} has skills {skills:?}; a proposer must be tool-less")]
+    ProposerHasSkills { agent: String, skills: Vec<String> },
+    #[error("no optimization job {job_id:?} for {owner}")]
+    NoJob { job_id: String, owner: String },
+    #[error("job {job_id} has no directory {}", dir.display())]
+    JobNoDirectory { job_id: String, dir: PathBuf },
+    #[error("job {job_id} is {state}: only a job that is nothing_to_promote, exhausted, failed, stale, promoted or reverted is removed without --force")]
+    JobNotRemovable { job_id: String, state: &'static str },
 }
 
 pub(crate) async fn dispatch(
@@ -173,9 +187,7 @@ async fn behavior_proposer(
     let config = pack_config(&resolved, &ctx.owner)?;
     ensure_tool_less(&config, &ctx.owner, &agent_id)?;
     let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
-        anyhow::bail!(
-            "start `gents server` for this home and retry: an agent proposer runs on a served home"
-        );
+        return Err(OptimizationCommandError::ProposerNeedsServedHome.into());
     };
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &ctx.owner)?;
     let preamble = subject_preamble(subject_dir, subject_agent, &args.target)?;
@@ -252,15 +264,21 @@ fn ensure_tool_less(
             .flat_map(|host| &host.cli)
             .map(|cli| cli.name.clone()),
     );
-    anyhow::ensure!(
-        names.is_empty(),
-        "proposer agent {agent_id} has tools {names:?}; a proposer must be tool-less"
-    );
+    if !names.is_empty() {
+        return Err(OptimizationCommandError::ProposerHasTools {
+            agent: agent_id.to_owned(),
+            tools: names,
+        }
+        .into());
+    }
     let skills = context.map_or(&[][..], |context| &context.skill_ids[..]);
-    anyhow::ensure!(
-        skills.is_empty(),
-        "proposer agent {agent_id} has skills {skills:?}; a proposer must be tool-less"
-    );
+    if !skills.is_empty() {
+        return Err(OptimizationCommandError::ProposerHasSkills {
+            agent: agent_id.to_owned(),
+            skills: skills.to_vec(),
+        }
+        .into());
+    }
     Ok(())
 }
 
@@ -540,22 +558,26 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
     validate_job_id(&args.job_id)?;
     let job = load_job(&ctx.access, &ctx.owner, &args.job_id)
         .await?
-        .with_context(|| format!("no optimization job {:?} for {}", args.job_id, ctx.owner))?;
+        .ok_or_else(|| OptimizationCommandError::NoJob {
+            job_id: args.job_id.clone(),
+            owner: ctx.owner.clone(),
+        })?;
     let dir = job_dir(&job.origin.jobs_dir, &args.job_id);
-    anyhow::ensure!(
-        dir.is_dir(),
-        "job {} has no directory {}",
-        args.job_id,
-        dir.display()
-    );
+    if !dir.is_dir() {
+        return Err(OptimizationCommandError::JobNoDirectory {
+            job_id: args.job_id.clone(),
+            dir,
+        }
+        .into());
+    }
     let dir = crate::commands::eval::manage::job_dir_in_this_home(ctx, &job)?;
     let state = derive_state(&job.journal);
     if !args.force && !removable(&state) {
-        anyhow::bail!(
-            "job {} is {}: only a job that is nothing_to_promote, exhausted, failed, stale, promoted or reverted is removed without --force",
-            args.job_id,
-            state.label()
-        );
+        return Err(OptimizationCommandError::JobNotRemovable {
+            job_id: args.job_id.clone(),
+            state: state.label(),
+        }
+        .into());
     }
     let bytes = crate::commands::eval::manage::dir_size(&dir)?;
     std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;

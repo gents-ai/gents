@@ -134,8 +134,12 @@ pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentS
             let mut identities = rapidhash::RapidHashSet::default();
             rows(&response,"AgentSession")?.iter().map(|row| {
                 let session = decode_session_row(row)?.session;
-                anyhow::ensure!(session.node_did==state.node_did.as_ref() && session.requester_did.as_deref()==Some(state.local_requester_did()) && session.agent_id==state.agent_id.as_ref(),"thread list crossed owner/requester/agent scope");
-                anyhow::ensure!(identities.insert(session.session_id.clone()),"thread list has duplicate canonical session identity");
+                if session.node_did != state.node_did.as_ref() || session.requester_did.as_deref() != Some(state.local_requester_did()) || session.agent_id != state.agent_id.as_ref() {
+                    return Err(CodexShimProjectionError::ThreadListScopeCrossed.into());
+                }
+                if !identities.insert(session.session_id.clone()) {
+                    return Err(CodexShimProjectionError::ThreadListDuplicateIdentity.into());
+                }
                 Ok(session)
             }).filter(|session| !matches!(session, Ok(session) if is_started(session))).collect()
         })

@@ -53,7 +53,11 @@ where
     Ok(())
 }
 
-pub(crate) fn write_marker(runs_dir: &Path, run_id: &str, out: &mut dyn Write) -> Result<()> {
+pub(crate) fn write_marker(
+    runs_dir: &Path,
+    run_id: &str,
+    out: &mut dyn Write,
+) -> Result<(), EvalCommandError> {
     let marker = request_cancel(runs_dir, run_id)?;
     if marker.parent().is_some_and(running_elsewhere) {
         writeln!(
@@ -118,48 +122,50 @@ pub(super) async fn invalidate(
 
 pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write) -> Result<()> {
     let dir = run_dir(&ctx.runs_dir(), &args.run_id)?;
-    anyhow::ensure!(
-        dir.is_dir(),
-        "run {} has no directory {}",
-        args.run_id,
-        dir.display()
-    );
-    let live = || {
-        anyhow::anyhow!(
-            "run {} is being run by a live process right now (see `gents eval watch {}`); pass --force to delete its directory anyway",
-            args.run_id,
-            args.run_id
-        )
+    if !dir.is_dir() {
+        return Err(EvalCommandError::RunNoDirectory {
+            run_id: args.run_id.clone(),
+            dir,
+        }
+        .into());
+    }
+    let live = || EvalCommandError::RunLive {
+        run_id: args.run_id.clone(),
     };
     if !args.force {
         let record = load_run(&ctx.access, &ctx.owner, &args.run_id)
             .await?
-            .with_context(|| format!("no eval run {:?} for {}", args.run_id, ctx.owner))?;
+            .ok_or_else(|| EvalCommandError::NoRun {
+                run_id: args.run_id.clone(),
+                owner: ctx.owner.clone(),
+            })?;
         let trials = load_trials(&ctx.access, &ctx.owner, &args.run_id).await?;
         let owed = slots_owed(&record, &trials);
-        anyhow::ensure!(
-            owed == 0,
-            "run {} is unfinished: it still owes {owed} slots; `gents eval resume {}` finishes it, or pass --force to delete its directory anyway",
-            args.run_id,
-            args.run_id
-        );
+        if owed != 0 {
+            return Err(EvalCommandError::RunUnfinished {
+                run_id: args.run_id.clone(),
+                owed,
+            }
+            .into());
+        }
         if running_elsewhere(&dir) {
-            return Err(live());
+            return Err(live().into());
         }
         if let Some((job_id, state)) = gents::optimization::held_runs(&ctx.access, &ctx.owner)
             .await?
             .get(&args.run_id)
         {
-            anyhow::bail!(
-                "run {} is evidence of optimization job {job_id}, which is {}; pass --force to delete its directory anyway",
-                args.run_id,
-                state.label()
-            );
+            return Err(EvalCommandError::RunEvidence {
+                run_id: args.run_id.clone(),
+                job_id: job_id.clone(),
+                state: state.label(),
+            }
+            .into());
         }
     }
     let bytes = dir_size(&dir)?;
     if !args.force && running_elsewhere(&dir) {
-        return Err(live());
+        return Err(live().into());
     }
     std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
     tracing::warn!(run_id = %args.run_id, bytes, "eval run directory removed; its documents stay");
@@ -175,7 +181,7 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
     let cutoff = chrono::Duration::from_std(args.older_than)
         .ok()
         .and_then(|age| chrono::Utc::now().checked_sub_signed(age))
-        .context("--older-than reaches before the earliest representable time")?;
+        .ok_or(EvalCommandError::OlderThanOverflow)?;
     let records = load_runs(&ctx.access, &ctx.owner).await?;
     let referenced = gents::optimization::referenced_run_ids(&ctx.access, &ctx.owner).await?;
     let mut runs: Vec<Doomed> = Vec::new();
@@ -325,11 +331,12 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
     for failure in &failures {
         writeln!(out, "{failure}")?;
     }
-    anyhow::ensure!(
-        failures.is_empty(),
-        "eval gc could not remove {} of the directories it chose",
-        failures.len()
-    );
+    if !failures.is_empty() {
+        return Err(EvalCommandError::GcFailed {
+            count: failures.len(),
+        }
+        .into());
+    }
     Ok(())
 }
 

@@ -67,7 +67,7 @@ pub(crate) async fn stage(
     .map_err(|error| {
         vec![format!(
             "writing the definition pack: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         )]
     })?;
     round_trip(dir.path(), definition).await.map_err(|error| {
@@ -119,23 +119,20 @@ pub(crate) fn commit(
             // Whatever is aside now is what would be deleted: it must still be
             // a pack gents eval init wrote, with nothing else in it.
             let changed = if !is_generated_eval_pack(&old_pack) {
-                Some(anyhow::anyhow!(
-                    "refusing to replace --out {}: it stopped being a definition pack gents eval init wrote while replacing it",
-                    out.display()
-                ))
+                Some(EvalInitError::ReplaceNotPack {
+                    out: out.to_path_buf(),
+                })
             } else {
                 match undeclared_entry(&old_pack) {
                     Ok(None) => None,
-                    Ok(Some(extra)) => Some(anyhow::anyhow!(
-                        "refusing to replace --out {}: {} appeared while replacing it",
-                        out.display(),
-                        extra
+                    Ok(Some(extra)) => Some(EvalInitError::ReplaceAppeared {
+                        out: out.to_path_buf(),
+                        extra: extra
                             .strip_prefix(&old_pack)
                             .map(|relative| existing.join(relative))
-                            .unwrap_or(extra)
-                            .display()
-                    )),
-                    Err(error) => Some(error.into()),
+                            .unwrap_or(extra),
+                    }),
+                    Err(error) => Some(error),
                 }
             };
             if let Some(error) = changed {
@@ -145,7 +142,7 @@ pub(crate) fn commit(
                     &old_pack,
                     "it changed while being replaced",
                 )?;
-                return Err(error);
+                return Err(error.into());
             }
             Some((existing, holder, old_pack))
         }
@@ -181,11 +178,12 @@ fn replaceable_destination(out: &Path, force: bool, gents_home: &Path) -> Result
         Err(error) => return Err(error).context("inspecting eval output"),
         Ok(_) => {}
     }
-    anyhow::ensure!(
-        force,
-        "{} already exists; pass --force to replace it",
-        out.display()
-    );
+    if !force {
+        return Err(EvalInitError::OutputExists {
+            out: out.to_path_buf(),
+        }
+        .into());
+    }
     let user_home = std::env::home_dir();
     let cwd = std::env::current_dir().context("resolving the working directory")?;
     replaceable_out(out, user_home.as_deref(), gents_home, &cwd).map(Some)
@@ -226,11 +224,12 @@ fn replaceable_out(
     gents_home: &Path,
     cwd: &Path,
 ) -> Result<PathBuf> {
-    anyhow::ensure!(
-        !out.symlink_metadata()?.file_type().is_symlink(),
-        "refusing to replace --out {}: it is a symbolic link",
-        out.display()
-    );
+    if out.symlink_metadata()?.file_type().is_symlink() {
+        return Err(EvalInitError::OutSymlink {
+            out: out.to_path_buf(),
+        }
+        .into());
+    }
     let resolved = crate::overwritable_home(out, user_home)
         .map_err(|error| {
             anyhow::anyhow!(
@@ -238,30 +237,35 @@ fn replaceable_out(
                 gents_protocol::error_chain::ErrorChain(&error)
             )
         })?
-        .with_context(|| format!("{} does not exist", out.display()))?;
+        .ok_or_else(|| EvalInitError::OutMissing {
+            out: out.to_path_buf(),
+        })?;
     let contains =
         |path: &Path| std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved));
-    anyhow::ensure!(
-        !contains(gents_home) && crate::home_state::read_init_config(&resolved)?.is_none(),
-        "refusing to replace --out {}: it is or contains a Gents home",
-        out.display()
-    );
-    anyhow::ensure!(
-        !contains(cwd),
-        "refusing to replace --out {}: it is or contains the working directory",
-        out.display()
-    );
-    anyhow::ensure!(
-        is_generated_eval_pack(&resolved),
-        "refusing to replace --out {}: it is not a definition pack gents eval init wrote; choose another --out or remove it yourself",
-        out.display()
-    );
+    if contains(gents_home) || crate::home_state::read_init_config(&resolved)?.is_some() {
+        return Err(EvalInitError::OutHome {
+            out: out.to_path_buf(),
+        }
+        .into());
+    }
+    if contains(cwd) {
+        return Err(EvalInitError::OutCwd {
+            out: out.to_path_buf(),
+        }
+        .into());
+    }
+    if !is_generated_eval_pack(&resolved) {
+        return Err(EvalInitError::OutNotGenerated {
+            out: out.to_path_buf(),
+        }
+        .into());
+    }
     if let Some(extra) = undeclared_entry(&resolved)? {
-        anyhow::bail!(
-            "refusing to replace --out {}: {} is not part of the pack gents eval init wrote; move it out or remove --out yourself",
-            out.display(),
-            extra.display()
-        );
+        return Err(EvalInitError::OutExtraEntry {
+            out: out.to_path_buf(),
+            extra,
+        }
+        .into());
     }
     Ok(resolved)
 }
@@ -499,17 +503,18 @@ fn write_files(
     interview_summary: &str,
     subject: &Dossier,
     pilot: Option<&PilotNote>,
-) -> Result<()> {
+) -> Result<(), EvalInitError> {
     let definition = &assembled.definition;
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut references = Vec::new();
     for case in &definition.cases {
         let path = case_asset(&case.case_id);
-        anyhow::ensure!(
-            !files.contains_key(&path),
-            "cases {:?} and another share the sidecar {path}; case ids must differ after `-` is read as `_`",
-            case.case_id
-        );
+        if files.contains_key(&path) {
+            return Err(EvalInitError::SidecarCollision {
+                case_id: case.case_id.clone(),
+                path,
+            });
+        }
         let mut bytes = serde_json::to_vec_pretty(case)?;
         bytes.push(b'\n');
         files.insert(path.clone(), bytes);
@@ -558,14 +563,17 @@ fn write_files(
         .keys()
         .find(|path| !gents::pack::is_distributable_asset_path(path))
     {
-        anyhow::bail!("refusing to write {path:?}: it is not a pack asset path");
+        return Err(EvalInitError::NotAssetPath { path: path.clone() });
     }
     for (path, bytes) in files {
         let file = dir.join(&path);
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&file, bytes).with_context(|| format!("writing {path}"))?;
+        std::fs::write(&file, bytes).map_err(|source| EvalInitError::WriteAsset {
+            path: path.clone(),
+            source,
+        })?;
     }
     Ok(())
 }
@@ -599,17 +607,16 @@ async fn install_and_read_back(
         &|_name| None,
     )?;
     let [loaded] = config.eval_definitions.as_slice() else {
-        anyhow::bail!(
-            "the pack loads {} eval definitions, not one",
-            config.eval_definitions.len()
-        );
+        return Err(EvalInitError::LoadedCount {
+            count: config.eval_definitions.len(),
+        }
+        .into());
     };
     let mut as_drafted = expected.clone();
     as_drafted.node_did = owner.clone();
-    anyhow::ensure!(
-        *loaded == as_drafted,
-        "the loaded definition differs from the validated draft"
-    );
+    if *loaded != as_drafted {
+        return Err(EvalInitError::DraftMismatch.into());
+    }
 
     gents::ensure_node(&home.node, &owner).await?;
     let access = ConfigAccess::local(home.node.clone());
@@ -640,10 +647,9 @@ async fn install_and_read_back(
     let installed: EvalDefinition =
         serde_json::from_value(installed.1).context("decoding the installed definition")?;
     installed.validate()?;
-    anyhow::ensure!(
-        installed.cases == loaded.cases,
-        "the installed definition's cases differ from the pack's"
-    );
+    if installed.cases != loaded.cases {
+        return Err(EvalInitError::InstalledCasesDiffer.into());
+    }
     Ok(loaded.clone())
 }
 

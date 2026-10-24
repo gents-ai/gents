@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::document_config::{EvalSplit, EvalTier};
 use gents::eval::checks::verdict_detail;
 use gents::eval::report::build::reason_code;
@@ -14,7 +14,7 @@ use gents::eval::{
 use gents_protocol::error_chain::ErrorChain;
 use serde::Serialize;
 
-use super::{render, write_json, EvalContext};
+use super::{render, write_json, EvalCommandError, EvalContext};
 use crate::cli::{EvalListArgs, EvalShowArgs, EvalTrialArgs};
 
 #[derive(Debug, Serialize)]
@@ -191,23 +191,28 @@ pub(super) async fn trial(
         .cells
         .iter()
         .find(|cell| cell.cell_id == args.cell)
-        .with_context(|| format!("run {} has no cell {:?}", args.run_id, args.cell))?;
+        .ok_or_else(|| EvalCommandError::InspectNoCell {
+            run_id: args.run_id.clone(),
+            cell: args.cell.clone(),
+        })?;
     let slot = cell
         .slots
         .iter()
         .find(|slot| slot.case_id == args.case_id && slot.trial_index == trial_index)
-        .with_context(|| {
-            format!(
-                "run {} cell {} has no slot for case {:?} trial {trial_index}",
-                args.run_id, args.cell, args.case_id
-            )
+        .ok_or_else(|| EvalCommandError::InspectNoSlot {
+            run_id: args.run_id.clone(),
+            cell: args.cell.clone(),
+            case_id: args.case_id.clone(),
+            trial_index,
         })?;
-    let latest = slot.latest.as_ref().with_context(|| {
-        format!(
-            "case {:?} trial {trial_index} of cell {} has no attempt yet: it is planned",
-            args.case_id, args.cell
-        )
-    })?;
+    let latest = slot
+        .latest
+        .as_ref()
+        .ok_or_else(|| EvalCommandError::InspectPlanned {
+            case_id: args.case_id.clone(),
+            trial_index,
+            cell: args.cell.clone(),
+        })?;
     let mut verdicts: Vec<TrialVerdict> = load_verdicts(&ctx.access, &ctx.owner, &args.run_id)
         .await?
         .into_iter()
@@ -226,12 +231,13 @@ pub(super) async fn trial(
         let trial = trials
             .iter()
             .find(|trial| trial.identity.trial_id == latest.trial_id)
-            .context("trial disappeared while inspecting the run")?;
-        anyhow::ensure!(
-            trial.completion.is_some(),
-            "trial {} is still active or unfinished; request inspection requires a finished trial",
-            latest.trial_id
-        );
+            .ok_or(EvalCommandError::TrialVanished)?;
+        if trial.completion.is_none() {
+            return Err(EvalCommandError::TrialActive {
+                trial_id: latest.trial_id.clone(),
+            }
+            .into());
+        }
         Some(
             gents::eval::runner::embedded::inspect_retained_requests(
                 &ctx.runtime,

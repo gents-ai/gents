@@ -6,6 +6,8 @@ use crate::commands::chat::{
 use crate::request_helpers::wait_for_terminal_response;
 use crate::{create_agent_request, RequestSubmitOptions};
 
+use super::error::EvalInitError;
+
 #[async_trait::async_trait]
 pub(crate) trait Turn {
     async fn send(&mut self, content: &str) -> Result<String>;
@@ -59,12 +61,13 @@ impl Turn for LiveTurn {
             .await?
         };
         let text = chat_turn_text_content(&response);
-        anyhow::ensure!(
-            !text.trim().is_empty(),
-            "the {} turn ended without a reply; `gents response show {}` shows why",
-            self.agent_id,
-            submitted.request_id
-        );
+        if text.trim().is_empty() {
+            return Err(EvalInitError::TurnEmpty {
+                agent: self.agent_id.clone(),
+                request_id: submitted.request_id.to_string(),
+            }
+            .into());
+        }
         Ok(text.to_owned())
     }
 

@@ -169,9 +169,11 @@ pub(crate) enum InitError {
     ModelNameRequired { preset: &'static str },
     #[error("unable to determine a default tool root for local tools")]
     DefaultToolRootUnavailable,
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
 }
 
-fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<PathBuf> {
+fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<PathBuf, InitError> {
     use std::path::Component;
 
     let refuse = || InitError::RefuseOverwrite {
@@ -180,7 +182,7 @@ fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<P
     };
     let Ok(relative) = data_dir.strip_prefix(home_dir) else {
         if fs::canonicalize(data_dir).is_ok_and(|resolved| resolved.starts_with(home)) {
-            return Err(refuse().into());
+            return Err(refuse());
         }
         return Ok(data_dir.to_path_buf());
     };
@@ -189,10 +191,10 @@ fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<P
         match component {
             Component::Normal(name) => resolved.push(name),
             Component::CurDir => continue,
-            _ => return Err(refuse().into()),
+            _ => return Err(refuse()),
         }
         if fs::symlink_metadata(&resolved).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-            return Err(refuse().into());
+            return Err(refuse());
         }
     }
     Ok(resolved)
@@ -1152,7 +1154,10 @@ async fn publish_home_config(
         .await?)
 }
 
-fn replacement<T>(collection: Collection, document: &T) -> Result<DesiredStateApplyDocument>
+fn replacement<T>(
+    collection: Collection,
+    document: &T,
+) -> Result<DesiredStateApplyDocument, InitError>
 where
     T: serde::Serialize,
 {
@@ -1329,12 +1334,12 @@ fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth>
     }
 }
 
-fn resolve_initial_tool_package(args: &InitArgs) -> Result<ToolPackageArg> {
-    Ok(resolve_init_tool_package(
+fn resolve_initial_tool_package(args: &InitArgs) -> Result<ToolPackageArg, InitError> {
+    resolve_init_tool_package(
         args.write_tools || (args.engineer && !args.yolo && args.tool_package.is_none()),
         args.yolo,
         args.tool_package,
-    )?)
+    )
 }
 
 fn resolve_init_tool_package(
@@ -1404,7 +1409,7 @@ fn tool_ceiling_for_package(tool_package: ToolPackageArg) -> ToolCeilingArg {
 fn resolve_tool_root_for_package(
     tool_package: ToolPackageArg,
     explicit: Option<&Path>,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<PathBuf>, InitError> {
     let needs_root = matches!(
         tool_package,
         ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo

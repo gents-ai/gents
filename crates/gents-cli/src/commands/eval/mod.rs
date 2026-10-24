@@ -87,10 +87,65 @@ pub(crate) enum EvalCommandError {
         #[source]
         source: std::io::Error,
     },
+    #[error("reading batch plan {}", path.display())]
+    ReadPlan {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("{note}")]
     Stopped { note: String },
+    #[error("stopped: report unavailable: {reason}")]
+    ReportUnavailable { reason: String },
+    #[error("stopped: {owed} slots owed (gents eval resume {run_id})")]
+    SlotsOwed { owed: usize, run_id: String },
     #[error("job {job_id}: its directory is not under this home")]
     JobOutsideHome { job_id: String },
+    #[error("run {run_id} has no cell {cell:?}")]
+    InspectNoCell { run_id: String, cell: String },
+    #[error("run {run_id} cell {cell} has no slot for case {case_id:?} trial {trial_index}")]
+    InspectNoSlot {
+        run_id: String,
+        cell: String,
+        case_id: String,
+        trial_index: u32,
+    },
+    #[error(
+        "case {case_id:?} trial {trial_index} of cell {cell} has no attempt yet: it is planned"
+    )]
+    InspectPlanned {
+        case_id: String,
+        trial_index: u32,
+        cell: String,
+    },
+    #[error("trial disappeared while inspecting the run")]
+    TrialVanished,
+    #[error("run {run_id} has no directory {}", dir.display())]
+    RunNoDirectory { run_id: String, dir: PathBuf },
+    #[error("run {run_id} is being run by a live process right now (see `gents eval watch {run_id}`); pass --force to delete its directory anyway")]
+    RunLive { run_id: String },
+    #[error("no eval run {run_id:?} for {owner}")]
+    NoRun { run_id: String, owner: String },
+    #[error("run {run_id} has no directory {} and the home's documents cannot be read: {reason}", dir.display())]
+    RunUnreadable {
+        run_id: String,
+        dir: PathBuf,
+        reason: String,
+    },
+    #[error("run {run_id} is unfinished: it still owes {owed} slots; `gents eval resume {run_id}` finishes it, or pass --force to delete its directory anyway")]
+    RunUnfinished { run_id: String, owed: usize },
+    #[error("run {run_id} is evidence of optimization job {job_id}, which is {state}; pass --force to delete its directory anyway")]
+    RunEvidence {
+        run_id: String,
+        job_id: String,
+        state: &'static str,
+    },
+    #[error("--older-than reaches before the earliest representable time")]
+    OlderThanOverflow,
+    #[error("eval gc could not remove {count} of the directories it chose")]
+    GcFailed { count: usize },
+    #[error("trial {trial_id} is still active or unfinished; request inspection requires a finished trial")]
+    TrialActive { trial_id: String },
 }
 
 pub(crate) struct EvalContext {

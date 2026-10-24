@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -14,6 +14,16 @@ use crate::{
     default_key_path, print_json, read_init_config, resolve_config_access, resolve_home_dir,
     DEFAULT_NODE_NAME,
 };
+
+#[derive(Debug, thiserror::Error)]
+enum ProvisionError {
+    #[error("provision did not converge")]
+    NotConverged,
+    #[error("bootstrap identity flags are mutually exclusive")]
+    BootstrapFlagsExclusive,
+    #[error("initialized home identity is required before provisioning {}; run `gents init --identity-only --home {}` for file-key development, or bootstrap the host identity backend first", home.display(), home.display())]
+    IdentityRequired { home: PathBuf },
+}
 
 pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -62,7 +72,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     if report.ok {
         Ok(())
     } else {
-        anyhow::bail!("provision did not converge")
+        Err(ProvisionError::NotConverged.into())
     }
 }
 
@@ -131,7 +141,7 @@ async fn ensure_home_identity(
     .filter(|value| *value)
     .count();
     if bootstrap_count > 1 {
-        anyhow::bail!("bootstrap identity flags are mutually exclusive");
+        return Err(ProvisionError::BootstrapFlagsExclusive.into());
     }
 
     if let Some(report) = read_init_config(home_dir)?.and_then(report_from_stored_identity) {
@@ -139,11 +149,10 @@ async fn ensure_home_identity(
     }
 
     if !bootstrap_file_identity && !bootstrap_macos_keychain && !bootstrap_macos_secure_enclave {
-        anyhow::bail!(
-            "initialized home identity is required before provisioning {}; run `gents init --identity-only --home {}` for file-key development, or bootstrap the host identity backend first",
-            home_dir.display(),
-            home_dir.display()
-        );
+        return Err(ProvisionError::IdentityRequired {
+            home: home_dir.to_path_buf(),
+        }
+        .into());
     }
 
     let data_dir = crate::default_data_dir(home_dir);
@@ -218,6 +227,8 @@ fn next_steps(home_dir: &Path, root: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::find_source;
+
     use super::*;
 
     #[tokio::test]
@@ -278,8 +289,7 @@ mod tests {
             Ok(_) => panic!("bootstrap must hold the exclusive store lock"),
             Err(error) => error,
         };
-        assert!(error
-            .downcast_ref::<gents::home::HomeError>()
+        assert!(find_source::<gents::home::HomeError>(error.as_ref())
             .and_then(gents::home::HomeError::lock_held)
             .is_some());
         assert!(!gents::home::init_config_path(&new_home).exists());

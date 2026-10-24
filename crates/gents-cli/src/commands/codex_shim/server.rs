@@ -78,8 +78,8 @@ impl BoundCodexShim {
         self.auth_required
     }
 
-    pub(crate) fn spawn(self) -> JoinHandle<Result<()>> {
-        tokio::spawn(async move { self.serve().await.map_err(anyhow::Error::from) })
+    pub(crate) fn spawn(self) -> JoinHandle<std::result::Result<(), ServerError>> {
+        tokio::spawn(async move { self.serve().await })
     }
 
     async fn serve(self) -> std::result::Result<(), ServerError> {

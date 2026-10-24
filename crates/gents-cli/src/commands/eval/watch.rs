@@ -3,7 +3,7 @@ use std::future::Future;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::eval::report::{load_report, report_refused};
 use gents::eval::runner::{
     read_progress, read_run_view, run_dir, run_finished, run_view, slots_owed, RunView,
@@ -12,7 +12,7 @@ use gents::eval::runner::{
 use gents::eval::{load_run, load_trials};
 
 use super::frame::{self, Heading, Screen};
-use super::{render, EvalContext};
+use super::{render, EvalCommandError, EvalContext};
 use crate::cli::EvalWatchArgs;
 
 pub(crate) enum Documents<'a> {
@@ -96,12 +96,14 @@ where
             None => Some(open().await?),
         };
         if let Some(Documents::Locked(reason)) = &documents {
-            anyhow::ensure!(
-                dir.is_dir(),
-                "run {} has no directory {} and the home's documents cannot be read: {reason}",
-                args.run_id,
-                dir.display()
-            );
+            if !dir.is_dir() {
+                return Err(EvalCommandError::RunUnreadable {
+                    run_id: args.run_id.clone(),
+                    dir: dir.clone(),
+                    reason: reason.clone(),
+                }
+                .into());
+            }
         }
         let progress = read_progress(&dir);
         let now = chrono::Utc::now();
@@ -193,7 +195,10 @@ where
                     break;
                 }
                 if deadline.is_none_or(|deadline| tokio::time::Instant::now() >= deadline) {
-                    anyhow::bail!("stopped: report unavailable: {reason}");
+                    return Err(EvalCommandError::ReportUnavailable {
+                        reason: reason.clone(),
+                    }
+                    .into());
                 }
                 tokio::time::sleep(args.interval).await;
                 documents = open().await?;
@@ -205,7 +210,10 @@ where
                 Documents::Open(ctx) => *ctx,
                 Documents::Reopened(ctx) => ctx,
                 Documents::Locked(reason) => {
-                    anyhow::bail!("stopped: report unavailable: {reason}")
+                    return Err(EvalCommandError::ReportUnavailable {
+                        reason: reason.clone(),
+                    }
+                    .into());
                 }
             };
             return ending(ctx, &args.run_id, &dir, args.json, out).await;
@@ -254,13 +262,18 @@ async fn ending(
 ) -> Result<()> {
     let record = load_run(&ctx.access, &ctx.owner, run_id)
         .await?
-        .with_context(|| format!("no eval run {run_id:?} for {}", ctx.owner))?;
+        .ok_or_else(|| EvalCommandError::NoRun {
+            run_id: run_id.to_owned(),
+            owner: ctx.owner.clone(),
+        })?;
     let trials = load_trials(&ctx.access, &ctx.owner, run_id).await?;
-    anyhow::ensure!(
-        run_finished(&record, &trials, dir),
-        "stopped: {} slots owed (gents eval resume {run_id})",
-        slots_owed(&record, &trials)
-    );
+    if !run_finished(&record, &trials, dir) {
+        return Err(EvalCommandError::SlotsOwed {
+            owed: slots_owed(&record, &trials),
+            run_id: run_id.to_owned(),
+        }
+        .into());
+    }
     if !json {
         writeln!(out, "finished")?;
     }

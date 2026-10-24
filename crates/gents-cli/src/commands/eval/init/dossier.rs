@@ -263,10 +263,13 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
             .map(|(path, bytes)| (path.as_str(), bytes.len()))
             .max_by_key(|(_, size)| *size)
             .unwrap_or(("manifest.json", 0));
-        anyhow::bail!(
-            "the subject dossier is {} bytes, over the {DOSSIER_LIMIT_BYTES}-byte limit; its largest asset is {largest} ({size} bytes)",
-            text.len()
-        );
+        return Err(EvalInitError::DossierTooLarge {
+            bytes: text.len(),
+            limit: DOSSIER_LIMIT_BYTES,
+            largest: largest.to_owned(),
+            largest_size: size,
+        }
+        .into());
     }
 
     Ok(Dossier {
@@ -324,8 +327,11 @@ fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&value)?)
 }
 
-fn choose_agent<'a>(config: &'a PackConfig, agent: Option<&str>) -> Result<&'a Agent> {
-    let ids = || {
+fn choose_agent<'a>(
+    config: &'a PackConfig,
+    agent: Option<&str>,
+) -> Result<&'a Agent, EvalInitError> {
+    let declared = || {
         config
             .agents
             .iter()
@@ -338,14 +344,16 @@ fn choose_agent<'a>(config: &'a PackConfig, agent: Option<&str>) -> Result<&'a A
             .agents
             .iter()
             .find(|agent| agent.agent_id == id)
-            .with_context(|| format!("the pack has no agent {id:?}; it declares: {}", ids())),
+            .ok_or_else(|| EvalInitError::AgentUnknown {
+                agent: id.to_owned(),
+                declared: declared(),
+            }),
         None => match config.agents.as_slice() {
             [only] => Ok(only),
-            [] => anyhow::bail!("the pack declares no agent to evaluate"),
-            _ => anyhow::bail!(
-                "the pack declares several agents ({}); choose one with --agent",
-                ids()
-            ),
+            [] => Err(EvalInitError::NoAgentToEvaluate),
+            _ => Err(EvalInitError::SeveralAgents {
+                declared: declared(),
+            }),
         },
     }
 }

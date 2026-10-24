@@ -15,6 +15,10 @@ pub(in crate::commands::codex_shim) enum CodexShimProjectionError {
     ThreadRowsMissing { collection: String },
     #[error("usage query omitted {name} rows")]
     UsageRowsMissing { name: String },
+    #[error("thread list crossed owner/requester/agent scope")]
+    ThreadListScopeCrossed,
+    #[error("thread list has duplicate canonical session identity")]
+    ThreadListDuplicateIdentity,
     #[error(transparent)]
     DecodeUsageRows(serde_json::Error),
     #[error("decoding {collection} rows")]

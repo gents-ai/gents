@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use gents::document_config::EvalSplit;
 use gents::eval::report::{load_report, EvalReport, SlotClass};
 use gents::eval::runner::{self, Capture, TrialLocator};
@@ -12,6 +12,7 @@ use gents::eval::OutcomeKind;
 use serde_json::{json, Value};
 
 use super::draft::parse_reply;
+use super::error::EvalInitError;
 use super::turn::Turn;
 use super::validate::Assembled;
 use super::write::{commit, rewrite_readme, split_name, PilotNote};
@@ -42,14 +43,15 @@ pub(crate) async fn pilot(
     out: &mut dyn Write,
 ) -> Result<PilotOutcome> {
     let (Some(written), Some(assembled)) = (&drafted.written, &drafted.assembled) else {
-        anyhow::bail!("nothing was written to pilot");
+        return Err(EvalInitError::NothingWritten { to: "pilot" }.into());
     };
     let definition = &assembled.definition;
-    anyhow::ensure!(
-        confirm(definition.cases.len()),
-        "the pilot was declined; the pack stays as written at {}",
-        written.out.display()
-    );
+    if !confirm(definition.cases.len()) {
+        return Err(EvalInitError::PilotDeclined {
+            out: written.out.clone(),
+        }
+        .into());
+    }
     install_definition(ctx, &written.out).await?;
 
     let unix_ms = chrono::Utc::now().timestamp_millis();
@@ -107,7 +109,7 @@ async fn run_and_answer(
     let assembled = drafted
         .assembled
         .as_ref()
-        .ok_or_else(|| anyhow!("nothing was written to pilot"))?;
+        .ok_or(EvalInitError::NothingWritten { to: "pilot" })?;
     let definition = &assembled.definition;
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         if !definition.cases.iter().any(|case| case.split == split) {
@@ -233,10 +235,12 @@ async fn run_split(
         ),
     )
     .await?;
-    anyhow::ensure!(
-        !outcome.cancelled && outcome.abandoned == 0,
-        "pilot run {run_id} stopped before it finished; the pack stays as written; `gents eval resume {run_id}` continues it"
-    );
+    if outcome.cancelled || outcome.abandoned != 0 {
+        return Err(EvalInitError::PilotStopped {
+            run_id: run_id.to_owned(),
+        }
+        .into());
+    }
     Ok(())
 }
 
@@ -407,7 +411,7 @@ async fn revise(
             let written = drafted
                 .written
                 .as_ref()
-                .ok_or_else(|| anyhow!("nothing was written to revise"))?;
+                .ok_or(EvalInitError::NothingWritten { to: "revise" })?;
             let written = commit(
                 staged,
                 &written.out,

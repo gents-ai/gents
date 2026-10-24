@@ -5,6 +5,8 @@ use gents::graphql::escape_graphql_string;
 use gents::ConfigAccess;
 use gents_protocol::row::{project_node_readiness, NodeReadinessRow, ProjectedAgentReadiness};
 
+use super::error::EvalInitError;
+
 /// Pack publication precedes router reconciliation, so an HTTP-ready server
 /// can still reject the author's first request as unassigned.
 pub(super) async fn wait_for_author(
@@ -48,10 +50,12 @@ pub(super) async fn wait_for_author(
     .await;
     match waited {
         Ok(result) => result,
-        Err(_) => anyhow::bail!(
-            "eval author {agent:?} did not become ready within {} seconds ({last}); inspect `gents status` for this home and retry",
-            timeout.as_secs_f64()
-        ),
+        Err(_) => Err(EvalInitError::AuthorNotReady {
+            agent: agent.to_owned(),
+            seconds: timeout.as_secs_f64(),
+            last,
+        }
+        .into()),
     }
 }
 

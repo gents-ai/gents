@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use gents_desktop_core::{
     client::DesktopPaths,
     home_reset::{
@@ -13,9 +13,80 @@ use crate::{
     native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform},
 };
 
+#[derive(Debug, thiserror::Error)]
+enum DesktopError {
+    #[error("Full desktop reset is supported on macOS.")]
+    MacOsOnly,
+    #[error("The managed service is still running; quit Gents and stop it before resetting.")]
+    ServiceRunning,
+    #[error("Cannot confirm the managed runtime endpoint is stopped; stop it before resetting.")]
+    EndpointRunning,
+    #[error(transparent)]
+    Paths(#[from] gents_desktop_core::client::PathsError),
+    #[error(transparent)]
+    Retire(#[from] gents_desktop_core::error::BridgeError),
+    #[error("{} is not valid UTF-8", path.display())]
+    NotUtf8 { path: std::path::PathBuf },
+    #[error("{path} cannot be quoted for a shell")]
+    CannotQuote {
+        path: String,
+        #[source]
+        source: shlex::QuoteError,
+    },
+    #[error("invalid desktop process ID")]
+    PidOutOfRange(#[source] std::num::TryFromIntError),
+    #[error("invalid desktop process ID")]
+    PidNotPositive,
+    #[error("waiting for desktop process shutdown")]
+    WaitShutdown(#[source] std::io::Error),
+    #[cfg(not(unix))]
+    #[error("desktop reset handoff is unsupported on this platform")]
+    HandoffUnsupported,
+    #[error("install the matching Gents desktop app before resetting browser data")]
+    NoDesktopApp,
+    #[error("the installed Gents desktop app has no executable")]
+    NoDesktopExecutable,
+    #[cfg(not(target_os = "macos"))]
+    #[error("desktop browser reset is unsupported on this platform")]
+    BrowserResetUnsupported,
+    #[error("{retired}, but browser data was not cleared. Quit every Gents window, then run `{retry}` to review and clear it")]
+    ClearBrowser {
+        retired: String,
+        retry: String,
+        #[source]
+        source: BrowserError,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+enum BrowserError {
+    #[error("creating browser clearing receipt directory")]
+    ReceiptDirectory(#[source] std::io::Error),
+    #[error("creating browser clearing stderr capture")]
+    StderrCapture(#[source] std::io::Error),
+    #[error("starting Gents to clear browser data; install the matching Gents desktop app before resetting")]
+    Spawn(#[source] std::io::Error),
+    #[error("Gents browser clearing did not finish within its deadline ({wait:?}; kill error: {kill_error:?}; reap error: {reap_error:?}). Install the matching desktop app and retry.")]
+    Deadline {
+        wait: std::io::Result<Option<std::process::ExitStatus>>,
+        kill_error: Option<std::io::Error>,
+        reap_error: Option<std::io::Error>,
+    },
+    #[error("Gents could not clear browser data: {message}")]
+    HelperReported { message: String },
+    #[error("Gents could not clear browser data: {diagnostic}. Install the matching Gents desktop app and retry.")]
+    HelperFailed { diagnostic: String },
+    #[error("Gents did not confirm browser clearing; install the matching desktop app and retry")]
+    ReceiptMissing(#[source] std::io::Error),
+    #[error("Gents did not provide a valid browser-clearing completion receipt")]
+    ReceiptInvalid,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     if !cfg!(target_os = "macos") {
-        bail!("Full desktop reset is supported on macOS.");
+        return Err(DesktopError::MacOsOnly.into());
     }
     let DesktopCommand::Reset {
         home,
@@ -137,15 +208,13 @@ async fn reset(
     .await
     .context("stopping the managed service")??;
     if still_running {
-        bail!("The managed service is still running; quit Gents and stop it before resetting.");
+        return Err(DesktopError::ServiceRunning.into());
     }
     let server = crate::server_host::ServerConfig::standard(home.clone());
     let address = std::net::SocketAddr::new(server.http_addr, server.http_port);
     match std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(150)) {
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
-        _ => bail!(
-            "Cannot confirm the managed runtime endpoint is stopped; stop it before resetting."
-        ),
+        _ => return Err(DesktopError::EndpointRunning.into()),
     }
     let _home_lock = if plan.runtime.is_some() {
         Some(gents::home::lock_home_store(&home)?)
@@ -155,9 +224,13 @@ async fn reset(
     let _client_lock = lock_client_state(&desktop)?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
-    retire_then_clear(&settled, disposition, backup.as_deref(), retry, || {
-        run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT)
-    })
+    Ok(retire_then_clear(
+        &settled,
+        disposition,
+        backup.as_deref(),
+        retry,
+        || run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT),
+    )?)
 }
 
 fn retire_then_clear(
@@ -165,17 +238,19 @@ fn retire_then_clear(
     disposition: HomeResetDisposition,
     backup: Option<&std::path::Path>,
     retry: &str,
-    clear: impl FnOnce() -> Result<()>,
-) -> Result<ManagedServerResetResult> {
+    clear: impl FnOnce() -> Result<(), BrowserError>,
+) -> Result<ManagedServerResetResult, DesktopError> {
     let mut result = settled.retire(disposition, backup)?;
-    clear().with_context(|| {
+    clear().map_err(|source| {
         let retired = match &result.backup_path {
             Some(path) => format!("Your local state was archived to {path}"),
             None => "Your local state was permanently deleted".into(),
         };
-        format!(
-            "{retired}, but browser data was not cleared. Quit every Gents window, then run `{retry}` to review and clear it"
-        )
+        DesktopError::ClearBrowser {
+            retired,
+            retry: retry.to_owned(),
+            source,
+        }
     })?;
     result.cleared_browser_paths = result.browser_paths.clone();
     Ok(result)
@@ -185,7 +260,7 @@ fn select_desktop(
     flag: Option<std::path::PathBuf>,
     env: Option<std::ffi::OsString>,
     cwd: &std::path::Path,
-) -> Result<DesktopPaths> {
+) -> Result<DesktopPaths, DesktopError> {
     let root = match flag.or_else(|| env.filter(|value| !value.is_empty()).map(Into::into)) {
         Some(root) => root,
         None => DesktopPaths::discover()?.root().to_path_buf(),
@@ -193,13 +268,19 @@ fn select_desktop(
     Ok(DesktopPaths::from_root(cwd.join(root)))
 }
 
-fn retry_command(home: &std::path::Path, desktop: &std::path::Path) -> Result<String> {
-    let quote = |path: &std::path::Path| -> Result<String> {
-        let path = path
-            .to_str()
-            .with_context(|| format!("{} is not valid UTF-8", path.display()))?;
-        Ok(shlex::try_quote(path)
-            .with_context(|| format!("{path} cannot be quoted for a shell"))?
+fn retry_command(
+    home: &std::path::Path,
+    desktop: &std::path::Path,
+) -> Result<String, DesktopError> {
+    let quote = |path: &std::path::Path| -> Result<String, DesktopError> {
+        let text = path.to_str().ok_or_else(|| DesktopError::NotUtf8 {
+            path: path.to_path_buf(),
+        })?;
+        Ok(shlex::try_quote(text)
+            .map_err(|source| DesktopError::CannotQuote {
+                path: text.to_owned(),
+                source,
+            })?
             .into_owned())
     };
     Ok(format!(
@@ -228,12 +309,12 @@ fn notify(message: &str) {
 
 /// The Tauri state can drop before native browser teardown finishes; the
 /// helper waits for process death as well as the file-lock handoff.
-async fn wait_for_exit(pid: u32) -> Result<()> {
+async fn wait_for_exit(pid: u32) -> Result<(), DesktopError> {
     #[cfg(unix)]
     {
-        let pid = i32::try_from(pid).context("invalid desktop process ID")?;
+        let pid = i32::try_from(pid).map_err(DesktopError::PidOutOfRange)?;
         if pid <= 0 {
-            bail!("invalid desktop process ID");
+            return Err(DesktopError::PidNotPositive);
         }
         loop {
             let result = unsafe { libc::kill(pid, 0) };
@@ -242,7 +323,7 @@ async fn wait_for_exit(pid: u32) -> Result<()> {
                 if error.raw_os_error() == Some(libc::ESRCH) {
                     return Ok(());
                 }
-                return Err(error).context("waiting for desktop process shutdown");
+                return Err(DesktopError::WaitShutdown(error));
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -250,7 +331,7 @@ async fn wait_for_exit(pid: u32) -> Result<()> {
     #[cfg(not(unix))]
     {
         let _ = pid;
-        bail!("desktop reset handoff is unsupported on this platform")
+        Err(DesktopError::HandoffUnsupported)
     }
 }
 
@@ -268,35 +349,35 @@ enum BrowserHelper {
 }
 
 #[cfg(target_os = "macos")]
-fn installed_desktop_executable() -> Result<std::path::PathBuf> {
+fn installed_desktop_executable() -> Result<std::path::PathBuf, DesktopError> {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{NSBundle, NSString};
     let url = NSWorkspace::sharedWorkspace()
         .URLForApplicationWithBundleIdentifier(&NSString::from_str("com.source-inc.gents"))
-        .context("install the matching Gents desktop app before resetting browser data")?;
+        .ok_or(DesktopError::NoDesktopApp)?;
     let path = NSBundle::bundleWithURL(&url)
         .and_then(|bundle| bundle.executableURL())
         .and_then(|url| url.path())
-        .context("the installed Gents desktop app has no executable")?;
+        .ok_or(DesktopError::NoDesktopExecutable)?;
     Ok(std::path::PathBuf::from(path.to_string()))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn installed_desktop_executable() -> Result<std::path::PathBuf> {
-    bail!("desktop browser reset is unsupported on this platform")
+fn installed_desktop_executable() -> Result<std::path::PathBuf, DesktopError> {
+    Err(DesktopError::BrowserResetUnsupported)
 }
 
 fn run_browser_helper(
     executable: &std::path::Path,
     helper: BrowserHelper,
     timeout: std::time::Duration,
-) -> Result<()> {
+) -> Result<(), BrowserError> {
     use std::io::{Read as _, Seek as _, SeekFrom};
     use std::process::{Command, Stdio};
     use wait_timeout::ChildExt as _;
-    let temporary = tempfile::tempdir().context("creating browser clearing receipt directory")?;
+    let temporary = tempfile::tempdir().map_err(BrowserError::ReceiptDirectory)?;
     let receipt = temporary.path().join("browser-clear.json");
-    let mut stderr = tempfile::tempfile().context("creating browser clearing stderr capture")?;
+    let mut stderr = tempfile::tempfile().map_err(BrowserError::StderrCapture)?;
     // Launch the executable directly so timeout cleanup owns the exact process,
     // including an older app that does not recognize the headless command.
     let mut command = Command::new(executable);
@@ -306,16 +387,21 @@ fn run_browser_helper(
     }
     let mut child = command
         .arg(&receipt)
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr.try_clone()?)
-        .spawn().context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr.try_clone()?)
+        .spawn()
+        .map_err(BrowserError::Spawn)?;
     let status = match child.wait_timeout(timeout) {
         Ok(Some(status)) => status,
         result => {
             let kill_error = child.kill().err();
             let reap_error = child.wait().err();
-            bail!(
-                "Gents browser clearing did not finish within its deadline ({result:?}; kill error: {kill_error:?}; reap error: {reap_error:?}). Install the matching desktop app and retry."
-            );
+            return Err(BrowserError::Deadline {
+                wait: result,
+                kill_error,
+                reap_error,
+            });
         }
     };
     let receipt_bytes = std::fs::read(&receipt);
@@ -328,27 +414,26 @@ fn run_browser_helper(
         .and_then(|value| value.get("error"))
         .and_then(serde_json::Value::as_str)
     {
-        bail!("Gents could not clear browser data: {error}");
+        return Err(BrowserError::HelperReported {
+            message: error.to_owned(),
+        });
     }
     if !status.success() {
         stderr.seek(SeekFrom::Start(0))?;
         let mut diagnostic = String::new();
         stderr.take(64 * 1024).read_to_string(&mut diagnostic)?;
-        bail!(
-            "Gents could not clear browser data: {}. Install the matching Gents desktop app and retry.",
-            diagnostic.trim()
-        );
+        return Err(BrowserError::HelperFailed {
+            diagnostic: diagnostic.trim().to_owned(),
+        });
     }
-    receipt_bytes.context(
-        "Gents did not confirm browser clearing; install the matching desktop app and retry",
-    )?;
+    receipt_bytes.map_err(BrowserError::ReceiptMissing)?;
     if completion
         .as_ref()
         .and_then(|value| value.get("completed"))
         .and_then(serde_json::Value::as_bool)
         != Some(true)
     {
-        bail!("Gents did not provide a valid browser-clearing completion receipt");
+        return Err(BrowserError::ReceiptInvalid);
     }
     Ok(())
 }
@@ -408,9 +493,9 @@ mod tests {
         let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
             .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("store held"),
+            format!("{}", ErrorChain(&error)).contains("store held"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -459,7 +544,7 @@ mod tests {
         assert!(
             !cleared,
             "browser data was cleared after {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(home.join("data/MANIFEST").is_file());
         assert!(home.join("init.json").is_file());
@@ -480,11 +565,13 @@ mod tests {
             &retry,
             || {
                 assert!(backup.join("home/data/MANIFEST").is_file());
-                bail!("WebKit refused")
+                Err(BrowserError::HelperReported {
+                    message: "WebKit refused".to_owned(),
+                })
             },
         )
         .unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains(&backup.display().to_string()), "{message}");
         assert!(
             message.contains("browser data was not cleared"),

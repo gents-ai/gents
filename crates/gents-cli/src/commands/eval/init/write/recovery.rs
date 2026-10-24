@@ -82,11 +82,12 @@ pub(super) fn recover_locked(out: &Path, gents_home: &Path) -> Result<()> {
     let cwd = std::env::current_dir().context("resolving the working directory")?;
     for protected in [user_home.as_path(), cwd.as_path(), gents_home] {
         let protected = resolve_through_existing_ancestor(protected)?;
-        anyhow::ensure!(
-            !protected.starts_with(&destination),
-            "refusing to recover eval output {}: it contains a protected home or working directory",
-            out.display()
-        );
+        if protected.starts_with(&destination) {
+            return Err(EvalInitError::OutProtected {
+                out: out.to_path_buf(),
+            }
+            .into());
+        }
     }
     let parent = destination.parent().context("eval output has no parent")?;
     let prefix = sibling_name(out, ".replaced-")?;
@@ -112,11 +113,13 @@ pub(super) fn recover_locked(out: &Path, gents_home: &Path) -> Result<()> {
         replaceable_out(&pack, Some(&user_home), gents_home, &cwd)?;
         backups.push(pack);
     }
-    anyhow::ensure!(
-        backups.len() <= 1,
-        "several interrupted eval replacements exist for {}; restore the intended pack from {backups:?} before retrying",
-        out.display()
-    );
+    if backups.len() > 1 {
+        return Err(EvalInitError::SeveralBackups {
+            out: out.to_path_buf(),
+            backups,
+        }
+        .into());
+    }
     if let Some(backup) = backups.pop() {
         std::fs::rename(&backup, out).with_context(|| {
             format!(
