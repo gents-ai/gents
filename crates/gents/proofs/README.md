@@ -651,6 +651,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/ClientShell/Settings.lean` | Physical document and composite revision guards, canonical editable fields, and post-save editor baseline adoption. |
 | `Proofs/GoalAutomation/ClientControl.lean` | Goal revision checks and client edit, pause, and resume through the existing Goal owners. |
 | `Proofs/GoalAutomation/ClientMutation.lean` | Atomic signed command receipts, exact command/digest recovery, replay, and stale session and Goal revision rejection. |
+| `Proofs/GoalAutomation/ClientDelivery.lean` | Durable caller reservation, exact signed preparation, read-only recovery, explicit resumption and acknowledged Goal-command result retention. |
 | `Proofs/GoalAutomation/ClientStart.lean` | Atomic session reservation, Goal creation, and first request publication. |
 | `Proofs/GoalAutomation/Observation.lean` | Signed Goal projections bound to the canonical physical session and requester. |
 | `Proofs/GoalAutomation/RequestAssignment.lean` | Signed Goal and physical opening-request attribution, retained assignment handoffs |
