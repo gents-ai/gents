@@ -1037,7 +1037,9 @@ describe("configuration panels", () => {
           ...fields,
         });
         const view_ = (backendId: string, fields: object = {}) => ({
-          backendId,
+          backendIds: [backendId],
+          label: backendId,
+          provider: "provider",
           windows: [],
           plan: null,
           note: null,
@@ -1078,7 +1080,7 @@ describe("configuration panels", () => {
           await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(1));
           expect(api.readProviderUsage).toHaveBeenCalledWith(
             deployment.nodeDid,
-            true,
+            false,
             null,
           );
           await act(async () =>
@@ -1105,7 +1107,7 @@ describe("configuration panels", () => {
           await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(4));
           expect(api.readProviderUsage).toHaveBeenLastCalledWith(
             deployment.nodeDid,
-            true,
+            false,
             null,
           );
         });

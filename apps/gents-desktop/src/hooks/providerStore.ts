@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 import type {
-  BackendUsageView,
+  AccountUsageView,
   InferenceSetupCatalog,
   ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
@@ -10,7 +10,7 @@ import { createSelectors, type WithSelectors } from "./createSelectors";
 
 export type ProviderState = {
   accounts: Readonly<Record<string, readonly ProviderAccountView[]>>;
-  usage: Readonly<Record<string, readonly BackendUsageView[]>>;
+  usage: Readonly<Record<string, readonly AccountUsageView[]>>;
   catalog: InferenceSetupCatalog | null;
   catalogFailure: { cause: unknown } | null;
 };
@@ -36,7 +36,7 @@ export const providers = {
   ) {
     store.setState((state) => ({ accounts: { ...state.accounts, [nodeDid]: views } }));
   },
-  usageRead(store: ProviderStore, nodeDid: string, views: readonly BackendUsageView[]) {
+  usageRead(store: ProviderStore, nodeDid: string, views: readonly AccountUsageView[]) {
     store.setState((state) => ({ usage: { ...state.usage, [nodeDid]: views } }));
   },
   catalogRead(store: ProviderStore, catalog: InferenceSetupCatalog) {

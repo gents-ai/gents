@@ -354,7 +354,7 @@ async fn resume_on_names_the_failed_step() {
 #[tokio::test]
 async fn resume_on_counts_the_plugin_slots_of_the_moved_profile() {
     let limited = Limited::new(&usage_limit()).await;
-    let asked = std::cell::RefCell::new(Vec::new());
+    let asked = std::sync::Mutex::new(Vec::new());
     let receipt = resume_goal_on_account(
         &limited.access,
         limited.f.identity.as_ref(),
@@ -364,13 +364,13 @@ async fn resume_on_counts_the_plugin_slots_of_the_moved_profile() {
         &limited.b,
         false,
         &|profile| {
-            asked.borrow_mut().push(profile.to_owned());
+            asked.lock().unwrap().push(profile.to_owned());
             Ok(vec!["team/ocr".into()])
         },
     )
     .await
     .unwrap();
-    assert_eq!(asked.into_inner(), [PROFILE]);
+    assert_eq!(asked.into_inner().unwrap(), [PROFILE]);
     let switch = receipt.switch.expect("the profile moved");
     assert_eq!(
         switch.headline,

@@ -1,11 +1,11 @@
 // Generated from the native command signatures.
+import type { AccountUsageView } from "./AccountUsageView.js";
 import type { AgentDeleteRequest } from "./AgentDeleteRequest.js";
 import type { AgentSaveRequest } from "./AgentSaveRequest.js";
 import type { AllowedFoldersView } from "./AllowedFoldersView.js";
 import type { BackendDeleteRequest } from "./BackendDeleteRequest.js";
 import type { BackendHealthView } from "./BackendHealthView.js";
 import type { BackendSaveRequest } from "./BackendSaveRequest.js";
-import type { BackendUsageView } from "./BackendUsageView.js";
 import type { ChatSendRequest } from "./ChatSendRequest.js";
 import type { ChatSendResult } from "./ChatSendResult.js";
 import type { ClaudeLoginRequest } from "./ClaudeLoginRequest.js";
@@ -93,6 +93,10 @@ import type { ProviderAccountRenameRequest } from "./ProviderAccountRenameReques
 import type { ProviderAccountRetrySaveRequest } from "./ProviderAccountRetrySaveRequest.js";
 import type { ProviderAccountView } from "./ProviderAccountView.js";
 import type { ProviderAccountsRequest } from "./ProviderAccountsRequest.js";
+import type { ProviderRecoveryApply } from "./ProviderRecoveryApply.js";
+import type { ProviderRecoveryPlan } from "./ProviderRecoveryPlan.js";
+import type { ProviderRecoveryRequest } from "./ProviderRecoveryRequest.js";
+import type { ProviderRecoveryResult } from "./ProviderRecoveryResult.js";
 import type { ProviderUsageReadRequest } from "./ProviderUsageReadRequest.js";
 import type { RequestResendResultView } from "./RequestResendResultView.js";
 import type { RequestTimelineView } from "./RequestTimelineView.js";
@@ -216,7 +220,9 @@ export type DesktopCommands = {
   desktop_provider_account_rename: { args: { request: ProviderAccountRenameRequest }; result: void };
   desktop_provider_account_retry_save: { args: { request: ProviderAccountRetrySaveRequest }; result: ProviderAccountView };
   desktop_provider_accounts_list: { args: { request: ProviderAccountsRequest }; result: Array<ProviderAccountView> };
-  desktop_provider_usage_read: { args: { request: ProviderUsageReadRequest }; result: Array<BackendUsageView> };
+  desktop_provider_recovery_apply: { args: { request: ProviderRecoveryApply }; result: ProviderRecoveryResult };
+  desktop_provider_recovery_plan: { args: { request: ProviderRecoveryRequest }; result: ProviderRecoveryPlan | null };
+  desktop_provider_usage_read: { args: { request: ProviderUsageReadRequest }; result: Array<AccountUsageView> };
   desktop_request_resend: { args: { requestId: string; nodeDid?: string | null }; result: RequestResendResultView };
   desktop_request_retry: { args: { requestId: string; nodeDid?: string | null }; result: ChatSendResult };
   desktop_request_timeline: { args: { nodeDid: string; requestId: string }; result: RequestTimelineView };

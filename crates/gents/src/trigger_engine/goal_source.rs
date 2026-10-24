@@ -341,7 +341,10 @@ impl GoalSource {
                 GoalRequestTerminal::Failed | GoalRequestTerminal::Dead
             )
         {
-            if let Some(reason) = self.request_usage_limit_failure(&latest.request_id).await? {
+            if let Some(reason) = self
+                .request_usage_limit_failure(&goal.node_did, &latest.request_id)
+                .await?
+            {
                 let post = goal
                     .state()
                     .and_then(|state| state.step(GoalAction::UsageLimit))
@@ -794,12 +797,16 @@ impl GoalSource {
         Ok(has_rows("InferenceCall")? || has_rows("AgentToolCall")? || provider_output)
     }
 
-    async fn request_usage_limit_failure(&self, request_id: &str) -> Result<Option<String>> {
+    async fn request_usage_limit_failure(
+        &self,
+        node_did: &str,
+        request_id: &str,
+    ) -> Result<Option<String>> {
         let call = ConfigAccess::transact_local_readonly(
             &self.node,
             None,
             "goal.last_failed_call",
-            |txn| Box::pin(last_failed_call_in_txn(txn, request_id)),
+            |txn| Box::pin(last_failed_call_in_txn(txn, node_did, request_id)),
         )
         .await?;
         let reason = call

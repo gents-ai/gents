@@ -195,7 +195,7 @@ export type { ProviderAccountDisconnectRequest } from "./generated/ProviderAccou
 export type { ProviderAccountRenameRequest } from "./generated/ProviderAccountRenameRequest.js";
 export type { ProviderAccountRemoveRequest } from "./generated/ProviderAccountRemoveRequest.js";
 export type { ProviderUsageReadRequest } from "./generated/ProviderUsageReadRequest.js";
-export type { BackendUsageView } from "./generated/BackendUsageView.js";
+export type { AccountUsageView } from "./generated/AccountUsageView.js";
 export type { UsageWindowView } from "./generated/UsageWindowView.js";
 export type { InferenceSetupState } from "./generated/InferenceSetupState.js";
 export type { InferenceSetupCatalog } from "./generated/InferenceSetupCatalog.js";
@@ -235,3 +235,9 @@ export type { GoalControlView } from "./generated/GoalControlView.js";
 export type { GoalControlAction } from "./generated/GoalControlAction.js";
 export type { GoalControlRequest } from "./generated/GoalControlRequest.js";
 export type { GoalControlResult } from "./generated/GoalControlResult.js";
+
+export type { ProviderRecoveryPlan } from "./generated/ProviderRecoveryPlan.js";
+export type { ProviderRecoveryAction } from "./generated/ProviderRecoveryAction.js";
+export type { ProviderRecoveryResult } from "./generated/ProviderRecoveryResult.js";
+export type { ProviderRecoveryRequest } from "./generated/ProviderRecoveryRequest.js";
+export type { ProviderRecoveryApply } from "./generated/ProviderRecoveryApply.js";

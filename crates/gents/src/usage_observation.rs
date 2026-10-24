@@ -174,6 +174,7 @@ pub fn usage_view(
 /// a late response from a replaced sign-in or edited backend cannot populate its successor.
 #[derive(Debug, Default)]
 pub struct UsageCache {
+    endpoints: UsageEndpoints,
     entries: tokio::sync::Mutex<rapidhash::RapidHashMap<CacheKey, UsageObservation>>,
 }
 
@@ -185,6 +186,17 @@ struct CacheKey {
 }
 
 impl UsageCache {
+    pub fn with_endpoints(endpoints: UsageEndpoints) -> Self {
+        Self {
+            endpoints,
+            ..Default::default()
+        }
+    }
+
+    pub fn endpoints(&self) -> &UsageEndpoints {
+        &self.endpoints
+    }
+
     async fn load(&self, target: &Target) -> Option<UsageObservation> {
         self.entries.lock().await.get(&target.key).cloned()
     }
@@ -709,7 +721,7 @@ impl crate::llm::tool::Tool for ProviderLimitsTool {
     async fn definition(&self, _prompt: String) -> crate::llm::tool::ToolDefinition {
         crate::llm::tool::ToolDefinition {
             name: Self::NAME.into(),
-            description: "Read this node's last observed provider limits, reset times and freshness. Does not refresh or change accounts.".into(),
+            description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account.".into(),
             parameters: serde_json::json!({"type":"object", "properties":{}, "additionalProperties":false}),
         }
     }
@@ -719,9 +731,9 @@ impl crate::llm::tool::Tool for ProviderLimitsTool {
             &self.cache,
             self.node.clone(),
             &self.node_did,
-            UsageTrigger::Cached,
+            UsageTrigger::Open,
             None,
-            &UsageEndpoints::default(),
+            self.cache.endpoints(),
             Utc::now(),
         )
         .await?;
@@ -729,7 +741,7 @@ impl crate::llm::tool::Tool for ProviderLimitsTool {
             .into_iter()
             .map(|read| {
                 serde_json::json!({
-                    "label": read.label, "provider": read.provider, "limits": read.usage,
+                    "label": read.label, "provider": read.provider, "limits": read.usage, "read": read.outcome,
                 })
             })
             .collect();

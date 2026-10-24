@@ -2708,26 +2708,15 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         None,
     )
     .await;
-    let response = db
-        .node
-        .execute(
-            r#"mutation {
-                add_InferenceCall(input: {
-                    call_id: "usage-limited-call",
-                    request_id: "usage-limited-request",
-                    call_seq: 1,
-                    attempt: 1,
-                    call_state: "failed",
-                    failure_reason: "provider insufficient_quota: credit balance exhausted"
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed usage limit: {:?}",
-        response.errors
-    );
+    seed_failed_call(
+        &db,
+        "usage-limited-call",
+        "inference",
+        1,
+        "2026-07-15T00:00:01Z",
+        "provider insufficient_quota: credit balance exhausted",
+    )
+    .await;
     set_goal(
         &db.node,
         db.node_identity.did(),
@@ -2767,6 +2756,7 @@ async fn seed_failed_call(
             r#"mutation {{
                 add_InferenceCall(input: {{
                     call_id: "{call_id}",
+                    node_did: "{node_did}",
                     request_id: "usage-limited-request",
                     call_seq: 1,
                     call_kind: "{call_kind}",
@@ -2775,7 +2765,12 @@ async fn seed_failed_call(
                     ended_at: "{ended_at}",
                     failure_reason: "{failure_reason}"
                 }}) {{ _docID }}
-            }}"#
+            }}"#,
+            call_id = gents::graphql::escape_graphql_string(call_id),
+            node_did = gents::graphql::escape_graphql_string(db.node_identity.did()),
+            call_kind = gents::graphql::escape_graphql_string(call_kind),
+            ended_at = gents::graphql::escape_graphql_string(ended_at),
+            failure_reason = gents::graphql::escape_graphql_string(failure_reason),
         ))
         .await;
     assert!(
@@ -3053,7 +3048,7 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
     create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
         db.node_identity.did(),
-        "openrouter-credits-request",
+        "usage-limited-request",
         SESSION,
         "failed",
         "2026-07-15T00:00:00Z",
@@ -3067,27 +3062,15 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
         r#"HttpError: Invalid status code 402 Payment Required with message: {"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
         chrono::Utc::now(),
     );
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                add_InferenceCall(input: {{
-                    call_id: "openrouter-credits-call",
-                    request_id: "openrouter-credits-request",
-                    call_seq: 1,
-                    attempt: 1,
-                    call_state: "failed",
-                    failure_reason: {}
-                }}) {{ _docID }}
-            }}"#,
-            serde_json::to_string(&reason).expect("reason literal")
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed credits 402: {:?}",
-        response.errors
-    );
+    seed_failed_call(
+        &db,
+        "openrouter-credits-call",
+        "inference",
+        1,
+        "2026-07-15T00:00:01Z",
+        &reason,
+    )
+    .await;
     set_goal(
         &db.node,
         db.node_identity.did(),
