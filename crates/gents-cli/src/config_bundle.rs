@@ -1,13 +1,17 @@
 use crate::config_writes::ConfigAccess;
 use crate::{desired_state, shared::ConfigExportBundle, CONFIG_EXPORT_FORMAT};
-use anyhow::{Context, Result};
+use gents::config_client::{config_projection, ConfigClientError, TransactionFailure};
 use gents::graphql::escape_graphql_string;
-use gents::{config_client::config_projection, Collection};
+use gents::Collection;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigBundleError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Projection(#[from] gents::config_client::DesiredStateError),
     #[error(transparent)]
     DesiredState(#[from] desired_state::convert::DesiredStateError),
     #[error(transparent)]
@@ -17,6 +21,37 @@ pub(crate) enum ConfigBundleError {
         collection_name: String,
         ids: String,
     },
+    #[error("configuration owner is blank")]
+    BlankOwner,
+    #[error("configuration owner has no Node")]
+    MissingNode,
+    #[error("configuration query returned no {collection_name} rows")]
+    MissingRows { collection_name: String },
+    #[error("canonical config projection missing")]
+    ProjectionMissing,
+    #[error("{collection_name} query returned a foreign owner")]
+    ForeignOwner { collection_name: String },
+    #[error("configuration logical ID missing")]
+    LogicalIdMissing,
+    #[error("ambiguous {collection_name} logical ID {id:?} within owner")]
+    AmbiguousLogicalId { collection_name: String, id: String },
+    #[error("ambiguous configuration node")]
+    AmbiguousNode,
+    #[error("owned configuration exists without its Node")]
+    OwnedWithoutNode,
+    #[error("decode canonical configuration snapshot")]
+    DecodeSnapshot(#[source] serde_json::Error),
+}
+
+type Result<T, E = ConfigBundleError> = std::result::Result<T, E>;
+
+impl TransactionFailure for ConfigBundleError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) async fn build_config_export_bundle(
@@ -25,7 +60,7 @@ pub(crate) async fn build_config_export_bundle(
 ) -> Result<ConfigExportBundle> {
     read_owned_config_bundle(access, node_did)
         .await?
-        .context("configuration owner has no Node")
+        .ok_or(ConfigBundleError::MissingNode)
 }
 
 pub(crate) async fn build_desired_state_live_bundle(
@@ -39,7 +74,9 @@ async fn read_owned_config_bundle(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<ConfigExportBundle>> {
-    anyhow::ensure!(!node_did.trim().is_empty(), "configuration owner is blank");
+    if node_did.trim().is_empty() {
+        return Err(ConfigBundleError::BlankOwner);
+    }
     let owner = node_did.to_owned();
     let access_mode = access.mode().to_owned();
     access
@@ -63,25 +100,30 @@ async fn read_owned_config_bundle(
                         .get("data")
                         .and_then(|data| data.get(name))
                         .and_then(Value::as_array)
-                        .with_context(|| format!("configuration query returned no {name} rows"))?;
+                        .ok_or_else(|| ConfigBundleError::MissingRows {
+                            collection_name: name.to_owned(),
+                        })?;
                     let mut normalized = Vec::with_capacity(rows.len());
                     let mut identities = BTreeSet::new();
                     for row in rows {
                         let (_, document) = config_projection(collection, Some(row))?;
-                        let document = document.context("canonical config projection missing")?;
-                        anyhow::ensure!(
-                            document.get("node_did").and_then(Value::as_str)
-                                == Some(owner.as_str()),
-                            "{name} query returned a foreign owner"
-                        );
+                        let document = document.ok_or(ConfigBundleError::ProjectionMissing)?;
+                        if document.get("node_did").and_then(Value::as_str) != Some(owner.as_str())
+                        {
+                            return Err(ConfigBundleError::ForeignOwner {
+                                collection_name: name.to_owned(),
+                            });
+                        }
                         let id = document
                             .get(collection.unique_field())
                             .and_then(Value::as_str)
-                            .context("configuration logical ID missing")?;
-                        anyhow::ensure!(
-                            identities.insert(id.to_owned()),
-                            "ambiguous {name} logical ID {id:?} within owner"
-                        );
+                            .ok_or(ConfigBundleError::LogicalIdMissing)?;
+                        if !identities.insert(id.to_owned()) {
+                            return Err(ConfigBundleError::AmbiguousLogicalId {
+                                collection_name: name.to_owned(),
+                                id: id.to_owned(),
+                            });
+                        }
                         normalized.push(document);
                     }
                     sort_document_rows(&mut normalized, collection.unique_field());
@@ -91,21 +133,22 @@ async fn read_owned_config_bundle(
                             config.insert(key.to_owned(), Value::Array(normalized));
                         }
                     } else {
-                        anyhow::ensure!(normalized.len() <= 1, "ambiguous configuration node");
+                        if normalized.len() > 1 {
+                            return Err(ConfigBundleError::AmbiguousNode);
+                        }
                         if let Some(node) = normalized.pop() {
                             config.insert("node".into(), node);
                         }
                     }
                 }
                 if !config.contains_key("node") {
-                    anyhow::ensure!(
-                        !has_documents,
-                        "owned configuration exists without its Node"
-                    );
+                    if has_documents {
+                        return Err(ConfigBundleError::OwnedWithoutNode);
+                    }
                     return Ok(None);
                 }
                 let config = serde_json::from_value(Value::Object(config))
-                    .context("decode canonical configuration snapshot")?;
+                    .map_err(ConfigBundleError::DecodeSnapshot)?;
                 Ok(Some(ConfigExportBundle {
                     format: CONFIG_EXPORT_FORMAT.into(),
                     node_did: owner,

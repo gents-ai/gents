@@ -8,6 +8,16 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DesiredStateDiffError {
+    #[error(transparent)]
+    Plan(#[from] gents::config_client::DesiredStateError),
+    #[error("configuration document belongs to another node")]
+    ForeignNodeDocument,
+    #[error("canonical document is missing its logical ID")]
+    MissingLogicalId,
+}
+
 pub(crate) fn diff_manifests(
     root: &Path,
     access_mode: &str,
@@ -43,18 +53,17 @@ pub(crate) fn diff_manifests(
 
 pub(super) fn canonical_records(
     config: &DesiredStateManifest,
-) -> Result<BTreeMap<(Collection, String), Value>> {
+) -> Result<BTreeMap<(Collection, String), Value>, DesiredStateDiffError> {
     DesiredStateApplyPlan::from_pack_config(config)?
         .documents()
         .iter()
         .map(|document| {
-            anyhow::ensure!(
-                document.update["node_did"].as_str() == Some(config.node.node_did.as_str()),
-                "configuration document belongs to another node"
-            );
+            if document.update["node_did"].as_str() != Some(config.node.node_did.as_str()) {
+                return Err(DesiredStateDiffError::ForeignNodeDocument);
+            }
             let id = document.update[document.collection.unique_field()]
                 .as_str()
-                .context("canonical document is missing its logical ID")?
+                .ok_or(DesiredStateDiffError::MissingLogicalId)?
                 .to_owned();
             Ok(((document.collection, id), document.update.clone()))
         })

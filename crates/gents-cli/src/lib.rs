@@ -1007,8 +1007,7 @@ mod tests {
         };
 
         assert!(
-            error
-                .downcast_ref::<gents::home::HomeError>()
+            gents_protocol::error_chain::find_source::<gents::home::HomeError>(error.as_ref())
                 .and_then(gents::home::HomeError::lock_held)
                 .is_some(),
             "{}",

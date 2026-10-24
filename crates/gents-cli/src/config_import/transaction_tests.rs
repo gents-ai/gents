@@ -133,7 +133,7 @@ async fn config_apply_txn_round_trip_against_recorder() {
                 )
                 .await?;
                 assert!(recorder_in_tx.committed_state().is_empty());
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, gents::config_client::ConfigClientError>(())
             })
         })
         .await
@@ -150,14 +150,14 @@ async fn config_apply_txn_round_trip_against_recorder() {
 async fn config_apply_txn_discard_leaves_committed_empty() {
     let (graphql, recorder) = start_recording_graphql().await;
     let access = ConfigAccess::graphql(graphql);
-    let result: Result<()> = access
+    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = access
         .transact_write("test.config_apply.discard", move |txn| {
             Box::pin(async move {
                 txn.execute(
                     "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
                 )
                 .await?;
-                anyhow::bail!("force rollback")
+                Err("force rollback".into())
             })
         })
         .await;

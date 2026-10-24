@@ -126,6 +126,34 @@ pub(crate) enum RequestHelpersError {
     ReceiptSignature(#[from] gents::RequestReceiptError),
     #[error("submission receipt differs from prepared signed request")]
     ReceiptDiffersFromPrepared,
+    #[error("loading authoritative request agent")]
+    LoadRequestAgent(#[source] gents::config_client::ConfigClientError),
+    #[error("Node query returned no row array")]
+    NodeRowsOmitted,
+    #[error("request target node must resolve to exactly one row")]
+    NodeNotUnique,
+    #[error("request target node is disabled")]
+    NodeDisabled,
+    #[error("request target node has no canonical default agent")]
+    NodeWithoutDefaultAgent,
+    #[error("Agent query returned no row array")]
+    AgentRowsOmitted,
+    #[error("request agent must resolve to exactly one row owned by the target node")]
+    AgentNotUnique,
+    #[error("request agent is disabled")]
+    AgentDisabled,
+    #[error("{0}")]
+    GraphqlMutation(&'static str),
+    #[error("submitting prepared AgentRequest {request_id}")]
+    SubmitPrepared {
+        request_id: String,
+        #[source]
+        source: Box<gents::config_client::ReceiptWriteError<RequestHelpersError>>,
+    },
+    #[error("committed signed request receipt missing")]
+    PreparedReceiptMissing,
+    #[error("committed signed request receipt is missing")]
+    CommittedReceiptMissing,
 }
 
 pub(crate) fn ensure_local_request_signer(
@@ -592,7 +620,7 @@ pub(crate) async fn create_goal_backed_agent_request(
         &prepared.create,
     )
     .await?;
-    committed_submitted_request(graphql, &prepared.create).await
+    Ok(committed_submitted_request(graphql, &prepared.create).await?)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -630,7 +658,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
         &prepared.create,
     )
     .await?;
-    committed_submitted_request(graphql, &prepared.create).await
+    Ok(committed_submitted_request(graphql, &prepared.create).await?)
 }
 
 pub(crate) async fn submit_prepared_agent_request_committed(
@@ -641,7 +669,7 @@ pub(crate) async fn submit_prepared_agent_request_committed(
     let mutation = prepared
         .create
         .graphql_mutation()
-        .map_err(anyhow::Error::msg)?;
+        .map_err(RequestHelpersError::GraphqlMutation)?;
     access
         .write_with_receipt("cli.request.submit", &mutation, || async {
             matching_prepared_receipt(graphql, &prepared.create)
@@ -649,26 +677,24 @@ pub(crate) async fn submit_prepared_agent_request_committed(
                 .map(|row| row.is_some())
         })
         .await
-        .with_context(|| {
-            format!(
-                "submitting prepared AgentRequest {}",
-                prepared.create.request_id
-            )
+        .map_err(|source| RequestHelpersError::SubmitPrepared {
+            request_id: prepared.create.request_id.clone(),
+            source: Box::new(source),
         })?;
     let row = matching_prepared_receipt(graphql, &prepared.create)
         .await?
-        .context("committed signed request receipt missing")?;
+        .ok_or(RequestHelpersError::PreparedReceiptMissing)?;
     Ok(submitted_from_receipt(row)?)
 }
 
 async fn committed_submitted_request(
     graphql: &GraphqlEndpoint,
     create: &AgentRequestCreate,
-) -> Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, RequestHelpersError> {
     let row = read_submitted_receipt(graphql, create)
         .await?
-        .context("committed signed request receipt is missing")?;
-    Ok(submitted_from_receipt(row)?)
+        .ok_or(RequestHelpersError::CommittedReceiptMissing)?;
+    submitted_from_receipt(row)
 }
 
 fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest, RequestHelpersError> {
@@ -758,7 +784,7 @@ async fn resolve_request_agent_id(
     graphql: &GraphqlEndpoint,
     node_did: &str,
     requested: Option<&str>,
-) -> Result<String> {
+) -> Result<String, RequestHelpersError> {
     let escaped_node_did = gents::graphql::escape_graphql_string(node_did);
     let response = post_graphql(
         graphql,
@@ -775,20 +801,18 @@ async fn resolve_request_agent_id(
         ),
     )
     .await
-    .context("loading authoritative request agent")?;
+    .map_err(RequestHelpersError::LoadRequestAgent)?;
     let nodes = response
         .pointer("/data/Node")
         .and_then(Value::as_array)
-        .context("Node query returned no row array")?;
-    anyhow::ensure!(
-        nodes.len() == 1,
-        "request target node must resolve to exactly one row"
-    );
+        .ok_or(RequestHelpersError::NodeRowsOmitted)?;
+    if nodes.len() != 1 {
+        return Err(RequestHelpersError::NodeNotUnique);
+    }
     let principal = &nodes[0];
-    anyhow::ensure!(
-        principal.get("enabled").and_then(Value::as_bool) == Some(true),
-        "request target node is disabled"
-    );
+    if principal.get("enabled").and_then(Value::as_bool) != Some(true) {
+        return Err(RequestHelpersError::NodeDisabled);
+    }
     let agent_id = match requested.map(str::trim).filter(|value| !value.is_empty()) {
         Some(agent_id) => agent_id.to_string(),
         None => principal
@@ -797,24 +821,22 @@ async fn resolve_request_agent_id(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .context("request target node has no canonical default agent")?,
+            .ok_or(RequestHelpersError::NodeWithoutDefaultAgent)?,
     };
     let agents = response
         .pointer("/data/Agent")
         .and_then(Value::as_array)
-        .context("Agent query returned no row array")?;
+        .ok_or(RequestHelpersError::AgentRowsOmitted)?;
     let matching = agents
         .iter()
         .filter(|row| row.get("agent_id").and_then(Value::as_str) == Some(&agent_id))
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        matching.len() == 1,
-        "request agent must resolve to exactly one row owned by the target node"
-    );
-    anyhow::ensure!(
-        matching[0].get("enabled").and_then(Value::as_bool) == Some(true),
-        "request agent is disabled"
-    );
+    if matching.len() != 1 {
+        return Err(RequestHelpersError::AgentNotUnique);
+    }
+    if matching[0].get("enabled").and_then(Value::as_bool) != Some(true) {
+        return Err(RequestHelpersError::AgentDisabled);
+    }
     Ok(agent_id)
 }
 
