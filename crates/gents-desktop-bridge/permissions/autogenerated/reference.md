@@ -3305,7 +3305,7 @@ Client start/shutdown, selected-agent, and application quit
 </td>
 <td>
 
-Session/conversation snapshot and live-delta reads
+Session/conversation snapshot, live-delta and selected attachment reads
 
 </td>
 </tr>

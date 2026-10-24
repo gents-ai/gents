@@ -1813,10 +1813,10 @@
           "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
         },
         {
-          "description": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`",
+          "description": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`",
           "type": "string",
           "const": "session-read",
-          "markdownDescription": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`"
+          "markdownDescription": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`"
         },
         {
           "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",
@@ -1837,10 +1837,10 @@
           "markdownDescription": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`"
         },
         {
-          "description": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-attachment-read`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`",
+          "description": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`",
           "type": "string",
           "const": "chat-write",
-          "markdownDescription": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-attachment-read`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`"
+          "markdownDescription": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`"
         },
         {
           "description": "Owner-scoped mailbox envelope reads\n#### This permission set includes:\n\n- `allow-desktop-mailbox-list`",
