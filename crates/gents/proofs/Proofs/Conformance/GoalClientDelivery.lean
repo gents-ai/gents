@@ -122,13 +122,19 @@ def cases : List Case :=
   , ⟨"proposal_command_mismatch", [], [.reserve intent { prepared with command := 11 } true]⟩
   , ⟨"stale_form_after_acknowledgement", [],
       [start, settle, ack, .reserve intent fresh true, check, send]⟩
+  , let control := { intent with command := 11, authored := 31 }
+    let signed : Prepared := ⟨11, 42, none⟩
+    ⟨"control_without_first_request", [],
+      [.reserve control signed true, .resume control,
+       .observe control ⟨11, 42, .applied⟩ true, .query control,
+       .acknowledge control signed, .reconnect, .query control, .resume control]⟩
   ]
 
 def casesJson : Json := toJson <| cases.map fun c => Json.mkObj
   [("name", toJson c.name), ("initial", journalJson c.initial),
    ("trace", toJson (traces c.initial c.actions))]
 
-example : cases.length = 20 := by native_decide
+example : cases.length = 21 := by native_decide
 
 end Conformance.GoalClientDeliveryContracts
 
