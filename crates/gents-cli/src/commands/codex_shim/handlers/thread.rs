@@ -120,22 +120,22 @@ pub(super) async fn handle_thread_request(
                 load_bound_context_window(&state.node, response_node_did, response_agent_id)
                     .await
                     .context("resolving scoped context window for ThreadResume")?;
-            send_notification(
-                outbound,
-                state,
-                codex::ServerNotification::ThreadTokenUsageUpdated(
-                    codex::ThreadTokenUsageUpdatedNotification {
-                        thread_id: record.session_id.clone(),
-                        turn_id: String::new(),
-                        token_usage: thread_token_usage(
-                            total_usage,
-                            last_usage,
-                            model_context_window,
-                        ),
-                    },
-                ),
-            )
-            .await?;
+            if let Some(token_usage) =
+                thread_token_usage(total_usage, last_usage, model_context_window)
+            {
+                send_notification(
+                    outbound,
+                    state,
+                    codex::ServerNotification::ThreadTokenUsageUpdated(
+                        codex::ThreadTokenUsageUpdatedNotification {
+                            thread_id: record.session_id.clone(),
+                            turn_id: String::new(),
+                            token_usage,
+                        },
+                    ),
+                )
+                .await?;
+            }
             ensure_loaded_caused_stream(connection, state, &record, child_stream_baseline).await;
             ensure_loaded_root_continuation_stream(
                 connection,

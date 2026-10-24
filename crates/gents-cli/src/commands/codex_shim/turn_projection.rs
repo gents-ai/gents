@@ -955,18 +955,28 @@ pub(in crate::commands::codex_shim) mod tests {
         use super::super::thread_projection::TokenTotals;
         use super::lean_reasoning_contracts::lean_codex_shim_context_usage_cases;
 
+        let totals = |input, output| {
+            TokenTotals(Some(
+                gents_protocol::usage::TokenUsageSummary::from_observations([
+                    gents_protocol::usage::TokenUsage {
+                        input_tokens: Some(input),
+                        output_tokens: Some(output),
+                        cached_input_tokens: Some(0),
+                        reasoning_output_tokens: Some(0),
+                        final_response: true,
+                        ..Default::default()
+                    },
+                ])
+                .unwrap(),
+            ))
+        };
         for case in lean_codex_shim_context_usage_cases() {
             let total = thread_token_usage(
-                TokenTotals {
-                    input_tokens: case.cumulative_input as i64,
-                    output_tokens: case.cumulative_output as i64,
-                },
-                TokenTotals {
-                    input_tokens: case.latest_prompt as i64,
-                    output_tokens: case.latest_completion as i64,
-                },
+                totals(case.cumulative_input as u64, case.cumulative_output as u64),
+                totals(case.latest_prompt as u64, case.latest_completion as u64),
                 case.model_window as i64,
-            );
+            )
+            .unwrap();
 
             assert_eq!(
                 total.total.total_tokens, case.total_tokens as i64,
