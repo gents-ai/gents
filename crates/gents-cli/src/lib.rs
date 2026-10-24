@@ -396,8 +396,14 @@ pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description
 /// Embedded editor launches must never trigger a system authentication dialog.
 /// Explicit credential access remains with the existing browser or store-unlock owner.
 pub fn run_cli_without_keychain_prompts() -> Result<()> {
+    without_keychain_prompts(run_cli)
+}
+
+/// The platform interaction prohibition is process-wide and retains any inherited
+/// prohibition. Native startup uses it when creating fresh credential custody.
+pub fn without_keychain_prompts<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
     let _interaction = process_resources::prevent_keychain_prompts(true)?;
-    run_cli()
+    operation()
 }
 
 pub fn run_cli() -> Result<()> {
