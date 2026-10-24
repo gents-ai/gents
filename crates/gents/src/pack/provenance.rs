@@ -1,34 +1,33 @@
 use anyhow::{Context, Result};
 
-use super::PackManifest;
+use super::{PackError, PackManifest};
 use crate::config_client::ConfigAccess;
 use crate::document_config::PackConfig;
 use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
 
-pub fn pack_origin_tag(pack_name: &str) -> Result<String> {
-    anyhow::ensure!(
-        super::is_valid_pack_name(pack_name),
-        "pack origin requires a snake_case pack name"
-    );
+pub fn pack_origin_tag(pack_name: &str) -> Result<String, PackError> {
+    if !super::is_valid_pack_name(pack_name) {
+        return Err(PackError::OriginName);
+    }
     Ok(format!("{PACK_ORIGIN_PREFIX}{pack_name}"))
 }
 
-pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
+pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>, PackError> {
     let mut origins = tags
         .iter()
         .filter_map(|tag| tag.strip_prefix(PACK_ORIGIN_PREFIX));
     let origin = origins.next();
-    anyhow::ensure!(
-        origins.next().is_none(),
-        "configuration document carries more than one pack origin"
-    );
+    if origins.next().is_some() {
+        return Err(PackError::MultipleOrigins);
+    }
     if let Some(origin) = origin {
-        anyhow::ensure!(
-            super::is_valid_pack_name(origin),
-            "configuration document carries invalid pack origin {origin:?}"
-        );
+        if !super::is_valid_pack_name(origin) {
+            return Err(PackError::InvalidOrigin {
+                origin: origin.to_owned(),
+            });
+        }
     }
     Ok(origin)
 }

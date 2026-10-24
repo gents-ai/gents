@@ -110,7 +110,7 @@ pub(crate) fn prepare_goal_continuation(
             admission,
         )
     };
-    build_request(spec)
+    Ok(build_request(spec))
 }
 
 pub(crate) async fn goal_continuation_agent(

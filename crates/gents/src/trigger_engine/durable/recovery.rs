@@ -173,7 +173,7 @@ mod tests {
                             terminal_state: state, reason: state,
                         }, "2026-01-01T00:00:01Z").await?;
                     }
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                 })
             }).await.unwrap();
             node.shutdown().await;

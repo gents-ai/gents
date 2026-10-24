@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -10,6 +9,8 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::workspace::WorkspaceBindingDoc;
+
+type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Clone, Copy, Debug)]
 enum RejectionOwner {
@@ -109,21 +110,20 @@ impl Fixture {
 
     async fn reject(&self, owner: RejectionOwner) -> Result<()> {
         match owner {
-            RejectionOwner::FreshAdmission => {
-                super::terminalize_pending_request_rejection(
-                    &self.node,
-                    &self.request.doc_id,
-                    &self.request.node_did,
-                    "workspace placement is unavailable",
-                    "test.workspace_rejection",
-                )
+            RejectionOwner::FreshAdmission => super::terminalize_pending_request_rejection(
+                &self.node,
+                &self.request.doc_id,
+                &self.request.node_did,
+                "workspace placement is unavailable",
+                "test.workspace_rejection",
+            )
+            .await
+            .map_err(Into::into),
+            RejectionOwner::ClaimAdmission => self
+                .lifecycle()
+                .reject_admission("workspace placement is unavailable")
                 .await
-            }
-            RejectionOwner::ClaimAdmission => {
-                self.lifecycle()
-                    .reject_admission("workspace placement is unavailable")
-                    .await
-            }
+                .map_err(Into::into),
         }
     }
 

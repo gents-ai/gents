@@ -4,6 +4,17 @@ use super::{UX_PLUGIN_AREAS, UX_PLUGIN_PREFIX};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
+    #[error("pack origin requires a snake_case pack name")]
+    OriginName,
+    #[error("configuration document carries more than one pack origin")]
+    MultipleOrigins,
+    #[error("configuration document carries invalid pack origin {origin:?}")]
+    InvalidOrigin { origin: String },
+    #[error(
+        "pack node sets default_agent_id {default:?}; a pack must not choose the default agent. Remove it from the pack: the user selects the default (\"Make default\" in the desktop, or default_agent_id in the node of their own `gents config apply` root)"
+    )]
+    DefaultAgentSet { default: String },
+
     #[error("{access:?} is not an access; use read or read_write")]
     UnknownAccess { access: String },
 

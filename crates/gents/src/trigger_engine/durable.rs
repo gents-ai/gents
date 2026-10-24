@@ -1,13 +1,44 @@
 mod recovery;
 #[cfg(test)]
 mod retained_tests;
-use crate::config_client::ConfigApplyTxn;
+use crate::config_client::{ConfigApplyTxn, ConfigClientError, TransactionFailure};
 use crate::graphql::escape_graphql_string;
-use anyhow::{ensure, Context, Result};
+use anyhow::{ensure, Context};
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 pub(crate) use recovery::recover_outcomes;
 #[cfg(test)]
 pub(crate) use recovery::recover_outcomes_in_txn;
+
+type Result<T, E = DurableTriggerError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum DurableTriggerError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("a Task sourced from FireOutcome cannot emit another FireOutcome")]
+    OutcomeSourceNotAllowed,
+    #[error("noncanonical fire identity")]
+    NoncanonicalFireIdentity,
+    #[error("noncanonical fire request ID")]
+    NoncanonicalRequestId,
+    #[error("noncanonical outcome fire identity")]
+    NoncanonicalOutcomeIdentity,
+    #[error("outcome-enabled fire lacks its source handoff identity")]
+    OutcomeSourceHandoffMissing,
+    #[error("Task outcome query omitted rows")]
+    OutcomeRowsOmitted,
+}
+
+impl TransactionFailure for DurableTriggerError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct PreparedFire {
@@ -73,7 +104,7 @@ fn goal_outcome_terminal(status: &str) -> bool {
 async fn observe_goal_outcome_binding(
     txn: &ConfigApplyTxn<'_>,
     fire: &TriggerFire,
-) -> Result<Option<GoalOutcomeBinding>> {
+) -> anyhow::Result<Option<GoalOutcomeBinding>> {
     let Some(expected_goal_id) = &fire.goal_id else {
         return Ok(None);
     };
@@ -209,18 +240,15 @@ pub(crate) async fn stage_fire_receipt(
     txn: &ConfigApplyTxn<'_>,
     fire: &TriggerFire,
 ) -> Result<bool> {
-    ensure!(
-        outcome_source_allowed(&fire.identity.source_collection, fire.emit_outcome),
-        "a Task sourced from FireOutcome cannot emit another FireOutcome"
-    );
-    ensure!(
-        fire.fire_key == fire_key(&fire.identity),
-        "noncanonical fire identity"
-    );
-    ensure!(
-        fire.request_id == fire.identity.request_id(),
-        "noncanonical fire request ID"
-    );
+    if !outcome_source_allowed(&fire.identity.source_collection, fire.emit_outcome) {
+        return Err(DurableTriggerError::OutcomeSourceNotAllowed);
+    }
+    if fire.fire_key != fire_key(&fire.identity) {
+        return Err(DurableTriggerError::NoncanonicalFireIdentity);
+    }
+    if fire.request_id != fire.identity.request_id() {
+        return Err(DurableTriggerError::NoncanonicalRequestId);
+    }
     let prior = txn
         .execute(&format!(
             "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}) {{ request_id }} }}",
@@ -275,10 +303,9 @@ pub(crate) async fn stage_outcome(
     } else {
         reason
     };
-    ensure!(
-        fire.fire_key == fire_key(&fire.identity),
-        "noncanonical outcome fire identity"
-    );
+    if fire.fire_key != fire_key(&fire.identity) {
+        return Err(DurableTriggerError::NoncanonicalOutcomeIdentity);
+    }
     let handoff_id = fire.identity.outcome_id();
     if outcome_published(txn, fire).await? {
         return Ok(false);
@@ -287,7 +314,7 @@ pub(crate) async fn stage_outcome(
         .source_handoff_id
         .as_ref()
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("outcome-enabled fire lacks its source handoff identity"))?;
+        .ok_or(DurableTriggerError::OutcomeSourceHandoffMissing)?;
     let outcome = gents_protocol::trigger_delivery::FireOutcome {
         handoff_id,
         fire_key: fire.fire_key.clone(),
@@ -316,10 +343,10 @@ async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Resu
             escape_graphql_string(&fire.identity.outcome_id())
         ))
         .await?;
-    Ok(!response["data"]["FireOutcome"]
+    let rows = response["data"]["FireOutcome"]
         .as_array()
-        .context("Task outcome query omitted rows")?
-        .is_empty())
+        .ok_or(DurableTriggerError::OutcomeRowsOmitted)?;
+    Ok(!rows.is_empty())
 }
 
 pub(crate) async fn publish_request_outcome(
@@ -351,7 +378,7 @@ pub(crate) async fn publish_goal_outcomes(
     goal_id: &str,
     reason: &str,
     now: &str,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, goal_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(goal_id))).await?;
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
@@ -380,7 +407,7 @@ pub(crate) async fn publish_goal_outcomes(
 pub async fn request_arrival_order(
     txn: &ConfigApplyTxn<'_>,
     doc_ids: &[String],
-) -> Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     if doc_ids.is_empty() {
         return Ok(Vec::new());
     }

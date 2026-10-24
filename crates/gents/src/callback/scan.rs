@@ -763,7 +763,7 @@ pub(super) async fn probe_filter(
     source_doc_id: &str,
     filter: Option<&str>,
 ) -> Result<Option<String>> {
-    event_delivery::probe_document(node, collection, source_doc_id, filter).await
+    Ok(event_delivery::probe_document(node, collection, source_doc_id, filter).await?)
 }
 
 pub(super) async fn fetch_source_doc(

@@ -9,7 +9,7 @@ pub const FOLDED_REASON: &str = "folded into claimed request";
 
 #[derive(Debug, thiserror::Error)]
 #[error("pending input was changed before it was consumed")]
-pub(crate) struct PendingInputChanged;
+pub struct PendingInputChanged;
 
 pub(crate) fn folded_input_key(folded_request_doc_id: &str) -> String {
     format!("folded:{folded_request_doc_id}")
@@ -168,7 +168,7 @@ pub(crate) async fn fold_candidates(
         .filter(|row| folds_into(head, row, now))
         .map(AgentRequest::try_from)
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
+        .map_err(QueueError::Watcher)
 }
 
 pub(crate) async fn select_fold_in_claim_txn(
@@ -176,7 +176,7 @@ pub(crate) async fn select_fold_in_claim_txn(
     head: &AgentRequest,
     admitted: &[String],
     claimed_at: &str,
-) -> Result<Vec<FoldedInput>> {
+) -> anyhow::Result<Vec<FoldedInput>> {
     if admitted.is_empty() || !heads_user_turn(head) {
         return Ok(Vec::new());
     }
@@ -191,7 +191,7 @@ pub(crate) async fn select_fold_in_claim_txn(
         doc_ids.push(
             row.doc_id
                 .clone()
-                .context("pending AgentRequest row is missing _docID")?,
+                .ok_or(QueueError::PendingRequestMissingDocId)?,
         );
     }
     let order = crate::trigger_engine::durable::request_arrival_order(txn, &doc_ids).await?;
@@ -207,7 +207,7 @@ pub(crate) async fn select_fold_in_claim_txn(
         .filter_map(|row| row.doc_id.as_deref().map(|doc| (doc, row)))
         .collect();
     let now = chrono::DateTime::parse_from_rfc3339(claimed_at)
-        .context("claim time is not RFC 3339")?
+        .map_err(QueueError::ClaimTimeNotRfc3339)?
         .with_timezone(&chrono::Utc);
     let mut selected = Vec::new();
     for doc in &order[head_position + 1..] {
@@ -232,7 +232,7 @@ pub(crate) async fn consume_folded_in_txn(
     consumption: &FoldedConsumption,
     published_at: &str,
     expected: &gents_protocol::message::Message,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let rows = super::intake::pending_rows_in_txn(
         txn,
         &consumption.head.node_did,
@@ -244,17 +244,16 @@ pub(crate) async fn consume_folded_in_txn(
         .map(|row| {
             row.doc_id
                 .clone()
-                .context("pending input lacks physical identity")
+                .ok_or(QueueError::PendingInputMissingDocId)
         })
         .collect::<Result<Vec<_>>>()?;
     if consumption.selected_at_claim {
         ids.push(consumption.head_doc_id.clone());
     }
     let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
-    anyhow::ensure!(
-        order.len() == ids.len(),
-        "pending input arrival order is incomplete"
-    );
+    if order.len() != ids.len() {
+        return Err(QueueError::PendingInputArrivalIncomplete.into());
+    }
     let first_id = if consumption.selected_at_claim {
         order
             .iter()
@@ -265,7 +264,7 @@ pub(crate) async fn consume_folded_in_txn(
     };
     let first = first_id.and_then(|id| rows.iter().find(|row| row.doc_id.as_ref() == Some(id)));
     let Some(row) = first else {
-        return Err(PendingInputChanged.into());
+        return Err(QueueError::from(PendingInputChanged).into());
     };
     let selected = if consumption.selected_at_claim {
         folds_into(&consumption.head, row, chrono::Utc::now())
@@ -281,7 +280,7 @@ pub(crate) async fn consume_folded_in_txn(
                 .unwrap_or(&RequestInput::default())
                 .authored_message(row.content.as_deref().unwrap_or_default())?
     {
-        return Err(PendingInputChanged.into());
+        return Err(QueueError::from(PendingInputChanged).into());
     }
     let doc_id = escape_graphql_string(&consumption.folded_request_doc_id);
     let mutation = format!(
@@ -307,17 +306,16 @@ pub(crate) async fn consume_folded_in_txn(
     let response = txn.execute(&mutation).await?;
     let updated = response["data"]["update_AgentRequest"]
         .as_array()
-        .context("folded input publication omitted affected rows")?;
+        .ok_or(QueueError::FoldedPublicationOmittedRows)?;
     if updated.is_empty() {
-        return Err(PendingInputChanged.into());
+        return Err(QueueError::from(PendingInputChanged).into());
     }
-    anyhow::ensure!(
-        updated.len() == 1,
-        "folded input publication changed multiple rows"
-    );
+    if updated.len() != 1 {
+        return Err(QueueError::FoldedPublicationChangedRows.into());
+    }
     let request_id = updated[0]["request_id"]
         .as_str()
-        .context("folded request receipt omitted request_id")?
+        .ok_or(QueueError::FoldedReceiptMissingRequestId)?
         .to_owned();
     crate::workspace::release_terminal_writer_binding(txn, &updated[0]).await?;
     crate::trigger_engine::durable::publish_request_outcome(
@@ -328,7 +326,8 @@ pub(crate) async fn consume_folded_in_txn(
         FOLDED_REASON,
         published_at,
     )
-    .await
+    .await?;
+    Ok(())
 }
 
 pub(crate) async fn ensure_folded_consumed_in_txn(
@@ -346,21 +345,21 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
         .await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
-    anyhow::ensure!(
-        rows.len() == 1
-            && rows[0].lifecycle_state == Some(RequestLifecycleState::Superseded)
-            && rows[0].superseded_by_request_doc_id.as_deref()
-                == Some(consumption.head_doc_id.as_str())
-            && rows[0].failure_reason.as_deref() == Some(FOLDED_REASON),
-        "replayed folded publication was not consumed by its request"
-    );
+    if !(rows.len() == 1
+        && rows[0].lifecycle_state == Some(RequestLifecycleState::Superseded)
+        && rows[0].superseded_by_request_doc_id.as_deref()
+            == Some(consumption.head_doc_id.as_str())
+        && rows[0].failure_reason.as_deref() == Some(FOLDED_REASON))
+    {
+        return Err(QueueError::FoldedReplayNotConsumed);
+    }
     Ok(())
 }
 
 pub(crate) async fn load_consumed_folded_inputs(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
-) -> Result<Vec<FoldedInput>> {
+) -> anyhow::Result<Vec<FoldedInput>> {
     if !heads_user_turn(head) {
         return Ok(Vec::new());
     }
@@ -396,32 +395,36 @@ pub(crate) async fn load_consumed_folded_inputs(
                 let response = txn.execute(query).await?;
                 let rows: Vec<AgentRequestRow> =
                     serde_json::from_value(response["data"]["AgentRequest"].clone())
-                        .context("decode folded requests")?;
+                        .map_err(QueueError::DecodeFoldedRequests)?;
                 let mut by_doc = rapidhash::RapidHashMap::default();
                 for row in rows {
-                    anyhow::ensure!(
-                        row.requester_did == head.requester_did,
-                        "folded request {} crossed its claimed request's requester",
-                        row.request_id
-                    );
+                    if row.requester_did != head.requester_did {
+                        return Err(QueueError::FoldedRequesterMismatch {
+                            request_id: row.request_id.clone(),
+                        }
+                        .into());
+                    }
                     let doc = row
                         .doc_id
                         .clone()
-                        .context("folded AgentRequest row is missing _docID")?;
+                        .ok_or(QueueError::FoldedRowMissingDocId)?;
                     by_doc.insert(doc, row);
                 }
                 let docs = by_doc.keys().cloned().collect::<Vec<_>>();
                 let order =
                     crate::trigger_engine::durable::request_arrival_order(txn, &docs).await?;
-                anyhow::ensure!(
-                    order.len() == docs.len(),
-                    "folded requests of {} lack a queue arrival",
-                    head.request_id
-                );
+                if order.len() != docs.len() {
+                    return Err(QueueError::FoldedRequestsWithoutArrival {
+                        request_id: head.request_id.clone(),
+                    }
+                    .into());
+                }
                 order
                     .into_iter()
-                    .map(|doc| {
-                        let row = by_doc.remove(&doc).context("folded arrival is ambiguous")?;
+                    .map(|doc| -> anyhow::Result<FoldedInput> {
+                        let row = by_doc
+                            .remove(&doc)
+                            .ok_or(QueueError::FoldedArrivalAmbiguous)?;
                         Ok(FoldedInput {
                             request_doc_id: doc,
                             request_id: row.request_id,

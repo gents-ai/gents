@@ -1,7 +1,6 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_loop::rig_compat::CachedInputTokensObservation;
 
@@ -11,6 +10,10 @@ use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PersistenceError {
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
     #[error("add_InferenceCall returned no _docID")]
     MissingInferenceCallDocId,
     #[error("InferenceCall {call_id} is no longer queued or is missing")]
@@ -21,6 +24,8 @@ pub(crate) enum PersistenceError {
     CallNotTransitionable { call_id: String, call_state: String },
 }
 
+type Result<T, E = PersistenceError> = std::result::Result<T, E>;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderCallUsage {
     pub(crate) input_tokens: u64,
@@ -28,10 +33,13 @@ pub(crate) struct ProviderCallUsage {
     pub(crate) cached_input_tokens: u64,
 }
 
-pub(super) fn completion_persistence_error(error: anyhow::Error) -> AdmissionError {
+pub(super) fn completion_persistence_error<E>(error: E) -> AdmissionError
+where
+    E: std::error::Error,
+{
     AdmissionError(format!(
         "persisting InferenceCall failed: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     ))
 }
 
@@ -67,7 +75,7 @@ pub(super) async fn persist_call_queued(
         &mutation,
     )
     .await?;
-    Ok(extract_inference_call_doc_id(resp.data.as_ref())?)
+    extract_inference_call_doc_id(resp.data.as_ref())
 }
 
 pub(super) async fn persist_call_started(
@@ -82,9 +90,8 @@ pub(super) async fn persist_call_started(
         &mutation,
     )
     .await
-    .map_err(|error| completion_persistence_error(error.into()))?;
-    extract_inference_call_doc_id(resp.data.as_ref())
-        .map_err(|error| completion_persistence_error(error.into()))
+    .map_err(completion_persistence_error)?;
+    extract_inference_call_doc_id(resp.data.as_ref()).map_err(completion_persistence_error)
 }
 
 pub(super) async fn persist_existing_call_running(
@@ -112,8 +119,7 @@ pub(super) async fn persist_existing_call_running(
     if crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty() {
         return Err(PersistenceError::CallNotQueued {
             call_id: call.call_id.clone(),
-        }
-        .into());
+        });
     }
     Ok(())
 }
@@ -161,8 +167,7 @@ pub(super) async fn persist_existing_call_terminal(
         _ => {
             return Err(PersistenceError::InvalidTerminalState {
                 call_state: call_state.to_owned(),
-            }
-            .into())
+            })
         }
     };
     let call_id = escape_graphql_string(&call.call_id);
@@ -221,8 +226,7 @@ pub(super) async fn persist_existing_call_terminal(
         return Err(PersistenceError::CallNotTransitionable {
             call_id: call.call_id.clone(),
             call_state: call_state.to_owned(),
-        }
-        .into());
+        });
     }
     Ok(())
 }

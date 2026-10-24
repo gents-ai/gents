@@ -9,19 +9,22 @@ pub async fn prepare_user_message_input(
     mut input: RequestInput,
     delivery: QueueDelivery,
 ) -> Result<RequestInput> {
-    anyhow::ensure!(!node_did.trim().is_empty(), "node_did is required");
-    anyhow::ensure!(!session_id.trim().is_empty(), "session_id is required");
-    anyhow::ensure!(
-        input.queue.as_ref().is_none_or(|queue| {
-            queue.source == QueueSource::User
-                && queue.policy == QueuePolicy::Append
-                && queue.key.is_none()
-                && queue.position.is_none()
-                && queue.interrupted_request_id.is_none()
-                && queue.background_completion_wake_version.is_none()
-        }),
-        "user messages require an ordinary user queue entry"
-    );
+    if node_did.trim().is_empty() {
+        return Err(QueueError::NodeDidRequired);
+    }
+    if session_id.trim().is_empty() {
+        return Err(QueueError::SessionIdRequired);
+    }
+    if !input.queue.as_ref().is_none_or(|queue| {
+        queue.source == QueueSource::User
+            && queue.policy == QueuePolicy::Append
+            && queue.key.is_none()
+            && queue.position.is_none()
+            && queue.interrupted_request_id.is_none()
+            && queue.background_completion_wake_version.is_none()
+    }) {
+        return Err(QueueError::UserEntryNotOrdinary);
+    }
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
@@ -35,7 +38,9 @@ pub async fn prepare_user_message_input(
         .await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
-    anyhow::ensure!(rows.len() <= 1, "session has conflicting active requests");
+    if rows.len() > 1 {
+        return Err(QueueError::ConflictingActiveRequests);
+    }
     input.queue = Some(RequestQueue {
         source: QueueSource::User,
         policy: QueuePolicy::Append,

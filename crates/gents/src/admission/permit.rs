@@ -145,7 +145,7 @@ impl AdmissionPermit {
                 return Err(AdmissionError(format!(
                     "persisting terminal InferenceCall usage failed for call {}: {}",
                     self.call.call_id,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 )));
             }
             tracing::warn!(call_id = %self.call.call_id, error = %error, "failed to persist terminal inference call state");

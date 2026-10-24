@@ -61,7 +61,7 @@ pub async fn build_meta_tools(
         let catalog = async {
             shared::enforce_health_gate(&ctx.health, &selection.mcp_service_id).await?;
             let service = shared::lookup_service(&ctx, &selection.mcp_service_id).await?;
-            ctx.list_tools(&selection.mcp_service_id, &service).await
+            Ok::<_, anyhow::Error>(ctx.list_tools(&selection.mcp_service_id, &service).await?)
         }
         .await;
         let catalog = match catalog {

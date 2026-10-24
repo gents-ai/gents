@@ -40,7 +40,7 @@ pub async fn pending_user_queue(
     node_did: &str,
     session_id: &str,
     requester_did: &str,
-) -> Result<PendingQueueSnapshot> {
+) -> anyhow::Result<PendingQueueSnapshot> {
     Ok(
         pending_user_queue_projection(access, node_did, session_id, requester_did, &[])
             .await?
@@ -62,7 +62,7 @@ pub async fn pending_user_queue_projection(
     session_id: &str,
     requester_did: &str,
     observed_doc_ids: &[String],
-) -> Result<PendingQueueProjection> {
+) -> anyhow::Result<PendingQueueProjection> {
     access
         .transact_readonly("queue.pending_user_snapshot", |txn| {
             Box::pin(async move {
@@ -92,7 +92,7 @@ pub async fn pending_user_queue_projection(
                         Ok(PendingQueueEntry {
                             request_doc_id: row
                                 .doc_id
-                                .context("pending row lacks physical identity")?,
+                                .ok_or(QueueError::PendingRowMissingIdentity)?,
                             request_id: row.request_id,
                             content: if row.requester_did.as_deref() == Some(requester_did) {
                                 row.content.unwrap_or_default()
@@ -177,27 +177,24 @@ fn selected_group<'a>(
         .iter()
         .map(|row| row.doc_id.clone().unwrap_or_default())
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        ids == edit.expected_request_doc_ids,
-        "The message queue changed. Refresh it and try again."
-    );
-    anyhow::ensure!(
-        !edit.selected_request_doc_ids.is_empty(),
-        "Select a pending message first."
-    );
+    if ids != edit.expected_request_doc_ids {
+        return Err(QueueError::MessageQueueChanged);
+    }
+    if edit.selected_request_doc_ids.is_empty() {
+        return Err(QueueError::NoPendingMessageSelected);
+    }
     let count = edit.selected_request_doc_ids.len();
     let start = ids
         .windows(count)
         .position(|group| group == edit.selected_request_doc_ids)
-        .context("Selected messages are no longer adjacent in the queue.")?;
+        .ok_or(QueueError::SelectedMessagesNotAdjacent)?;
     let selected = &rows[start..start + count];
-    anyhow::ensure!(
-        selected.iter().all(|row| editable(row, requester)),
-        "A selected message has started or cannot be edited by this user."
-    );
+    if !selected.iter().all(|row| editable(row, requester)) {
+        return Err(QueueError::SelectedMessageNotEditable);
+    }
     let first = &selected[0];
-    anyhow::ensure!(
-        selected.iter().all(|row| row.agent_id == first.agent_id
+    if !selected.iter().all(|row| {
+        row.agent_id == first.agent_id
             && row.workspace_id == first.workspace_id
             && row.workspace_authority == first.workspace_authority
             && row.workspace_owner_node_did == first.workspace_owner_node_did
@@ -209,29 +206,30 @@ fn selected_group<'a>(
                 == first
                     .input
                     .as_ref()
-                    .map(|input| (&input.cwd, &input.selected_skill_ids))),
-        "Messages with different execution settings cannot be reordered together."
-    );
-    anyhow::ensure!(
-        edit.messages.is_empty() || edit.messages.len() == count,
-        "Replacement must preserve the selected message count."
-    );
+                    .map(|input| (&input.cwd, &input.selected_skill_ids))
+    }) {
+        return Err(QueueError::MixedExecutionSettings);
+    }
+    if !(edit.messages.is_empty() || edit.messages.len() == count) {
+        return Err(QueueError::ReplacementCountMismatch);
+    }
     let mut sources = rapidhash::RapidHashSet::default();
     for message in &edit.messages {
-        anyhow::ensure!(
-            edit.selected_request_doc_ids
-                .contains(&message.request_doc_id)
-                && sources.insert(message.request_doc_id.as_str()),
-            "Replacement messages must name each selected message once."
-        );
-        anyhow::ensure!(
-            selected
-                .iter()
-                .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
-                .and_then(|row| row.input.as_ref())
-                .is_some_and(|input| input.has_authored_input(&message.content)),
-            "A message cannot be empty. Remove it instead."
-        );
+        if !(edit
+            .selected_request_doc_ids
+            .contains(&message.request_doc_id)
+            && sources.insert(message.request_doc_id.as_str()))
+        {
+            return Err(QueueError::ReplacementMessageNotSelected);
+        }
+        if !selected
+            .iter()
+            .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
+            .and_then(|row| row.input.as_ref())
+            .is_some_and(|input| input.has_authored_input(&message.content))
+        {
+            return Err(QueueError::EmptyReplacementMessage);
+        }
     }
     Ok(selected)
 }
@@ -272,26 +270,25 @@ fn replacement_spec(
         source
             .doc_id
             .as_deref()
-            .context("selected message has no physical identity")?,
+            .ok_or(QueueError::SelectedMessageMissingIdentity)?,
     );
     input.initial_title = None;
     let slot_id = slot
         .doc_id
         .clone()
-        .context("selected slot has no identity")?;
+        .ok_or(QueueError::SelectedSlotMissingIdentity)?;
     let old_queue = slot
         .input
         .as_ref()
         .and_then(|input| input.queue.as_ref())
-        .context("selected slot has no queue input")?;
+        .ok_or(QueueError::SelectedSlotMissingQueue)?;
     let queue = input
         .queue
         .as_mut()
-        .context("selected message has no queue input")?;
-    anyhow::ensure!(
-        replacement_delivery_allowed(old_queue.delivery, delivery),
-        "Steering input cannot be changed back to queued delivery."
-    );
+        .ok_or(QueueError::SelectedMessageMissingQueue)?;
+    if !replacement_delivery_allowed(old_queue.delivery, delivery) {
+        return Err(QueueError::SteeringRevertedToQueue);
+    }
     queue.delivery = delivery;
     queue.position = Some(QueuePosition {
         slot_request_doc_id: old_queue
@@ -307,7 +304,10 @@ fn replacement_spec(
             requester_did: Some(requester_did.to_owned()),
             request_id,
             node_did: node_did.to_owned(),
-            agent_id: source.agent_id.clone().context("message has no agent")?,
+            agent_id: source
+                .agent_id
+                .clone()
+                .ok_or(QueueError::MessageMissingAgent)?,
             session_id: session_id.to_owned(),
             content: message.content.trim().to_owned(),
             execution_origin: ExecutionOrigin::Interactive,
@@ -334,7 +334,7 @@ pub async fn prepare_pending_user_edit(
     session_id: &str,
     requester_did: &str,
     edit: &PendingQueueEdit,
-) -> Result<Vec<AgentRequestCreate>> {
+) -> anyhow::Result<Vec<AgentRequestCreate>> {
     prepare_pending_user_edit_with_deliveries(
         access,
         signer,
@@ -358,7 +358,7 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
     requester_did: &str,
     edit: &PendingQueueEdit,
     deliveries: Option<&[QueueDelivery]>,
-) -> Result<Vec<AgentRequestCreate>> {
+) -> anyhow::Result<Vec<AgentRequestCreate>> {
     anyhow::ensure!(
         signer.did() == requester_did && admission.signer_did == requester_did,
         "Only the author can edit pending messages."
@@ -504,10 +504,10 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
     requester_did: &str,
     edit: &PendingQueueEdit,
     creates: &[AgentRequestCreate],
-) -> Result<std::result::Result<ValidatedPendingEdit, String>> {
+) -> anyhow::Result<std::result::Result<ValidatedPendingEdit, String>> {
     crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
     let current = pending_in_txn(txn, node_did, session_id).await?;
-    let checked = (|| -> Result<ValidatedPendingEdit> {
+    let checked = (|| -> anyhow::Result<ValidatedPendingEdit> {
         let selected = selected_group(&current, edit, requester_did)?;
         anyhow::ensure!(
             creates.len() == edit.messages.len(),
@@ -546,7 +546,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                         .context("Replacement has no queue input.")?
                         .delivery,
                 },
-            )?)?;
+            )?);
             anyhow::ensure!(
                 create == &expected,
                 "Replacement request does not match the selected message."
@@ -598,7 +598,7 @@ pub(crate) async fn persisted_replacements_in_txn(
         )).await?;
         let existing = response["data"]["AgentRequest"]
             .as_array()
-            .context("replacement identity lookup missing")?;
+            .ok_or(QueueError::ReplacementIdentityLookupMissing)?;
         match existing.first() {
             None => missing += 1,
             Some(row)
@@ -612,7 +612,7 @@ pub(crate) async fn persisted_replacements_in_txn(
                 exact.push(
                     row["_docID"]
                         .as_str()
-                        .context("replacement lacks physical identity")?
+                        .ok_or(QueueError::ReplacementMissingIdentity)?
                         .to_owned(),
                 );
             }
@@ -642,7 +642,11 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
     };
     for create in &creates {
         let response = txn
-            .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+            .execute(
+                &create
+                    .graphql_mutation()
+                    .map_err(|reason| QueueError::RequestCreate { reason })?,
+            )
             .await?;
         let id = crate::graphql::created_doc_id(&response, "AgentRequest")?;
         receipt.request_doc_ids.push(id);
@@ -683,12 +687,12 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
         } else {
             txn.execute(&mutation).await?
         };
-        anyhow::ensure!(
-            result["data"]["update_AgentRequest"]
-                .as_array()
-                .is_some_and(|rows| rows.len() == 1),
-            "A selected message started before this edit. Refresh the queue."
-        );
+        if !result["data"]["update_AgentRequest"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1)
+        {
+            return Err(QueueError::SelectedMessageStarted);
+        }
         let mut released = serde_json::to_value(old)?;
         released["_docID"] = serde_json::Value::String(old_id.to_owned());
         crate::workspace::release_terminal_writer_binding(txn, &released).await?;
@@ -718,31 +722,30 @@ pub fn pending_steer_edit(
     expected: Vec<String>,
     request_doc_id: &str,
 ) -> Result<PendingQueueEdit> {
-    anyhow::ensure!(
-        snapshot
-            .entries
-            .iter()
-            .map(|entry| &entry.request_doc_id)
-            .eq(expected.iter()),
-        "The message queue changed. Refresh it and try again."
-    );
+    if !snapshot
+        .entries
+        .iter()
+        .map(|entry| &entry.request_doc_id)
+        .eq(expected.iter())
+    {
+        return Err(QueueError::MessageQueueChanged);
+    }
     let index = snapshot
         .entries
         .iter()
         .position(|entry| entry.request_doc_id == request_doc_id)
-        .context("This message is no longer pending.")?;
+        .ok_or(QueueError::MessageNoLongerPending)?;
     let target = &snapshot.entries[index];
-    anyhow::ensure!(
-        target.steerable,
-        "This message cannot be steered or is already steering."
-    );
+    if !target.steerable {
+        return Err(QueueError::MessageNotSteerable);
+    }
     let selected = &snapshot.entries[..=index];
-    anyhow::ensure!(
-        selected
-            .iter()
-            .all(|entry| entry.steerable && entry.edit_group == target.edit_group),
-        "This message cannot pass earlier input with different execution settings."
-    );
+    if !selected
+        .iter()
+        .all(|entry| entry.steerable && entry.edit_group == target.edit_group)
+    {
+        return Err(QueueError::SteerMixedExecutionSettings);
+    }
     let reordered = std::iter::once(target).chain(snapshot.entries[..index].iter());
     Ok(PendingQueueEdit {
         expected_request_doc_ids: expected,
@@ -774,7 +777,7 @@ pub(super) async fn replace_pending_user_messages(
     actor: PendingEditActor<'_>,
     edit: PendingQueueEdit,
     deliveries: &[QueueDelivery],
-) -> Result<PendingQueueReceipt> {
+) -> anyhow::Result<PendingQueueReceipt> {
     let PendingEditActor {
         node_did,
         session_id,
@@ -806,7 +809,7 @@ pub(super) async fn replace_pending_user_messages(
                 )
                 .await?
                 .map_err(anyhow::Error::msg)?;
-                apply_pending_user_edit_in_txn(txn, validated).await
+                Ok(apply_pending_user_edit_in_txn(txn, validated).await?)
             })
         })
         .await

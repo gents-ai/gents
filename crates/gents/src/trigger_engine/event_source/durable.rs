@@ -1,6 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
+use anyhow::Context;
 use gents_protocol::event_delivery::EventConsumer;
 
 pub(super) struct PendingCheckpoint {

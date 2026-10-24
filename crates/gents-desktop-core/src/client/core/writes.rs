@@ -549,7 +549,7 @@ impl ClientCore {
         delivery: gents_protocol::request_input::QueueDelivery,
     ) -> Result<gents_protocol::request_input::RequestInput> {
         let input = self.prepare_goal_input(node_did, session_id, input).await?;
-        gents::lifecycle::prepare_user_message_input(
+        Ok(gents::lifecycle::prepare_user_message_input(
             &self
                 .operator_observation_graphql(node_did)
                 .map(ConfigAccess::Graphql)
@@ -559,7 +559,7 @@ impl ClientCore {
             input,
             delivery,
         )
-        .await
+        .await?)
     }
 
     pub async fn pending_user_queue(

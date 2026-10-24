@@ -1,18 +1,77 @@
-use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::event_delivery::{EventConsumer, EventGroupState};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::event_source::SourceSchemaCache;
+use super::event_source::{EventSourceError, SourceSchemaCache};
 use super::TriggerEngineError;
+use crate::config_client::{ConfigClientError, TransactionFailure};
 use crate::document_config::{CallbackBinding, EventGroupCount, EventSource};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, GraphqlResponseError};
 use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
 pub(crate) mod source_scan;
+
+type Result<T, E = EventDeliveryError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EventDeliveryError {
+    #[error(transparent)]
+    Engine(#[from] TriggerEngineError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Response(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Chrono(#[from] chrono::ParseError),
+    #[error(transparent)]
+    Source(Box<EventSourceError>),
+    #[error("event delivery owner is missing")]
+    OwnerMissing,
+    #[error("callback event source requires created events")]
+    CallbackEventKindNotCreated,
+    #[error("callback source owner/reference mismatch")]
+    CallbackSourceMismatch,
+    #[error("group requires correlation field")]
+    CorrelationFieldMissing,
+    #[error("group correlation field missing")]
+    GroupCorrelationFieldMissing,
+    #[error("group requires expected count or timeout")]
+    CountOrTimeoutMissing,
+    #[error("fixed expected count is outside group bounds")]
+    FixedCountOutOfBounds,
+    #[error("group correlation is missing")]
+    CorrelationMissing,
+    #[error("created event group disappeared")]
+    GroupDisappeared,
+    #[error("event source lacks composite version")]
+    CompositeVersionMissing,
+    #[error("event source scan did not advance its document cursor")]
+    ScanCursorStalled,
+}
+
+impl From<EventSourceError> for EventDeliveryError {
+    fn from(error: EventSourceError) -> Self {
+        Self::Source(Box::new(error))
+    }
+}
+
+impl TransactionFailure for EventDeliveryError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Response(error) => TransactionFailure::config_client_error(error),
+            Self::Source(error) => TransactionFailure::config_client_error(error.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum Delivery<'a> {
@@ -122,36 +181,34 @@ impl Delivery<'_> {
         }
     }
     pub(crate) fn validate_group(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.owner().trim().is_empty(),
-            "event delivery owner is missing"
-        );
+        if self.owner().trim().is_empty() {
+            return Err(EventDeliveryError::OwnerMissing);
+        }
         if let Self::Callback { binding, source } = self {
-            anyhow::ensure!(
-                source.event_kind.as_deref().unwrap_or("created") == "created",
-                "callback event source requires created events"
-            );
-            anyhow::ensure!(
-                binding.node_did == source.node_did
-                    && binding.event_source_id == source.event_source_id,
-                "callback source owner/reference mismatch"
-            );
+            if source.event_kind.as_deref().unwrap_or("created") != "created" {
+                return Err(EventDeliveryError::CallbackEventKindNotCreated);
+            }
+            if binding.node_did != source.node_did
+                || binding.event_source_id != source.event_source_id
+            {
+                return Err(EventDeliveryError::CallbackSourceMismatch);
+            }
         }
         let field = self
             .correlation_field()
-            .context("group requires correlation field")?;
+            .ok_or(EventDeliveryError::CorrelationFieldMissing)?;
         crate::graphql::validate_graphql_name(field)?;
         let minimum = self.minimum_count()?;
         let expected = self.expected()?;
-        anyhow::ensure!(
-            expected.is_some() || self.timeout_secs()?.is_some(),
-            "group requires expected count or timeout"
-        );
+        if expected.is_none() && self.timeout_secs()?.is_none() {
+            return Err(EventDeliveryError::CountOrTimeoutMissing);
+        }
         match expected {
-            Some(EventGroupCount::Fixed(n)) => anyhow::ensure!(
-                n > 0 && n <= MAX_EVENT_TRIGGER_GROUP_DOCS as i64 && minimum <= n as usize,
-                "fixed expected count is outside group bounds"
-            ),
+            Some(EventGroupCount::Fixed(n)) => {
+                if !(n > 0 && n <= MAX_EVENT_TRIGGER_GROUP_DOCS as i64 && minimum <= n as usize) {
+                    return Err(EventDeliveryError::FixedCountOutOfBounds);
+                }
+            }
             Some(EventGroupCount::SourceField { source_field }) => {
                 crate::graphql::validate_graphql_name(&source_field)?
             }
@@ -231,9 +288,9 @@ pub(crate) async fn probe_document(
     .await?;
     let rows = crate::graphql::rows::<Value>(&response, collection)?;
     rows.first()
-        .map(|row| {
+        .map(|row| -> Result<String> {
             crate::graphql::document_composite_version(row, "event selection probe")?
-                .context("event source lacks composite version")
+                .ok_or(EventDeliveryError::CompositeVersionMissing)
                 .map(|v| v.cid)
         })
         .transpose()
@@ -288,16 +345,15 @@ pub(crate) async fn load_or_create_group(
     correlation: &str,
 ) -> Result<GroupRecord> {
     delivery.validate_group()?;
-    anyhow::ensure!(
-        !correlation.trim().is_empty(),
-        "group correlation is missing"
-    );
+    if correlation.trim().is_empty() {
+        return Err(EventDeliveryError::CorrelationMissing);
+    }
     crate::config_client::ConfigAccess::transact_local_write(node,None,"event.group_clock",|txn| Box::pin(async move {
         let query=group_query(delivery,correlation);
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
         let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
         txn.execute_with_variables("mutation($input:EventGroupStateMutationInputArg!){create_EventGroupState(input:$input){_docID}}",&json!({"input":state})).await?;
-        decode_group(&txn.execute(&query).await?,delivery,correlation)?.context("created event group disappeared")
+        decode_group(&txn.execute(&query).await?,delivery,correlation)?.ok_or(EventDeliveryError::GroupDisappeared)
     })).await
 }
 
@@ -342,7 +398,7 @@ pub(crate) async fn evaluate_group(
         Some((
             delivery
                 .correlation_field()
-                .context("group correlation field missing")?,
+                .ok_or(EventDeliveryError::GroupCorrelationFieldMissing)?,
             correlation,
         )),
     )?;
@@ -451,7 +507,7 @@ pub(crate) async fn group_correlation_page(
     delivery.validate_group()?;
     let field = delivery
         .correlation_field()
-        .context("group correlation field missing")?;
+        .ok_or(EventDeliveryError::GroupCorrelationFieldMissing)?;
     crate::graphql::validate_collection_identifier(delivery.collection())?;
     let base = selection_filter(delivery.filter(), None)?;
     let filter = cursor.map_or(base.clone(), |cursor| {

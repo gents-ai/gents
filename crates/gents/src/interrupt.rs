@@ -210,14 +210,14 @@ async fn interrupt_request_matching_in_txn(
         updated.len() == 1 && updated[0]["_docID"] == row["_docID"],
         "interrupt mutation did not update the selected physical request"
     );
-    drain_automated_wakeups_in_txn(
+    Ok(drain_automated_wakeups_in_txn(
         txn,
         session_id,
         node_did,
         row["requester_did"].as_str(),
         "automated wake-up drained because active request was interrupted",
     )
-    .await
+    .await?)
 }
 
 pub(crate) async fn interrupt_active_session_in_txn(

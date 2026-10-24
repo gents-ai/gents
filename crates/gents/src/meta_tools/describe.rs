@@ -93,7 +93,7 @@ impl Tool for DescribeToolTool {
                     format!(
                         "service '{}' is currently unavailable: {}",
                         args.service_id,
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     ),
                     true,
                 ),
@@ -128,7 +128,7 @@ impl Tool for DescribeToolTool {
                         format!(
                             "service '{}' could not list tools for describe_tool: {}",
                             args.service_id,
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         ),
                         true,
                     ),

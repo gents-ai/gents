@@ -551,7 +551,7 @@ where
             Err(error) => {
                 tracing::warn!(
                     request_id = %request.request_id,
-                    error = %ErrorChain(error.as_ref()),
+                    error = %ErrorChain(&error),
                     "could not read queued messages to fold; claiming the request alone"
                 );
                 return Vec::new();

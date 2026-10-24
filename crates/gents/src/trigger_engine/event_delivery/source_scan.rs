@@ -1,9 +1,10 @@
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
-use super::super::TriggerEngineError;
+use super::{EventDeliveryError, TriggerEngineError};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+
+type Result<T, E = EventDeliveryError> = std::result::Result<T, E>;
 
 const SOURCE_SCAN_PAGE_SIZE: usize = 1_000;
 
@@ -14,7 +15,7 @@ pub(crate) async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Resul
         .map(|row| {
             document_id(&row)
                 .map(str::to_owned)
-                .map_err(anyhow::Error::from)
+                .map_err(EventDeliveryError::from)
         })
         .collect()
 }
@@ -33,7 +34,7 @@ pub(crate) async fn load_doc_field(
     Ok(fields)
 }
 
-fn document_id(row: &Value) -> Result<&str, TriggerEngineError> {
+fn document_id(row: &Value) -> std::result::Result<&str, TriggerEngineError> {
     row.get("_docID")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
@@ -78,10 +79,9 @@ pub(crate) async fn load_source_rows(
         let page = rows::<Value>(&response, collection)?;
         for row in &page {
             let id = document_id(row)?;
-            anyhow::ensure!(
-                id > after.as_str(),
-                "event source scan did not advance its document cursor"
-            );
+            if id <= after.as_str() {
+                return Err(EventDeliveryError::ScanCursorStalled);
+            }
             after = id.to_owned();
         }
         let complete = page.len() < SOURCE_SCAN_PAGE_SIZE;
@@ -120,7 +120,7 @@ pub(crate) mod tests {
                                 .await?;
                             ids.push(crate::graphql::created_doc_id(&response, "RescanSource")?);
                         }
-                        Ok::<_, anyhow::Error>(ids)
+                        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(ids)
                     })
                 })
                 .await

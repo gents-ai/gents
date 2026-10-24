@@ -1,6 +1,6 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::{anyhow, Context as _};
+use anyhow::Context as _;
 use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -10,7 +10,7 @@ use crate::truncation::{truncate_text, TruncationLimits, TruncationMode};
 
 use super::shared::{
     enforce_health_gate, extract_text, lookup_service, MetaToolContext, MetaToolError,
-    StructuredToolError,
+    MetaToolFailure, StructuredToolError,
 };
 
 const CALL_TOOL_MAX_BYTES: usize = 50 * 1024;
@@ -107,7 +107,7 @@ impl Tool for CallToolTool {
 
         let health = enforce_health_gate(&self.ctx.health, &args.service_id)
             .await
-            .context("call_tool")?;
+            .map_err(MetaToolFailure::CallToolHealth)?;
 
         let service = lookup_service(&self.ctx, &args.service_id)
             .await
@@ -117,13 +117,17 @@ impl Tool for CallToolTool {
         let selection = self
             .ctx
             .service_selection(&args.service_id)
-            .ok_or_else(|| anyhow!("MCP service is not selected"))?;
-        let mut call_timeout = super::shared::timeout(selection.timeout_secs, 300)?;
+            .ok_or(MetaToolFailure::NotSelected)?;
+        let mut call_timeout =
+            super::shared::timeout(selection.timeout_secs, 300).map_err(MetaToolFailure::from)?;
         if matches!(health.as_ref().map(|h| h.status), Some(HealthStatus::Stale)) {
-            call_timeout =
-                call_timeout.min(super::shared::timeout(selection.stale_timeout_secs, 120)?);
+            call_timeout = call_timeout.min(
+                super::shared::timeout(selection.stale_timeout_secs, 120)
+                    .map_err(MetaToolFailure::from)?,
+            );
         }
-        let connect_timeout = super::shared::timeout(selection.connect_timeout_secs, 15)?;
+        let connect_timeout = super::shared::timeout(selection.connect_timeout_secs, 15)
+            .map_err(MetaToolFailure::from)?;
 
         if let Some(error) = self
             .preflight_arguments(
@@ -150,27 +154,23 @@ impl Tool for CallToolTool {
             ),
         )
         .await
-        .map_err(|_| {
-            anyhow!(
-                "service '{}' timed out after {}s",
-                args.service_id,
-                call_timeout.as_secs()
-            )
+        .map_err(|_| MetaToolFailure::CallTimedOut {
+            service_id: args.service_id.clone(),
+            seconds: call_timeout.as_secs(),
         })?
-        .context("MCP call_tool")?;
+        .map_err(MetaToolFailure::CallTool)?;
 
         if result.is_error == Some(true) {
             let error_text = extract_text(&result);
-            return Err(anyhow!(
-                "tool '{}' on service '{}' returned an error: {}",
-                args.tool_name,
-                args.service_id,
-                if error_text.is_empty() {
+            return Err(MetaToolFailure::ReturnedError {
+                tool_name: args.tool_name.clone(),
+                service_id: args.service_id.clone(),
+                text: if error_text.is_empty() {
                     "(no error message)".to_string()
                 } else {
                     error_text
-                }
-            )
+                },
+            }
             .into());
         }
 
@@ -212,7 +212,7 @@ impl CallToolTool {
                 return Some(StructuredToolError::service_unavailable(
                     service_id,
                     tool_name,
-                    format!("MCP catalog unavailable: {}", ErrorChain(error.as_ref())),
+                    format!("MCP catalog unavailable: {}", ErrorChain(&error)),
                     true,
                 ));
             }

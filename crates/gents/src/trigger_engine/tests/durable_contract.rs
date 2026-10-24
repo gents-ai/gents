@@ -1,6 +1,8 @@
 use super::*;
 use crate::trigger_engine::durable;
 use gents_protocol::error_chain::ErrorChain;
+
+type TestError = Box<dyn std::error::Error + Send + Sync>;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 use serde::Deserialize;
 
@@ -261,7 +263,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                                 "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
                             }}),
                         ).await?;
-                        Ok::<_, anyhow::Error>(())
+                        Ok::<_, TestError>(())
                     })
                 },
             ).await.unwrap();
@@ -369,8 +371,10 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
             |txn| {
                 Box::pin(async {
                     durable::stage_fire_request(txn, &fire, &mutation).await?;
-                    anyhow::ensure!(commit, "injected pre-commit crash");
-                    Ok(())
+                    if !commit {
+                        return Err("injected pre-commit crash".into());
+                    }
+                    Ok::<_, TestError>(())
                 })
             },
         )
@@ -516,7 +520,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         let terminal_state = &terminal_state;
                         Box::pin(async move {
                             txn.execute(&format!("mutation {{update_AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}, input: {{lifecycle_state: \"{}\"}}) {{_docID}}}}", escape_graphql_string(&identity.request_id()), escape_graphql_string(terminal_state))).await?;
-                            anyhow::ensure!(commit, "injected terminal transaction crash"); Ok(())
+                            if !commit { return Err("injected terminal transaction crash".into()); } Ok::<_, TestError>(())
                         })
                     }).await;
                     assert_eq!(result.is_ok(), commit);
@@ -534,11 +538,11 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                     if commit {
                         durable::recover_outcomes(&node, "owner-a").await.unwrap();
                     } else {
-                        let result: anyhow::Result<()> = access
+                        let result: std::result::Result<(), TestError> = access
                             .transact_write("test.outcome_publication_rollback", |txn| {
                                 Box::pin(async move {
                                     durable::recover_outcomes_in_txn(txn, "owner-a").await?;
-                                    anyhow::bail!("injected outcome transaction crash")
+                                    Err("injected outcome transaction crash".into())
                                 })
                             })
                             .await;
@@ -680,7 +684,7 @@ async fn saved_arrival_cursor(access: &crate::config_client::ConfigAccess) -> St
     access
         .transact_write("test.read_arrival_cursor", |txn| {
             Box::pin(async move {
-                Ok::<_, anyhow::Error>(
+                Ok::<_, TestError>(
                     crate::config_client::event_source_cursor::load_or_seed(
                         txn,
                         "owner-a",
@@ -739,7 +743,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     "task_id":"contract-task","source":{"kind":"event","event_source_id":"source"},
                     "enabled":case["enabled"], "concurrency":case["mode"]}}),
             ).await?;
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, TestError>(())
         })).await.unwrap();
         assert_eq!(
             saved_arrival_cursor(&access).await,
@@ -798,7 +802,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     let mutation = &mutation;
                     Box::pin(async move {
                         durable::stage_fire_request(txn, receipt, mutation).await?;
-                        Ok::<_, anyhow::Error>(())
+                        Ok::<_, TestError>(())
                     })
                 })
                 .await
@@ -807,13 +811,15 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         if let Some(commit) = case["admission_commit"].as_bool() {
             let receipt = receipt(&adapt_fire(decode(&case["fire"])), pre.requests.len());
             let mutation = request_mutation(&receipt);
-            let admitted: anyhow::Result<()> = access
+            let admitted: std::result::Result<(), TestError> = access
                 .transact_write("test.arrival_admission_crash", |txn| {
                     let receipt = &receipt;
                     let mutation = &mutation;
                     Box::pin(async move {
                         durable::stage_fire_request(txn, receipt, mutation).await?;
-                        anyhow::ensure!(commit, "injected crash before receipt/request commit");
+                        if !commit {
+                            return Err("injected crash before receipt/request commit".into());
+                        }
                         Ok(())
                     })
                 })
@@ -823,7 +829,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         if let Some(commit) = case["checkpoint_commit"].as_bool() {
             let entry: Arrival = decode(&case["entry"]);
             let busy = case["busy"].as_bool().unwrap();
-            let checkpointed: anyhow::Result<bool> = access
+            let checkpointed: std::result::Result<bool, TestError> = access
                 .transact_write("test.arrival_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
@@ -836,7 +842,9 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                             busy,
                         )
                         .await?;
-                        anyhow::ensure!(commit, "injected crash before checkpoint commit");
+                        if !commit {
+                            return Err("injected crash before checkpoint commit".into());
+                        }
                         Ok(accepted)
                     })
                 })
@@ -1002,7 +1010,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     "event_source_id":"source","callback_id":"callback","enabled":binding_enabled}}),
             ).await?;
             event_source_cursor::load_or_seed(txn, "owner-a", &handoff_binding()).await?;
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, TestError>(())
         })).await.unwrap();
         let saved = || {
             let access = access.clone();
@@ -1010,7 +1018,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 access
                     .transact_write("test.read_callback_cursor", |txn| {
                         Box::pin(async move {
-                            Ok::<_, anyhow::Error>(
+                            Ok::<_, TestError>(
                                 event_source_cursor::load_or_seed(
                                     txn,
                                     "owner-a",
@@ -1075,7 +1083,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             }
         }
         if let Some(commit) = case["checkpoint_commit"].as_bool() {
-            let checkpointed: anyhow::Result<bool> = access
+            let checkpointed: std::result::Result<bool, TestError> = access
                 .transact_write("test.callback_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
@@ -1088,7 +1096,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                             false,
                         )
                         .await?;
-                        anyhow::ensure!(commit, "injected crash before checkpoint commit");
+                        if !commit {
+                            return Err("injected crash before checkpoint commit".into());
+                        }
                         Ok(accepted)
                     })
                 })

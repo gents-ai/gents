@@ -76,6 +76,10 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::lifecycle::ExecutionRenewalError>(cause))
         .or_else(|| wrapped::<crate::lifecycle::RecoveryError>(cause))
         .or_else(|| wrapped::<crate::lifecycle::CanonicalRecoveryError>(cause))
+        .or_else(|| wrapped::<crate::lifecycle::queue::QueueError>(cause))
+        .or_else(|| wrapped::<crate::trigger_engine::durable::DurableTriggerError>(cause))
+        .or_else(|| wrapped::<crate::trigger_engine::event_delivery::EventDeliveryError>(cause))
+        .or_else(|| wrapped::<crate::trigger_engine::event_source::EventSourceError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

@@ -387,7 +387,7 @@ pub enum RequestSigner<'a> {
 
 pub(crate) fn build_request(
     spec: RequestSpec,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+) -> gents_protocol::request_admission::AgentRequestCreate {
     let RequestSpec {
         purpose,
         identity,
@@ -467,7 +467,7 @@ pub(crate) fn build_request(
         create.retry_parent_request_doc_id = link.parent_request_doc_id;
     }
 
-    Ok(create)
+    create
 }
 
 pub(crate) async fn sign_request(
@@ -489,7 +489,7 @@ pub async fn build_signed_request(
     spec: RequestSpec,
     signer: RequestSigner<'_>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
-    let mut create = build_request(spec)?;
+    let mut create = build_request(spec);
     sign_request(&mut create, signer).await?;
     Ok(create)
 }

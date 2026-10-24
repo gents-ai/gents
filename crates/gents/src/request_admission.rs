@@ -681,7 +681,10 @@ async fn verify_request_input(
             )
             .await
             .map_err(|error| {
-                if error.is::<crate::lifecycle::queue::InvalidQueuePosition>() {
+                if matches!(
+                    error,
+                    crate::lifecycle::queue::QueueError::InvalidQueuePosition(_)
+                ) {
                     AgentRequestAdmissionError::denied(error)
                 } else {
                     AgentRequestAdmissionError::unavailable(error)

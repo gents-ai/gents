@@ -79,7 +79,7 @@ pub use queue::{
     pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
     PendingQueueSnapshot,
 };
-pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
+pub use queue::{prepare_pending_user_edit, prepare_user_message_input, QueueError};
 pub use queue::{FOLDED_REASON, REMOVED_REASON, REPLACED_REASON};
 pub(crate) use task_title::task_goal_session_title;
 pub use task_title::task_session_title;

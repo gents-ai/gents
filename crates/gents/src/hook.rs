@@ -40,6 +40,26 @@ pub(crate) enum HookError {
     MissingActiveRequestDocId,
     #[error("tool call is missing its request deadline")]
     MissingRequestDeadline,
+    #[error("plugin effect dispatch does not match its admitted input")]
+    PluginEffectDispatchMismatch,
+    #[error(
+        "tool dispatch lacks StreamProcessor native identity for internal call {internal_call_id}"
+    )]
+    DispatchMissingStreamIdentity { internal_call_id: String },
+    #[error(
+        "tool dispatch lacks registered provider tool id for internal call {internal_call_id}"
+    )]
+    DispatchMissingProviderToolId { internal_call_id: String },
+    #[error("dispatch provider call id does not match StreamProcessor identity")]
+    DispatchProviderCallIdMismatch,
+    #[error("accepted dispatch requires a physical request binding")]
+    DispatchMissingRequestBinding,
+    #[error("tool dispatch lacks its provider-published AcceptedToolCall binding")]
+    DispatchMissingAcceptedBinding,
+    #[error("accepted tool binding does not match registered provider dispatch identity")]
+    AcceptedBindingMismatch,
+    #[error(transparent)]
+    ToolCallLifecycle(#[from] crate::tool_call_lifecycle::ToolCallLifecycleError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -229,8 +249,11 @@ impl BackgroundExecutionRegistry {
 
     pub(crate) fn try_process_record_list(
         &self,
-    ) -> anyhow::Result<Vec<crate::managed_exec::ownership::ProcessRecord>> {
-        Ok(self.process_records.try_list()?)
+    ) -> Result<
+        Vec<crate::managed_exec::ownership::ProcessRecord>,
+        crate::managed_exec::ownership::ManagedExecError,
+    > {
+        self.process_records.try_list()
     }
 
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
@@ -575,18 +598,18 @@ impl DefraSessionHook {
         args: &str,
         deadline_at: DateTime<Utc>,
         await_mode: AwaitMode,
-    ) -> anyhow::Result<ToolCallLifecycle> {
+    ) -> Result<ToolCallLifecycle, HookError> {
         if let Some((lifecycle, recorded_arguments)) =
             self.effect_tool_calls.lock().await.remove(internal_call_id)
         {
-            anyhow::ensure!(
-                provider_call_id.is_none()
-                    && lifecycle.tool_name() == tool_name
-                    && lifecycle.request_id() == request_id
-                    && lifecycle.session_id() == session_id
-                    && recorded_arguments == args,
-                "plugin effect dispatch does not match its admitted input"
-            );
+            if !(provider_call_id.is_none()
+                && lifecycle.tool_name() == tool_name
+                && lifecycle.request_id() == request_id
+                && lifecycle.session_id() == session_id
+                && recorded_arguments == args)
+            {
+                return Err(HookError::PluginEffectDispatchMismatch);
+            }
             return Ok(lifecycle);
         }
         let registered = self
@@ -596,47 +619,39 @@ impl DefraSessionHook {
             .tool_result_identities
             .get(internal_call_id)
             .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tool dispatch lacks StreamProcessor native identity for internal call {internal_call_id}"
-                )
+            .ok_or_else(|| HookError::DispatchMissingStreamIdentity {
+                internal_call_id: internal_call_id.to_owned(),
             })?;
-        let native_id = registered.result_id.ok_or_else(|| {
-            anyhow::anyhow!(
-                "tool dispatch lacks registered provider tool id for internal call {internal_call_id}"
-            )
-        })?;
+        let native_id =
+            registered
+                .result_id
+                .ok_or_else(|| HookError::DispatchMissingProviderToolId {
+                    internal_call_id: internal_call_id.to_owned(),
+                })?;
         if let Some(provider_call_id) = provider_call_id {
-            anyhow::ensure!(
-                Some(provider_call_id) == registered.call_id.as_deref(),
-                "dispatch provider call id does not match StreamProcessor identity"
-            );
+            if Some(provider_call_id) != registered.call_id.as_deref() {
+                return Err(HookError::DispatchProviderCallIdMismatch);
+            }
         }
 
         let request_doc_id = self
             .active_request_doc_id_for(request_id)
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("accepted dispatch requires a physical request binding")
-            })?;
+            .ok_or(HookError::DispatchMissingRequestBinding)?;
         let accepted = self
             .accepted_tool_calls
             .lock()
             .await
             .remove(internal_call_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tool dispatch lacks its provider-published AcceptedToolCall binding"
-                )
-            })?;
-        anyhow::ensure!(
-            accepted.id == native_id
-                && accepted.call_id == registered.call_id
-                && accepted.request_doc_id == request_doc_id
-                && accepted.session_id == session_id
-                && accepted.tool_name == tool_name,
-            "accepted tool binding does not match registered provider dispatch identity"
-        );
+            .ok_or(HookError::DispatchMissingAcceptedBinding)?;
+        if !(accepted.id == native_id
+            && accepted.call_id == registered.call_id
+            && accepted.request_doc_id == request_doc_id
+            && accepted.session_id == session_id
+            && accepted.tool_name == tool_name)
+        {
+            return Err(HookError::AcceptedBindingMismatch);
+        }
         let selected = self
             .remote_tools
             .as_ref()

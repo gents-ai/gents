@@ -6,7 +6,7 @@ use defra_node::EmbeddedNode;
 use serde::Serialize;
 
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
-use crate::mcp_pool::McpPool;
+use crate::mcp_pool::{McpPool, McpPoolError};
 use crate::tool_call_lifecycle::FailureClass;
 
 #[derive(Clone)]
@@ -54,10 +54,10 @@ impl MetaToolContext {
         &self,
         service_id: &str,
         service: &ResolvedMcpService,
-    ) -> anyhow::Result<rmcp::model::ListToolsResult> {
+    ) -> Result<rmcp::model::ListToolsResult, ListToolsError> {
         let selection = self
             .service_selection(service_id)
-            .ok_or_else(|| anyhow!("MCP service is not selected"))?;
+            .ok_or(ListToolsError::NotSelected)?;
         let connect = timeout(selection.connect_timeout_secs, 15)?;
         let discovery = timeout(selection.discovery_timeout_secs, 30)?;
         tokio::time::timeout(
@@ -71,13 +71,11 @@ impl MetaToolContext {
             ),
         )
         .await
-        .map_err(|_| {
-            anyhow!(
-                "MCP discovery on '{service_id}' timed out after {}s",
-                discovery.as_secs()
-            )
+        .map_err(|_| ListToolsError::DiscoveryTimeout {
+            service_id: service_id.to_owned(),
+            seconds: discovery.as_secs(),
         })?
-        .map_err(anyhow::Error::from)
+        .map_err(ListToolsError::Pool)
     }
 
     pub(super) fn blocked_service_error(
@@ -108,6 +106,29 @@ pub struct MetaToolError(MetaToolErrorKind);
 enum MetaToolErrorKind {
     Other(anyhow::Error),
     Structured(StructuredToolError),
+    Failed(MetaToolFailure),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum MetaToolFailure {
+    #[error("MCP service is not selected")]
+    NotSelected,
+    #[error(transparent)]
+    Timeout(#[from] TimeoutError),
+    #[error(transparent)]
+    ListTools(#[from] ListToolsError),
+    #[error("call_tool")]
+    CallToolHealth(#[source] HealthGateError),
+    #[error("service '{service_id}' timed out after {seconds}s")]
+    CallTimedOut { service_id: String, seconds: u64 },
+    #[error("MCP call_tool")]
+    CallTool(#[source] McpPoolError),
+    #[error("tool '{tool_name}' on service '{service_id}' returned an error: {text}")]
+    ReturnedError {
+        tool_name: String,
+        service_id: String,
+        text: String,
+    },
 }
 
 impl MetaToolError {
@@ -121,9 +142,7 @@ impl MetaToolError {
                 class: error.lifecycle_failure_class(),
                 text: error.to_result_text(),
             },
-            MetaToolErrorKind::Other(error) => crate::llm::tool::ToolError::ToolCallError(
-                Box::new(MetaToolError(MetaToolErrorKind::Other(error))),
-            ),
+            kind => crate::llm::tool::ToolError::ToolCallError(Box::new(MetaToolError(kind))),
         }
     }
 }
@@ -133,6 +152,7 @@ impl std::fmt::Display for MetaToolError {
         match &self.0 {
             MetaToolErrorKind::Other(error) => write!(f, "{}", ErrorChain(error.as_ref())),
             MetaToolErrorKind::Structured(error) => f.write_str(&error.to_result_text()),
+            MetaToolErrorKind::Failed(error) => write!(f, "{}", ErrorChain(error)),
         }
     }
 }
@@ -142,6 +162,13 @@ impl std::error::Error for MetaToolError {
         match &self.0 {
             MetaToolErrorKind::Other(error) => Some(error.root_cause()),
             MetaToolErrorKind::Structured(_) => None,
+            MetaToolErrorKind::Failed(error) => {
+                let mut root: &(dyn std::error::Error + 'static) = error;
+                while let Some(next) = root.source() {
+                    root = next;
+                }
+                Some(root)
+            }
         }
     }
 }
@@ -150,6 +177,44 @@ impl From<anyhow::Error> for MetaToolError {
     fn from(error: anyhow::Error) -> Self {
         Self(MetaToolErrorKind::Other(error))
     }
+}
+
+impl From<MetaToolFailure> for MetaToolError {
+    fn from(error: MetaToolFailure) -> Self {
+        Self(MetaToolErrorKind::Failed(error))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ListToolsError {
+    #[error("MCP service is not selected")]
+    NotSelected,
+    #[error(transparent)]
+    Timeout(#[from] TimeoutError),
+    #[error("MCP discovery on '{service_id}' timed out after {seconds}s")]
+    DiscoveryTimeout { service_id: String, seconds: u64 },
+    #[error(transparent)]
+    Pool(McpPoolError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum HealthGateError {
+    #[error(
+        "service '{service_id}' is currently unreachable{}",
+        .last_error.as_deref().map(|error| format!(" (last error: {error})")).unwrap_or_default()
+    )]
+    Unreachable {
+        service_id: String,
+        last_error: Option<String>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum TimeoutError {
+    #[error(transparent)]
+    OutOfRange(#[from] std::num::TryFromIntError),
+    #[error("MCP timeout must be positive")]
+    NotPositive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -386,17 +451,15 @@ pub(super) fn format_health_status(health: Option<&ServiceHealth>) -> String {
 pub(super) async fn enforce_health_gate(
     health_map: &ServiceHealthMap,
     service_id: &str,
-) -> anyhow::Result<Option<ServiceHealth>> {
+) -> Result<Option<ServiceHealth>, HealthGateError> {
     let health = health_map.get(service_id).await;
     if let Some(health) = &health {
         match health.status {
             HealthStatus::Unreachable => {
-                let suffix = health
-                    .last_error
-                    .as_deref()
-                    .map(|error| format!(" (last error: {error})"))
-                    .unwrap_or_default();
-                anyhow::bail!("service '{service_id}' is currently unreachable{suffix}");
+                return Err(HealthGateError::Unreachable {
+                    service_id: service_id.to_owned(),
+                    last_error: health.last_error.clone(),
+                });
             }
             HealthStatus::Stale => {
                 tracing::warn!(
@@ -412,8 +475,13 @@ pub(super) async fn enforce_health_gate(
     Ok(health)
 }
 
-pub(super) fn timeout(value: Option<i64>, default: u64) -> anyhow::Result<std::time::Duration> {
+pub(super) fn timeout(
+    value: Option<i64>,
+    default: u64,
+) -> Result<std::time::Duration, TimeoutError> {
     let seconds = value.map(u64::try_from).transpose()?.unwrap_or(default);
-    anyhow::ensure!(seconds > 0, "MCP timeout must be positive");
+    if seconds == 0 {
+        return Err(TimeoutError::NotPositive);
+    }
     Ok(std::time::Duration::from_secs(seconds))
 }

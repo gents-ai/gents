@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
+use crate::config_client::ConfigClientError;
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::UpdateSubscriptionSource;
@@ -20,6 +20,59 @@ use crate::UpdateSubscriptionSource;
 use super::{FireIntent, TriggerEngineError, TriggerKind, TriggerSource};
 
 mod durable;
+
+type Result<T, E = EventSourceError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EventSourceError {
+    #[error(transparent)]
+    Engine(#[from] TriggerEngineError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Response(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Delivery(#[from] super::event_delivery::EventDeliveryError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("introspect {collection}")]
+    Introspect {
+        collection: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("source doc {source_doc_id} not found in {collection}")]
+    SourceDocNotFound {
+        source_doc_id: String,
+        collection: String,
+    },
+    #[error("source doc {source_doc_id} not found in {collection} (no rows in response)")]
+    SourceDocNoRows {
+        source_doc_id: String,
+        collection: String,
+    },
+    #[error("trigger execution context exceeds {max} bytes")]
+    TriggerContextTooLarge { max: usize },
+    #[error("group trigger agent is unavailable")]
+    GroupTriggerAgentUnavailable,
+}
+
+impl crate::config_client::TransactionFailure for EventSourceError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Response(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Delivery(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
 
 const SEEN_DOCS_SEED_MAX_ATTEMPTS: usize = 20;
 const SEEN_DOCS_SEED_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -294,7 +347,7 @@ impl SourceSchemaCache {
         &self,
         collection: &str,
         node: &EmbeddedNode,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> Result<Vec<String>> {
         crate::graphql::validate_collection_identifier(collection)?;
         let mut guard = self.by_collection.lock().await;
         if let Some(fields) = guard.get(collection) {
@@ -306,7 +359,10 @@ impl SourceSchemaCache {
             "introspect",
         )
         .await
-        .with_context(|| format!("introspect {collection}"))?;
+        .map_err(|source| EventSourceError::Introspect {
+            collection: collection.to_owned(),
+            source,
+        })?;
         let fields = source_fields_from(response.data.as_ref(), collection)?;
         guard.insert(collection.to_string(), fields.clone());
         Ok(fields)
@@ -316,7 +372,7 @@ impl SourceSchemaCache {
 /// The introspection query for a collection's own fields. `collection` names
 /// a live document collection, not an arbitrary string, so it is validated
 /// before being spliced in and escaped as the string literal it fills.
-pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
+pub(crate) fn source_fields_query(collection: &str) -> Result<String> {
     crate::graphql::validate_collection_identifier(collection)?;
     Ok(format!(
         r#"query {{
@@ -937,7 +993,7 @@ impl EventSource {
         &self,
         source_doc_id: &str,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         Ok(event_delivery::probe_document(
             &self.node,
             &trigger.source_collection,
@@ -952,10 +1008,13 @@ impl EventSource {
         &self,
         collection: &str,
         source_doc_id: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> Result<serde_json::Value> {
         self.read_source_doc(collection, source_doc_id)
             .await?
-            .with_context(|| format!("source doc {source_doc_id} not found in {collection}"))
+            .ok_or_else(|| EventSourceError::SourceDocNotFound {
+                source_doc_id: source_doc_id.to_owned(),
+                collection: collection.to_owned(),
+            })
     }
 
     /// The hydrated source document, or `None` when this reader sees no row.
@@ -963,7 +1022,7 @@ impl EventSource {
         &self,
         collection: &str,
         source_doc_id: &str,
-    ) -> anyhow::Result<Option<serde_json::Value>> {
+    ) -> Result<Option<serde_json::Value>> {
         // `fields_for` validates this binding before the query is built, so
         // it is the one gate for both sites.
         let fields = self
@@ -991,11 +1050,10 @@ impl EventSource {
             .and_then(|d| d.get(collection))
             .and_then(serde_json::Value::as_array)
         else {
-            anyhow::bail!(
-                "source doc {} not found in {} (no rows in response)",
-                source_doc_id,
-                collection
-            );
+            return Err(EventSourceError::SourceDocNoRows {
+                source_doc_id: source_doc_id.to_owned(),
+                collection: collection.to_owned(),
+            });
         };
         Ok(rows.first().cloned())
     }
@@ -1004,7 +1062,7 @@ impl EventSource {
         snapshot: &ActiveRuntimeSnapshot,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         doc: &serde_json::Value,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>> {
         let fields = snapshot
             .tool_surface(&trigger.task.agent_id)
             .map(|surface| surface.source_fill_fields())
@@ -1031,10 +1089,9 @@ impl EventSource {
             source_fields,
         })?;
         if encoded.len() > crate::lifecycle::MAX_TRIGGER_CONTEXT_BYTES {
-            anyhow::bail!(
-                "trigger execution context exceeds {} bytes",
-                crate::lifecycle::MAX_TRIGGER_CONTEXT_BYTES
-            );
+            return Err(EventSourceError::TriggerContextTooLarge {
+                max: crate::lifecycle::MAX_TRIGGER_CONTEXT_BYTES,
+            });
         }
         Ok(Some(encoded))
     }
@@ -1042,10 +1099,10 @@ impl EventSource {
     fn delivery<'a>(
         snapshot: &'a ActiveRuntimeSnapshot,
         trigger: &'a crate::runtime_snapshot::ResolvedEventTrigger,
-    ) -> anyhow::Result<Delivery<'a>> {
+    ) -> Result<Delivery<'a>> {
         let agent = snapshot
             .agent(&trigger.task.agent_id)
-            .ok_or_else(|| anyhow::anyhow!("group trigger agent is unavailable"))?;
+            .ok_or(EventSourceError::GroupTriggerAgentUnavailable)?;
         Ok(Delivery::Trigger {
             node_did: agent.node_did(),
             trigger,

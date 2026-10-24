@@ -1,12 +1,54 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+
+type Result<T, E = TitleAuditUsageError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+enum TitleAuditUsageError {
+    #[error("inference call row is not an object")]
+    CallRowNotObject,
+    #[error("decoding audit usage InferenceCall row")]
+    DecodeCallRow(#[source] serde_json::Error),
+    #[error("audit usage has no {field}")]
+    MissingField { field: &'static str },
+    #[error("audit usage query omitted {field} rows")]
+    RowsOmitted { field: &'static str },
+    #[error("decoding audit usage {field} rows")]
+    DecodeRows {
+        field: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("negative audit prompt usage")]
+    NegativePrompt(#[source] std::num::TryFromIntError),
+    #[error("negative audit completion usage")]
+    NegativeCompletion(#[source] std::num::TryFromIntError),
+    #[error("audit usage has only one persisted token component")]
+    PartialTokens,
+    #[error("audit prompt usage overflow")]
+    PromptOverflow,
+    #[error("audit completion usage overflow")]
+    CompletionOverflow,
+    #[error("inference call crossed selected physical request scope")]
+    CrossedScope,
+    #[error("inference call logical request disagrees with physical owner")]
+    LogicalRequestMismatch,
+    #[error("one inference document has conflicting call IDs")]
+    ConflictingCallIds,
+    #[error("one call ID has conflicting persisted rows")]
+    ConflictingRows,
+    #[error("budget restart requires reported provider usage for call {call_id}")]
+    BudgetUsageMissing { call_id: String },
+    #[error("budget restart usage overflow")]
+    BudgetOverflow,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditUsageTokens {
@@ -59,20 +101,20 @@ fn decode_calls_for_node(values: &[serde_json::Value], node_did: &str) -> Result
         .map(|row| {
             let mut row = row.clone();
             row.as_object_mut()
-                .context("inference call row is not an object")?
+                .ok_or(TitleAuditUsageError::CallRowNotObject)?
                 .remove("node_did");
-            serde_json::from_value(row).context("decoding audit usage InferenceCall row")
+            serde_json::from_value(row).map_err(TitleAuditUsageError::DecodeCallRow)
         })
         .collect()
 }
 
-fn nonempty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
+fn nonempty<'a>(value: Option<&'a str>, field: &'static str) -> Result<&'a str> {
     value
         .filter(|value| !value.trim().is_empty())
-        .with_context(|| format!("audit usage has no {field}"))
+        .ok_or(TitleAuditUsageError::MissingField { field })
 }
 
-fn required_rows<T>(response: &defra_node::QueryResponse, field: &str) -> Result<Vec<T>>
+fn required_rows<T>(response: &defra_node::QueryResponse, field: &'static str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
 {
@@ -80,20 +122,20 @@ where
         .data
         .as_ref()
         .and_then(|data| data.get(field))
-        .with_context(|| format!("audit usage query omitted {field} rows"))?;
+        .ok_or(TitleAuditUsageError::RowsOmitted { field })?;
     serde_json::from_value(value.clone())
-        .with_context(|| format!("decoding audit usage {field} rows"))
+        .map_err(|source| TitleAuditUsageError::DecodeRows { field, source })
 }
 
 fn totals_for_call(row: &CallRow) -> Result<AuditUsageTokens> {
     match (row.prompt_tokens, row.completion_tokens) {
         (None, None) => Ok(AuditUsageTokens::default()),
         (Some(prompt), Some(completion)) => Ok(AuditUsageTokens {
-            prompt_tokens: u64::try_from(prompt).context("negative audit prompt usage")?,
+            prompt_tokens: u64::try_from(prompt).map_err(TitleAuditUsageError::NegativePrompt)?,
             completion_tokens: u64::try_from(completion)
-                .context("negative audit completion usage")?,
+                .map_err(TitleAuditUsageError::NegativeCompletion)?,
         }),
-        _ => anyhow::bail!("audit usage has only one persisted token component"),
+        _ => Err(TitleAuditUsageError::PartialTokens),
     }
 }
 
@@ -101,11 +143,11 @@ fn add_usage(total: &mut AuditUsageTokens, usage: AuditUsageTokens) -> Result<()
     total.prompt_tokens = total
         .prompt_tokens
         .checked_add(usage.prompt_tokens)
-        .context("audit prompt usage overflow")?;
+        .ok_or(TitleAuditUsageError::PromptOverflow)?;
     total.completion_tokens = total
         .completion_tokens
         .checked_add(usage.completion_tokens)
-        .context("audit completion usage overflow")?;
+        .ok_or(TitleAuditUsageError::CompletionOverflow)?;
     Ok(())
 }
 
@@ -122,22 +164,19 @@ fn coherent_calls(
         nonempty(Some(&call.call_state), "inference call state")?;
         let logical = request_ids
             .get(&call.request_doc_id)
-            .context("inference call crossed selected physical request scope")?;
-        anyhow::ensure!(
-            call.request_id == *logical,
-            "inference call logical request disagrees with physical owner"
-        );
+            .ok_or(TitleAuditUsageError::CrossedScope)?;
+        if call.request_id != *logical {
+            return Err(TitleAuditUsageError::LogicalRequestMismatch);
+        }
         if let Some(previous) = by_doc.insert(call.doc_id.clone(), call.call_id.clone()) {
-            anyhow::ensure!(
-                previous == call.call_id,
-                "one inference document has conflicting call IDs"
-            );
+            if previous != call.call_id {
+                return Err(TitleAuditUsageError::ConflictingCallIds);
+            }
         }
         if let Some(previous) = by_call.get(&call.call_id) {
-            anyhow::ensure!(
-                previous == &call,
-                "one call ID has conflicting persisted rows"
-            );
+            if previous != &call {
+                return Err(TitleAuditUsageError::ConflictingRows);
+            }
         } else {
             by_call.insert(call.call_id.clone(), call);
         }
@@ -177,23 +216,22 @@ fn project_budget_catalog(
     coherent_calls(request_ids, calls)?
         .values()
         .try_fold(0_u64, |used, call| {
-            anyhow::ensure!(
-                call.prompt_tokens.is_some() && call.completion_tokens.is_some(),
-                "budget restart requires reported provider usage for call {}",
-                call.call_id
-            );
+            let usage_missing = || TitleAuditUsageError::BudgetUsageMissing {
+                call_id: call.call_id.clone(),
+            };
+            if call.prompt_tokens.is_none() || call.completion_tokens.is_none() {
+                return Err(usage_missing());
+            }
             let usage = totals_for_call(call)?;
             let charged = usage
                 .prompt_tokens
                 .checked_add(usage.completion_tokens)
-                .context("budget restart usage overflow")?;
-            anyhow::ensure!(
-                charged > 0,
-                "budget restart requires reported provider usage for call {}",
-                call.call_id
-            );
+                .ok_or(TitleAuditUsageError::BudgetOverflow)?;
+            if charged == 0 {
+                return Err(usage_missing());
+            }
             used.checked_add(charged)
-                .context("budget restart usage overflow")
+                .ok_or(TitleAuditUsageError::BudgetOverflow)
         })
 }
 
@@ -208,7 +246,7 @@ struct ParentUsageCatalog {
 fn project_goal_catalog(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<crate::goal::SessionTokenUsage> {
+) -> anyhow::Result<crate::goal::SessionTokenUsage> {
     let calls = coherent_calls(request_ids, calls)?;
     let parts = || {
         calls
@@ -232,7 +270,7 @@ pub(crate) async fn load_session_goal_usage(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<crate::goal::SessionTokenUsage> {
+) -> anyhow::Result<crate::goal::SessionTokenUsage> {
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
         escape_graphql_string(node_did), escape_graphql_string(session_id),
@@ -298,20 +336,20 @@ pub(crate) async fn load_session_goal_usage(
 pub async fn load_parent_inclusive_audit_usage(
     node: &EmbeddedNode,
     exact_parent: &AgentRequestRow,
-) -> Result<ParentAuditUsage> {
+) -> anyhow::Result<ParentAuditUsage> {
     let catalog = load_parent_catalog(node, exact_parent).await?;
-    project_catalog(
+    Ok(project_catalog(
         &catalog.parent_doc_id,
         &catalog.parent_id,
         &catalog.request_ids,
         catalog.calls,
-    )
+    )?)
 }
 
 pub(crate) async fn load_parent_inclusive_budget_usage(
     node: &EmbeddedNode,
     request: &crate::watcher::AgentRequest,
-) -> Result<u64> {
+) -> anyhow::Result<u64> {
     let scope = AgentRequestRow {
         doc_id: Some(request.doc_id.clone()),
         request_id: request.request_id.clone(),
@@ -326,13 +364,13 @@ pub(crate) async fn load_parent_inclusive_budget_usage(
         catalog.max_total_tokens == request.max_total_tokens,
         "budget restart disagrees with the execution owner's pinned limit"
     );
-    project_budget_catalog(&catalog.request_ids, catalog.calls)
+    Ok(project_budget_catalog(&catalog.request_ids, catalog.calls)?)
 }
 
 async fn load_parent_catalog(
     node: &EmbeddedNode,
     exact_parent: &AgentRequestRow,
-) -> Result<ParentUsageCatalog> {
+) -> anyhow::Result<ParentUsageCatalog> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;
     let parent_id = nonempty(Some(&exact_parent.request_id), "parent logical request")?;
     let agent = nonempty(exact_parent.node_did.as_deref(), "parent agent")?;
@@ -547,10 +585,9 @@ mod tests {
             }
             LeanTitleUsageResult::Error { error } if error == "conflicting_call_id" => {
                 let error = actual.expect_err(&case.name);
-                assert_eq!(
-                    error.root_cause().to_string(),
-                    "one call ID has conflicting persisted rows",
-                    "{} rejected for the wrong reason",
+                assert!(
+                    matches!(error, TitleAuditUsageError::ConflictingRows),
+                    "{} rejected for the wrong reason: {error:?}",
                     case.name,
                 );
             }
