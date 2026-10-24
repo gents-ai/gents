@@ -8,6 +8,7 @@ use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
     ProjectedNodeReadinessSummary,
 };
+use gents_protocol::usage::{TokenUsageColumns, TokenUsageSummary};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -75,7 +76,6 @@ pub(crate) struct MetricsBackendRow {
 struct InferenceMetricsQueryData {
     nodes: Vec<InferenceNodeRow>,
     agents: Vec<InferenceAgentRow>,
-    profiles: Vec<InferenceProfileRow>,
     calls: Vec<InferenceCallMetricRow>,
     window_seconds: i64,
 }
@@ -86,8 +86,6 @@ struct InferenceMetricsPageData {
     nodes: Vec<InferenceNodeRow>,
     #[serde(rename = "Agent", default)]
     agents: Vec<InferenceAgentRow>,
-    #[serde(rename = "InferenceProfile", default)]
-    profiles: Vec<InferenceProfileRow>,
     #[serde(rename = "InferenceCall", default)]
     calls: Vec<InferenceCallMetricRow>,
 }
@@ -108,20 +106,6 @@ struct InferenceAgentRow {
     node_did: String,
     #[serde(default)]
     display_name: String,
-    #[serde(default)]
-    inference_profile_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct InferenceProfileRow {
-    #[serde(default)]
-    profile_id: String,
-    #[serde(default)]
-    node_did: String,
-    #[serde(default)]
-    backend_id: String,
-    #[serde(default)]
-    model_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,10 +120,12 @@ struct InferenceCallMetricRow {
     call_state: String,
     #[serde(default)]
     ended_at: String,
+    #[serde(default, deserialize_with = "null_string_as_unknown")]
+    model_name: String,
     #[serde(default)]
-    prompt_tokens: Option<i64>,
-    #[serde(default)]
-    completion_tokens: Option<i64>,
+    call_kind: String,
+    #[serde(flatten)]
+    usage: TokenUsageColumns,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -149,6 +135,7 @@ struct InferenceRequestMetricKey {
     backend_id: String,
     model: String,
     status: String,
+    call_kind: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -157,13 +144,13 @@ struct InferenceTokenMetricKey {
     node_did: String,
     backend_id: String,
     model: String,
+    call_kind: String,
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct InferenceMetricFamilies {
     request_totals: BTreeMap<InferenceRequestMetricKey, i64>,
-    prompt_token_totals: BTreeMap<InferenceTokenMetricKey, i64>,
-    completion_token_totals: BTreeMap<InferenceTokenMetricKey, i64>,
+    usage: BTreeMap<InferenceTokenMetricKey, Option<TokenUsageSummary>>,
 }
 
 fn null_string_as_unknown<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
@@ -947,7 +934,6 @@ async fn load_inference_metrics_query_data(
     let mut result = InferenceMetricsQueryData {
         nodes: Vec::new(),
         agents: Vec::new(),
-        profiles: Vec::new(),
         calls: Vec::new(),
         window_seconds: INFERENCE_METRICS_WINDOW_SECS,
     };
@@ -964,7 +950,6 @@ async fn load_inference_metrics_query_data(
         if offset == 0 {
             result.nodes = page.nodes;
             result.agents = page.agents;
-            result.profiles = page.profiles;
         }
 
         let page_len = page.calls.len();
@@ -1017,14 +1002,8 @@ fn inference_metrics_query(
             agent_id
             node_did
             display_name
-            inference_profile_id
         }
-        InferenceProfile {
-            profile_id
-            node_did
-            backend_id
-            model_name
-        }
+
 "#
     } else {
         ""
@@ -1035,7 +1014,7 @@ fn inference_metrics_query(
         {metadata}
         InferenceCall(
             filter: {{
-                call_kind: {{ _eq: "inference" }},
+                call_kind: {{ _in: ["inference", "compaction", "scheduled", "oneoff"] }},
                 call_state: {{ _in: ["completed", "failed", "cancelled"] }},
                 ended_at: {{ _ge: "{ended_after}" }}
             }},
@@ -1048,8 +1027,15 @@ fn inference_metrics_query(
             backend_id
             call_state
             ended_at
+            model_name
+            call_kind
             prompt_tokens
             completion_tokens
+            cached_input_tokens
+            cache_creation_input_tokens
+            reasoning_output_tokens
+            provider_total_tokens
+            usage_completeness
         }}
     }}"#
     )
@@ -1085,47 +1071,100 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
                 ("backend_id", key.backend_id),
                 ("model", key.model),
                 ("status", key.status),
+                ("call_kind", key.call_kind),
             ],
             total,
         );
     }
 
-    push_metric_prelude(
-        lines,
-        "gents_inference_prompt_tokens_window_sum",
-        "Prompt tokens reported by terminal inference calls ended inside the trailing scrape window; this gauge is not cumulative.",
-    );
-    for (key, total) in families.prompt_token_totals {
-        push_metric_sample(
-            lines,
-            "gents_inference_prompt_tokens_window_sum",
-            &[
-                ("agent", key.agent),
-                ("node_did", key.node_did),
-                ("backend_id", key.backend_id),
-                ("model", key.model),
-            ],
-            total,
-        );
-    }
-
-    push_metric_prelude(
-        lines,
-        "gents_inference_completion_tokens_window_sum",
-        "Completion tokens reported by terminal inference calls ended inside the trailing scrape window; this gauge is not cumulative.",
-    );
-    for (key, total) in families.completion_token_totals {
-        push_metric_sample(
-            lines,
-            "gents_inference_completion_tokens_window_sum",
-            &[
-                ("agent", key.agent),
-                ("node_did", key.node_did),
-                ("backend_id", key.backend_id),
-                ("model", key.model),
-            ],
-            total,
-        );
+    type Counter = fn(&TokenUsageSummary) -> Option<u64>;
+    let counters: &[(&str, &str, Counter)] = &[
+        (
+            "prompt_tokens",
+            "Reported input tokens, including cache reads and writes.",
+            |s| s.input.observed(),
+        ),
+        (
+            "completion_tokens",
+            "Reported output tokens, including reasoning.",
+            |s| s.output.observed(),
+        ),
+        (
+            "cached_input_tokens",
+            "Reported cache read tokens, a subset of input.",
+            |s| s.cache_read.observed(),
+        ),
+        (
+            "cache_creation_input_tokens",
+            "Reported cache write tokens, a subset of input.",
+            |s| s.cache_write.observed(),
+        ),
+        (
+            "reasoning_output_tokens",
+            "Reported reasoning tokens, a subset of output.",
+            |s| s.reasoning.observed(),
+        ),
+        (
+            "provider_total_tokens",
+            "Provider-reported total evidence, not an additional charge.",
+            |s| s.provider_total.observed(),
+        ),
+        (
+            "incomplete_usage",
+            "Calls without complete valid provider input and output usage.",
+            |s| Some(s.incomplete_calls),
+        ),
+        (
+            "input_reported_calls",
+            "Calls reporting input tokens.",
+            |s| Some(s.input.reported),
+        ),
+        (
+            "output_reported_calls",
+            "Calls reporting output tokens.",
+            |s| Some(s.output.reported),
+        ),
+        (
+            "cache_read_reported_calls",
+            "Calls reporting cache read tokens.",
+            |s| Some(s.cache_read.reported),
+        ),
+        (
+            "cache_write_reported_calls",
+            "Calls reporting cache write tokens.",
+            |s| Some(s.cache_write.reported),
+        ),
+        (
+            "reasoning_reported_calls",
+            "Calls reporting reasoning tokens.",
+            |s| Some(s.reasoning.reported),
+        ),
+        (
+            "provider_total_reported_calls",
+            "Calls reporting provider total tokens.",
+            |s| Some(s.provider_total.reported),
+        ),
+    ];
+    for (counter, help, value) in counters {
+        let name = format!("gents_inference_{counter}_window_sum");
+        push_metric_prelude(lines, &name, help);
+        for (key, summary) in &families.usage {
+            let Some(amount) = summary.as_ref().and_then(value) else {
+                continue;
+            };
+            push_metric_sample(
+                lines,
+                &name,
+                &[
+                    ("agent", key.agent.clone()),
+                    ("node_did", key.node_did.clone()),
+                    ("backend_id", key.backend_id.clone()),
+                    ("model", key.model.clone()),
+                    ("call_kind", key.call_kind.clone()),
+                ],
+                amount,
+            );
+        }
     }
 }
 
@@ -1159,6 +1198,7 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
         })
         .collect::<BTreeMap<_, _>>();
     let mut families = InferenceMetricFamilies::default();
+    let mut observations = BTreeMap::<InferenceTokenMetricKey, Vec<_>>::new();
     for call in &data.calls {
         if !is_terminal_inference_status(&call.call_state) {
             continue;
@@ -1174,12 +1214,6 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
                         .is_none_or(|node_did| agent_config.node_did == node_did)
             })
         });
-        let profile = agent_config.and_then(|agent_config| {
-            data.profiles.iter().find(|profile| {
-                profile.node_did == agent_config.node_did
-                    && profile.profile_id == agent_config.inference_profile_id
-            })
-        });
         let node_did = call_node_did
             .or_else(|| {
                 agent_config.and_then(|agent_config| clean_metric_label(&agent_config.node_did))
@@ -1193,12 +1227,11 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
                 agent_config.and_then(|agent_config| clean_metric_label(&agent_config.display_name))
             })
             .unwrap_or_else(|| node_did.clone());
-        let backend_id = clean_metric_label(&call.backend_id)
-            .or_else(|| profile.and_then(|profile| clean_metric_label(&profile.backend_id)))
-            .unwrap_or_else(|| "unknown".to_string());
-        let model = profile
-            .and_then(|profile| clean_metric_label(&profile.model_name))
-            .unwrap_or_else(|| "unknown".to_string());
+        let backend_id =
+            clean_metric_label(&call.backend_id).unwrap_or_else(|| "unknown".to_string());
+        let model = clean_metric_label(&call.model_name).unwrap_or_else(|| "unknown".to_string());
+        let call_kind =
+            clean_metric_label(&call.call_kind).unwrap_or_else(|| "unknown".to_string());
         let status = clean_metric_label(&call.call_state).unwrap_or_else(|| "unknown".to_string());
 
         let request_key = InferenceRequestMetricKey {
@@ -1207,6 +1240,7 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
             backend_id: backend_id.clone(),
             model: model.clone(),
             status,
+            call_kind: call_kind.clone(),
         };
         *families.request_totals.entry(request_key).or_default() += 1;
 
@@ -1215,21 +1249,18 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
             node_did,
             backend_id,
             model,
+            call_kind,
         };
-        if let Some(prompt_tokens) = nonnegative_metric_value(call.prompt_tokens) {
-            *families
-                .prompt_token_totals
-                .entry(token_key.clone())
-                .or_default() += prompt_tokens;
-        }
-        if let Some(completion_tokens) = nonnegative_metric_value(call.completion_tokens) {
-            *families
-                .completion_token_totals
-                .entry(token_key)
-                .or_default() += completion_tokens;
-        }
+        observations
+            .entry(token_key)
+            .or_default()
+            .push(call.usage.observation().unwrap_or_default());
     }
 
+    families.usage = observations
+        .into_iter()
+        .map(|(key, values)| (key, TokenUsageSummary::from_observations(values).ok()))
+        .collect();
     families
 }
 
@@ -1240,10 +1271,6 @@ fn is_terminal_inference_status(status: &str) -> bool {
 fn clean_metric_label(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
-}
-
-fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
-    value.map(|value| value.max(0))
 }
 
 pub(crate) struct MetricsCoreData {
@@ -2009,6 +2036,32 @@ mod tests {
     }
 
     #[test]
+    fn nullable_recorded_model_keeps_inference_metrics_available() {
+        for model in [
+            serde_json::json!({}),
+            serde_json::json!({"model_name": null}),
+        ] {
+            let mut call = serde_json::json!({"call_state":"completed", "call_kind":"inference"});
+            call.as_object_mut()
+                .unwrap()
+                .extend(model.as_object().unwrap().clone());
+            let page: InferenceMetricsPageData =
+                serde_json::from_value(serde_json::json!({"InferenceCall":[call]})).unwrap();
+            let families = build_inference_metric_families(&InferenceMetricsQueryData {
+                nodes: vec![],
+                agents: vec![],
+                calls: page.calls,
+                window_seconds: INFERENCE_METRICS_WINDOW_SECS,
+            });
+            assert_eq!(families.request_totals.len(), 1);
+            assert_eq!(
+                families.request_totals.keys().next().unwrap().model,
+                "unknown"
+            );
+        }
+    }
+
+    #[test]
     fn metric_labels_escape_backslash_quote_and_newline() {
         let mut lines = Vec::new();
         push_metric_sample(
@@ -2034,13 +2087,6 @@ mod tests {
                 agent_id: "agent_config-1".to_string(),
                 node_did: "did:key:zAgent".to_string(),
                 display_name: "fallback-agent_config-name".to_string(),
-                inference_profile_id: "profile-1".to_string(),
-            }],
-            profiles: vec![InferenceProfileRow {
-                profile_id: "profile-1".to_string(),
-                node_did: "did:key:zAgent".to_string(),
-                backend_id: "backend-from-profile".to_string(),
-                model_name: "fixture-model".to_string(),
             }],
             calls: vec![
                 InferenceCallMetricRow {
@@ -2049,8 +2095,13 @@ mod tests {
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
                     ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),
-                    prompt_tokens: Some(10),
-                    completion_tokens: Some(4),
+                    model_name: "fixture-model".to_string(),
+                    call_kind: "inference".to_string(),
+                    usage: TokenUsageColumns {
+                        prompt_tokens: Some(10),
+                        completion_tokens: Some(4),
+                        ..Default::default()
+                    },
                 },
                 InferenceCallMetricRow {
                     node_did: "did:key:zAgent".to_string(),
@@ -2058,8 +2109,13 @@ mod tests {
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
                     ended_at: "2026-06-13T10:00:01.000000000+00:00".to_string(),
-                    prompt_tokens: Some(7),
-                    completion_tokens: Some(3),
+                    model_name: "fixture-model".to_string(),
+                    call_kind: "inference".to_string(),
+                    usage: TokenUsageColumns {
+                        prompt_tokens: Some(7),
+                        completion_tokens: Some(3),
+                        ..Default::default()
+                    },
                 },
                 InferenceCallMetricRow {
                     node_did: "did:key:zAgent".to_string(),
@@ -2067,8 +2123,13 @@ mod tests {
                     backend_id: "backend-1".to_string(),
                     call_state: "failed".to_string(),
                     ended_at: "2026-06-13T10:00:02.000000000+00:00".to_string(),
-                    prompt_tokens: Some(5),
-                    completion_tokens: None,
+                    model_name: "fixture-model".to_string(),
+                    call_kind: "inference".to_string(),
+                    usage: TokenUsageColumns {
+                        prompt_tokens: Some(5),
+                        completion_tokens: None,
+                        ..Default::default()
+                    },
                 },
                 InferenceCallMetricRow {
                     node_did: "did:key:zAgent".to_string(),
@@ -2076,8 +2137,13 @@ mod tests {
                     backend_id: "backend-1".to_string(),
                     call_state: "running".to_string(),
                     ended_at: "2026-06-13T10:00:03.000000000+00:00".to_string(),
-                    prompt_tokens: Some(99),
-                    completion_tokens: Some(99),
+                    model_name: "fixture-model".to_string(),
+                    call_kind: "inference".to_string(),
+                    usage: TokenUsageColumns {
+                        prompt_tokens: Some(99),
+                        completion_tokens: Some(99),
+                        ..Default::default()
+                    },
                 },
             ],
             window_seconds: INFERENCE_METRICS_WINDOW_SECS,
@@ -2090,6 +2156,7 @@ mod tests {
             backend_id: "backend-1".to_string(),
             model: "fixture-model".to_string(),
             status: "completed".to_string(),
+            call_kind: "inference".to_string(),
         };
         let failed_key = InferenceRequestMetricKey {
             status: "failed".to_string(),
@@ -2100,12 +2167,15 @@ mod tests {
             node_did: "did:key:zAgent".to_string(),
             backend_id: "backend-1".to_string(),
             model: "fixture-model".to_string(),
+            call_kind: "inference".to_string(),
         };
 
         assert_eq!(families.request_totals.get(&completed_key), Some(&2));
         assert_eq!(families.request_totals.get(&failed_key), Some(&1));
-        assert_eq!(families.prompt_token_totals.get(&token_key), Some(&22));
-        assert_eq!(families.completion_token_totals.get(&token_key), Some(&7));
+        let summary = families.usage[&token_key].unwrap();
+        assert_eq!(summary.input.known, 22);
+        assert_eq!(summary.output.known, 7);
+        assert_eq!(summary.incomplete_calls, 3);
     }
 
     #[test]
@@ -2130,22 +2200,20 @@ mod tests {
                 agent_id: "agent-1".to_string(),
                 node_did: "did:key:zAgent".to_string(),
                 display_name: "agent \"friendly\"".to_string(),
-                inference_profile_id: "profile-1".to_string(),
-            }],
-            profiles: vec![InferenceProfileRow {
-                profile_id: "profile-1".to_string(),
-                node_did: "did:key:zAgent".to_string(),
-                backend_id: "backend-1".to_string(),
-                model_name: "model\none".to_string(),
             }],
             calls: vec![InferenceCallMetricRow {
-                node_did: String::new(),
+                node_did: "did:key:zAgent".to_string(),
                 agent_id: "agent-1".to_string(),
-                backend_id: String::new(),
+                backend_id: "backend-1".to_string(),
                 call_state: "completed".to_string(),
                 ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),
-                prompt_tokens: Some(10),
-                completion_tokens: Some(3),
+                model_name: "model\none".to_string(),
+                call_kind: "inference".to_string(),
+                usage: TokenUsageColumns {
+                    prompt_tokens: Some(10),
+                    completion_tokens: Some(3),
+                    ..Default::default()
+                },
             }],
             window_seconds: INFERENCE_METRICS_WINDOW_SECS,
         };
@@ -2158,13 +2226,13 @@ mod tests {
         assert!(body.contains("gents_inference_metrics_window_seconds 300"));
         assert!(body.contains("# TYPE gents_inference_requests_window_count gauge"));
         assert!(body.contains(
-            "gents_inference_requests_window_count{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
+            "gents_inference_requests_window_count{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\",call_kind=\"inference\"} 1"
         ));
         assert!(body.contains(
-            "gents_inference_prompt_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
+            "gents_inference_prompt_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",call_kind=\"inference\"} 10"
         ));
         assert!(body.contains(
-            "gents_inference_completion_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
+            "gents_inference_completion_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",call_kind=\"inference\"} 3"
         ));
     }
 }

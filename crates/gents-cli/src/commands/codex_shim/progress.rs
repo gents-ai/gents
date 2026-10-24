@@ -95,6 +95,11 @@ pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) 
                 ended_at
                 prompt_tokens
                 completion_tokens
+                cached_input_tokens
+                cache_creation_input_tokens
+                reasoning_output_tokens
+                provider_total_tokens
+                usage_completeness
             }}
         }}"#,
         request_doc_id = escape_graphql_string(request_doc_id),
