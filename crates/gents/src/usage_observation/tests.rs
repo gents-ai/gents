@@ -144,7 +144,7 @@ async fn read(
     now: DateTime<Utc>,
 ) -> UsageRead {
     read_account_usage(
-        &cache,
+        cache,
         node.clone(),
         node_did,
         backend,
@@ -894,7 +894,7 @@ async fn node_read(
     endpoints: &UsageEndpoints,
 ) -> Vec<AccountUsageRead> {
     read_node_usage(
-        &cache,
+        cache,
         node.clone(),
         node_did,
         trigger,
