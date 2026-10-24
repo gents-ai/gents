@@ -142,6 +142,15 @@ def summarize (observations : List Observation) : Option Summary :=
   let summary := observations.foldl Summary.add {}
   if observations.all valid && summary.valid then some summary else none
 
+def Summary.chargedTotal (summary : Summary) : Option Nat :=
+  if summary.incompleteCalls = 0 then some (summary.input.known + summary.output.known)
+  else none
+
+def Summary.freshInput (summary : Summary) : Option Nat :=
+  if summary.input.reported = summary.calls ∧ summary.cacheRead.reported = summary.calls then
+    some (summary.input.known - summary.cacheRead.known)
+  else none
+
 theorem absent_counter_preserves_column (column : Column) :
     column.add none = column := rfl
 

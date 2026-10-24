@@ -379,6 +379,8 @@ async fn fetch_recent_calls(
                 queue_depth_at_enqueue
                 prompt_tokens
                 completion_tokens
+                cached_input_tokens cache_creation_input_tokens reasoning_output_tokens
+                provider_total_tokens usage_completeness
             }}
         }}"#,
         limit = RECENT_CALLS_PER_BACKEND,
@@ -434,6 +436,16 @@ fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
         queue_depth_at_enqueue: row.get("queue_depth_at_enqueue").and_then(|v| v.as_i64()),
         prompt_tokens: row.get("prompt_tokens").and_then(|v| v.as_i64()),
         completion_tokens: row.get("completion_tokens").and_then(|v| v.as_i64()),
+        cached_input_tokens: row.get("cached_input_tokens").and_then(|v| v.as_i64()),
+        cache_creation_input_tokens: row
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_i64()),
+        reasoning_output_tokens: row.get("reasoning_output_tokens").and_then(|v| v.as_i64()),
+        provider_total_tokens: row.get("provider_total_tokens").and_then(|v| v.as_i64()),
+        usage_completeness: row
+            .get("usage_completeness")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
     }
 }
 

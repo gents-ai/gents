@@ -95,6 +95,7 @@ pub fn test_agent_for_node(
 ) -> ResolvedAgent {
     let agent_id = agent_id.into();
     ResolvedAgent {
+        profile_id: None,
         skills: Vec::new(),
         agent_id,
         node: principal,
