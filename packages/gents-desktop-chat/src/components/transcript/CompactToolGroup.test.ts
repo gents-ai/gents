@@ -146,6 +146,94 @@ describe("compact action history", () => {
 });
 
 describe("compact action summaries", () => {
+  it("bounds an action block interrupted by invisible same-turn assistant messages and preserves its change anchor", () => {
+    const items: RenderedTimelineItem[] = Array.from(
+      { length: 50 },
+      (_, index) => [
+        boundaryGroup(`group-${index}`, [
+          tool(
+            `tool-${index}`,
+            index >= 48 ? "running" : index % 3 ? "success" : "error",
+          ),
+        ]),
+        {
+          kind: "assistantMessage" as const,
+          itemKey: `empty-${index}`,
+          content: " \n ",
+          reasoning: " ",
+          requestTurn: {
+            requestDocId: "physical-request",
+            requestId: "request",
+            settled: false,
+          },
+          reconstruction: { state: "ready" as const },
+        },
+      ],
+    ).flat();
+    const original = JSON.stringify(items);
+    const html = renderToStaticMarkup(
+      createElement(MessageList, {
+        timelineItems: items,
+        compactTools: true,
+        renderAfterItem: (item) =>
+          item.itemKey === "empty-49"
+            ? createElement(
+                "section",
+                { "data-change-anchor": item.itemKey },
+                "Recorded changes",
+              )
+            : null,
+      }),
+    );
+    expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
+    expect(html).toContain("16 failed");
+    expect(html.match(/data-change-anchor="empty-49"/g)).toHaveLength(1);
+    expect(JSON.stringify(items)).toBe(original);
+    const compacted = coalesceToolGroups(items);
+    expect(compacted).toHaveLength(1);
+    expect(coalesceToolGroups(compacted)[0]).toBe(compacted[0]);
+    expect(compacted[0]?.compactAnchors).toEqual(
+      items.filter((item) => item.kind === "assistantMessage"),
+    );
+  });
+
+  it("retains visible, unavailable and differently owned assistant boundaries", () => {
+    const empty: Extract<RenderedTimelineItem, { kind: "assistantMessage" }> = {
+      kind: "assistantMessage",
+      itemKey: "boundary",
+      content: "",
+      requestTurn: {
+        requestDocId: "physical-request",
+        requestId: "request",
+        settled: false,
+      },
+      reconstruction: { state: "ready" },
+    };
+    const boundaries = [
+      { ...empty, content: "Explanation" },
+      { ...empty, reasoning: "Reasoning" },
+      { ...empty, reconstruction: { state: "denied" as const } },
+      { ...empty, reconstruction: { state: "loading" as const } },
+      { ...empty, reconstruction: { state: "invalid" as const } },
+      { ...empty, requestTurn: undefined },
+      {
+        ...empty,
+        requestTurn: {
+          ...empty.requestTurn!,
+          requestDocId: "another-physical-request",
+        },
+      },
+    ];
+    for (const boundary of boundaries) {
+      const items = [
+        boundaryGroup("before", [tool("before")]),
+        boundary,
+        boundaryGroup("after", [tool("after")]),
+      ];
+      expect(coalesceToolGroups(items)).toEqual(items);
+    }
+  });
+
   it("summarizes mixed settled outcomes without losing failure or cancellation evidence", () => {
     const stopped = {
       ...tool("stopped", "error"),

@@ -6,6 +6,7 @@ import { useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { ToolGroup } from "./ToolGroup.js";
+import { isEmptyAssistantMessage } from "./MessageItems.js";
 import {
   actionEntries,
   actionKind,
@@ -24,11 +25,21 @@ function physicalGroupOwner(
   return owners.size === 1 ? owners.values().next().value : null;
 }
 
-export function coalesceToolGroups(items: RenderedTimelineItem[]) {
-  const result: RenderedTimelineItem[] = [];
+type AssistantMessage = Extract<
+  RenderedTimelineItem,
+  { kind: "assistantMessage" }
+>;
+
+/** Invisible messages remain available to the host's turn-attachment renderer. */
+export type CompactTimelineItem = RenderedTimelineItem & {
+  compactAnchors?: readonly AssistantMessage[];
+};
+
+export function coalesceToolGroups(items: CompactTimelineItem[]) {
+  const result: CompactTimelineItem[] = [];
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]!;
-    if (item.kind !== "toolGroup" || items[index + 1]?.kind !== "toolGroup") {
+    if (item.kind !== "toolGroup") {
       result.push(item);
       continue;
     }
@@ -38,14 +49,28 @@ export function coalesceToolGroups(items: RenderedTimelineItem[]) {
       continue;
     }
     const chunks = [item.tools];
-    for (
-      let next = items[index + 1];
-      next?.kind === "toolGroup" && physicalGroupOwner(next) === owner;
-      next = items[++index + 1]
-    ) {
-      chunks.push(next.tools);
+    const anchors = [...(item.compactAnchors ?? [])];
+    let changed = false;
+    while (index + 1 < items.length) {
+      const next = items[index + 1]!;
+      if (next.kind === "toolGroup" && physicalGroupOwner(next) === owner) {
+        chunks.push(next.tools);
+        anchors.push(...(next.compactAnchors ?? []));
+      } else if (
+        next.kind === "assistantMessage" &&
+        next.requestTurn?.requestDocId === owner &&
+        isEmptyAssistantMessage(next)
+      ) {
+        anchors.push(next);
+      } else break;
+      changed = true;
+      index += 1;
     }
-    result.push(chunks.length === 1 ? item : { ...item, tools: chunks.flat() });
+    result.push(
+      changed
+        ? { ...item, tools: chunks.flat(), compactAnchors: anchors }
+        : item,
+    );
   }
   return result;
 }

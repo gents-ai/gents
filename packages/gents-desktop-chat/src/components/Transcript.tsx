@@ -4,11 +4,21 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { useListWindow } from "@source-inc/gents-desktop-ui";
 import type { ReactNode } from "react";
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
 import { TimelineItem, timelineKey } from "./transcript/TimelineItem.js";
-import { coalesceToolGroups } from "./transcript/CompactToolGroup.js";
+import {
+  coalesceToolGroups,
+  type CompactTimelineItem,
+} from "./transcript/CompactToolGroup.js";
 
 export const MessageList = memo(function MessageList({
   timelineItems,
@@ -29,7 +39,7 @@ export const MessageList = memo(function MessageList({
     item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
   ) => void;
 }) {
-  const displayItems = useMemo(() => {
+  const displayItems = useMemo<CompactTimelineItem[]>(() => {
     return compactTools ? coalesceToolGroups(timelineItems) : timelineItems;
   }, [compactTools, timelineItems]);
   const window = useListWindow(
@@ -82,6 +92,11 @@ export const MessageList = memo(function MessageList({
                 animateAssistantReveal={item.itemKey === revealAssistantItemKey}
               />
               {renderAfterItem?.(item)}
+              {item.compactAnchors?.map((anchor) => (
+                <Fragment key={timelineKey(anchor)}>
+                  {renderAfterItem?.(anchor)}
+                </Fragment>
+              ))}
             </li>
           );
         })}

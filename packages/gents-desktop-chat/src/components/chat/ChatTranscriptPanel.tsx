@@ -14,7 +14,10 @@ import type {
 import { LIST_WINDOW_THRESHOLD } from "@source-inc/gents-desktop-ui";
 import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
-import { coalesceToolGroups } from "../transcript/CompactToolGroup.js";
+import {
+  coalesceToolGroups,
+  type CompactTimelineItem,
+} from "../transcript/CompactToolGroup.js";
 
 export type ChatTranscriptPanelProps = {
   selectedSessionId: string | null;
@@ -36,7 +39,7 @@ export const TRANSCRIPT_PAGE_SIZE = 40;
 const TRANSCRIPT_RETAINED_ITEMS = TRANSCRIPT_PAGE_SIZE * 2;
 const RESPONSE_ERROR_SUMMARY = "The assistant couldn't complete this turn.";
 
-function timelineChangeSignal(items: RenderedTimelineItem[]) {
+function timelineChangeSignal(items: CompactTimelineItem[]) {
   return JSON.stringify(
     items.map((item) => {
       switch (item.kind) {
@@ -74,6 +77,10 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
           return [
             item.kind,
             item.itemKey,
+            item.compactAnchors?.map((anchor) => [
+              anchor.itemKey,
+              anchor.requestTurn,
+            ]),
             item.tools.map((tool) => [
               tool.itemKey,
               tool.statusKind,
@@ -162,7 +169,7 @@ export function ChatTranscriptPanel({
     ];
   }, [optimisticPendingTurn, selectedSessionId, session?.timelineItems]);
 
-  const timelineItems = useMemo(
+  const timelineItems = useMemo<CompactTimelineItem[]>(
     () =>
       compactTools
         ? coalesceToolGroups(sourceTimelineItems)
