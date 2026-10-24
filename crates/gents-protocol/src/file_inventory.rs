@@ -89,6 +89,17 @@ pub struct FileInventoryBinding {
     pub coverage: FileInventoryCoverage,
 }
 
+/// Chronology derived by the source from selected canonical publications.
+/// This establishes neither image continuity, coverage nor read authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryOrdinal {
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub index: u64,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub entries: u64,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
@@ -99,6 +110,11 @@ pub struct FileInventoryEntry {
     pub projection_doc_id: String,
     pub observation_doc_id: String,
     pub change: FileChangeMetadata,
+    /// Absent observations carry no chronology. Omission from the signing
+    /// payload preserves retained receipts without granting an inferred order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    pub order: Option<FileInventoryOrdinal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +223,12 @@ impl FileInventoryPage {
             && self.entries.len() <= FILE_INVENTORY_PAGE_LIMIT
             && count == remaining.min(FILE_INVENTORY_PAGE_LIMIT as u64)
             && self.next == next
+            && self.entries.iter().all(|entry| {
+                entry
+                    .order
+                    .as_ref()
+                    .is_none_or(|order| order.entries <= self.binding.coverage.entries)
+            })
             && coherent_inventory_entries(&self.entries)
     }
 }
@@ -219,6 +241,8 @@ pub fn coherent_inventory_entries(entries: &[FileInventoryEntry]) -> bool {
     let mut tools = RapidHashMap::new();
     let mut projections = RapidHashMap::new();
     let mut observations = RapidHashMap::new();
+    let mut orders = RapidHashMap::new();
+    let mut positions = RapidHashMap::new();
     let mut previous: Option<&str> = None;
     for entry in entries {
         if [
@@ -234,6 +258,10 @@ pub fn coherent_inventory_entries(entries: &[FileInventoryEntry]) -> bool {
         ]
         .iter()
         .any(|value| value.is_empty())
+            || entry
+                .order
+                .as_ref()
+                .is_some_and(|order| order.index >= order.entries)
             || previous.is_some_and(|tool| tool > entry.tool_call_doc_id.as_str())
             || !keys.insert((
                 &entry.projection_doc_id,
@@ -244,6 +272,29 @@ pub fn coherent_inventory_entries(entries: &[FileInventoryEntry]) -> bool {
             return false;
         }
         previous = Some(&entry.tool_call_doc_id);
+        let resource = (
+            &entry.scope.node_did,
+            &entry.change.root,
+            &entry.change.path,
+        );
+        if orders
+            .insert(resource, entry.order.as_ref())
+            .is_some_and(|prior| match (prior, entry.order.as_ref()) {
+                (None, None) => false,
+                (Some(left), Some(right)) => left.entries != right.entries,
+                _ => true,
+            })
+        {
+            return false;
+        }
+        if let Some(order) = &entry.order {
+            if positions
+                .insert((resource, order.index), &entry.tool_call_doc_id)
+                .is_some_and(|prior| prior != &entry.tool_call_doc_id)
+            {
+                return false;
+            }
+        }
         let tool = (
             &entry.request_doc_id,
             &entry.scope,

@@ -281,7 +281,7 @@ private def wirePageJson (value : WirePage) : String := object
 private def envelopeJson (value : PageEnvelope) : String := object
   [("purpose", jsonString (match value.purpose with
       | .transcriptV1 => "transcript_v1"
-      | .fileInventoryV3 => "file_inventory_v3")),
+      | .fileInventoryV2 => "file_inventory_v2")),
    ("request_key", jsonString value.requestKey), ("signer", jsonString value.signer),
    ("signature_verified", boolString value.signatureVerified), ("page", wirePageJson value.page)]
 
