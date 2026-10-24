@@ -14,6 +14,7 @@ structure Row where
   requester   : Nat
   state       : RowState
   foldedInto  : Option Nat
+  replacedBy  : Option Nat := none
   queuedAfter : Option RequestId
   retryParent : Option RequestId
   retryParentDoc : Option Nat
@@ -67,6 +68,21 @@ def resolve (rows : List Row) (row : Row) : Row :=
 def turnOf (rows : List Row) (newest : Row) : Row :=
   resolve rows newest
 
+/-- An author replacement changes the current input without recording that
+the old input was consumed. Presentation follows its physical successor within
+the requester scope. Missing links and cycles preserve the last observed row. -/
+def replacementSeen (rows : List Row) : Nat → List Nat → Row → Row
+  | 0, _, row => row
+  | fuel + 1, seen, row =>
+      if row.doc ∈ seen then row else
+      if row.state != .terminal then row else
+      match row.replacedBy.bind (findDoc rows row.requester) with
+      | some next => replacementSeen rows fuel (row.doc :: seen) next
+      | none => row
+
+def replacementOf (rows : List Row) (row : Row) : Row :=
+  replacementSeen rows (rows.length + 1) [] row
+
 /-- A durable observation can still name a terminal request while another
 request owns the session loop. Once the observed turn has ended, presentation
 uses a subsequent active row in the same requester scope, or the latest subsequent
@@ -74,19 +90,20 @@ normal request when none is active. Earlier active observations cannot revive
 a newer terminal turn. Input and answer
 ownership continue to use `turnOf` and `answerOf`. -/
 def displayTurn (rows : List Row) (selected : Row) : Row :=
-  let turn := turnOf rows selected
+  let turn := turnOf rows (replacementOf rows selected)
   if turn.state = .terminal then
     let eligible := fun row : Row => row.requester == selected.requester && row.publicInput
     let subsequent := rows.dropWhile (fun row => row.doc != selected.doc)
     match subsequent.reverse.find? (fun row => eligible row && row.state == .active) with
     | some active => active
     | none =>
-      ((subsequent.reverse.find? eligible).map (turnOf rows)).getD turn
+      ((subsequent.reverse.find? eligible).map (fun row =>
+        turnOf rows (replacementOf rows row))).getD turn
   else turn
 
 theorem display_keeps_nonterminal_turn (rows : List Row) (selected : Row)
-    (h : (turnOf rows selected).state ≠ .terminal) :
-    displayTurn rows selected = turnOf rows selected := by
+    (h : (turnOf rows (replacementOf rows selected)).state ≠ .terminal) :
+    displayTurn rows selected = turnOf rows (replacementOf rows selected) := by
   simp [displayTurn, h]
 
 /-- A request's answer follows its physical fold owner and retry successor.
@@ -138,7 +155,8 @@ def resolutionDependencies (rows : List Row) (row : Row) : List Row :=
   | none =>
       match row.state with
       | .terminal => rows.filter (fun candidate =>
-          candidate.retryParent == some row.request && candidate.requester == row.requester)
+          (row.replacedBy == some candidate.doc || candidate.retryParent == some row.request) &&
+            candidate.requester == row.requester)
       | .active => []
       | .unclaimed =>
           match row.queuedAfter with
@@ -294,6 +312,30 @@ theorem find_preserves_requester {rows : List Row} {requester : Nat} {p : Row �
     {r : Row} (hp : ∀ x, p x = true → x.requester = requester)
     (hfind : rows.find? p = some r) : r.requester = requester :=
   hp r (List.find?_some hfind)
+
+theorem replacement_stays_in_requester_scope (rows : List Row) :
+    ∀ (fuel : Nat) (seen : List Nat) (row : Row),
+      (replacementSeen rows fuel seen row).requester = row.requester := by
+  intro fuel
+  induction fuel with
+  | zero => intro seen row; rfl
+  | succ fuel ih =>
+    intro seen row
+    simp only [replacementSeen]
+    split
+    · rfl
+    · split
+      · rfl
+      · cases hnext : row.replacedBy.bind (findDoc rows row.requester) with
+        | none => rfl
+        | some next =>
+          rw [ih (row.doc :: seen) next]
+          cases hdoc : row.replacedBy with
+          | none => simp [hdoc] at hnext
+          | some doc =>
+            simp [hdoc] at hnext
+            exact find_preserves_requester
+              (by intro x hx; simp at hx; exact hx.2) hnext
 
 theorem resolve_stays_in_requester_scope (rows : List Row) :
     ∀ (fuel : Nat) (seen : List Nat) (row : Row),

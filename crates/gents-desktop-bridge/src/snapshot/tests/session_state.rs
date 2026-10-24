@@ -87,8 +87,13 @@ fn lean_session_rows(
         .map(|(index, row)| {
             let owner = row
                 .folded_into
+                .or(row.replaced_by)
                 .map(|doc| rows.iter().find(|candidate| candidate.doc == doc));
-            let lifecycle = match (row.state.as_str(), row.folded_into, row.completed) {
+            let lifecycle = match (
+                row.state.as_str(),
+                row.folded_into.or(row.replaced_by),
+                row.completed,
+            ) {
                 ("unclaimed", _, _) => RequestLifecycleState::Pending,
                 ("active", _, _) => RequestLifecycleState::Processing,
                 ("terminal", Some(_), _) => RequestLifecycleState::Superseded,
@@ -117,10 +122,17 @@ fn lean_session_rows(
                 superseded_by_request: owner.map(|owner| {
                     owner.map_or("req-missing".into(), |o| contract_request_id(o.request))
                 }),
-                superseded_by_request_doc_id: row.folded_into.map(|doc| format!("doc-{doc}")),
+                superseded_by_request_doc_id: row
+                    .folded_into
+                    .or(row.replaced_by)
+                    .map(|doc| format!("doc-{doc}")),
                 failure_reason: row
                     .folded_into
-                    .map(|_| gents::lifecycle::FOLDED_REASON.to_owned()),
+                    .map(|_| gents::lifecycle::FOLDED_REASON.to_owned())
+                    .or_else(|| {
+                        row.replaced_by
+                            .map(|_| gents::lifecycle::REPLACED_REASON.to_owned())
+                    }),
                 input: (row.queued_after.is_some() || row.background_wake).then(|| RequestInput {
                     queue: Some(RequestQueue {
                         delivery: Default::default(),
@@ -223,7 +235,7 @@ fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String>
 #[test]
 fn session_snapshot_binds_generated_session_turn_cases() {
     let cases = super::lean_vocab_test::lean_client_session_turn_cases();
-    assert_eq!(cases.len(), 31);
+    assert_eq!(cases.len(), 41);
     for case in cases {
         let rows = lean_session_rows("session-1", &case.rows);
         let selected = rows

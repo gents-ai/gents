@@ -43,6 +43,7 @@ pub(crate) struct LeanSessionTurnRow {
     pub(crate) requester: usize,
     pub(crate) state: String,
     pub(crate) folded_into: Option<usize>,
+    pub(crate) replaced_by: Option<usize>,
     pub(crate) queued_after: Option<usize>,
     pub(crate) retry_parent: Option<usize>,
     pub(crate) retry_parent_doc: Option<usize>,
