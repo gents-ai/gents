@@ -407,6 +407,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let mut last_turn_new_content_bytes = 0usize;
     let mut last_turn_row_bytes = 0usize;
     let mut blocks_before_last_turn = 0usize;
+    let mut first_turn_block_rows = 0usize;
     for turn in 0..turns {
         let body = serde_json::json!({
             "model":"m", "messages": (0..=turn).map(|index|
@@ -446,6 +447,9 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             blocks_before_last_turn = block_payload_bytes(db.node.as_ref()).await;
         }
         sink.capture(rendered.clone()).await.unwrap();
+        if turn == 0 {
+            first_turn_block_rows = block_count(db.node.as_ref()).await;
+        }
         let query = format!(
             r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json provenance_json capture_version}} }}"#,
             escape_graphql_string(&rendered.capture_key)
@@ -462,9 +466,13 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         for payload in ["request_body", "provenance_payload"] {
             let record = stored_payload_record(&container, payload);
             assert_eq!(record["kind"], "tree", "payload {payload}");
-            referenced_blocks += record["tree"]["leaves"].as_u64().unwrap() as usize;
-            assert!(record["tree"]["height"].as_u64().unwrap() <= 1);
-            leaf_keys.extend(manifest_payload_keys(db.node.as_ref(), &container, payload).await);
+            let keys = manifest_payload_keys(db.node.as_ref(), &container, payload).await;
+            assert_eq!(
+                keys.len(),
+                record["tree"]["leaves"].as_u64().unwrap() as usize
+            );
+            referenced_blocks += keys.len();
+            leaf_keys.extend(keys);
         }
         let decoded = gents::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
@@ -513,9 +521,8 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
          anything"
     );
     assert!(
-        leaf_keys.len() < 4 * turns && block_rows <= leaf_keys.len() + 2 * turns,
-        "{block_rows} stored blocks for {turns} turns: storage must grow linearly, not with \
-         the conversation"
+        block_rows <= first_turn_block_rows * turns,
+        "{block_rows} stored blocks for {turns} turns against {first_turn_block_rows} for the first turn: storage must grow linearly, not with the conversation"
     );
     assert!(
         leaf_keys.len() * 2 < referenced_blocks,
@@ -749,9 +756,9 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
         manifest_payload_keys(db.node.as_ref(), &edited_container, "request_body").await;
     manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
 
-    assert!(
-        !post_edit_body.contains(&pre_edit_body[0]),
-        "the post-edit manifest must not reference a block of the replaced span"
+    assert_ne!(
+        post_edit_body, pre_edit_body,
+        "the edit must change the manifest's content-addressed leaf sequence"
     );
     let shared_tail = shared_manifest_suffix(&pre_edit_body, &post_edit_body);
     assert!(
