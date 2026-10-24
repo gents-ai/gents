@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
@@ -1285,7 +1286,9 @@ async fn wait_for_hydrated_history(
                 Ok((_, native)) => {
                     message_present |= present_message(&native).body_markdown == expected_content;
                 }
-                Err(error) => unresolved.push(format!("{}: {error:#}", header.doc_id)),
+                Err(error) => {
+                    unresolved.push(format!("{}: {}", header.doc_id, ErrorChain(error.as_ref())))
+                }
             }
         }
         if status.as_ref().is_some_and(|row| {

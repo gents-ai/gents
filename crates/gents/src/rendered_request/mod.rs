@@ -329,7 +329,8 @@ mod tests {
                 .expect_err("a failed store read cannot decode");
         assert!(
             store.downcast_ref::<CaptureStoreReadError>().is_some(),
-            "{store:#}"
+            "{}",
+            ErrorChain(store.as_ref())
         );
 
         let missing =
@@ -338,7 +339,8 @@ mod tests {
                 .expect_err("a missing base cannot decode");
         assert!(
             missing.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "{missing:#}"
+            "{}",
+            ErrorChain(missing.as_ref())
         );
     }
 
@@ -498,7 +500,8 @@ mod tests {
                 .expect_err("a failed store read cannot decode");
         assert!(
             error.downcast_ref::<CaptureStoreReadError>().is_some(),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         let cases: [(&str, BTreeMap<usize, BlockAnswer>); 3] = [
@@ -524,7 +527,8 @@ mod tests {
                     .unwrap_or_else(|| panic!("{label} must fail closed"));
             assert!(
                 error.downcast_ref::<CaptureStoreReadError>().is_none(),
-                "{label} is a verification failure, not a store failure: {error:#}"
+                "{label} is a verification failure, not a store failure: {}",
+                ErrorChain(error.as_ref())
             );
         }
 
@@ -636,13 +640,15 @@ mod tests {
         .expect_err("the misreferencing turn must fail closed");
         assert!(
             error.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "a misreferenced block is a verification failure, not a store failure: {error:#}"
+            "a misreferenced block is a verification failure, not a store failure: {}",
+            ErrorChain(error.as_ref())
         );
         assert!(
             error
                 .to_string()
                 .contains("does not hash to its content key"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         let replayed = decode_capture_json_from_cached(
@@ -669,7 +675,8 @@ mod tests {
         .expect_err("a manifest naming an absent document must fail closed");
         assert!(
             error.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "an absent block is a verification failure, not a store failure: {error:#}"
+            "an absent block is a verification failure, not a store failure: {}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -752,6 +759,7 @@ mod tests {
 
 use anyhow::{Context, Result};
 pub use encoding::{CapturePayloadKind, EncodingError};
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 
 pub fn decode_inline_capture_json(
@@ -768,7 +776,7 @@ pub fn decode_inline_capture_json(
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("reading a rendered-request capture dependency from the store: {0:#}")]
+#[error("reading a rendered-request capture dependency from the store: {}", ErrorChain(.0.as_ref()))]
 pub struct CaptureStoreReadError(pub anyhow::Error);
 
 #[async_trait::async_trait]

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -131,8 +132,13 @@ impl Fixture {
 
     async fn refusal(&self, surface: &str, tool: &str) -> String {
         format!(
-            "{:#}",
-            self.call(surface, tool, json!({})).await.unwrap_err()
+            "{}",
+            ErrorChain(
+                self.call(surface, tool, json!({}))
+                    .await
+                    .unwrap_err()
+                    .as_ref()
+            )
         )
     }
 }
@@ -268,21 +274,29 @@ async fn the_tools_own_refusals_reach_the_page() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("lane"),
-        "the bounded write tool's own refusal: {error:#}"
+        ErrorChain(error.as_ref()).to_string().contains("lane"),
+        "the bounded write tool's own refusal: {}",
+        ErrorChain(error.as_ref())
     );
     let error = fixture
         .call("board", "list_tasks", json!({"fields": ["_docID"]}))
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("allowlist"), "{error:#}");
+    assert!(
+        ErrorChain(error.as_ref()).to_string().contains("allowlist"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
     let error = fixture
         .call("board", "list_tasks", json!(["title"]))
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("args must be a JSON object"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("args must be a JSON object"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     fixture.node.shutdown().await;
 }
@@ -318,11 +332,14 @@ async fn a_disabled_missing_or_foreign_surface_is_refused() {
         format!("surface \"foreign\" is not installed on node {NODE}")
     );
     let error = format!(
-        "{:#}",
-        fixture
-            .call_as(BOARD, OTHER_NODE, "board", "list_tasks", json!({}))
-            .await
-            .unwrap_err()
+        "{}",
+        ErrorChain(
+            fixture
+                .call_as(BOARD, OTHER_NODE, "board", "list_tasks", json!({}))
+                .await
+                .unwrap_err()
+                .as_ref()
+        )
     );
     assert_eq!(
         error,
@@ -350,26 +367,35 @@ async fn a_surface_without_the_tool_is_refused() {
 async fn a_dev_door_listing_declares_nothing_and_is_refused() {
     let fixture = Fixture::new().await;
     let error = format!(
-        "{:#}",
-        fixture
-            .call_as("loose", NODE, "board", "list_tasks", json!({}))
-            .await
-            .unwrap_err()
+        "{}",
+        ErrorChain(
+            fixture
+                .call_as("loose", NODE, "board", "list_tasks", json!({}))
+                .await
+                .unwrap_err()
+                .as_ref()
+        )
     );
     assert_eq!(error, "ux plugin \"loose\" declares no data surfaces");
     let error = format!(
-        "{:#}",
-        surfaces(fixture.home.path(), &fixture.access, "loose", NODE)
-            .await
-            .unwrap_err()
+        "{}",
+        ErrorChain(
+            surfaces(fixture.home.path(), &fixture.access, "loose", NODE)
+                .await
+                .unwrap_err()
+                .as_ref()
+        )
     );
     assert_eq!(error, "ux plugin \"loose\" declares no data surfaces");
     let error = format!(
-        "{:#}",
-        fixture
-            .call_as("acme/nope/board", NODE, "board", "list_tasks", json!({}))
-            .await
-            .unwrap_err()
+        "{}",
+        ErrorChain(
+            fixture
+                .call_as("acme/nope/board", NODE, "board", "list_tasks", json!({}))
+                .await
+                .unwrap_err()
+                .as_ref()
+        )
     );
     assert!(
         error.contains("no ux plugin \"acme/nope/board\""),

@@ -1,5 +1,6 @@
 mod support;
 use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 use support::*;
 
 #[path = "cli_codex_shim/helpers/live.rs"]
@@ -153,7 +154,8 @@ mod turn_streaming;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn thread_goal_round_trip_survives_shim_restart() -> TestResult<()> {
-    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error:#}"))?;
+    let tempdir =
+        tempfile::tempdir().map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-goal-restart-{}", Uuid::new_v4().simple());

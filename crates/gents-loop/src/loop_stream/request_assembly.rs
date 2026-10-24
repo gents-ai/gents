@@ -44,7 +44,8 @@ pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
             StreamingError::Completion(CompletionError::RequestError(Box::new(violation)))
         }
         Err(error) => StreamingError::Completion(CompletionError::ProviderError(format!(
-            "loading canonical Claude replay evidence failed: {error:#}",
+            "loading canonical Claude replay evidence failed: {}",
+            ErrorChain(error.as_ref()),
         ))),
     }
 }
@@ -1490,7 +1491,8 @@ where
         aggregate_token_budget_exhaustion_message(error.as_ref()).map_or_else(
             || {
                 StreamingError::Completion(CompletionError::ProviderError(format!(
-                    "per-turn provider-input compaction failed: {error:#}"
+                    "per-turn provider-input compaction failed: {}",
+                    ErrorChain(error.as_ref())
                 )))
             },
             |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),

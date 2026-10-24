@@ -2,6 +2,7 @@
 //! job row's stored result. Requests and answers are `gents_protocol::job`'s
 //! [`JobCall`] and [`RoundResult`], keyed by request id under `job_results`.
 
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -186,7 +187,7 @@ where
     let round = match outcome {
         Ok(result) => RoundResult::Result { result },
         Err(error) => RoundResult::Error {
-            error: format!("{error:#}"),
+            error: format!("{}", ErrorChain(error.as_ref())),
         },
     };
     serde_json::to_value(round).expect("a round result has a JSON encoding")

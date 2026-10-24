@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -580,7 +581,12 @@ async fn tool_output(
         requester,
     )
     .await
-    .map_err(|error| anyhow::anyhow!("{error:#}; next call: sessions {transcript_call}"))?;
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "{}; next call: sessions {transcript_call}",
+            ErrorChain(error.as_ref())
+        )
+    })?;
     let mut next = json!({"action":"output","session_id":session_id});
     match &call_id {
         Some(call_id) => next["call_id"] = json!(call_id),

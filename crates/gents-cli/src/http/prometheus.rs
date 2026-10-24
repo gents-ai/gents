@@ -1,4 +1,5 @@
 use gents::config_client::GraphqlEndpoint;
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
 
@@ -1385,7 +1386,7 @@ async fn load_liveness_activity(
             Ok(Ok(rows)) => activity.extend(rows),
             Ok(Err(error)) => tracing::warn!(
                 request_count = chunk.len(),
-                error = format!("{error:#}"),
+                error = format!("{}", ErrorChain(error.as_ref())),
                 "liveness activity read failed; progress falls back to claimed_at"
             ),
             Err(_) => {

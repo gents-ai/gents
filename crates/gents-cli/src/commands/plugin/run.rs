@@ -169,6 +169,7 @@ fn outcome_output(
 mod tests {
     use super::*;
     use gents::plugin::PluginRunner;
+    use gents_protocol::error_chain::ErrorChain;
 
     async fn run_installed(
         bytes: &[u8],
@@ -324,7 +325,7 @@ mod tests {
         })
         .await
         .expect_err("an uninstalled plugin must be refused");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("gents/does_not_exist"), "{message}");
         assert!(message.contains("not installed"), "{message}");
     }
@@ -369,8 +370,9 @@ mod tests {
             .await
             .expect_err("without a binding the plugin has no filesystem access at all");
         assert!(
-            format!("{error:#}").contains("trapped"),
-            "expected a hard trap from the guest's own failed filesystem access: {error:#}"
+            ErrorChain(error.as_ref()).to_string().contains("trapped"),
+            "expected a hard trap from the guest's own failed filesystem access: {}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -429,8 +431,11 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            format!("{error:#}").contains("--grant-authority"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("--grant-authority"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(store::list_records(home.path()).unwrap().is_empty());
 
@@ -496,7 +501,7 @@ mod tests {
         let error = call_installed(home.path(), "fixture", "list_files", input.clone())
             .await
             .expect_err("a folder the operator has not allowed must be refused");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("cannot read \"root\""), "{message}");
 
         gents::plugin::allowed::add(home.path(), listing.path(), gents::pack::BindAccess::Read)
@@ -509,7 +514,7 @@ mod tests {
         let error = call_installed(home.path(), "fixture", "list_files", serde_json::json!({}))
             .await
             .expect_err("without the field the plugin runs sealed and cannot read anything");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(!message.contains("cannot read"), "{message}");
         assert!(message.contains("trapped"), "{message}");
     }

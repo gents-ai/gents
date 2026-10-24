@@ -1,5 +1,6 @@
 //! Single I/O owner for authenticated enrollment authority and its effects.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -320,7 +321,8 @@ impl EnrollmentAuthorityOwner {
     }
 
     fn publish_failed(&self, error: &anyhow::Error) {
-        let next = EnrollmentAuthorityState::Failed(Arc::from(format!("{error:#}")));
+        let next =
+            EnrollmentAuthorityState::Failed(Arc::from(ErrorChain(error.as_ref()).to_string()));
         self.sender.send_if_modified(|current| {
             if *current == next {
                 return false;
@@ -1485,7 +1487,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!read_error.is_denied());
-        assert!(format!("{read_error:#}").contains("injected enrollment projection read failure"));
+        assert!(ErrorChain(&read_error)
+            .to_string()
+            .contains("injected enrollment projection read failure"));
         command_task.await.unwrap();
 
         let replacement_request_id = replacement_request.request_id.clone();

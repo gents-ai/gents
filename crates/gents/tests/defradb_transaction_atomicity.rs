@@ -11,6 +11,7 @@ use anyhow::{bail, Context, Result};
 use gents::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -208,7 +209,7 @@ async fn failed_second_mutation_persists_neither_when_propagated() -> TestResult
         outcome.is_err(),
         "propagating the failed second mutation must fail the transaction: {outcome:?}"
     );
-    let error = format!("{:#}", outcome.unwrap_err());
+    let error = ErrorChain(outcome.unwrap_err().as_ref()).to_string();
     assert!(
         error.contains("TxnAtomicityMissing"),
         "unexpected failure: {error}"
@@ -361,10 +362,12 @@ async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> TestRe
     )
     .await;
 
-    let error = format!(
-        "{:#}",
-        outcome.expect_err("a duplicate unique-key insert must fail")
-    );
+    let error = ErrorChain(
+        outcome
+            .expect_err("a duplicate unique-key insert must fail")
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("violates unique index"),
         "the unique index must reject the duplicate key: {error}"
@@ -421,10 +424,12 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
     )
     .await;
 
-    let error = format!(
-        "{:#}",
-        outcome.expect_err("a duplicate composite-key insert must fail")
-    );
+    let error = ErrorChain(
+        outcome
+            .expect_err("a duplicate composite-key insert must fail")
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("violates unique index"),
         "the composite unique index must reject the duplicate pair: {error}"

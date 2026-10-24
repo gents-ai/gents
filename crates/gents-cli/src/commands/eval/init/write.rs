@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -61,10 +62,16 @@ pub(crate) async fn stage(
         subject,
         pilot,
     )
-    .map_err(|error| vec![format!("writing the definition pack: {error:#}")])?;
+    .map_err(|error| {
+        vec![format!(
+            "writing the definition pack: {}",
+            ErrorChain(error.as_ref())
+        )]
+    })?;
     round_trip(dir.path(), definition).await.map_err(|error| {
         vec![format!(
-            "the definition pack does not load and install: {error:#}"
+            "the definition pack does not load and install: {}",
+            ErrorChain(error.as_ref())
         )]
     })?;
     Ok(Staged { dir, pack_name })

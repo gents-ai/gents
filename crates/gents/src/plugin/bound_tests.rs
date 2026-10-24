@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 fn dir_names(dir: &Path) -> Vec<std::ffi::OsString> {
     let mut names: Vec<_> = std::fs::read_dir(dir)
@@ -66,14 +67,16 @@ fn a_path_that_is_not_the_one_the_scope_checked_is_refused() {
         gents_protocol::error_chain::ErrorChain(&error)
             .to_string()
             .contains("changed after it was validated"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
     let error = BoundDir::folder(&base.join("missing"), BindAccess::Read).unwrap_err();
     assert!(
         gents_protocol::error_chain::ErrorChain(&error)
             .to_string()
             .contains("cannot be read"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
     std::fs::create_dir(base.join("d")).unwrap();
     std::os::unix::fs::symlink(base.join("d"), base.join("dlink")).unwrap();
@@ -132,7 +135,8 @@ fn a_bound_dir_swapped_to_a_fifo_is_refused() {
         gents_protocol::error_chain::ErrorChain(&error)
             .to_string()
             .contains("is not a folder"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -148,7 +152,8 @@ fn a_bound_file_swapped_to_a_fifo_is_refused() {
         gents_protocol::error_chain::ErrorChain(&error)
             .to_string()
             .contains("is not a file"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -163,7 +168,8 @@ fn a_bound_dir_swapped_to_a_file_is_refused() {
         gents_protocol::error_chain::ErrorChain(&error)
             .to_string()
             .contains("is not a folder"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -178,7 +184,8 @@ fn a_bound_file_swapped_to_a_folder_is_refused() {
         gents_protocol::error_chain::ErrorChain(&error)
             .to_string()
             .contains("is not a file"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
 }
 

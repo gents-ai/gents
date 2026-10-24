@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
@@ -393,7 +394,8 @@ impl GraphqlEnrollmentStore {
                 .await
                 .with_context(|| {
                     format!(
-                        "enrollment terminal commit was not observably recovered after: {commit_error:#}"
+                        "enrollment terminal commit was not observably recovered after: {}",
+                        ErrorChain(commit_error.as_ref())
                     )
                 })?,
         };
@@ -526,7 +528,8 @@ impl GraphqlEnrollmentStore {
                     .map(|candidate| candidate.revision_doc_id.clone())
                     .with_context(|| {
                         format!(
-                            "revocation commit was not observably recovered after: {commit_error:#}"
+                            "revocation commit was not observably recovered after: {}",
+                            ErrorChain(commit_error.as_ref())
                         )
                     })?
             }
@@ -691,7 +694,8 @@ impl GraphqlEnrollmentStore {
                     .and_then(|candidate| candidate.route_receipt_doc_id.clone())
                     .with_context(|| {
                         format!(
-                            "route receipt commit was not observably recovered after: {commit_error:#}"
+                            "route receipt commit was not observably recovered after: {}",
+                            ErrorChain(commit_error.as_ref())
                         )
                     })
             }
@@ -811,7 +815,7 @@ impl GraphqlEnrollmentStore {
                 self.fail_closed.record(Some(if network_rows.is_empty() {
                     FailClosed::NoNetwork
                 } else {
-                    FailClosed::Authority(format!("{error:#}"))
+                    FailClosed::Authority(ErrorChain(error.as_ref()).to_string())
                 }));
                 Ok(EnrollmentProjection::conflicted(network_id, error))
             }
@@ -901,7 +905,7 @@ impl GraphqlEnrollmentStore {
                 Err(error) => add_request_conflict(
                     &mut request_conflicts,
                     &request_id,
-                    format!("invalid enrollment request: {error:#}"),
+                    format!("invalid enrollment request: {}", ErrorChain(error.as_ref())),
                 ),
             }
         }
@@ -1027,7 +1031,10 @@ impl GraphqlEnrollmentStore {
                     add_request_conflict(
                         &mut request_conflicts,
                         &request_id,
-                        format!("invalid enrollment decision: {error:#}"),
+                        format!(
+                            "invalid enrollment decision: {}",
+                            ErrorChain(error.as_ref())
+                        ),
                     );
                     tracing::warn!(?scope, request_id, error = %error, "scoped invalid enrollment decision");
                 }

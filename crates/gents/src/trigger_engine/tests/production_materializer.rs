@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionMaterializer) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
@@ -50,7 +51,11 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         )
         .await
         .expect_err("an invalid declaration must roll back before publication");
-    assert!(invalid.to_string().contains("non-empty"), "{invalid:#}");
+    assert!(
+        invalid.to_string().contains("non-empty"),
+        "{}",
+        ErrorChain(invalid.as_ref())
+    );
     assert!(
         crate::goal::load_canonical_goal(node.as_ref(), &node_did, &identity.session_id)
             .await
@@ -505,7 +510,8 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
         .expect_err("wrong-principal deterministic binding must conflict");
     assert!(
         error.to_string().contains("identity conflicts"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -653,7 +659,11 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
         )
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("not found"), "{error:#}");
+    assert!(
+        error.to_string().contains("not found"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
     assert!(
         workspace_requests(&node, "ws-owner").await.is_empty(),
         "wrong owner must reject before request publication"
@@ -927,7 +937,8 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
         error
             .to_string()
             .contains("isolated workspace ws-foreign-ownerless not found"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(workspace_requests(&node, "ws-foreign-ownerless")
         .await
@@ -1099,7 +1110,8 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         .expect_err("second writer must not enqueue");
     assert!(
         error.to_string().contains("unique Active ReadWrite"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     let rows = workspace_requests(node.as_ref(), "ws-rw").await;
     assert_eq!(rows.len(), 2, "{rows:?}");

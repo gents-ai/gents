@@ -1,6 +1,7 @@
 use super::*;
 use crate::lifecycle::RequestTerminalOutcome;
 use crate::session;
+use gents_protocol::error_chain::ErrorChain;
 
 #[tokio::test]
 async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
@@ -302,7 +303,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .verify_fresh(&forged, TEST_AGENT_ID)
             .await
             .unwrap_err();
-        assert!(error.is_denied(), "{error:#}");
+        assert!(error.is_denied(), "{}", ErrorChain(&error));
         let mut forged_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
             TEST_AGENT_ID,
@@ -396,10 +397,11 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .verify_fresh(&bad, TEST_AGENT_ID)
             .await
             .unwrap_err();
-        assert!(error.is_denied(), "{error:#}");
+        assert!(error.is_denied(), "{}", ErrorChain(&error));
         assert!(
             error.to_string().contains("outside its session"),
-            "{error:#}"
+            "{}",
+            ErrorChain(&error)
         );
     }
 }
@@ -712,7 +714,8 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
         conflict
             .to_string()
             .contains("replay conflicts with authority, scope, or content"),
-        "unexpected conflict: {conflict:#}"
+        "unexpected conflict: {}",
+        ErrorChain(conflict.as_ref())
     );
 }
 
@@ -1174,7 +1177,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
     )
     .await
     .expect_err("a committed session sequence cannot be claimed twice");
-    assert!(format!("{duplicate:#}").contains("unique index"));
+    assert!(format!("{}", ErrorChain(duplicate.as_ref())).contains("unique index"));
     for row_session in [session, "only-null-sequence"] {
         let indexed =
             super::super::atomic_inputs::append_sequence_query(db.node_did(), row_session);

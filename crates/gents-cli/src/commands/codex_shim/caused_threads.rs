@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 use anyhow::Result;
@@ -152,7 +153,7 @@ async fn bound_model(state: &ShimState, node_did: &str, agent_id: &str) -> Optio
         Ok(model) => Some(model),
         Err(error) => {
             tracing::debug!(
-                error = format!("{error:#}"),
+                error = format!("{}", ErrorChain(error.as_ref())),
                 node_did,
                 agent_id,
                 "Codex caused thread has no locally bound model"

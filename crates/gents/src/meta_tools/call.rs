@@ -1,6 +1,7 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Context as _};
+use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -211,7 +212,7 @@ impl CallToolTool {
                 return Some(StructuredToolError::service_unavailable(
                     service_id,
                     tool_name,
-                    format!("MCP catalog unavailable: {error:#}"),
+                    format!("MCP catalog unavailable: {}", ErrorChain(error.as_ref())),
                     true,
                 ));
             }

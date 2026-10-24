@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -103,7 +104,8 @@ fn read_write_fails_closed_without_workspace_write_sandbox() {
         error
             .to_string()
             .contains("enforceable WorkspaceWrite sandbox"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -124,7 +126,8 @@ fn read_write_rejects_sealed_workspace() {
     .unwrap_err();
     assert!(
         error.to_string().contains("not bindable for authority"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -164,7 +167,11 @@ fn integrate_only_binds_sealed_with_matching_hash() {
         bind_input(WorkspaceAuthority::Integrate, Some(&operator), false),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("not bindable"), "{error:#}");
+    assert!(
+        error.to_string().contains("not bindable"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
 
     let mut workspace = ready_workspace();
     workspace.lifecycle_state = "sealed".into();
@@ -204,7 +211,8 @@ fn sealed_mismatch_and_missing_hash_fail_closed() {
         error
             .to_string()
             .contains("does not match workspace seal_hash"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 
     let mut drifted = placement(&placement_path);
@@ -222,7 +230,8 @@ fn sealed_mismatch_and_missing_hash_fail_closed() {
         error
             .to_string()
             .contains("observed_tree_hash drifted does not match"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -246,7 +255,8 @@ fn sealed_requires_live_tree_hash() {
     .unwrap_err();
     assert!(
         error.to_string().contains("requires live tree hash"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -284,7 +294,8 @@ fn live_tree_hash_drift_fails_closed() {
         error
             .to_string()
             .contains("live tree hash drifted does not match"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -395,7 +406,8 @@ fn sealed_missing_observed_tree_hash_fails_closed() {
         error
             .to_string()
             .contains("missing placement observed_tree_hash"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -412,7 +424,8 @@ fn placement_outside_operator_root_fails_closed() {
     .unwrap_err();
     assert!(
         error.to_string().contains("escapes operator tool root"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -457,7 +470,8 @@ fn persisted_cwd_must_stay_under_placement() {
     .unwrap_err();
     assert!(
         error.to_string().contains("not under workspace root"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -805,7 +819,8 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
     let error = fx.grant.validate_for_launch().await.unwrap_err();
     assert!(
         error.to_string().contains("active ReadOnly binding"),
-        "unexpected validation failure: {error:#}"
+        "unexpected validation failure: {}",
+        ErrorChain(error.as_ref())
     );
 }
 

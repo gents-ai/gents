@@ -2695,6 +2695,7 @@ mod lifecycle_tests {
     use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
     use crate::config_client::ConfigAccess;
     use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[derive(Debug, Clone, Copy)]
     enum Product {
@@ -3590,7 +3591,7 @@ mod lifecycle_tests {
         )
         .await
         .expect_err("an invalid config fails the add");
-        let text = format!("{error:#}");
+        let text = format!("{}", ErrorChain(error.as_ref()));
         assert!(text.contains("missing-backend"), "{text}");
         assert!(text.contains("sign in again"), "{text}");
         assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);

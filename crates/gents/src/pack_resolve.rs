@@ -154,6 +154,7 @@ fn offline_pack_error(
 mod tests {
     use super::*;
     use crate::pack_store::test_pack_named as build_pack;
+    use gents_protocol::error_chain::ErrorChain;
 
     const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:1";
 
@@ -296,7 +297,7 @@ mod tests {
             installed: &[],
         };
         let error = expect_err(resolve_named("gents/nowhere", &options).await);
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             message.contains("is not in the pack store of")
                 && message.contains("could not be reached"),
@@ -317,7 +318,7 @@ mod tests {
             installed: &[],
         };
         let error = expect_err(resolve_named("gents/nowhere@9.9.9", &options).await);
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains("gents/nowhere@9.9.9"), "{message}");
         assert!(
             message.contains("gents pack fetch gents/nowhere@9.9.9 --store"),
@@ -340,7 +341,7 @@ mod tests {
             installed: &[],
         };
         let error = expect_err(resolve_named("gents/nowhere", &options).await);
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             message.contains("is not in the pack store of") && message.contains("has no such pack"),
             "{message}"

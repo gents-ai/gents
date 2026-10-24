@@ -233,6 +233,7 @@ fn admit_prepare_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     #[tokio::test]
@@ -275,7 +276,11 @@ mod tests {
         )
         .await
         .expect_err("a directory outside the resolved tool root must be refused");
-        assert!(format!("{error:#}").contains("outside"), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref()).to_string().contains("outside"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let escape = within.path().join("allowed").join("..").join("..");
         let error = run_prepare_steps(
@@ -287,7 +292,11 @@ mod tests {
         )
         .await
         .expect_err("a `..` escape out of the resolved tool root must be refused");
-        assert!(format!("{error:#}").contains("outside"), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref()).to_string().contains("outside"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[test]
@@ -402,8 +411,11 @@ mod tests {
         let error = admit_prepare_step(fixture.path(), &distribution, &step, None, false)
             .expect_err("no source and a missing artifact must be refused");
         assert!(
-            format!("{error:#}").contains("has no source and its artifact is missing"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("has no source and its artifact is missing"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -465,8 +477,11 @@ mod tests {
         .await
         .expect_err("a plugin declaring authority must be refused without --grant-authority");
         assert!(
-            format!("{error:#}").contains("--grant-authority"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("--grant-authority"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         let fields = run_prepare_steps(

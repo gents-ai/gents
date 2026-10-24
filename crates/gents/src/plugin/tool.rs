@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -145,7 +146,7 @@ impl ToolDyn for PluginTool {
             };
             if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
                 return ToolDispatchResult {
-                    result: Err(tool_error(format!("{error:#}"))),
+                    result: Err(tool_error(format!("{}", ErrorChain(error.as_ref())))),
                     plugin_receipt: Some(super::executor::initial_receipt(&self.record, &input)),
                     deferred_writes: None,
                 };
@@ -162,7 +163,7 @@ impl ToolDyn for PluginTool {
                 .await;
             let mut deferred_writes = None;
             let result = call
-                .map_err(|error| tool_error(format!("{error:#}")))
+                .map_err(|error| tool_error(format!("{}", ErrorChain(error.as_ref()))))
                 .and_then(|mut call| match call.outcome.verdict {
                     PluginVerdict::Success => {
                         deferred_writes = self.defer_writes(&mut call.outcome.output)?;

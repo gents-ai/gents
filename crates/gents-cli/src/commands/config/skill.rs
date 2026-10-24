@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use gents::document_config::SkillDocument;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Value};
 
 use super::ConfigCommandError;
@@ -266,7 +267,7 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
         }) {
             Ok(skill) => skill,
             Err(error) => {
-                errors.push(json!({"skill_id": skill_id, "error": format!("{error:#}")}));
+                errors.push(json!({"skill_id": skill_id, "error": format!("{}", ErrorChain(error.as_ref()))}));
                 continue;
             }
         };

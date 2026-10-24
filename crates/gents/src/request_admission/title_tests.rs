@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -253,7 +254,13 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     let doc_id = insert_request(&node, &create).await;
     let queued = super::load_request_for_admission_test(node.as_ref(), &doc_id)
         .await
-        .unwrap_or_else(|error| panic!("{}: load queued request: {error:#}", case.name));
+        .unwrap_or_else(|error| {
+            panic!(
+                "{}: load queued request: {}",
+                case.name,
+                ErrorChain(error.as_ref())
+            )
+        });
     if !case.pending_deadline_absent {
         update_request_field(&node, &doc_id, "deadline", &case.request.created_at).await;
     }

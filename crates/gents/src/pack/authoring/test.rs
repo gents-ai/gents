@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -71,7 +72,9 @@ pub async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
                 .unwrap_or_default();
             match run_case(&coordinate, &runner, budget, &path).await {
                 Ok(()) => report.passed += 1,
-                Err(error) => report.failures.push(format!("{name}: {error:#}")),
+                Err(error) => report
+                    .failures
+                    .push(format!("{name}: {}", ErrorChain(error.as_ref()))),
             }
         }
         results.push(report);

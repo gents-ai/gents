@@ -486,6 +486,7 @@ mod tests {
     use crate::eval::report::fixtures::{
         at, definition, fail, pass, record, trial_id, Outcome, Rows, RUN,
     };
+    use gents_protocol::error_chain::ErrorChain;
 
     #[test]
     fn slot_scores_map_to_what_pairing_reads_and_serialize_by_name() {
@@ -554,7 +555,12 @@ mod tests {
     fn refusal(result: Result<EvalReport>) -> String {
         let error = result.expect_err("expected a refusal");
         report_refused(error.as_ref())
-            .unwrap_or_else(|| panic!("expected a ReportRefused, got {error:#}"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a ReportRefused, got {}",
+                    ErrorChain(error.as_ref())
+                )
+            })
             .0
             .clone()
     }

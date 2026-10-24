@@ -1,6 +1,7 @@
 //! Pre-commit scratch files and slot interrupts. `admit_scratch` is Lean
 //! `scratchAdmitted`; `write_scratch` admits each file through it.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -222,7 +223,9 @@ pub(crate) async fn recover_step_commit(
         Ok(true) => Ok(()),
         Ok(false) => Err(commit_error),
         Err(recovery_error) => Err(anyhow::anyhow!(
-            "job step recovery failed after ambiguous commit: {recovery_error:#}; original commit error: {commit_error:#}"
+            "job step recovery failed after ambiguous commit: {}; original commit error: {}",
+            ErrorChain(recovery_error.as_ref()),
+            ErrorChain(commit_error.as_ref())
         )),
     }
 }
@@ -433,6 +436,7 @@ fn body_digest(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -1002,7 +1006,11 @@ mod tests {
         let error = super::recover_step_commit(&harness.node, None, lost(), &changed)
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("integrity"), "{error:#}");
+        assert!(
+            error.to_string().contains("integrity"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         harness.close().await;
     }
 
@@ -1047,7 +1055,11 @@ mod tests {
         let error = stage(&harness, &[changed], &again, &harness.row)
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("integrity"), "{error:#}");
+        assert!(
+            error.to_string().contains("integrity"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(

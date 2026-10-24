@@ -131,6 +131,7 @@ impl CancelCause {
     ];
 }
 
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -660,7 +661,7 @@ impl ToolCallLifecycle {
                         tracing::warn!(
                             request_doc_id = %doc_id,
                             tool_call_id = %self.tool_call_id,
-                            error = %format!("{error:#}"),
+                            error = %ErrorChain(error.as_ref()),
                             "output budget uses the default: owning request did not load"
                         );
                         None

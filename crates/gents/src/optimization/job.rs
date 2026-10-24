@@ -481,6 +481,7 @@ pub async fn append(access: &ConfigAccess, job: &mut JobRecord, entry: JournalEn
 mod tests {
     use super::*;
     use crate::optimization::target::{Target, TargetField};
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     async fn access() -> ConfigAccess {
@@ -620,7 +621,8 @@ mod tests {
         let error = append(&access, &mut stale, proposed(1, "racing"))
             .await
             .unwrap_err();
-        let conflict = journal_conflict(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let conflict =
+            journal_conflict(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(conflict.expected, 0);
         assert!(stale.journal.is_empty());
 

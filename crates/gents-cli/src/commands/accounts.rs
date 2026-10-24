@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
@@ -517,7 +518,7 @@ pub(crate) async fn list_with_usage(
                 Ok(reads) => Some(reads),
                 Err(error) if refresh => return Err(error),
                 Err(error) => {
-                    writeln!(warnings, "usage not read: {error:#}")?;
+                    writeln!(warnings, "usage not read: {}", ErrorChain(error.as_ref()))?;
                     None
                 }
             }
@@ -829,7 +830,11 @@ where
         match probed {
             Ok(text) => blocks.push(format!("{}\n{text}", account.label)),
             Err(error) => {
-                blocks.push(format!("{}: probe failed: {error:#}", account.label));
+                blocks.push(format!(
+                    "{}: probe failed: {}",
+                    ErrorChain(error.as_ref()),
+                    account.label
+                ));
                 failed.push(account.label);
             }
         }

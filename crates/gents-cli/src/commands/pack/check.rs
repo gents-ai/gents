@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -59,14 +60,14 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     let manifest = match read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
-            report.problems.push(format!("{error:#}"));
+            report.problems.push(ErrorChain(error.as_ref()).to_string());
             return report;
         }
     };
     let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
         Ok(archive) => archive,
         Err(error) => {
-            report.problems.push(format!("{error:#}"));
+            report.problems.push(ErrorChain(error.as_ref()).to_string());
             return report;
         }
     };
@@ -77,15 +78,15 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         match load_config(&archive) {
             Ok(config) => {
                 if let Err(error) = check_filters(dir, &config, &mut report.problems).await {
-                    report.problems.push(format!("{error:#}"));
+                    report.problems.push(ErrorChain(error.as_ref()).to_string());
                 }
             }
-            Err(error) => report.problems.push(format!("{error:#}")),
+            Err(error) => report.problems.push(ErrorChain(error.as_ref()).to_string()),
         }
     }
     if dir.join("experiment.json").is_file() {
         if let Err(error) = super::scenario::validate_scenario_defaults(dir) {
-            report.problems.push(format!("{error:#}"));
+            report.problems.push(ErrorChain(error.as_ref()).to_string());
         }
     }
     report
@@ -132,8 +133,10 @@ async fn check_filters(
         );
         if let Err(error) = access.execute(&query).await {
             problems.push(format!(
-                "event source {} filter is not valid on {}: {error:#}",
-                source.event_source_id, source.source_collection
+                "event source {} filter is not valid on {}: {}",
+                source.event_source_id,
+                source.source_collection,
+                ErrorChain(error.as_ref())
             ));
         }
     }

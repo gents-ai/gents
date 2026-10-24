@@ -442,6 +442,7 @@ fn streamable_owned(value: &str) -> Option<String> {
 #[cfg(test)]
 mod canonical_selection_tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     struct Facts {
@@ -473,7 +474,7 @@ mod canonical_selection_tests {
         let error = project_messages_with_sink(&FailingSink, None, &request(), 8192)
             .await
             .expect_err("sink failure");
-        assert!(format!("{error:#}").contains("canonical read owner rejected"));
+        assert!(format!("{}", ErrorChain(error.as_ref())).contains("canonical read owner rejected"));
     }
 
     fn request() -> gents_protocol::row::AgentRequestRow {

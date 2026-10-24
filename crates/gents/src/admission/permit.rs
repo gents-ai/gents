@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
@@ -142,8 +143,9 @@ impl AdmissionPermit {
             // rehydrate reads only InferenceCall rows.
             if terminal.usage.is_some() {
                 return Err(AdmissionError(format!(
-                    "persisting terminal InferenceCall usage failed for call {}: {error:#}",
-                    self.call.call_id
+                    "persisting terminal InferenceCall usage failed for call {}: {}",
+                    self.call.call_id,
+                    ErrorChain(error.as_ref())
                 )));
             }
             tracing::warn!(call_id = %self.call.call_id, error = %error, "failed to persist terminal inference call state");

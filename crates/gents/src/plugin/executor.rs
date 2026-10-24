@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -98,7 +99,7 @@ pub struct PluginCall {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("{source:#}")]
+#[error("{}", ErrorChain(.source.as_ref()))]
 struct PluginAttemptError {
     source: anyhow::Error,
     receipt: PluginExecutionReceipt,

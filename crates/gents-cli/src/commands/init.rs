@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -491,7 +492,10 @@ async fn maybe_inline_grok_login(
         Ok(Some(_)) => return InlineGrokLoginState::ExistingCredential,
         Ok(None) => {}
         Err(error) => {
-            eprintln!("Could not check for an existing Grok credential: {error:#}");
+            eprintln!(
+                "Could not check for an existing Grok credential: {}",
+                ErrorChain(error.as_ref())
+            );
         }
     }
     if !crate::interactive_backend::confirm("Log in to Grok / xAI now to finish setup?", true).await
@@ -515,7 +519,7 @@ async fn maybe_inline_grok_login(
             InlineGrokLoginState::Completed(Box::new(outcome))
         }
         Err(error) => {
-            eprintln!("Grok login failed: {error:#}");
+            eprintln!("Grok login failed: {}", ErrorChain(error.as_ref()));
             InlineGrokLoginState::Unauthenticated
         }
     }
@@ -564,7 +568,10 @@ async fn maybe_inline_claude_login(
         Ok(Some(_)) => return InlineClaudeLoginState::ExistingCredential,
         Ok(None) => {}
         Err(error) => {
-            eprintln!("Could not check for an existing Claude credential: {error:#}");
+            eprintln!(
+                "Could not check for an existing Claude credential: {}",
+                ErrorChain(error.as_ref())
+            );
         }
     }
     if !crate::interactive_backend::confirm("Log in to Claude now to finish setup?", true).await {
@@ -591,7 +598,7 @@ async fn maybe_inline_claude_login(
             InlineClaudeLoginState::Completed(Box::new(outcome))
         }
         Err(error) => {
-            eprintln!("Claude login failed: {error:#}");
+            eprintln!("Claude login failed: {}", ErrorChain(error.as_ref()));
             InlineClaudeLoginState::Unauthenticated
         }
     }
@@ -620,7 +627,10 @@ async fn maybe_inline_codex_login(
         Ok(Some(_)) => return InlineCodexLoginState::ExistingCredential,
         Ok(None) => {}
         Err(error) => {
-            eprintln!("Could not check for an existing ChatGPT credential: {error:#}");
+            eprintln!(
+                "Could not check for an existing ChatGPT credential: {}",
+                ErrorChain(error.as_ref())
+            );
         }
     }
     if !crate::interactive_backend::confirm("Log in to ChatGPT now to finish setup?", true).await {
@@ -647,9 +657,10 @@ async fn maybe_inline_codex_login(
         }
         Err(error) => {
             eprintln!(
-                "ChatGPT login did not complete: {error:#}\n\
+                "ChatGPT login did not complete: {}\n\
                  The backend is configured; finish later with `gents codex-login` \
-                 (add --device-auth on a headless machine)."
+                 (add --device-auth on a headless machine).",
+                ErrorChain(error.as_ref())
             );
             InlineCodexLoginState::Unauthenticated
         }
@@ -1648,8 +1659,9 @@ mod tests {
         let error = lock_init_store_for_user(&home, &home.join("data"), true, Some(&missing))
             .expect_err("an unresolvable user home is not compared lexically");
         assert!(
-            format!("{error:#}").contains("cannot be resolved"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("cannot be resolved"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(home.join("init.json").is_file(), "nothing was wiped");
         lock_init_store_for_user(&home, &home.join("data"), false, None)
@@ -1961,8 +1973,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("must be enabled"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("must be enabled"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(node_document().await, None);
 

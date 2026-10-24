@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -459,10 +460,11 @@ where
                 }
             }
             Ok(Err(error)) => {
+                let message = ErrorChain(error.as_ref()).to_string();
                 if handle_slot_failure(
                     &agent_config.agent_id,
                     generation,
-                    &format!("{error:#}"),
+                    &message,
                     failure_policy.as_deref(),
                     &standing,
                     &mut shutdown,

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -63,7 +64,7 @@ async fn names(access: &ConfigAccess) -> Result<Vec<String>> {
     let response = access
         .execute("{ NodeAccessProbe { name } }")
         .await
-        .map_err(|error| format!("reading probe rows: {error:#}"))?;
+        .map_err(|error| format!("reading probe rows: {}", ErrorChain(error.as_ref())))?;
     let mut names: Vec<String> = response["data"]["NodeAccessProbe"]
         .as_array()
         .into_iter()
@@ -88,7 +89,8 @@ async fn assert_access_control(
         .expect_err("an anonymous HTTP mutation must be refused");
     assert!(
         refused.to_string().contains("not authorized"),
-        "unexpected refusal: {refused:#}"
+        "unexpected refusal: {}",
+        ErrorChain(refused.as_ref())
     );
     let refused_schema = anonymous
         .add_schema("type NodeAccessIntruder { name: String }")
@@ -96,7 +98,8 @@ async fn assert_access_control(
         .expect_err("an anonymous HTTP schema change must be refused");
     assert!(
         refused_schema.to_string().contains("401"),
-        "unexpected schema refusal: {refused_schema:#}"
+        "unexpected schema refusal: {}",
+        ErrorChain(refused_schema.as_ref())
     );
 
     let signed = ConfigAccess::graphql_as(endpoint, principal);

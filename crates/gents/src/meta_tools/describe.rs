@@ -1,5 +1,6 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashSet;
 use rmcp::model::{ListToolsResult, Tool as McpTool};
 use serde::Deserialize;
@@ -90,8 +91,9 @@ impl Tool for DescribeToolTool {
                     &args.service_id,
                     &args.tool_name,
                     format!(
-                        "service '{}' is currently unavailable: {error:#}",
-                        args.service_id
+                        "service '{}' is currently unavailable: {}",
+                        args.service_id,
+                        ErrorChain(error.as_ref())
                     ),
                     true,
                 ),
@@ -106,8 +108,9 @@ impl Tool for DescribeToolTool {
                         &args.service_id,
                         &args.tool_name,
                         format!(
-                            "service '{}' is not available for describe_tool: {error:#}",
-                            args.service_id
+                            "service '{}' is not available for describe_tool: {}",
+                            args.service_id,
+                            ErrorChain(error.as_ref())
                         ),
                         false,
                     ),
@@ -123,8 +126,9 @@ impl Tool for DescribeToolTool {
                         &args.service_id,
                         &args.tool_name,
                         format!(
-                            "service '{}' could not list tools for describe_tool: {error:#}",
-                            args.service_id
+                            "service '{}' could not list tools for describe_tool: {}",
+                            args.service_id,
+                            ErrorChain(error.as_ref())
                         ),
                         true,
                     ),

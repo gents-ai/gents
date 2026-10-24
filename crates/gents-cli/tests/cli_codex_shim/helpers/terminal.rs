@@ -1,5 +1,6 @@
 use super::*;
 use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 
 pub(super) fn require_command(name: &str) -> TestResult<()> {
     if which(name).is_some() {
@@ -22,9 +23,10 @@ fn run_git_output(cwd: &std::path::Path, args: &[&str]) -> TestResult<String> {
         .output()
         .map_err(|error| {
             format!(
-                "running git {} in {}: {error:#}",
+                "running git {} in {}: {}",
                 args.join(" "),
-                cwd.display()
+                cwd.display(),
+                ErrorChain(&error)
             )
         })?;
     if !output.status.success() {
@@ -44,8 +46,13 @@ pub(super) fn init_test_git_repo(cwd: &std::path::Path, branch: &str) -> TestRes
     require_command("git")?;
     run_git_command(cwd, &["init"])?;
     run_git_command(cwd, &["checkout", "-B", branch])?;
-    fs::write(cwd.join(".codex-shim-git-fixture"), "base\n")
-        .map_err(|error| format!("writing git fixture in {}: {error:#}", cwd.display()))?;
+    fs::write(cwd.join(".codex-shim-git-fixture"), "base\n").map_err(|error| {
+        format!(
+            "writing git fixture in {}: {}",
+            cwd.display(),
+            ErrorChain(&error)
+        )
+    })?;
     run_git_command(cwd, &["add", ".codex-shim-git-fixture"])?;
     run_git_command(
         cwd,
@@ -158,7 +165,7 @@ expect {{
         token_match_regex = tcl_brace_str(&token_match_regex),
     );
     fs::write(script, contents)
-        .map_err(|error| format!("writing {}: {error:#}", script.display()).into())
+        .map_err(|error| format!("writing {}: {}", script.display(), ErrorChain(&error)).into())
 }
 
 pub(super) fn smoke_prompt(prompt_token: &str) -> String {
@@ -179,8 +186,13 @@ pub(super) fn assert_shim_trace_methods(
     path: &std::path::Path,
     methods: &[&str],
 ) -> TestResult<()> {
-    let trace = fs::read_to_string(path)
-        .map_err(|error| format!("reading shim trace {}: {error:#}", path.display()))?;
+    let trace = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "reading shim trace {}: {}",
+            path.display(),
+            ErrorChain(&error)
+        )
+    })?;
     for method in methods {
         assert!(
             trace.contains(method),
@@ -195,8 +207,13 @@ pub(super) fn assert_shim_trace_method_count_at_least(
     method: &str,
     minimum: usize,
 ) -> TestResult<()> {
-    let trace = fs::read_to_string(path)
-        .map_err(|error| format!("reading shim trace {}: {error:#}", path.display()))?;
+    let trace = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "reading shim trace {}: {}",
+            path.display(),
+            ErrorChain(&error)
+        )
+    })?;
     let count = trace.matches(method).count();
     assert!(
         count >= minimum,
@@ -221,7 +238,7 @@ pub(super) fn wait_for_tmux_token_occurrences(
         let output = Command::new("tmux")
             .args(["capture-pane", "-pt", session])
             .output()
-            .map_err(|error| format!("capturing tmux pane: {error:#}"))?;
+            .map_err(|error| format!("capturing tmux pane: {}", ErrorChain(&error)))?;
         if output.status.success() {
             last = String::from_utf8_lossy(&output.stdout).into_owned();
             if token_occurrences(&terminal_token_search_text(&last), needle) >= required_count {

@@ -1,6 +1,7 @@
 use super::convert::DesiredStateError;
 use super::{DesiredStateManifest, DesiredStateValidationReport};
 use anyhow::{Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 use std::{
     fs,
@@ -21,7 +22,7 @@ pub(crate) fn load_manifest_root_for_owner(
     let manifest = match load_root(root, owner) {
         Ok(config) => Some(config),
         Err(error) => {
-            errors.push(format!("{error:#}"));
+            errors.push(format!("{}", ErrorChain(error.as_ref())));
             None
         }
     };

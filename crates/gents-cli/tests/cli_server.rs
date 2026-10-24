@@ -1,4 +1,5 @@
 mod support;
+use gents_protocol::error_chain::ErrorChain;
 use support::graphql::graphql_mutation_with_variables;
 use support::*;
 
@@ -445,7 +446,7 @@ async fn ready_json_without_recovery_still_fails_on_a_held_port() -> Result<()> 
         .err()
         .ok_or("the non-recovering spawn must fail while the port is held")?;
 
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(&*error));
     assert!(
         message.contains("embedded HTTP listener cannot bind"),
         "must surface the child's own bind diagnostic, not a replacement port:\n{message}"
@@ -526,7 +527,8 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             .expect_err("anonymous HTTP writes must be refused");
         assert!(
             refused.to_string().contains("not authorized"),
-            "{phase}: unexpected refusal: {refused:#}"
+            "{phase}: unexpected refusal: {}",
+            ErrorChain(refused.as_ref())
         );
         gents::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(&graphql))
             .write("test.nac.signed", &mutation)

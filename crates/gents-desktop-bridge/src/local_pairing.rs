@@ -193,7 +193,7 @@ pub(crate) async fn observe_managed_runtime_schema(
         fetch_managed_runtime_status(endpoint, &tokio_util::sync::CancellationToken::new()).await?;
     core.finish_runtime_schema_observation(&observation, &status)
         .await
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| ErrorChain(error.as_ref()).to_string())
 }
 
 pub(crate) async fn ensure_managed_runtime_pairing(
@@ -234,14 +234,14 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                 .map(|requests| {
                     select_managed_request(requests, &target.node_did, live_peer.as_deref())
                 })
-                .map_err(|error| format!("{error:#}"))
+                .map_err(|error| ErrorChain(error.as_ref()).to_string())
         },
         |request_id| {
             let core = Arc::clone(&core);
             async move {
                 core.resend_status_enrollment(&request_id)
                     .await
-                    .map_err(|error| format!("{error:#}"))
+                    .map_err(|error| ErrorChain(error.as_ref()).to_string())
             }
         },
         || async {
@@ -250,7 +250,8 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                 .map(|request| request.request_id)
                 .map_err(|error| {
                     PairingFailure::classify(format!(
-                        "requesting managed runtime enrollment: {error:#}"
+                        "requesting managed runtime enrollment: {}",
+                        ErrorChain(error.as_ref())
                     ))
                 })
         },
@@ -279,7 +280,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
             {
                 Ok(()) => Ok(PairingApproval::Committed),
                 Err(error) => {
-                    let message = format!("{error:#}");
+                    let message = ErrorChain(error.as_ref()).to_string();
                     if enrollment_request_is_not_visible_yet(&message) {
                         tracing::debug!(
                             request_id = %request_id,
@@ -293,9 +294,12 @@ pub(crate) async fn ensure_managed_runtime_pairing(
             }
         },
         || async {
-            core.request_p2p_repair()
-                .await
-                .map_err(|error| format!("requesting managed route reconciliation: {error:#}"))
+            core.request_p2p_repair().await.map_err(|error| {
+                format!(
+                    "requesting managed route reconciliation: {}",
+                    ErrorChain(error.as_ref())
+                )
+            })
         },
     )
     .await?;

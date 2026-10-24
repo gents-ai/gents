@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use sha2::{Digest, Sha256};
 
 #[test]
@@ -11,7 +12,8 @@ fn review_cannot_escape_ceiling_through_enclosing_repository() {
     let error = resolve_repository(&permitted, "HEAD", "HEAD", Some(&permitted)).unwrap_err();
     assert!(
         error.to_string().contains("escapes operator tool root"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -218,8 +220,9 @@ async fn prepare_entry_run_refuses_a_document_outside_declared_writes() {
     .await
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("does not declare in prepare.writes"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("does not declare in prepare.writes"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 

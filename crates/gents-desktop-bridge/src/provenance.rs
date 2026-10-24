@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -45,7 +46,7 @@ pub async fn session_provenance(
     scope: SessionScope,
 ) -> Result<SessionProvenanceView, String> {
     let access = crate::snapshot::node_reads(core, &scope.node_did);
-    let fail = |error: anyhow::Error| format!("session provenance: {error:#}");
+    let fail = |error: anyhow::Error| format!("session provenance: {}", ErrorChain(error.as_ref()));
     let lineage = lineage(&access, &scope).await.map_err(fail)?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
     let opening_request_id = match &lineage.started_by {

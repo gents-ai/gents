@@ -1,4 +1,5 @@
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 
 use super::selection::CommandOutputLimits;
 
@@ -24,7 +25,7 @@ pub(crate) async fn configured_output_budget(
                 node_did,
                 agent_id,
                 tool_name,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "output budget uses the default: agent tools did not resolve"
             );
             crate::toolset::DEFAULT_MAX_COMMAND_CHARS

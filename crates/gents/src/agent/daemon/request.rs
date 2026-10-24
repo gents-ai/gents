@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use tracing::Instrument;
 
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
@@ -46,7 +47,7 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
-            reason: format!("{context} partial output persistence failed: {error:#}"),
+            reason: format!("{context} partial output persistence failed: {}", ErrorChain(error.as_ref())),
         }.into()),
         Err(_) => Err(super::ShutdownDrainFailure {
             reason: format!("{context} partial output persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state"),
@@ -749,5 +750,7 @@ where
 }
 
 fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
-    format!("{error:#}").contains("stale compaction generation")
+    ErrorChain(error.as_ref())
+        .to_string()
+        .contains("stale compaction generation")
 }

@@ -739,6 +739,7 @@ pub(crate) fn defra_rendered_request_capture_factory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::{json, Value};
 
     fn capture_text(seed: u64, len: usize) -> String {
@@ -1206,11 +1207,19 @@ mod tests {
         .unwrap();
         let next = rendered_turn(1, body);
         let error = sink.capture(next.clone()).await.unwrap_err();
-        assert!(format!("{error:#}").contains("deleted"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("deleted"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert!(sink.stored_fact(&next.capture_key).await.unwrap().is_none());
         let reopened = DefraRenderedRequestSink::new(Arc::clone(&node));
         let error = reopened.capture(next.clone()).await.unwrap_err();
-        assert!(format!("{error:#}").contains("deleted"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("deleted"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert!(reopened
             .stored_fact(&next.capture_key)
             .await
@@ -1342,7 +1351,8 @@ mod tests {
         let error = sink.capture(rebound).await.unwrap_err();
         assert!(
             error.to_string().contains("integrity violation"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         node.shutdown().await;
     }

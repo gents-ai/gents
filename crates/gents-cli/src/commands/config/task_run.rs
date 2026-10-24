@@ -432,6 +432,7 @@ mod tests {
     use super::*;
     use crate::request_helpers::goal_input_tests::{authored_input, fixture, reference};
     use gents::NodeIdentity;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     pub(super) async fn signed_task_receipt(
@@ -546,7 +547,11 @@ mod tests {
         .await
         .unwrap_err();
         server.abort();
-        assert!(format!("{error:#}").contains("signature"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("signature"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         Ok(())
     }
 

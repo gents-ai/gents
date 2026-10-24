@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 mod authoring;
 mod crud;
@@ -363,7 +364,7 @@ fn log_config_call(
     let error = result
         .as_ref()
         .err()
-        .map(|error| truncated(&format!("{error:#}"), 500));
+        .map(|error| truncated(&ErrorChain(error.as_ref()).to_string(), 500));
     tracing::info!(
         target: "gents::self_config",
         call = %call,
@@ -506,11 +507,12 @@ impl ConfigCommandTool {
     ) -> (String, Value) {
         let missing = error.downcast_ref::<crate::document_config::MissingReference>();
         let message = missing.map_or_else(
-            || format!("{error:#}"),
+            || ErrorChain(error.as_ref()).to_string(),
             |missing| {
                 format!(
-                    "{} Cause: {error:#}",
-                    missing_reference_next_step(missing, deleting)
+                    "{} Cause: {}",
+                    missing_reference_next_step(missing, deleting),
+                    ErrorChain(error.as_ref())
                 )
             },
         );
@@ -1787,9 +1789,9 @@ impl ConfigCommandTool {
             .map(|(field, _)| field.clone());
         let collection = request.target.collection_name();
         self.patch_outcome(core, verb, request).await.map_err(|error| {
-            match stringified.filter(|_| format!("{error:#}").contains("invalid type: string")) {
+            match stringified.filter(|_| ErrorChain(error.as_ref()).to_string().contains("invalid type: string")) {
                 Some(field) => anyhow!(
-                    "{collection} field {field:?} holds a JSON string; send a native JSON object or array in set, not a string. ({error:#})"
+                    "{collection} field {field:?} holds a JSON string; send a native JSON object or array in set, not a string. ({})", ErrorChain(error.as_ref())
                 ),
                 None => error,
             }

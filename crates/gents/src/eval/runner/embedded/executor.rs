@@ -43,6 +43,7 @@ use crate::pack::{
 use crate::tool_surface::{BashMode, FileToolMode, ToolCeiling, ToolPolicySurface};
 use crate::toolset::CommandExecutionMode;
 use crate::{Collection, ConfigAccess, DocumentRuntimeOptions, RuntimeSnapshotObserver};
+use gents_protocol::error_chain::ErrorChain;
 
 const GRACE: Duration = Duration::from_secs(30);
 
@@ -168,7 +169,7 @@ impl EmbeddedExecutor {
 
         if let Err(error) = runtime.shutdown().await {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %spec.trial_id,
                 "eval trial runtime did not shut down cleanly"
             );
@@ -215,7 +216,7 @@ where
         match observer.snapshot().await {
             Ok(snapshot) => spec.progress.live(snapshot),
             Err(error) => tracing::debug!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %spec.trial_id,
                 "eval trial live snapshot was not read"
             ),
@@ -269,7 +270,7 @@ impl TrialExecutor for EmbeddedExecutor {
             Ok(locator) => locator,
             Err(error) => {
                 tracing::warn!(
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     trial_id = %spec.trial_id,
                     "eval trial home could not be provisioned"
                 );
@@ -313,7 +314,7 @@ impl TrialExecutor for EmbeddedExecutor {
             Ok(home) => home,
             Err(error) => {
                 tracing::warn!(
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     home = %trial_dir.display(),
                     "eval trial home is no longer readable"
                 );
@@ -324,7 +325,7 @@ impl TrialExecutor for EmbeddedExecutor {
             Ok(requests) => requests,
             Err(error) => {
                 tracing::warn!(
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     session_id = %at.session_id,
                     "eval trial session could not be read back"
                 );
@@ -339,7 +340,7 @@ impl TrialExecutor for EmbeddedExecutor {
                 .await
                 .unwrap_or_else(|error| {
                     tracing::warn!(
-                        error = %format!("{error:#}"),
+                        error = %ErrorChain(error.as_ref()),
                         request_id = %request.request_id,
                         "eval trial request evidence could not be collected"
                     );
@@ -439,7 +440,7 @@ fn unprovisioned() -> TrialLocator {
 
 fn infrastructure(trial_id: &str, locator: TrialLocator, error: &anyhow::Error) -> TrialEvidence {
     tracing::warn!(
-        error = %format!("{error:#}"),
+        error = %ErrorChain(error.as_ref()),
         trial_id = %trial_id,
         "trial infrastructure failure"
     );
@@ -981,7 +982,7 @@ async fn submit_and_observe(
         }
         Err(error) => {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %spec.trial_id,
                 stage_id = %stage.stage_id,
                 "eval stage could not be submitted"
@@ -996,7 +997,7 @@ async fn submit_and_observe(
         Ok(observed) => Some(observed),
         Err(error) => {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %spec.trial_id,
                 stage_id = %stage.stage_id,
                 "eval stage could not be observed to a terminal state"
@@ -1019,7 +1020,7 @@ async fn submit_and_observe(
                     "eval stage deadline ended before the trial home was quiet; capturing it with requests still running"
                 ),
                 Err(error) => tracing::warn!(
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     trial_id = %spec.trial_id,
                     stage_id = %stage.stage_id,
                     "eval stage could not observe the trial home settling"
@@ -1039,7 +1040,7 @@ async fn submit_and_observe(
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %spec.trial_id,
                 stage_id = %stage.stage_id,
                 "eval stage evidence could not be collected"
@@ -1060,7 +1061,7 @@ async fn submit_and_observe(
                 .await
         {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %spec.trial_id,
                 stage_id = %stage.stage_id,
                 "eval stage evidence of later session requests could not be collected"
@@ -1144,7 +1145,7 @@ async fn continue_until_done(
             Ok(_) => {}
             Err(error) => {
                 tracing::warn!(
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     trial_id = %spec.trial_id,
                     "eval continuation could not read its until capture"
                 );
@@ -1160,7 +1161,7 @@ async fn continue_until_done(
             submit_stage(&home.node, locator, &spec.agent_id, &prod, &request_id).await
         {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %spec.trial_id,
                 "eval continuation prod could not be submitted"
             );
@@ -1340,7 +1341,7 @@ async fn trigger_failure(
         },
         Err(error) => {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 trial_id = %trial_id,
                 stage_id = %stage_id,
                 "eval trial trigger status could not be read"
@@ -1533,7 +1534,7 @@ async fn run_captures(
                         Ok(Some(version)) => versions.push(version),
                         Ok(None) => {}
                         Err(error) => {
-                            tracing::warn!(error = %format!("{error:#}"), capture = %name,
+                            tracing::warn!(error = %ErrorChain(error.as_ref()), capture = %name,
                                 "eval schema capture failed; recording no capture");
                             failed = true;
                             break;
@@ -1567,7 +1568,7 @@ async fn run_captures(
                     results.insert(name.clone(), CaptureResult::Documents { rows });
                 }
                 Err(error) => tracing::warn!(
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     capture = %name,
                     "eval document capture failed; the stage records no capture under that name"
                 ),
@@ -1712,7 +1713,7 @@ fn capture_files(workspace: &Path, glob: &str) -> Option<CaptureResult> {
         }),
         Err(error) => {
             tracing::warn!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 glob = %glob,
                 "eval file capture was refused or failed; the stage records no capture under that name"
             );
@@ -1819,7 +1820,7 @@ async fn home_usage(node: &EmbeddedNode) -> TrialUsage {
         Ok::<_, anyhow::Error>(usage_of(&request_evidence_from_query_data(&data).inference_calls))
     }.await;
     result.unwrap_or_else(|error| {
-        tracing::warn!(error = %format!("{error:#}"), "eval trial usage could not be collected");
+        tracing::warn!(error = %ErrorChain(error.as_ref()), "eval trial usage could not be collected");
         TrialUsage::default()
     })
 }
@@ -2594,7 +2595,7 @@ mod tests {
         let error = install(&spec, &home, &dir.path().join("workspace"))
             .await
             .unwrap_err();
-        let reason = format!("{error:#}");
+        let reason = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             reason.contains("inference slots") && reason.contains("profile_id"),
             "{reason}"
@@ -2679,7 +2680,7 @@ mod tests {
         let error = install_fixtures(&access, &incompatible, &workspace, home.did())
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("EvalSubmission"));
+        assert!(format!("{}", ErrorChain(error.as_ref())).contains("EvalSubmission"));
         assert_eq!(
             access
                 .execute("query { EvalSubmission { message } }")

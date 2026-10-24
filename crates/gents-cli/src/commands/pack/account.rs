@@ -139,6 +139,7 @@ mod tests {
     use crate::commands::pack::registry::tests::{
         serve_fake_pack, FAKE_PASSWORD, FAKE_TOKEN, FAKE_USERNAME,
     };
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn login_exchanges_a_password_for_a_token_the_fake_registry_issued() {
@@ -240,7 +241,7 @@ mod tests {
         })
         .await
         .unwrap_err();
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains("acme/widget"), "{message}");
         assert!(message.contains("new_owner"), "{message}");
         assert!(message.contains("cannot be undone"), "{message}");

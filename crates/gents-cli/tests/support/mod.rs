@@ -83,7 +83,9 @@ pub async fn initialized_node(
         .with_node_identity_did(&node_did)
         .build()
         .await
-        .map_err(|error| format!("opening initialized embedded node: {error:#}").into())
+        .map_err(|error| {
+            format!("opening initialized embedded node: {}", ErrorChain(&error)).into()
+        })
 }
 
 pub fn node_did_from_init(init: &serde_json::Value) -> TestResult<String> {

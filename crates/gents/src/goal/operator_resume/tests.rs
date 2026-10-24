@@ -3,6 +3,7 @@ use super::*;
 use crate::config_client::{read_desired_state_record_in_txn, ConfigAccess};
 use crate::Collection;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 
 #[derive(serde::Deserialize)]
@@ -215,7 +216,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 .await
                 .unwrap();
                 let error = limited.resume_on(&limited.b).await.unwrap_err();
-                assert!(format!("{error:#}").contains("target account"));
+                assert!(format!("{}", ErrorChain(error.as_ref())).contains("target account"));
                 assert!(limited.children().await.is_empty());
                 assert_eq!(limited.goal_status().await, "usage_limited");
             }

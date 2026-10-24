@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -210,12 +211,9 @@ impl InferenceTarget {
             .build()
             .expect("reqwest client");
         let mut request = client.get(&url);
-        if let Some(key) = self
-            .backend
-            .auth
-            .resolve_api_key()
-            .unwrap_or_else(|error| panic!("target {} credential: {error:#}", self.name))
-        {
+        if let Some(key) = self.backend.auth.resolve_api_key().unwrap_or_else(|error| {
+            panic!("target {} credential: {}", self.name, ErrorChain(&error))
+        }) {
             request = request.bearer_auth(key);
         }
         let name = &self.name;
@@ -281,7 +279,7 @@ pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>, InferenceS
 }
 
 pub fn live_target() -> InferenceTarget {
-    InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
+    InferenceTarget::selected().unwrap_or_else(|error| panic!("{}", ErrorChain(error.as_ref())))
 }
 
 pub async fn bind_target(

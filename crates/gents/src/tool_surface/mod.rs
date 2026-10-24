@@ -36,6 +36,7 @@ pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSe
 pub(crate) use selection::{AgentToolConfig, BackgroundToolConfig};
 pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 
@@ -568,7 +569,7 @@ impl ToolSurface {
                     ToolSurfaceError::WriteToolNotWellFormed {
                         tool_name: decl.tool_name.clone(),
                         collection: decl.collection.clone(),
-                        error: format!("{error:#}"),
+                        error: ErrorChain(error.as_ref()).to_string(),
                         surface: self
                             .surface_of_tool
                             .get(&decl.tool_name)

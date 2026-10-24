@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 #[test]
@@ -176,7 +177,9 @@ async fn changed_targets_and_overbroad_selection_never_apply() {
             Some(json!({"and":[{"eq":{"reference":"one"}}]})),
         );
         let error = tool.execute(&malformed).await.unwrap_err();
-        assert!(format!("{error:#}").contains("unknown filter field/operator"));
+        assert!(ErrorChain(error.as_ref())
+            .to_string()
+            .contains("unknown filter field/operator"));
     }
     node.shutdown().await;
 }
@@ -469,7 +472,8 @@ mod plugin {
             .unwrap_err();
             assert!(
                 error.to_string().contains("declared data grant"),
-                "{error:#}"
+                "{}",
+                ErrorChain(error.as_ref())
             );
         }
         node.shutdown().await;
@@ -487,7 +491,8 @@ mod plugin {
         .unwrap_err();
         assert!(
             error.to_string().contains("declared data grant"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(notes(&node).await, json!([]));
         node.shutdown().await;
@@ -506,7 +511,11 @@ mod plugin {
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("missing_field"), "{error:#}");
+        assert!(
+            error.to_string().contains("missing_field"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert_eq!(notes(&node).await, json!([]));
         node.shutdown().await;
     }
@@ -592,7 +601,11 @@ mod plugin {
         let error = apply_all(&node, &grant, vec![write("y")])
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("duplicate Keyed a"), "{error:#}");
+        assert!(
+            error.to_string().contains("duplicate Keyed a"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
         node.shutdown().await;
     }
@@ -611,14 +624,19 @@ mod plugin {
                 .unwrap_err();
             assert!(
                 error.to_string().contains("exactly one unique key"),
-                "{error:#}"
+                "{}",
+                ErrorChain(error.as_ref())
             );
         }
         let missing = insert_with("Keyed", json!({"body": "x"}), Some(OnConflict::Ignore));
         let error = apply_all(&node, &keyed_grant("Keyed", &[&["key"]]), vec![missing])
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("key"), "{error:#}");
+        assert!(
+            error.to_string().contains("key"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert_eq!(rows(&node, "Keyed").await, json!([]));
         node.shutdown().await;
     }

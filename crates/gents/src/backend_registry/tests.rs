@@ -3,6 +3,7 @@ use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::lean_vocab_test::lean_backend_health_admission_cases;
 use crate::OpenAiWireApi;
+use gents_protocol::error_chain::ErrorChain;
 
 fn base_backend() -> InferenceBackend {
     serde_json::from_value(serde_json::json!({
@@ -524,8 +525,11 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
         .await
         .expect_err("a single lookup stays strict");
     assert!(
-        format!("{error:#}").contains("FutureProviderKind"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("FutureProviderKind"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     Ok(())
 }

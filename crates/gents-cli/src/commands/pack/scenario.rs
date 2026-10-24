@@ -1,6 +1,7 @@
 //! Apply the pack only after runtime readiness; event sources must observe the
 //! seed collection before seeding because they process created/first-seen docs.
 use gents::config_client::GraphqlEndpoint;
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -3546,7 +3547,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     ) = match outcome {
         Ok(values) => values,
         Err(error) => {
-            eprintln!("\nrun failed: {error:#}");
+            eprintln!("\nrun failed: {}", ErrorChain(error.as_ref()));
             eprintln!("server log: {}", log.display());
             return Err(error);
         }
@@ -3934,10 +3935,16 @@ mod tests {
             let error =
                 allow_scenario_folders(pack.path(), &manifest(folders, tool_root), home.path())
                     .unwrap_err();
-            assert!(format!("{error:#}").contains(expected), "{error:#}");
+            assert!(
+                ErrorChain(error.as_ref()).to_string().contains(expected),
+                "{}",
+                ErrorChain(error.as_ref())
+            );
         }
         let twice = manifest(serde_json::json!([{"path": "a"}, {"path": "a"}]), true);
-        assert!(format!("{:#}", validate_manifest(&twice).unwrap_err()).contains("twice"));
+        assert!(ErrorChain(validate_manifest(&twice).unwrap_err().as_ref())
+            .to_string()
+            .contains("twice"));
     }
 
     #[test]
@@ -3996,8 +4003,12 @@ mod tests {
         std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
         let error = format!(
-            "{:#}",
-            validate_scenario_defaults(authored_pack.path()).unwrap_err()
+            "{}",
+            ErrorChain(
+                validate_scenario_defaults(authored_pack.path())
+                    .unwrap_err()
+                    .as_ref()
+            )
         );
         assert!(
             error.contains("must not choose the default agent"),
@@ -4141,8 +4152,13 @@ mod tests {
         packs.sort();
         assert!(!packs.is_empty(), "expected checked-in scenario packs");
         for pack in packs {
-            load_manifest_defaults(&pack)
-                .unwrap_or_else(|error| panic!("{} should load: {error:#}", pack.display()));
+            load_manifest_defaults(&pack).unwrap_or_else(|error| {
+                panic!(
+                    "{} should load: {}",
+                    pack.display(),
+                    ErrorChain(error.as_ref())
+                )
+            });
         }
     }
 
@@ -4171,7 +4187,7 @@ mod tests {
         std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
         let error = load_manifest_defaults(dir.path()).expect_err("pack must refuse to load: run");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(
             message.contains(
                 "expect.trigger_ids entry fixture-worker uses EventSource fixture-worker-source \
@@ -4191,7 +4207,7 @@ mod tests {
         std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
         let error = load_manifest_defaults(dir.path()).expect_err("pack must refuse to load: run");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(
             message.contains("missing EventSource absent-source"),
             "{message}"

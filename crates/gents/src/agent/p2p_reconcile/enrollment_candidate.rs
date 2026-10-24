@@ -44,38 +44,41 @@ pub async fn request_enrollment(
     confirm_network_admin_pin(node, &offer).await?;
     let candidate_peer = p2p.local_peer_id().await.map_err(anyhow::Error::msg)?;
     let candidate_ticket = local_enrollment_ticket(&p2p, &candidate_peer).await?;
-    let (request, document_id) = match persisted_request(
-        node,
-        identity,
-        &offer,
-        offer_token,
-        &candidate_peer,
-    )
-    .await?
-    {
-        Some(existing) => existing,
-        None => {
-            let request = sign_enrollment_request(
-                identity,
-                &offer,
-                offer_token,
-                candidate_peer,
-                candidate_ticket,
-            )
-            .await?;
-            let document_id = match write_enrollment_request(node, &request).await {
-                    Ok(document_id) => document_id,
-                    Err(write_error) => {
-                        persisted_request(node, identity, &offer, offer_token, &request.candidate_peer)
-                            .await?
-                            .filter(|(persisted, _)| persisted == &request)
-                            .with_context(|| format!("enrollment request commit was not observably recovered after: {write_error:#}"))?
-                            .1
-                    }
-                };
-            (request, document_id)
-        }
-    };
+    let (request, document_id) =
+        match persisted_request(node, identity, &offer, offer_token, &candidate_peer).await? {
+            Some(existing) => existing,
+            None => {
+                let request = sign_enrollment_request(
+                    identity,
+                    &offer,
+                    offer_token,
+                    candidate_peer,
+                    candidate_ticket,
+                )
+                .await?;
+                let document_id =
+                    match write_enrollment_request(node, &request).await {
+                        Ok(document_id) => document_id,
+                        Err(write_error) => persisted_request(
+                            node,
+                            identity,
+                            &offer,
+                            offer_token,
+                            &request.candidate_peer,
+                        )
+                        .await?
+                        .filter(|(persisted, _)| persisted == &request)
+                        .with_context(|| {
+                            format!(
+                                "enrollment request commit was not observably recovered after: {}",
+                                ErrorChain(write_error.as_ref())
+                            )
+                        })?
+                        .1,
+                    };
+                (request, document_id)
+            }
+        };
     push_enrollment_request(&p2p, &offer, &request.request_id, &document_id).await?;
     Ok(request)
 }
@@ -283,7 +286,8 @@ pub async fn confirm_network_admin_pin(
                 .await?;
         anyhow::ensure!(
             matches!(rows::<AdminPinRow>(&response, "NetworkAdminPin")?.as_slice(), [pin] if &pin.admin_did == admin_did),
-            "admin pin commit was not observably recovered after: {commit_error:#}"
+            "admin pin commit was not observably recovered after: {}",
+            ErrorChain(commit_error.as_ref())
         );
     }
     Ok(())

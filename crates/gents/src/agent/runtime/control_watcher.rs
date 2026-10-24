@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -120,7 +121,8 @@ pub(super) async fn run_control_watcher_with_timing(
                                 error = %error,
                                 "runtime control watcher failed to refresh document view during settle window"
                             );
-                            runtime_status.publish_error(&format!("{error:#}")).await;
+                            let message = ErrorChain(error.as_ref()).to_string();
+                            runtime_status.publish_error(&message).await;
                             if resync_required
                                 || settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline)
                             {
@@ -193,7 +195,8 @@ pub(super) async fn run_control_watcher_with_timing(
                             error = %error,
                             "runtime reconcile resolve failed; keeping previous active generation"
                         );
-                        runtime_status.publish_error(&format!("{error:#}")).await;
+                        let message = ErrorChain(error.as_ref()).to_string();
+                        runtime_status.publish_error(&message).await;
                     }
                 }
                 if resolve_failed {
@@ -305,7 +308,8 @@ pub(super) async fn run_control_watcher_with_timing(
                                         error = %error,
                                         "runtime control watcher failed to reload document view; keeping previous active generation"
                                     );
-                                    runtime_status.publish_error(&format!("{error:#}")).await;
+                                    let message = ErrorChain(error.as_ref()).to_string();
+                            runtime_status.publish_error(&message).await;
                                     resync_required = true;
                                     dirty = true;
                                     sleep.as_mut().reset(
@@ -334,9 +338,8 @@ pub(super) async fn run_control_watcher_with_timing(
                                         error = %resync_error,
                                         "runtime control watcher failed to resync document view after update error"
                                     );
-                                    runtime_status
-                                        .publish_error(&format!("{resync_error:#}"))
-                                        .await;
+                                    let message = ErrorChain(resync_error.as_ref()).to_string();
+                                    runtime_status.publish_error(&message).await;
                                     resync_required = true;
                                     dirty = true;
                                     sleep.as_mut().reset(

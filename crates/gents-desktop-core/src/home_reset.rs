@@ -306,7 +306,7 @@ fn upgrade_retirement(
     read().map_err(|error| {
         BridgeError::new(
             BridgeErrorCode::Backend,
-            format!("Inspecting store upgrade: {error:#}"),
+            format!("Inspecting store upgrade: {}", ErrorChain(error.as_ref())),
         )
     })
 }
@@ -1140,7 +1140,7 @@ impl HomeResetPlan {
             delete_key(&key.record, &key.key_file).map_err(|error| {
                 BridgeError::new(
                     BridgeErrorCode::Backend,
-                    format!("Removing retired store key: {error:#}"),
+                    format!("Removing retired store key: {}", ErrorChain(error.as_ref())),
                 )
             })?;
             retired.extend(

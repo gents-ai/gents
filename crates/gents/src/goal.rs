@@ -5,6 +5,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents_protocol::error_chain::ErrorChain;
 
 mod claimed_publication;
 mod client_control;
@@ -1586,7 +1587,7 @@ fn resolve_ambiguous_goal_submission_commit(
         Ok(Some(_)) => Ok(GoalBackedRequestDisposition::Idempotent),
         Ok(None) => Err(commit_error),
         Err(recovery_error) => Err(anyhow::anyhow!(
-            "goal-backed request recovery failed after ambiguous commit: {recovery_error:#}; original commit error: {commit_error:#}"
+            "goal-backed request recovery failed after ambiguous commit: {}; original commit error: {}", ErrorChain(recovery_error.as_ref()), ErrorChain(commit_error.as_ref())
         )),
     }
 }

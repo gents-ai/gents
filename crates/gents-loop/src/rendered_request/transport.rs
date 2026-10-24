@@ -2,6 +2,7 @@ use std::fmt;
 use std::future::Future;
 
 use bytes::Bytes;
+use gents_protocol::error_chain::ErrorChain;
 use rig::http_client::{
     self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
 };
@@ -213,7 +214,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 turn_index,
                 attempt,
                 stage = stage.as_str(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "refusing provider send: rendered-request capture failed"
             );
             Err(http_client::Error::Instance(

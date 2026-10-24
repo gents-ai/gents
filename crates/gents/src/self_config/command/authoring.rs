@@ -236,6 +236,7 @@ impl ConfigCommandTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[test]
     fn the_caller_path_never_expands_authority() {
@@ -249,7 +250,7 @@ mod tests {
         assert!(inside.starts_with(&canonical_root));
         for escape in ["../escape", "/etc/gents_escape"] {
             let error = admit_scaffold_dir(&context, escape).unwrap_err();
-            let message = format!("{error:#}");
+            let message = ErrorChain(error.as_ref()).to_string();
             assert!(
                 message.contains("outside the allowed tool root"),
                 "{message}"
@@ -267,7 +268,7 @@ mod tests {
         ] {
             let error =
                 ensure_mode(mode, true, "scaffold").expect_err("a write-refusing mode refuses");
-            let message = format!("{error:#}");
+            let message = ErrorChain(error.as_ref()).to_string();
             assert!(
                 message.contains(expected),
                 "{message} should name {expected}"
@@ -275,7 +276,7 @@ mod tests {
         }
         for operation in ["check", "verify"] {
             let error = ensure_mode(FileToolMode::Off, false, operation).unwrap_err();
-            let message = format!("{error:#}");
+            let message = ErrorChain(error.as_ref()).to_string();
             assert!(message.contains("file permission"), "{message}");
             assert!(ensure_mode(FileToolMode::ReadOnly, false, operation).is_ok());
         }

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -1101,7 +1102,8 @@ async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
         error
             .to_string()
             .contains("no local enrollment request enroll-missing"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(core
         .active_status_enrollment_requests()
@@ -1245,12 +1247,13 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "enrollment": { "token": &offer },
         STATUS_REPLICATED_SCHEMA_FIELD: changed_request,
     });
-    let error = format!(
-        "{:#}",
+    let error = ErrorChain(
         core.request_status_enrollment(&request_skew)
             .await
             .unwrap_err()
-    );
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("refusing to enroll with an incompatible runtime")
             && error.contains("AgentRequest"),
@@ -1261,10 +1264,13 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "enrollment": { "token": offer },
         STATUS_REPLICATED_SCHEMA_FIELD: next_release,
     });
-    let error = format!(
-        "{:#}",
-        core.request_status_enrollment(&skewed).await.unwrap_err()
-    );
+    let error = ErrorChain(
+        core.request_status_enrollment(&skewed)
+            .await
+            .unwrap_err()
+            .as_ref(),
+    )
+    .to_string();
     assert!(
         error.contains("update the app and the runtime to the same version")
             && error.contains("AgentSession"),

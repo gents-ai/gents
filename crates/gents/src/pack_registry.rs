@@ -604,6 +604,7 @@ pub fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     async fn serve_one_pack(
         namespace: &str,
@@ -773,7 +774,7 @@ mod tests {
             client.search("demo", 1).await.unwrap_err(),
             client.download("acme", "demo", "1.0.0").await.unwrap_err(),
         ] {
-            let message = format!("{error:#}");
+            let message = format!("{}", ErrorChain(error.as_ref()));
             assert!(
                 message.contains("could not reach the registry at http://127.0.0.1:1"),
                 "{message}"
@@ -841,13 +842,14 @@ mod tests {
             "http://localhost:8080/api/v1/login",
         ] {
             let url = reqwest::Url::parse(loopback).unwrap();
-            RegistryClient::require_secure(&url)
-                .unwrap_or_else(|error| panic!("{loopback} must be allowed: {error:#}"));
+            RegistryClient::require_secure(&url).unwrap_or_else(|error| {
+                panic!("{loopback} must be allowed: {}", ErrorChain(error.as_ref()))
+            });
         }
 
         let cleartext = reqwest::Url::parse("http://registry.example/api/v1/login").unwrap();
         let error = RegistryClient::require_secure(&cleartext).unwrap_err();
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains("https"), "{message}");
         assert!(message.contains("http://registry.example"), "{message}");
     }

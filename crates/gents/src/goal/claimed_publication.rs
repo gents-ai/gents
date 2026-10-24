@@ -8,6 +8,7 @@ use crate::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 use crate::request_admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::row::AgentRequestRow;
 
 pub(crate) async fn publish_claimed_continuation(
@@ -263,7 +264,7 @@ async fn stage_claimed_continuation(
                     &goal,
                     sequence,
                     parent_request_id,
-                    &format!("invalid Goal wait evidence: {error:#}"),
+                    &format!("invalid Goal wait evidence: {}", ErrorChain(error.as_ref())),
                     true,
                     now,
                 )

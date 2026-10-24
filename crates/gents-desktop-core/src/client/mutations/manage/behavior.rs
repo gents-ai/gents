@@ -94,6 +94,7 @@ pub async fn delete_agent_context_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -250,8 +251,11 @@ mod tests {
                 .await
                 .unwrap_err();
                 assert!(
-                    format!("{disable:#}").contains("must be enabled"),
-                    "{disable:#}"
+                    ErrorChain(disable.as_ref())
+                        .to_string()
+                        .contains("must be enabled"),
+                    "{}",
+                    ErrorChain(disable.as_ref())
                 );
             }
         }

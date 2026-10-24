@@ -1,6 +1,7 @@
 use defra_p2p_adapter::P2pDocumentRequest;
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::support::enrollment::wait_for_peer_identity;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
@@ -40,7 +41,7 @@ async fn connected_pair() -> Result<(TestDb, TestDb)> {
         .ok_or("A has no P2P transport")?
         .connect_peer(&b_address)
         .await
-        .map_err(|error| format!("connect P2P peers: {error:#}"))?;
+        .map_err(|error| format!("connect P2P peers: {}", ErrorChain(&error)))?;
     wait_for_connected_peer(a.node.as_ref()).await;
     wait_for_connected_peer(b.node.as_ref()).await;
     for (from, address) in [(&a, &b_address), (&b, &a_address)] {
@@ -55,7 +56,9 @@ async fn connected_pair() -> Result<(TestDb, TestDb)> {
                 None,
             )
             .await
-            .map_err(|error| format!("register exact-document push route: {error:#}"))?;
+            .map_err(|error| {
+                format!("register exact-document push route: {}", ErrorChain(&error))
+            })?;
     }
     Ok((a, b))
 }
@@ -94,7 +97,7 @@ async fn push_segment(from: &TestDb, to: &TestDb, doc_id: &str) -> Result<()> {
             }],
         )
         .await
-        .map_err(|error| format!("push AgentOutputSegment/{doc_id}: {error:#}"))?;
+        .map_err(|error| format!("push AgentOutputSegment/{doc_id}: {}", ErrorChain(&error)))?;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         if segment_exists(to, doc_id).await? {
@@ -279,7 +282,8 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
             error.downcast_ref::<ReconstructionError>(),
             Some(ReconstructionError::ConflictingSegments { ordinal: 0, .. })
         ),
-        "expected ordinal-0 segment conflict, got {error:#}"
+        "expected ordinal-0 segment conflict, got {}",
+        ErrorChain(error.as_ref())
     );
     Ok(())
 }

@@ -375,6 +375,7 @@ async fn read_inference_setup_state_from(
 mod tests {
     use super::*;
     use crate::client::{ClientStore, DesktopPaths, PrincipalIdentity};
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::{json, Value};
     use wiremock::{
         matchers::{method, path},
@@ -482,7 +483,9 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert!(!format!("{error:#}").contains("private-runtime-error"));
+            assert!(!ErrorChain(error.as_ref())
+                .to_string()
+                .contains("private-runtime-error"));
         }
         assert!(target.received_requests().await.unwrap().is_empty());
     }

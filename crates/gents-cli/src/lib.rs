@@ -839,6 +839,7 @@ mod tests {
     use super::*;
     use crate::shared::StoredInitConfig;
     use gents::NodeIdentity as _;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
@@ -898,7 +899,11 @@ mod tests {
             Ok(_) => panic!("an unrecorded key must not be adopted"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("unrecorded file"), "{error:#}");
+        assert!(
+            error.to_string().contains("unrecorded file"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert_eq!(std::fs::read(key_file).unwrap(), before);
         assert!(!data.join("MANIFEST").exists(), "the store is never opened");
     }
@@ -958,11 +963,7 @@ mod tests {
 
         let error = gents::home::lock_store(&home, &default_data_dir(&home))
             .expect_err("an opened store excludes another runtime");
-        assert!(
-            error.lock_held().is_some(),
-            "{}",
-            gents_protocol::error_chain::ErrorChain(&error)
-        );
+        assert!(error.lock_held().is_some(), "{}", ErrorChain(&error));
 
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
@@ -988,7 +989,8 @@ mod tests {
                 .downcast_ref::<gents::home::HomeError>()
                 .and_then(gents::home::HomeError::lock_held)
                 .is_some(),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

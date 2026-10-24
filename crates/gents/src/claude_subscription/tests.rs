@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rig::completion::ToolDefinition;
 
 use super::*;
@@ -161,7 +162,8 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     assert!(
         err.to_string()
             .contains("gents claude-login --node-did did:key:z6MkNobody"),
-        "{err:#}"
+        "{}",
+        ErrorChain(err.as_ref())
     );
 }
 

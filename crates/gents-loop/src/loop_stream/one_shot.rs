@@ -2,6 +2,7 @@ use super::*;
 use crate::provider_audit::{
     AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
 };
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::rendered_request::CaptureScope;
 
 #[derive(Debug, thiserror::Error)]
@@ -77,7 +78,10 @@ async fn emit_auxiliary(
                 Ok(_) => Err(error),
                 Err(close_error) => Err(persistence_failure(
                     "observation cleanup",
-                    close_error.context(format!("original auxiliary error: {error:#}")),
+                    close_error.context(format!(
+                        "original auxiliary error: {}",
+                        ErrorChain(error.as_ref())
+                    )),
                 )),
             }
         }
@@ -100,7 +104,10 @@ async fn close_received_auxiliary_after_error(error: anyhow::Error) -> anyhow::E
         Ok(()) => error,
         Err(close_error) => persistence_failure(
             "error cleanup",
-            close_error.context(format!("original one-shot error: {error:#}")),
+            close_error.context(format!(
+                "original one-shot error: {}",
+                ErrorChain(error.as_ref())
+            )),
         ),
     }
 }
@@ -114,7 +121,10 @@ async fn finish_one_shot_result<T>(result: anyhow::Result<T>) -> anyhow::Result<
                 Ok(_) => Err(error),
                 Err(close_error) => Err(persistence_failure(
                     "error cleanup",
-                    close_error.context(format!("original one-shot error: {error:#}")),
+                    close_error.context(format!(
+                        "original one-shot error: {}",
+                        ErrorChain(error.as_ref())
+                    )),
                 )),
             }
         }
@@ -255,7 +265,8 @@ where
                 let error = stream_failure(error, last_attempt_error.take());
                 let error = match flush_failure {
                     Some(flush_error) => error.context(format!(
-                        "receiving the auxiliary item after a flush failed: {flush_error:#}"
+                        "receiving the auxiliary item after a flush failed: {}",
+                        ErrorChain(flush_error.as_ref())
                     )),
                     None => error,
                 };
@@ -474,7 +485,8 @@ where
                 }
                 Ok(()) => error,
                 Err(receipt_error) => receipt_error.context(format!(
-                    "retaining the received auxiliary item after a flush failed: {error:#}"
+                    "retaining the received auxiliary item after a flush failed: {}",
+                    ErrorChain(error.as_ref())
                 )),
             });
         }
@@ -844,7 +856,9 @@ mod tests {
             assert!(error
                 .downcast_ref::<AuxiliaryPersistenceFailure>()
                 .is_some());
-            assert!(format!("{error:#}").contains("mock close failure"));
+            assert!(ErrorChain(error.as_ref())
+                .to_string()
+                .contains("mock close failure"));
             assert_eq!(closes.load(Ordering::SeqCst), 1);
             let error = finish_one_shot_result::<String>(Err(error.context("outer caller")))
                 .await

@@ -1,4 +1,5 @@
 use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -20,7 +21,7 @@ pub fn register_served_home(home: &Path, port: u16) -> TestResult<()> {
         return Ok(());
     };
     let identity = gents::KeyIdentity::load_existing(key_path, None)
-        .map_err(|error| format!("loading served home key {key_path}: {error:#}"))?;
+        .map_err(|error| format!("loading served home key {key_path}: {}", ErrorChain(&error)))?;
     served_principals()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

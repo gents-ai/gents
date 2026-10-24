@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -316,7 +317,7 @@ async fn recover_record(
         tracing::error!(
             request_id = %record.request_id,
             cwd = %record.cwd.display(),
-            error = %format!("{error:#}"),
+            error = %ErrorChain(error.as_ref()),
             "refusing recovered task cleanup outside an admitted root"
         );
         for hook in &remaining {

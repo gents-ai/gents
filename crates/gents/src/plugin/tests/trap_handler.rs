@@ -1,5 +1,6 @@
 use super::{build_plugin_pack, ECHO_WAT};
 use crate::plugin::{PluginBudget, PluginRunner, PluginVerdict};
+use gents_protocol::error_chain::ErrorChain;
 
 const CHILD_ENV: &str = "GENTS_PLUGIN_TRAP_HANDLER_SIGNAL_CHILD";
 const TEST_NAME: &str =
@@ -100,7 +101,8 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
             gents_protocol::error_chain::ErrorChain(&error)
                 .to_string()
                 .contains("trapped"),
-            "the fault must come back as a typed trap: {error:#}"
+            "the fault must come back as a typed trap: {}",
+            ErrorChain(&error)
         );
 
         echo_once(&echo, 2);

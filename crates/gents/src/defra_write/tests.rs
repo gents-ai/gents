@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use crate::llm::tool::Tool;
@@ -113,7 +114,11 @@ async fn rejects_a_persisted_protected_collection_at_execution() {
     )
     .await
     .unwrap_err();
-    assert!(format!("{err:#}").contains("protected"), "{err:#}");
+    assert!(
+        format!("{}", ErrorChain(&err)).contains("protected"),
+        "{}",
+        ErrorChain(&err)
+    );
 }
 
 #[tokio::test]
@@ -507,8 +512,10 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
         );
         let error = tool.ensure_well_formed().unwrap_err();
         assert!(
-            format!("{error:#}").contains("unsupported bounded write field type `Object`"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref()))
+                .contains("unsupported bounded write field type `Object`"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -516,8 +523,10 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     assert!(!absent.is_well_formed());
     let error = absent.ensure_well_formed().unwrap_err();
     assert!(
-        format!("{error:#}").contains("field `missing_total` is absent from `CountOwner`"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref()))
+            .contains("field `missing_total` is absent from `CountOwner`"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -546,7 +555,11 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
                 .add_schema(&format!("type {collection} {{ count: {schema} }}"))
                 .await
                 .unwrap_err();
-            assert!(format!("{error:#}").contains(expected_error), "{error:#}");
+            assert!(
+                format!("{}", ErrorChain(&error)).contains(expected_error),
+                "{}",
+                ErrorChain(&error)
+            );
             continue;
         }
         if case["storage"] != true {
@@ -579,7 +592,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             serde_json::from_value(json!({"count": input})).unwrap(),
         )
         .await
-        .unwrap_or_else(|error| panic!("{schema}: {error:#}"));
+        .unwrap_or_else(|error| panic!("{schema}: {}", ErrorChain(&error)));
         let query = format!("{{ {collection} {{ count }} }}");
         let response =
             crate::graphql::graphql_with_transaction_retry(&node, &query, "read count carrier")

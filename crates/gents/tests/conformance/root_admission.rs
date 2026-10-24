@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 
 use super::lean_contract_snapshot;
@@ -242,9 +243,10 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                         case.name
                     ),
                     (Err(error), Some(modeled)) => panic!(
-                        "meet case {} refused a selection the model admits at {}: {error:#}",
+                        "meet case {} refused a selection the model admits at {}: {}",
                         case.name,
-                        modeled.display()
+                        modeled.display(),
+                        ErrorChain(error.as_ref())
                     ),
                     (Err(_), None) => {}
                 }

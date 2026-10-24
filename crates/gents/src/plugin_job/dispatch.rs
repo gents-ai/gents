@@ -2,6 +2,7 @@
 //! loop; an answer that is not a job ends the call there, and a refusal
 //! completes it failed with the host code and the call that follows.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -99,7 +100,7 @@ pub async fn run_step0(
                 lifecycle,
                 FailureClass::ServiceUnavailable,
                 Refusal::NotAvailable.code(),
-                &format!("{error:#}"),
+                &format!("{}", ErrorChain(error.as_ref())),
                 &format!("Next: ask the operator to reinstall the pack that provides {coordinate}"),
             )
             .await
@@ -163,7 +164,7 @@ pub async fn run_step0(
                 lifecycle,
                 FailureClass::ToolReturnedError,
                 None,
-                &format!("{error:#}"),
+                &format!("{}", ErrorChain(error.as_ref())),
                 &format!("Next: call `{tool}` again with different arguments"),
             )
             .await
@@ -530,7 +531,7 @@ pub async fn adopt_step0(
                 lifecycle,
                 FailureClass::PolicyDenied,
                 Refusal::PolicyDenied.code(),
-                &format!("{error:#}"),
+                &format!("{}", ErrorChain(error.as_ref())),
                 "Next: return scratch files with plain names under the working folder, or finish without scratch",
             )
             .await;

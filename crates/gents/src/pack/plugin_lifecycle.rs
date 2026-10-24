@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
@@ -160,7 +161,7 @@ pub fn remove_local<P>(
         Ok(plugins) => {
             let cache_error = cleanup_cache(prepared_cache)
                 .err()
-                .map(|error| format!("{error:#}"));
+                .map(|error| format!("{}", ErrorChain(error.as_ref())));
             Ok(LocalPackRemoval {
                 record,
                 plugins,
@@ -237,7 +238,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("installed locally"));
+        assert!(format!("{}", ErrorChain(error.as_ref())).contains("installed locally"));
         let first = super::super::read_home_install(home.path(), coordinate)
             .unwrap()
             .expect("local pin survives a failed notification");

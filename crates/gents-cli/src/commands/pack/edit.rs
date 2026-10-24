@@ -629,6 +629,7 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
 mod tests {
     use super::*;
     use crate::cli::PackTemplate;
+    use gents_protocol::error_chain::ErrorChain;
 
     async fn check(dir: &Path) -> Vec<String> {
         super::super::check::check_dir(dir).await.problems
@@ -793,8 +794,11 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            format!("{duplicate:#}").contains("already has"),
-            "{duplicate:#}"
+            ErrorChain(duplicate.as_ref())
+                .to_string()
+                .contains("already has"),
+            "{}",
+            ErrorChain(duplicate.as_ref())
         );
         let dangling = apply_add(
             &mut pack,
@@ -804,7 +808,13 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(format!("{dangling:#}").contains("no agent"), "{dangling:#}");
+        assert!(
+            ErrorChain(dangling.as_ref())
+                .to_string()
+                .contains("no agent"),
+            "{}",
+            ErrorChain(dangling.as_ref())
+        );
     }
 
     #[test]

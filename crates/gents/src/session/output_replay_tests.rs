@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -1506,7 +1507,8 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
             error
                 .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
                 .is_none(),
-            "{fault:?} is not a replay violation: {error:#}"
+            "{fault:?} is not a replay violation: {}",
+            ErrorChain(error.as_ref())
         );
     }
 }

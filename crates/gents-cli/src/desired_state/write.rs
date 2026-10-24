@@ -1,5 +1,6 @@
 use super::DesiredStateManifest;
 use gents::Collection;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 use std::{collections::BTreeSet, fs, path::Path};
 
@@ -16,7 +17,7 @@ pub(crate) fn write_manifest_root(
     manifest: &DesiredStateManifest,
     force: bool,
 ) -> Result<(), String> {
-    write_root(root, manifest, force).map_err(|error| format!("{error:#}"))
+    write_root(root, manifest, force).map_err(|error| format!("{}", ErrorChain(error.as_ref())))
 }
 
 fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyhow::Result<()> {

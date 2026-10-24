@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Value};
 
 use super::registry::{resolve_registry_url, RegistryClient};
@@ -26,7 +27,7 @@ async fn outdated_packs(
     for pack in installed {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
         let (latest, outdated, error) = match client.package(namespace, name).await {
-            Err(error) => (None, None, Some(format!("{error:#}"))),
+            Err(error) => (None, None, Some(ErrorChain(error.as_ref()).to_string())),
             Ok(package) => match package["latest"].as_str() {
                 None => (
                     None,
@@ -138,7 +139,10 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
             Ok(_) => updated.push(coordinate),
-            Err(error) => failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") })),
+            Err(error) => failed.push(json!({
+                "pack": coordinate,
+                "error": ErrorChain(error.as_ref()).to_string(),
+            })),
         }
     }
 

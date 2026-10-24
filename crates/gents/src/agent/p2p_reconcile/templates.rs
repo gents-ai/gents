@@ -613,6 +613,7 @@ pub fn scope_filter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
@@ -720,7 +721,11 @@ mod tests {
         let error = read_client_replicated_schema(node.clone())
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("is not registered"), "{error:#}");
+        assert!(
+            error.to_string().contains("is not registered"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         crate::migration::ensure_all_runtime_migrations(node.clone())
             .await

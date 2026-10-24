@@ -147,6 +147,7 @@ fn decode_requests(response: serde_json::Value) -> Result<Vec<RetainedRequest>> 
 mod tests {
     use super::*;
     use crate::{KeyIdentity, NodeIdentity};
+    use gents_protocol::error_chain::ErrorChain;
 
     fn locator(did: &str, hint: &str) -> TrialLocator {
         TrialLocator {
@@ -270,11 +271,12 @@ resources:
             inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
                 .await
                 .unwrap_err();
-        let held_text = format!("{held:#}");
+        let held_text = format!("{}", ErrorChain(held.as_ref()));
         assert!(
             held_text.contains("already open in this process")
                 || held_text.contains("already locked for read-write access"),
-            "{held:#}"
+            "{}",
+            ErrorChain(held.as_ref())
         );
         close(home).await;
         let mismatch = inspect_retained_requests(
@@ -285,8 +287,9 @@ resources:
         .await
         .unwrap_err();
         assert!(
-            format!("{mismatch:#}").contains("does not match recorded DID"),
-            "{mismatch:#}"
+            format!("{}", ErrorChain(mismatch.as_ref())).contains("does not match recorded DID"),
+            "{}",
+            ErrorChain(mismatch.as_ref())
         );
         assert!(inspect_retained_requests(
             &crate::test_support::runtime_handle(),
@@ -302,8 +305,9 @@ resources:
                 .await
                 .unwrap_err();
         assert!(
-            format!("{missing:#}").contains("identity key does not exist"),
-            "{missing:#}"
+            format!("{}", ErrorChain(missing.as_ref())).contains("identity key does not exist"),
+            "{}",
+            ErrorChain(missing.as_ref())
         );
         assert!(!path.join("node.key").exists());
         let missing = inspect_retained_requests(
@@ -313,7 +317,11 @@ resources:
         )
         .await
         .unwrap_err();
-        assert!(format!("{missing:#}").contains("is missing"), "{missing:#}");
+        assert!(
+            format!("{}", ErrorChain(missing.as_ref())).contains("is missing"),
+            "{}",
+            ErrorChain(missing.as_ref())
+        );
         assert!(!runs.path().join("missing").exists());
     }
 
@@ -329,8 +337,9 @@ resources:
                 .await
                 .unwrap_err();
         assert!(
-            format!("{missing:#}").contains("no existing database"),
-            "{missing:#}"
+            format!("{}", ErrorChain(missing.as_ref())).contains("no existing database"),
+            "{}",
+            ErrorChain(missing.as_ref())
         );
         assert!(!path.join("MANIFEST").exists());
         let node = crate::defra_node::EmbeddedNode::builder()
@@ -347,7 +356,7 @@ resources:
                 inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
                     .await
                     .unwrap_err();
-            let error = format!("{error:#}");
+            let error = format!("{}", ErrorChain(error.as_ref()));
             assert!(error.contains("AgentRequest"), "{error}");
             assert!(!error.contains("already open"), "{error}");
         }

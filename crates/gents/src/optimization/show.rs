@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents_protocol::error_chain::ErrorChain;
 use serde::Serialize;
 
 use crate::config_client::ConfigAccess;
@@ -39,7 +40,7 @@ pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<Jo
     let definition = match load_definition(access, owner, &origin.definition.definition_id).await {
         Ok(definition) => Some(definition),
         Err(error) if freeze_refused(error.as_ref()).is_some() => {
-            tracing::info!(job_id, error = %format!("{error:#}"), "optimization job's definition is gone or invalid; decisions are not recomputed");
+            tracing::info!(job_id, error = %ErrorChain(error.as_ref()), "optimization job's definition is gone or invalid; decisions are not recomputed");
             None
         }
         Err(error) => return Err(error),

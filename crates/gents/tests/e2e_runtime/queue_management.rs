@@ -5,6 +5,7 @@ use gents::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -422,8 +423,9 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
     ] {
         let error = gents::verify_request_receipt_signature(&tampered).expect_err(field);
         assert!(
-            format!("{error:#}").contains("signature"),
-            "{field}: {error:#}"
+            ErrorChain(error.as_ref()).to_string().contains("signature"),
+            "{field}: {}",
+            ErrorChain(error.as_ref())
         );
     }
     gents::verify_request_receipt_signature(signed)

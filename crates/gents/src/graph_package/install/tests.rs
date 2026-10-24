@@ -4,6 +4,7 @@ use crate::graph_pipeline::{
 };
 use crate::test_support::{install_test_graph_package, load_test_graph_package};
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -44,7 +45,7 @@ async fn prepare_package_refuses_a_write_collection_the_package_does_not_declare
         .await
         .map(|_| ())
         .unwrap_err();
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(error.as_ref()));
     assert!(message.contains("NotDeclaredCollection"), "{message}");
     assert!(message.contains("review"), "{message}");
 }
@@ -85,8 +86,9 @@ async fn invalid_retained_reference_fails_before_any_package_schema_write() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("missing-behavior"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("missing-behavior"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(node.get_collection("CodeReviewJob").unwrap().is_none());
     let response = node
@@ -121,8 +123,9 @@ async fn existing_package_schema_must_match_types_indexes_and_immutability() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("does not match requested schema"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("does not match requested schema"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(node.get_collection("CodeReviewArea").unwrap().is_none());
 }

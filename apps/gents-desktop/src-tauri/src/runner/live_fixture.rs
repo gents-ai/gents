@@ -17,6 +17,7 @@ use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
 use gents_desktop_core::local_runtime::DesktopInitSummary;
+use gents_protocol::error_chain::ErrorChain;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
 
@@ -483,7 +484,10 @@ async fn wait_for_operator_graphql(endpoint: &str, node_did: &str) -> Result<()>
                 );
             }
             Err(error) => {
-                anyhow::bail!("live operator GraphQL {endpoint} was not ready: {error:#}");
+                anyhow::bail!(
+                    "live operator GraphQL {endpoint} was not ready: {}",
+                    ErrorChain(error.as_ref())
+                );
             }
         }
     }

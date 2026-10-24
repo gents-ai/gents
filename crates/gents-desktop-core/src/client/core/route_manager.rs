@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -346,7 +347,10 @@ impl ClientRouteManager {
                         false,
                         false,
                     ),
-                    Some(format!("client route reconcile failed: {error:#}")),
+                    Some(format!(
+                        "client route reconcile failed: {}",
+                        ErrorChain(error.as_ref())
+                    )),
                     error_class,
                 );
                 tracing::warn!(
@@ -955,7 +959,10 @@ fn record_pairing_error(
     error: &anyhow::Error,
 ) {
     sync_state.update_peer(record, |status| {
-        status.last_error = Some(format!("client route reconcile failed: {error:#}"));
+        status.last_error = Some(format!(
+            "client route reconcile failed: {}",
+            ErrorChain(error.as_ref())
+        ));
     });
 }
 

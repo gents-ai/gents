@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -120,7 +121,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
     match verifier.verify_fresh(&request, agent_id).await {
         Ok(verified) => Some(verified),
         Err(error) if error.is_denied() => {
-            let reason = format!("request admission denied: {error:#}");
+            let reason = format!("request admission denied: {}", ErrorChain(&error));
             record_current_claim_outcome("admission_denied");
             record_current_request_outcome("admission_denied");
             if let Err(persist_error) =
@@ -532,7 +533,8 @@ where
         }
         match (run_result, auxiliary_error) {
             (Err(error), Some(auxiliary_error)) => Err(error.context(format!(
-                "owned auxiliary task also failed: {auxiliary_error:#}"
+                "owned auxiliary task also failed: {}",
+                ErrorChain(auxiliary_error.as_ref())
             ))),
             (Err(error), None) => Err(error),
             (Ok(()), Some(error)) => Err(error),
@@ -549,7 +551,7 @@ where
             Err(error) => {
                 tracing::warn!(
                     request_id = %request.request_id,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "could not read queued messages to fold; claiming the request alone"
                 );
                 return Vec::new();
@@ -880,13 +882,14 @@ where
                 tracing::error!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "refusing to run a request whose task hooks cannot be prepared"
                 );
+                let message = ErrorChain(error.as_ref()).to_string();
                 self.finalize_failure_before_work(
                     &mut lifecycle,
                     &stream_writer,
-                    &format!("{error:#}"),
+                    &message,
                     &request,
                 )
                 .await;

@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, PayloadRef,
@@ -1596,7 +1597,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             {
                 tracing::warn!(
                     header_doc_id = %candidate.header_doc_id,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "accepted turn request is unverifiable; its reasoning is not replayed"
                 );
                 continue;
@@ -2209,7 +2210,7 @@ fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
     tracing::warn!(
         capture_key = %capture_key,
         suppressed,
-        error = %format!("{error:#}"),
+        error = %ErrorChain(error.as_ref()),
         "accepted turn capture is unverifiable; its reasoning is not replayed"
     );
 }

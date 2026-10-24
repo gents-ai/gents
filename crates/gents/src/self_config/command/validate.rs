@@ -2,6 +2,7 @@ use super::*;
 use crate::config_client::{
     validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents_protocol::error_chain::ErrorChain;
 
 impl ConfigCommandTool {
     pub(super) async fn validate_saved(&self, argv: &[String]) -> Result<String> {
@@ -22,7 +23,7 @@ impl ConfigCommandTool {
                         let mut diagnostic = json!({
                             "collection": collection.graphql_type(),
                             "id": id,
-                            "error": format!("{error:#}")
+                            "error": ErrorChain(error.as_ref()).to_string()
                         });
                         if let Some(missing) = error.downcast_ref::<crate::document_config::MissingReference>() {
                             diagnostic["field"] = json!(missing.field);
@@ -47,7 +48,7 @@ impl ConfigCommandTool {
                         if crate::config_client::is_transaction_step_unavailable(&error) {
                             return Err(error);
                         }
-                        errors.push(json!({"error":format!("{error:#}")}));
+                        errors.push(json!({"error":ErrorChain(error.as_ref()).to_string()}));
                     }
                 }
                 let selected: std::collections::BTreeSet<String> = references.documents()
@@ -92,7 +93,7 @@ impl ConfigCommandTool {
                     errors.push(json!({
                         "collection":"DatastoreToolSurface", "id":surface.surface_id,
                         "tool_name":tool_name, "schema_collection":collection,
-                        "error":format!("{error:#}"),
+                        "error":ErrorChain(error.as_ref()).to_string(),
                         "inspect_with":{"argv":["datastore","get"],"target_id":surface.surface_id},
                         "inspect_schema_with":{"tool":"schema","args":{"argv":["collection","get"],"target_id":collection}},
                         "next":"Use datastore update to correct this entry or schema collection update to correct the existing collection. Preserve unrelated fields and entries, then run config validate again."

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -461,7 +462,7 @@ async fn print_new_entries(
         Ok(Some(job)) => job.journal,
         Ok(None) => return,
         Err(error) => {
-            tracing::warn!(job_id, error = %format!("{error:#}"), "could not read the job's journal for progress");
+            tracing::warn!(job_id, error = %format!("{}", ErrorChain(error.as_ref())), "could not read the job's journal for progress");
             return;
         }
     };
@@ -581,6 +582,7 @@ mod tests {
     use clap::Parser;
 
     use gents::eval::checks::CheckRegistry;
+    use gents_protocol::error_chain::ErrorChain;
     use tokio_util::sync::CancellationToken;
 
     use super::testing::{
@@ -716,7 +718,8 @@ mod tests {
         assert!(
             message.starts_with("proposer agent fixture-worker has tools [")
                 && message.ends_with("]; a proposer must be tool-less"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(message.contains("\"read_file\""), "{message}");
     }
@@ -801,7 +804,8 @@ mod tests {
         .unwrap_err();
         assert!(
             error.to_string().contains("start `gents server`"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -824,7 +828,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             message.starts_with("gents/absent_proposer is not in the pack store of ")
                 && message.contains("could not be reached")
@@ -878,7 +882,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert_eq!(format!("{error:#}"), refusal);
+            assert_eq!(format!("{}", ErrorChain(error.as_ref())), refusal);
         }
     }
 
@@ -999,7 +1003,7 @@ mod tests {
             error.to_string(),
             "policy max_rounds 3 does not match the budget's max_rounds 2; the Bonferroni divisor must be the number of candidates the job may try"
         );
-        assert_eq!(format!("{error:#}"), error.to_string());
+        assert_eq!(format!("{}", ErrorChain(error.as_ref())), error.to_string());
 
         std::fs::write(
             &path,
@@ -1047,13 +1051,16 @@ mod tests {
         let refusal = r#"job_id "a/b" must be one ordinary path component"#;
         assert_eq!(error.to_string(), refusal);
         assert_eq!(
-            format!("{error:#}"),
+            format!("{}", ErrorChain(error.as_ref())),
             refusal,
             "a refusal carries no context"
         );
         let wrapped = anyhow::Error::from(gents::optimization::JobRefused(refusal.to_owned()))
             .context("driving the job");
-        assert_eq!(format!("{:#}", super::surface_refusal(wrapped)), refusal);
+        assert_eq!(
+            format!("{}", ErrorChain(super::surface_refusal(wrapped).as_ref())),
+            refusal
+        );
     }
 
     #[tokio::test]
@@ -1102,7 +1109,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            format!("{error:#}"),
+            format!("{}", ErrorChain(error.as_ref())),
             "job job-stop stopped before it finished; run the same command with --job-id job-stop to resume it"
         );
         let output = String::from_utf8(out).unwrap();
@@ -1152,7 +1159,8 @@ mod tests {
             error
                 .to_string()
                 .starts_with("job job-json stopped before it finished"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         let output = String::from_utf8(out).unwrap();
         let json: serde_json::Value = serde_json::from_str(&output)
@@ -1183,7 +1191,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(!format!("{error:#}").contains("resume"), "{error:#}");
+        assert!(
+            !format!("{}", ErrorChain(error.as_ref())).contains("resume"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert!(gents::optimization::load_job(
             &fixture.ctx.access,
             &fixture.ctx.owner,
@@ -1249,7 +1261,11 @@ mod tests {
         let wrong = optimization(&fixture, &["promote", "job-1", "--digest", "sha256:wrong"])
             .await
             .unwrap_err();
-        assert!(wrong.to_string().starts_with("wrong_digest: "), "{wrong:#}");
+        assert!(
+            wrong.to_string().starts_with("wrong_digest: "),
+            "{}",
+            ErrorChain(wrong.as_ref())
+        );
 
         let promoted = optimization(&fixture, &["promote", "job-1", "--digest", digest.as_str()])
             .await
@@ -1287,12 +1303,20 @@ mod tests {
         let again = optimization(&fixture, &["promote", "job-1", "--digest", digest.as_str()])
             .await
             .unwrap_err();
-        assert!(again.to_string().starts_with("not_ready: "), "{again:#}");
+        assert!(
+            again.to_string().starts_with("not_ready: "),
+            "{}",
+            ErrorChain(again.as_ref())
+        );
 
         let wrong = optimization(&fixture, &["revert", "job-1", "--digest", "sha256:wrong"])
             .await
             .unwrap_err();
-        assert!(wrong.to_string().starts_with("wrong_digest: "), "{wrong:#}");
+        assert!(
+            wrong.to_string().starts_with("wrong_digest: "),
+            "{}",
+            ErrorChain(wrong.as_ref())
+        );
         let reverted = optimization(&fixture, &["revert", "job-1", "--digest", target.as_str()])
             .await
             .unwrap();
@@ -1354,7 +1378,8 @@ mod tests {
         assert!(
             kept.to_string()
                 .starts_with("job job-1 is ready_to_promote: "),
-            "{kept:#}"
+            "{}",
+            ErrorChain(kept.as_ref())
         );
 
         let held = gents::optimization::held_runs(&fixture.ctx.access, &fixture.ctx.owner)
@@ -1430,7 +1455,8 @@ mod tests {
             .unwrap_err();
         assert!(
             refused.to_string().starts_with("rebuild_mismatch: "),
-            "{refused:#}"
+            "{}",
+            ErrorChain(refused.as_ref())
         );
     }
 

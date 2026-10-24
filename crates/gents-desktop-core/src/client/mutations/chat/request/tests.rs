@@ -1,6 +1,7 @@
 type TestError = Box<dyn std::error::Error + Send + Sync>;
 type Result<T = (), E = TestError> = std::result::Result<T, E>;
 use gents::NodeIdentity as _;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_admission::AgentRequestCreate;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -272,7 +273,11 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
             drive_session_recovery_case_with_core(&core, case)
                 .await
                 .map_err(|error| {
-                    format!("driving Lean SessionRecovery case {}: {error:#}", case.name)
+                    format!(
+                        "driving Lean SessionRecovery case {}: {}",
+                        case.name,
+                        ErrorChain(error.as_ref())
+                    )
                 })?;
         }
 
@@ -924,7 +929,12 @@ async fn request_from_store_for_test(
         }
     })
     .await
-    .map_err(|error| format!("expected request {request_id} in desktop store: {error:#}"))?
+    .map_err(|error| {
+        format!(
+            "expected request {request_id} in desktop store: {}",
+            ErrorChain(&error)
+        )
+    })?
 }
 
 async fn fetch_request_row_for_test(

@@ -4,6 +4,7 @@ use crate::provider_input::ProviderInputError;
 use crate::rig_compat::ProviderModel;
 use anyhow::Result;
 use futures::future::BoxFuture;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::message::Message;
 use serde::{Deserialize, Serialize};
 
@@ -868,7 +869,7 @@ where
                 && !deadline_elapsed(summary_config.deadline, now.as_ref()) =>
         {
             tracing::warn!(
-                error = %bounded_error_diagnostic(&format!("{guided_error:#}")),
+                error = %bounded_error_diagnostic(&ErrorChain(guided_error.as_ref()).to_string()),
                 "guided compaction output exhausted recovery; trying one strict non-guided JSON fallback"
             );
             let mut fallback_config = summary_config;
@@ -905,8 +906,8 @@ where
                     anyhow::anyhow!(
                         "compaction_provider_failure: guided structured output failed: {}; \
                          non-guided JSON fallback failed: {}",
-                        bounded_error_diagnostic(&format!("{guided_error:#}")),
-                        bounded_error_diagnostic(&format!("{fallback_error:#}"))
+                        bounded_error_diagnostic(&ErrorChain(guided_error.as_ref()).to_string()),
+                        bounded_error_diagnostic(&ErrorChain(fallback_error.as_ref()).to_string())
                     )
                 }
             })?;
@@ -914,7 +915,7 @@ where
                 anyhow::anyhow!(
                     "compaction_provider_failure: guided structured output failed: {}; \
                      non-guided JSON fallback failed: {}",
-                    bounded_error_diagnostic(&format!("{guided_error:#}")),
+                    bounded_error_diagnostic(&ErrorChain(guided_error.as_ref()).to_string()),
                     bounded_error_diagnostic(&fallback_error)
                 )
             })
@@ -932,14 +933,14 @@ where
             };
             Err(anyhow::anyhow!(
                 "compaction_provider_failure: {deadline_context}{}",
-                bounded_error_diagnostic(&format!("{error:#}"))
+                bounded_error_diagnostic(&ErrorChain(error.as_ref()).to_string())
             ))
         }
     }
 }
 
 fn is_guided_output_failure(error: &anyhow::Error) -> bool {
-    let diagnostic = format!("{error:#}");
+    let diagnostic = ErrorChain(error.as_ref()).to_string();
     diagnostic.contains("structured-output validation failed")
         || diagnostic.contains("completion produced no visible output")
 }

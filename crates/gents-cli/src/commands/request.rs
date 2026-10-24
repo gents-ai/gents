@@ -1,4 +1,5 @@
 use gents::config_client::GraphqlEndpoint;
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -468,7 +469,7 @@ async fn load_request_show_snapshot(
     let blocked = gents::blocked_turn::blocked_turn(&access, &request_node_did, request_id)
         .await
         .unwrap_or_else(|error| {
-            tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");
+            tracing::warn!(request_id, error = %ErrorChain(error.as_ref()), "blocked turn unreadable");
             None
         });
     let liveness = crate::commands::status::load_liveness_value(graphql, &request_node_did).await;

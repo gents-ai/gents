@@ -301,6 +301,7 @@ pub fn materialize_candidate(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     const OWNER: &str = "did:key:subject-owner";
@@ -519,8 +520,9 @@ pub(crate) mod tests {
         std::fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
         let error = task_pack(&baseline_dir).unwrap_err();
         assert!(
-            format!("{error:#}").contains("tasks/plan/prompt.md"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("tasks/plan/prompt.md"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         let context = context_pack(&baseline_dir).unwrap();
         assert_eq!(
@@ -534,7 +536,11 @@ pub(crate) mod tests {
         let dirs = tempfile::tempdir().unwrap();
         write_fixture_pack(&dirs.path().join("baseline"));
         let error = task_pack(&dirs.path().join("baseline")).unwrap_err();
-        assert!(format!("{error:#}").contains("plan"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("plan"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[test]
@@ -606,7 +612,11 @@ pub(crate) mod tests {
         write_fixture_pack(&baseline_dir);
         let error = materialize_pack(&baseline_dir, OWNER, "no-such-agent", &JobTarget::Context)
             .unwrap_err();
-        assert!(format!("{error:#}").contains("no-such-agent"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("no-such-agent"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     pub(crate) fn write_inline_fixture_pack(root: &Path) {

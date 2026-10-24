@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -67,7 +68,7 @@ fn install_from_pack_locked(
         Err(error) => {
             tracing::warn!(
                 plugin = %plugin.name,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "the previous plugin record is unreadable; its model binding is not carried over"
             );
             None

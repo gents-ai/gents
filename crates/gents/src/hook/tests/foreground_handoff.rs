@@ -1,5 +1,6 @@
 use super::*;
 use gents_loop::session_hook::ForegroundResult;
+use gents_protocol::error_chain::ErrorChain;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -516,7 +517,9 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
             error
                 .downcast_ref::<crate::hook::persistence::BackgroundCapacityExceeded>()
                 .map(|capacity| capacity.0)
-                .unwrap_or_else(|| panic!("unexpected start failure: {error:#}"))
+                .unwrap_or_else(|| {
+                    panic!("unexpected start failure: {}", ErrorChain(error.as_ref()))
+                })
         })
         .collect::<Vec<_>>();
     assert_eq!(refusals, vec![capacity]);

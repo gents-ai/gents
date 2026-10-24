@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -607,7 +608,7 @@ impl P2pTool {
                     _ => store.revoke_request(id).await,
                 }
                 .map_err(|error| {
-                    if format!("{error:#}").contains("challenge is reused") {
+                    if format!("{}", ErrorChain(error.as_ref())).contains("challenge is reused") {
                         error.context("an offer token is single use: two nodes requested with one offer, so both requests are refused. Each joining node needs its own fresh offer; mint one per node and have each re-request; next call: p2p {\"action\":\"enrollment_offer\"}")
                     } else {
                         error
@@ -774,7 +775,7 @@ impl Tool for P2pTool {
     async fn call(&self, args: P2pParams) -> std::result::Result<String, P2pError> {
         let (argv, options) = args
             .command()
-            .map_err(|error| P2pError(format!("{error:#}")))?;
+            .map_err(|error| P2pError(format!("{}", ErrorChain(error.as_ref()))))?;
         if argv.len() > 4 || serde_json::to_vec(&options).map_or(true, |bytes| bytes.len() > 16_384)
         {
             return Err(P2pError(
@@ -782,7 +783,7 @@ impl Tool for P2pTool {
             ));
         }
         let result = self.call_one(argv, options).await.map_err(|error| {
-            let message = format!("{error:#}");
+            let message = format!("{}", ErrorChain(error.as_ref()));
             P2pError(if message.contains("next call:") {
                 message
             } else {

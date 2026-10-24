@@ -1,6 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
 use crate::lifecycle::RequestTerminalOutcome;
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
 
@@ -961,7 +962,8 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             .unwrap_err();
         assert!(
             error.is::<super::super::PendingInputChanged>(),
-            "{name}: {error:#}"
+            "{name}: {}",
+            ErrorChain(error.as_ref())
         );
         let rows = fold_rows(&db.node, session_id).await;
         for entry in &expected.pending {

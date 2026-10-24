@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
@@ -79,7 +80,7 @@ pub(super) async fn run(
                 let line = match line.context("reading chat input") {
                     Ok(line) => line,
                     Err(error) => {
-                        eprintln!("Could not read chat input: {error:#}");
+                        eprintln!("Could not read chat input: {}", ErrorChain(error.as_ref()));
                         failure = Some(error);
                         accepting = false;
                         continue;
@@ -89,7 +90,7 @@ pub(super) async fn run(
                     Ok(false) => {}
                     outcome => {
                         if let Err(error) = outcome {
-                            eprintln!("Could not record plugin approval: {error:#}");
+                            eprintln!("Could not record plugin approval: {}", ErrorChain(error.as_ref()));
                             failure = Some(error);
                         }
                         prompt(label)?;
@@ -137,7 +138,7 @@ pub(super) async fn run(
                         });
                     }
                     Err(error) => {
-                        eprintln!("Could not submit message: {error:#}");
+                        eprintln!("Could not submit message: {}", ErrorChain(error.as_ref()));
                         failure = Some(error);
                     }
                 }
@@ -146,7 +147,7 @@ pub(super) async fn run(
             completed = turns.next(), if !turns.is_empty() => {
                 if let Some((request_id, result)) = completed {
                     if let Err(error) = result {
-                        eprintln!("Request {request_id}: {error:#}");
+                        eprintln!("Request {request_id}: {}", ErrorChain(error.as_ref()));
                         failure = Some(error);
                     }
                     if accepting && approval_prompt.is_none() {

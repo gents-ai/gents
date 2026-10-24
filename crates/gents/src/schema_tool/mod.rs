@@ -2,6 +2,7 @@ use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::llm::tool::{Tool, ToolDefinition};
 use anyhow::{bail, ensure, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -489,7 +490,7 @@ impl SchemaTool {
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
                 } else if error.is::<SchemaSdlFailure>() {
-                    sdl_help_call(args, &format!("{error:#}"))
+                    sdl_help_call(args, &format!("{}", ErrorChain(error.as_ref())))
                 } else {
                     help_call(args)
                 };
@@ -610,5 +611,7 @@ fn sdl_help_call(args: &SchemaParams, error: &str) -> Value {
 }
 
 fn schema_error(error: anyhow::Error, recovery: Value) -> SchemaError {
-    SchemaError(json!({"error":format!("{error:#}"),"recovery":recovery}).to_string())
+    SchemaError(
+        json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":recovery}).to_string(),
+    )
 }

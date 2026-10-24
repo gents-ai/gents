@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::time::Duration;
 
 use axum::{http::StatusCode, routing::post, Router};
@@ -38,8 +39,8 @@ async fn graphql_connection_errors_keep_their_source_and_diagnostic() {
     .await
     .expect_err("destination port zero cannot host a listener");
     let source = transport_source(&error).expect("connection error remains downcastable");
-    assert!(source.is_connect(), "{error:#}");
-    assert!(!source.is_timeout(), "{error:#}");
+    assert!(source.is_connect(), "{}", ErrorChain(error.as_ref()));
+    assert!(!source.is_timeout(), "{}", ErrorChain(error.as_ref()));
     assert_eq!(source.url().map(reqwest::Url::as_str), Some(endpoint.url()));
     assert_diagnostic(&error, &endpoint);
 }
@@ -57,7 +58,7 @@ async fn graphql_timeouts_keep_their_source_and_diagnostic() {
     .await
     .expect_err("the HTTP response never arrives");
     let source = transport_source(&error).expect("timeout remains downcastable");
-    assert!(source.is_timeout(), "{error:#}");
+    assert!(source.is_timeout(), "{}", ErrorChain(error.as_ref()));
     assert_eq!(source.url().map(reqwest::Url::as_str), Some(endpoint.url()));
     assert_diagnostic(&error, &endpoint);
 }
@@ -100,7 +101,10 @@ async fn graphql_response_errors_remain_distinct_from_transport_failures() {
                 assert!(!source.is_connect() && !source.is_timeout() && !source.is_body());
             }
             ("graphql", None) => assert!(error.to_string().contains("timeout")),
-            _ => panic!("{kind} changed classification: {error:#}"),
+            _ => panic!(
+                "{kind} changed classification: {}",
+                ErrorChain(error.as_ref())
+            ),
         }
     }
 }

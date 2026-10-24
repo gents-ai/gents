@@ -3,6 +3,7 @@ use crate::goal::{set_goal, GoalStatus};
 use crate::graph_pipeline::runtime::graph_test_owner;
 use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
 pub(super) async fn execute(node: &defra_node::EmbeddedNode, query: &str) -> serde_json::Value {
@@ -507,7 +508,8 @@ async fn typed_resume_obeys_cancelled_or_failed_graph_fence() {
         let error = result.expect_err("a fenced graph must reject typed child publication");
         assert!(
             error.to_string().contains("graph run"),
-            "unexpected pre-fence rejection: {error:#}"
+            "unexpected pre-fence rejection: {}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(
             publication_state(&node).await,
@@ -630,7 +632,8 @@ async fn automatic_claimed_publication_obeys_graph_fence() {
             let error = result.expect_err("cancelled graph must reject automatic publication");
             assert!(
                 error.to_string().contains("graph run"),
-                "unexpected pre-fence rejection: {error:#}"
+                "unexpected pre-fence rejection: {}",
+                ErrorChain(error.as_ref())
             );
             assert_eq!(publication_state(&node).await, before);
         } else {
@@ -704,7 +707,8 @@ async fn fresh_goal_on_closed_rooted_session_rolls_back() {
     .expect_err("closed graph cannot acquire a fresh continuation obligation");
     assert!(
         error.to_string().contains("graph run"),
-        "unexpected pre-fence rejection: {error:#}"
+        "unexpected pre-fence rejection: {}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(publication_state(&node).await, before);
     node.shutdown().await;
@@ -787,7 +791,8 @@ async fn plain_graph_root_factory_fences_publication_and_cancellation() {
     ).await.expect_err("cancelled graph rejects the actual root factory");
     assert!(
         error.to_string().contains("graph run"),
-        "unexpected factory failure: {error:#}"
+        "unexpected factory failure: {}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(publication_state(&node).await, closed);
     node.shutdown().await;
@@ -875,7 +880,8 @@ async fn goal_backed_graph_root_factory_rolls_back_after_cancellation() {
     .expect_err("closed graph rejects atomic root and Goal publication");
     assert!(
         error.to_string().contains("graph run"),
-        "unexpected submission failure: {error:#}"
+        "unexpected submission failure: {}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(publication_state(&node).await, closed);
     assert_eq!(
@@ -1266,7 +1272,8 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
             .unwrap_err();
         assert!(
             denial.to_string().contains("node is not its pinned owner"),
-            "{denial:#}"
+            "{}",
+            ErrorChain(denial.as_ref())
         );
         txn.discard().await.unwrap();
         execute(&node, &request.graphql_mutation().unwrap()).await;

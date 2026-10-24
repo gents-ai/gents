@@ -1163,6 +1163,7 @@ impl PackDigester {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::job::StampedField;
 
     fn valid_plugin() -> PackPlugin {
@@ -1243,7 +1244,10 @@ mod tests {
     }
 
     fn refusal(plugin: &PackPlugin) -> String {
-        format!("{:#}", plugin.validate().expect_err("must be refused"))
+        format!(
+            "{}",
+            ErrorChain(plugin.validate().expect_err("must be refused").as_ref())
+        )
     }
 
     #[test]
@@ -1471,7 +1475,7 @@ mod tests {
         let error = with_data(vec![surface("board", &["List-Tasks"])])
             .validate(&no_plugins())
             .unwrap_err();
-        let error = format!("{error:#}");
+        let error = format!("{}", ErrorChain(&error));
         assert!(error.contains("\"List-Tasks\""), "{error}");
         assert!(error.contains("\"board\""), "{error}");
         assert!(error.contains("starting with a letter"), "{error}");
@@ -1497,24 +1501,28 @@ mod tests {
         .validate(&no_plugins())
         .unwrap_err();
         assert!(
-            format!("{error:#}").contains("data surface \"board\" twice"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("data surface \"board\" twice"),
+            "{}",
+            ErrorChain(&error)
         );
 
         let error = with_data(vec![surface("board", &["list_tasks", "list_tasks"])])
             .validate(&no_plugins())
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("tool \"list_tasks\" on data surface \"board\" twice"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error))
+                .contains("tool \"list_tasks\" on data surface \"board\" twice"),
+            "{}",
+            ErrorChain(&error)
         );
 
         let error = with_data(vec![surface("board", &[])])
             .validate(&no_plugins())
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("data surface \"board\" with no tools"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("data surface \"board\" with no tools"),
+            "{}",
+            ErrorChain(&error)
         );
 
         for bad in ["", "my board", "board\n", &"s".repeat(129)] {
@@ -1522,8 +1530,9 @@ mod tests {
                 .validate(&no_plugins())
                 .unwrap_err();
             assert!(
-                format!("{error:#}").contains("a surface id is non-empty"),
-                "{bad:?}: {error:#}"
+                format!("{}", ErrorChain(&error)).contains("a surface id is non-empty"),
+                "{bad:?}: {}",
+                ErrorChain(&error)
             );
         }
         with_data(vec![surface(&"s".repeat(128), &["list_tasks"])])
@@ -1542,15 +1551,20 @@ mod tests {
         };
         let error = both.validate(&BTreeSet::from(["gen"])).unwrap_err();
         assert!(
-            format!("{error:#}").contains("both entry and plugin"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("both entry and plugin"),
+            "{}",
+            ErrorChain(&error)
         );
         let neither = PackUxPlugin {
             entry: None,
             ..valid_ux()
         };
         let error = neither.validate(&no_plugins()).unwrap_err();
-        assert!(format!("{error:#}").contains("neither"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(&error)).contains("neither"),
+            "{}",
+            ErrorChain(&error)
+        );
     }
 
     #[test]
@@ -1584,15 +1598,20 @@ mod tests {
             .expect("declared");
         let error = produced.validate(&no_plugins()).unwrap_err();
         assert!(
-            format!("{error:#}").contains("does not declare"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("does not declare"),
+            "{}",
+            ErrorChain(&error)
         );
         let styled = PackUxPlugin {
             css: Some("ux/report/plugin.css".to_owned()),
             ..produced
         };
         let error = styled.validate(&BTreeSet::from(["report_ui"])).unwrap_err();
-        assert!(format!("{error:#}").contains("css"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(&error)).contains("css"),
+            "{}",
+            ErrorChain(&error)
+        );
     }
 
     #[test]
@@ -1606,10 +1625,15 @@ mod tests {
         };
         let error = unknown_area.validate(&no_plugins()).unwrap_err();
         assert!(
-            format!("{error:#}").contains("statusbar.right"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("statusbar.right"),
+            "{}",
+            ErrorChain(&error)
         );
-        assert!(format!("{error:#}").contains("known areas"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(&error)).contains("known areas"),
+            "{}",
+            ErrorChain(&error)
+        );
 
         let no_areas = PackUxPlugin {
             contributes: UxContributions::default(),
@@ -1635,8 +1659,9 @@ mod tests {
         };
         let error = directive_without_area.validate(&no_plugins()).unwrap_err();
         assert!(
-            format!("{error:#}").contains("transcript.directives"),
-            "{error:#}"
+            format!("{}", ErrorChain(&error)).contains("transcript.directives"),
+            "{}",
+            ErrorChain(&error)
         );
 
         let good = PackUxPlugin {
@@ -1698,7 +1723,11 @@ mod tests {
             vec!["README.md", "plugins/format_check.afb"],
         ))
         .unwrap_err();
-        assert!(format!("{error:#}").contains("not its entry"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("not its entry"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let error = validate_pack_manifest(&ux_pack(
             vec![ux.clone(), ux],
@@ -1709,7 +1738,11 @@ mod tests {
             ],
         ))
         .unwrap_err();
-        assert!(format!("{error:#}").contains("twice"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("twice"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[test]
@@ -1723,8 +1756,9 @@ mod tests {
             .push("ux/board/plugin.js".to_owned());
         let error = validate_pack_manifest(&manifest).unwrap_err();
         assert!(
-            format!("{error:#}").contains("assets or plugins pack"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("assets or plugins pack"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         manifest.metadata.ux.clear();
         validate_pack_manifest(&manifest).expect("a documents pack without ux is unchanged");

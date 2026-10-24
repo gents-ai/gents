@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -179,7 +180,11 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
 
         if let Some(expected) = &case.resolved_model {
             assert_eq!(
-                actual_model.unwrap_or_else(|error| panic!("{}: {error:#}", case.witness)),
+                actual_model.unwrap_or_else(|error| panic!(
+                    "{}: {}",
+                    ErrorChain(error.as_ref()),
+                    case.witness
+                )),
                 format!("backend::{expected}"),
                 "{}: installed binding",
                 case.witness
@@ -188,7 +193,11 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
         assert_eq!(agent, case.projected_agent_id, "{}", case.witness);
         match &case.projected_model {
             Some(expected) => assert_eq!(
-                model.unwrap_or_else(|error| panic!("{}: {error:#}", case.witness)),
+                model.unwrap_or_else(|error| panic!(
+                    "{}: {}",
+                    ErrorChain(error.as_ref()),
+                    case.witness
+                )),
                 format!("backend::{expected}"),
                 "{}",
                 case.witness

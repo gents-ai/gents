@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::os::windows::ffi::OsStrExt;
@@ -346,7 +347,11 @@ mod tests {
                 0
             );
             let error = prepare_home(&paths).await.unwrap_err();
-            assert!(error.to_string().contains("grant access"), "{error:#}");
+            assert!(
+                error.to_string().contains("grant access"),
+                "{}",
+                ErrorChain(error.as_ref())
+            );
             assert_eq!(std::fs::read(&record).unwrap(), b"keep");
         }
     }

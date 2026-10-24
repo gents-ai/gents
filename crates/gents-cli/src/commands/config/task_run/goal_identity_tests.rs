@@ -1,5 +1,6 @@
 use super::*;
 use gents::NodeIdentity;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 use serde_json::json;
@@ -177,8 +178,9 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
         let row = lookup_request_by_retry_key(&access, signer.did(), &fire.fire_key).await?;
         if let Err(error) = admitted {
             assert!(
-                format!("{error:#}").contains("Task Goal assignment changed"),
-                "{error:#}"
+                format!("{}", ErrorChain(error.as_ref())).contains("Task Goal assignment changed"),
+                "{}",
+                ErrorChain(error.as_ref())
             );
             assert!(row.is_none(), "{case}");
             let persisted = access

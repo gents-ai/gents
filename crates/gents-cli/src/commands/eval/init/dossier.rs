@@ -442,6 +442,7 @@ fn schema_types(sdl: &str) -> Vec<(String, BTreeSet<String>)> {
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::path::PathBuf;
 
     use serde_json::{json, Value};
@@ -686,7 +687,10 @@ mod tests {
         });
         let prompt = "x".repeat(70 * 1024);
         write_pack(big.path(), &config, &[("prompts/a.md", &prompt)]);
-        let error = format!("{:#}", render(big.path(), None).err().unwrap());
+        let error = format!(
+            "{}",
+            ErrorChain(render(big.path(), None).err().unwrap().as_ref())
+        );
         assert!(error.contains("prompts/a.md"), "{error}");
         assert!(error.contains(&DOSSIER_LIMIT_BYTES.to_string()), "{error}");
     }

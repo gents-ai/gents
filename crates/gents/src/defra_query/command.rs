@@ -1,4 +1,5 @@
 use anyhow::{bail, ensure, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
@@ -265,8 +266,11 @@ pub async fn execute_command(
         query
     };
     let response = access.execute_read(&query).await.map_err(|error| {
-        let diagnostic =
-            super::diagnose_failed_query(&params, Some(&schema), &format!("{error:#}"));
+        let diagnostic = super::diagnose_failed_query(
+            &params,
+            Some(&schema),
+            &format!("{}", ErrorChain(error.as_ref())),
+        );
         error.context(format!(
             "{diagnostic}; recovery: {}",
             json!({"tool":"query","args":{"argv":["help",command]}})

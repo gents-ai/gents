@@ -480,6 +480,7 @@ mod tests {
     use gents::defra_node::EmbeddedNode;
     use gents::document_config::AdvertisedModel;
     use gents::{record_model_catalog_in_txn, BackendProviderKind};
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::row::{
         AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
         NodeReadinessProcessState, NodeReadinessRow, NodeReadinessSnapshot,
@@ -789,8 +790,9 @@ mod tests {
             .await
             .expect_err("an unadvertised model must be rejected");
         assert!(
-            format!("{error:#}").contains("does not advertise"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("does not advertise"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

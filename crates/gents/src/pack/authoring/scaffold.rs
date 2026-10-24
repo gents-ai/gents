@@ -534,6 +534,7 @@ fn readme(names: &Names, template: Template) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn input(template: Template) -> ScaffoldInput {
         ScaffoldInput {
@@ -559,9 +560,9 @@ mod tests {
             assert!(report.files.contains(&"manifest.json".to_owned()));
             let manifest: crate::pack::PackManifest =
                 serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap())
-                    .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
+                    .unwrap_or_else(|error| panic!("{template:?}: {}", ErrorChain(&error)));
             crate::pack::validate_manifest("review_toolkit", &manifest)
-                .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
+                .unwrap_or_else(|error| panic!("{template:?}: {}", ErrorChain(error.as_ref())));
             if template == Template::Graph {
                 assert_eq!(
                     manifest.compiler_version.as_deref(),
@@ -656,9 +657,10 @@ mod tests {
         std::fs::write(&entry, "import x from 'https://evil/s.js'\nexport default { id: 'review_toolkit', register() {} }\n").unwrap();
         let error = super::super::build::build_pack(&dir, &NoPlugins, None).unwrap_err();
         assert!(
-            format!("{error:#}").contains("static lint refuses")
-                && format!("{error:#}").contains("non-sdk import"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("static lint refuses")
+                && format!("{}", ErrorChain(error.as_ref())).contains("non-sdk import"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

@@ -1,4 +1,5 @@
 use anyhow::{ensure, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -444,7 +445,8 @@ impl Tool for WriteTool {
                     .map(|v| v.recovery.clone())
                     .unwrap_or_else(|| json!({"tool":"write","args":{"argv":["help"]}}));
                 Err(WriteError(
-                    json!({"error":format!("{error:#}"),"recovery":next}).to_string(),
+                    json!({"error":ErrorChain(error.as_ref()).to_string(),"recovery":next})
+                        .to_string(),
                 ))
             }
         }

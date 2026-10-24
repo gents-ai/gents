@@ -6,6 +6,7 @@ use crate::agent::p2p_reconcile::{
     },
     single_string_eq,
 };
+use gents_protocol::error_chain::ErrorChain;
 
 pub(super) fn desired_row(template: Option<&str>, node_did: Option<&str>) -> PairingStateRow {
     PairingStateRow {
@@ -227,7 +228,7 @@ fn foreign_node_did_still_hard_fails_whole_peer_load() {
         "did:key:self",
     )
     .expect_err("foreign node_did must hard-fail, not soft-skip");
-    let msg = format!("{err:#}");
+    let msg = ErrorChain(&err).to_string();
     assert!(
         msg.contains("foreign") || msg.contains("someone-else") || msg.contains("refusing"),
         "error should name the refusal: {msg}"

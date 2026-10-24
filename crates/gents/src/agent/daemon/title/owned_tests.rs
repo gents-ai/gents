@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -271,7 +272,9 @@ async fn goal_usage_rejects_a_review_without_its_same_session_parent() {
     )
     .await
     .unwrap_err();
-    assert!(format!("{error:#}").contains("goal review has no same-session parent"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("goal review has no same-session parent"));
 }
 
 async fn install_review_policy(
@@ -634,7 +637,11 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("not approved"), "{error:#}");
+        assert!(
+            error.to_string().contains("not approved"),
+            "{}",
+            ErrorChain(&error)
+        );
         assert!(calls.lock().unwrap().is_empty());
         assert!(!marker.exists());
         assert!(crate::plugin::approval::pending_requests(home.path())
@@ -845,7 +852,9 @@ async fn access_review_without_reported_usage_invalidates_the_callers_allowance(
         )
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("aggregate_token_usage_missing"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("aggregate_token_usage_missing"));
     drain_reviews(&tasks, false).await;
     assert!(budget.snapshot().is_err());
     let recovered = crate::completion_factory::aggregate_token_budget_for_request(
@@ -998,7 +1007,8 @@ async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daem
         .unwrap_err();
     assert!(
         super::super::ShutdownDrainFailure::occurs_in(&error),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     tasks.close();
     let joined = tokio::time::timeout(Duration::from_secs(10), tasks.join_next())
@@ -1008,7 +1018,8 @@ async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daem
     let error = super::super::auxiliary_task_join_result(joined).unwrap_err();
     assert!(
         super::super::ShutdownDrainFailure::occurs_in(&error),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(
         fixture.terminal_row().await,
@@ -2508,7 +2519,8 @@ async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
         .expect_err("fenced partial must surface through daemon join");
     assert!(
         error.is::<super::super::ShutdownDrainFailure>(),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -2718,8 +2730,11 @@ async fn fenced_title_output_fails_closed_without_retry() {
         .expect_err("a fenced auxiliary writer must fail the title");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "storage failure retried");
     assert!(
-        format!("{error:#}").contains("lost its live processing lease"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("lost its live processing lease"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
     let response = ConfigAccess::local(fixture.node.clone())

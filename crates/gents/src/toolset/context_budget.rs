@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -190,7 +191,7 @@ pub struct ContextBudgetToolError(anyhow::Error);
 
 impl std::fmt::Display for ContextBudgetToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 

@@ -14,6 +14,7 @@ use crate::eval::runner::freeze::{definition_ref, load_definition, read_frozen_d
 use crate::eval::runner::{freeze_refused, run_dir};
 use crate::eval::{load_run, load_trials, load_verdicts, RunHeader, RunRecord};
 use crate::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 
 /// Every run `owner` has, oldest first (`created_at`, then `run_id`).
 pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>> {
@@ -95,7 +96,7 @@ pub async fn load_report_among(
 /// database errors pass through unchanged.
 fn definition_refused(error: anyhow::Error) -> anyhow::Error {
     if unresolvable(&error) {
-        refused(format!("{error:#}")).into()
+        refused(format!("{}", ErrorChain(error.as_ref()))).into()
     } else {
         error
     }

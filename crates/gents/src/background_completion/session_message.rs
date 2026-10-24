@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Debug, Deserialize)]
 struct SessionMessageRow {
@@ -43,7 +44,7 @@ pub(crate) async fn settle_running_session_message_rows(
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 tool_call_doc_id = %row.doc_id,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "session-message row settlement failed; will retry"
             ),
         }
@@ -208,7 +209,7 @@ pub(crate) async fn turn_assignment_handoff(
                     Err(error) => {
                         tracing::warn!(
                             caused_request_id = %caused.request_id,
-                            error = %format!("{error:#}"),
+                            error = %ErrorChain(error.as_ref()),
                             "assignment state is unreadable; the handoff cannot claim assignment success"
                         );
                         AssignmentObservation::Unknown

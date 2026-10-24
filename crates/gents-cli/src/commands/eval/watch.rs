@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::future::Future;
 use std::io::Write;
 use std::path::Path;
@@ -35,7 +36,7 @@ pub(crate) fn store_locked(error: &anyhow::Error) -> bool {
         "database directory is already locked for read-write access",
         "database directory is already open in this process",
     ];
-    let text = format!("{error:#}");
+    let text = format!("{}", ErrorChain(error.as_ref()));
     LOCKED.iter().any(|locked| text.contains(locked))
 }
 
@@ -46,7 +47,9 @@ where
 {
     match resolve().await {
         Ok(ctx) => Ok(Documents::Reopened(ctx)),
-        Err(error) if store_locked(&error) => Ok(Documents::Locked(format!("{error:#}"))),
+        Err(error) if store_locked(&error) => {
+            Ok(Documents::Locked(format!("{}", ErrorChain(error.as_ref()))))
+        }
         Err(error) => Err(error),
     }
 }

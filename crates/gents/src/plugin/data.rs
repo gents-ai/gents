@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::job::{
     DataCall, DataOp, DataQuery, DataQueryResponse, DataWrite, PluginDataDeclaration, RoundResult,
     CALLER_NODE_DID_FILTER,
@@ -471,7 +472,7 @@ impl Session {
                     result: DataQueryResponse { rows },
                 },
                 Err(error) => RoundResult::Error {
-                    error: format!("{error:#}"),
+                    error: format!("{}", ErrorChain(error.as_ref())),
                 },
             };
             results.insert(

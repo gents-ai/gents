@@ -9,6 +9,7 @@ use crate::local_pairing::{
 };
 use gents_desktop_core::home_reset::*;
 use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
+use gents_protocol::error_chain::ErrorChain;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -821,7 +822,7 @@ where
     } else {
         error.downcast_ref::<BridgeError>().cloned()
     };
-    let mut message = format!("{error:#}");
+    let mut message = ErrorChain(error.as_ref()).to_string();
     let _lifecycle = match lifecycle {
         Some(lifecycle) => lifecycle,
         None => relock_start(state, token).await.map_err(|_| cancelled())?,
@@ -1527,7 +1528,8 @@ where
         return Err(BridgeError::untyped(token.cancel_message()));
     }
     if matches!(adopted, Ok(BootOutcome::NeedsLaunch(..))) {
-        return adopted.map_err(|error| BridgeError::untyped(format!("{error:#}")));
+        return adopted
+            .map_err(|error| BridgeError::untyped(ErrorChain(error.as_ref()).to_string()));
     }
     let result = settle_adoption(state, &token, node_home, adopted).await;
     emit_status(app, state).await;
@@ -1545,7 +1547,7 @@ async fn settle_adoption<'a>(
         Ok(outcome) => return Ok(outcome),
         Err(error) => error,
     };
-    let message = format!("{error:#}");
+    let message = ErrorChain(error.as_ref()).to_string();
     if error.is::<RuntimeStillBooting>() {
         return Err(BridgeError::new(
             BridgeErrorCode::RuntimeStillBooting,
@@ -2484,7 +2486,7 @@ where
                 provision,
             )
             .await
-            .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+            .map_err(|error| BridgeError::untyped(ErrorChain(error.as_ref()).to_string()))
         },
         || async {
             save_confirmed_preference(
@@ -2509,7 +2511,7 @@ where
     if let (Some(core), Some(node_did)) = (current_core(&state), previous_did.as_deref()) {
         if let Err(error) = core.mark_managed_runtime_restarting(node_did).await {
             let message = format!(
-                "The node was stopped, but desktop restart bookkeeping failed: {error:#}. Retry Restart Node."
+                "The node was stopped, but desktop restart bookkeeping failed: {}. Retry Restart Node.", ErrorChain(error.as_ref())
             );
             state.managed_server.lock().await.last_error = Some(message.clone());
             emit_status(&app, &state).await;

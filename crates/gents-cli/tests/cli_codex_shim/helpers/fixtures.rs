@@ -1,6 +1,7 @@
 use super::*;
 use crate::support::graphql::graphql_mutation_with_variables;
 use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 
 async fn exact_request_binding(
     graphql: &str,
@@ -86,7 +87,11 @@ async fn next_session_message_sequence(
                 .max()
                 .unwrap_or(0);
             return u32::try_from(highest + 1).map_err(|error| {
-                format!("fixture session sequence exceeds u32: {error:#}").into()
+                format!(
+                    "fixture session sequence exceeds u32: {}",
+                    ErrorChain(&error)
+                )
+                .into()
             });
         }
         assert!(
@@ -146,7 +151,7 @@ async fn seed_canonical_tool_transcript(
         runs: vec![SegmentRun {
             stream: 0,
             bytes: u32::try_from(arguments.len())
-                .map_err(|error| format!("fixture arguments exceed u32: {error:#}"))?,
+                .map_err(|error| format!("fixture arguments exceed u32: {}", ErrorChain(&error)))?,
             declaration: Some(StreamDeclaration {
                 block_index: 0,
                 part_index: 0,
@@ -227,8 +232,9 @@ async fn seed_canonical_tool_transcript(
             ordinal: Some(0),
             runs: vec![SegmentRun {
                 stream: 0,
-                bytes: u32::try_from(result.len())
-                    .map_err(|error| format!("fixture result exceeds u32: {error:#}"))?,
+                bytes: u32::try_from(result.len()).map_err(|error| {
+                    format!("fixture result exceeds u32: {}", ErrorChain(&error))
+                })?,
                 declaration: Some(StreamDeclaration {
                     block_index: 0,
                     part_index: 0,
@@ -304,7 +310,10 @@ async fn seed_canonical_tool_transcript(
     )
     .await
     .map_err(|error| {
-        format!("seeded tool call does not reconstruct through its canonical admission: {error:#}")
+        format!(
+            "seeded tool call does not reconstruct through its canonical admission: {}",
+            ErrorChain(error.as_ref())
+        )
     })?;
     assert!(
         serde_json::from_str::<Value>(&presentation.arguments)?

@@ -1309,6 +1309,7 @@ mod tests {
     };
     use crate::commands::grok_shim::turn::PromptBlock;
     use gents::graphql::ensure_no_errors;
+    use gents_protocol::error_chain::ErrorChain;
     use tokio::sync::Mutex;
 
     fn bound_model() -> BoundModel {
@@ -2572,7 +2573,9 @@ mod tests {
                         )
                         .await
                         .map(|value| format!("{value:?}"))
-                        .unwrap_or_else(|error| format!("presentation error: {error:#}"))
+                        .unwrap_or_else(|error| {
+                            format!("presentation error: {}", ErrorChain(error.as_ref()))
+                        })
                     } else {
                         "parent request scope unavailable".into()
                     }

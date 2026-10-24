@@ -147,6 +147,7 @@ pub(crate) fn compile_lock() -> &'static std::sync::Mutex<()> {
 mod tests {
     use super::*;
     use afterburner_cloud::Afb;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn write(path: &Path, contents: &[u8]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -175,13 +176,20 @@ mod tests {
         let owner = format!("test plugin ({language})");
         let out = root.parent().unwrap().join(format!("{language}.afb"));
         let local = load_and_validate(&owner, root).unwrap_or_else(|error| {
-            panic!("loading the {language} package must succeed: {error:#}")
+            panic!(
+                "loading the {language} package must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
         });
         let _guard = compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        compile(&owner, root, local, &out)
-            .unwrap_or_else(|error| panic!("compiling {language} must succeed: {error:#}"));
+        compile(&owner, root, local, &out).unwrap_or_else(|error| {
+            panic!(
+                "compiling {language} must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
+        });
 
         let bytes = std::fs::read(&out).unwrap();
         let afb = Afb::from_bytes(&bytes)
@@ -372,13 +380,21 @@ mod tests {
 
         let owner = "test plugin (python)";
         let out = root.parent().unwrap().join("python.afb");
-        let local = load_and_validate(owner, &root)
-            .unwrap_or_else(|error| panic!("loading the python package must succeed: {error:#}"));
+        let local = load_and_validate(owner, &root).unwrap_or_else(|error| {
+            panic!(
+                "loading the python package must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
+        });
         let _guard = compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        compile(owner, &root, local, &out)
-            .unwrap_or_else(|error| panic!("compiling python must succeed: {error:#}"));
+        compile(owner, &root, local, &out).unwrap_or_else(|error| {
+            panic!(
+                "compiling python must succeed: {}",
+                ErrorChain(error.as_ref())
+            )
+        });
 
         let bytes = std::fs::read(&out).unwrap();
         let afb = Afb::from_bytes(&bytes).expect("python's output must be a readable .afb");
@@ -405,7 +421,10 @@ mod tests {
             ..Default::default()
         };
         gents::plugin::PluginRunner::compile(&bytes, &plugin).unwrap_or_else(|error| {
-            panic!("a compiled python bundle runs under every bound a call applies: {error:#}")
+            panic!(
+                "a compiled python bundle runs under every bound a call applies: {}",
+                ErrorChain(&error)
+            )
         });
     }
 
@@ -422,7 +441,7 @@ mod tests {
         let error = load_and_validate("test plugin (haskell)", &root)
             .map(drop)
             .expect_err("haskell must be refused");
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains("haskell"), "{message}");
         assert!(
             message.contains("does not know how to compile"),

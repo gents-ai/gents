@@ -24,6 +24,7 @@
 //! LOCK_NB`), and `O_NOFOLLOW` is passed from a per-target constant declared
 //! in this file with the same ABI value `libc`/`nix` use.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::fs::{File, OpenOptions, Permissions};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -737,12 +738,12 @@ async fn register_client(
                     target: LOG_TARGET,
                     client_type = %client_type,
                     mode = %mode.wire_name(),
-                    reason = %format!("{reason:#}"),
+                    reason = %format!("{}", ErrorChain(reason.as_ref())),
                     "grok shim leader rejected an invalid register frame"
                 );
                 let _ = frames.try_send(ServerEnvelope::Error {
                     code: ENVELOPE_ERROR_INVALID_REQUEST,
-                    message: format!("{reason:#}"),
+                    message: format!("{}", ErrorChain(reason.as_ref())),
                 });
                 return Err(());
             }
@@ -1747,7 +1748,8 @@ mod tests {
                 Err(error) => {
                     assert!(
                         Instant::now() < deadline,
-                        "a leader should be spawnable after the previous handle was dropped: {error:#}"
+                        "a leader should be spawnable after the previous handle was dropped: {}",
+                        ErrorChain(error.as_ref())
                     );
                     sleep(Duration::from_millis(10)).await;
                 }
@@ -1884,7 +1886,8 @@ mod tests {
         let error = ensure_socket_parent(&deep).expect_err("a symlink component must be rejected");
         assert!(
             error.to_string().contains("is a symlink"),
-            "the error should name the symlink component: {error:#}"
+            "the error should name the symlink component: {}",
+            ErrorChain(error.as_ref())
         );
         assert!(
             !target.join("nested").exists(),
@@ -1919,7 +1922,8 @@ mod tests {
             ensure_socket_parent(&deep).expect_err("a non-directory component must be rejected");
         assert!(
             error.to_string().contains("is not a directory"),
-            "the error should name the non-directory component: {error:#}"
+            "the error should name the non-directory component: {}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(
             std::fs::read_to_string(&blocker).expect("the blocking file should be readable"),

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 
 use std::sync::Arc;
@@ -658,7 +659,12 @@ pub(crate) async fn commit(
     )
     .await?
     .filter(|_| durable.is_running())
-    .with_context(|| format!("session-message commit outcome is unknown after: {error:#}"))?;
+    .with_context(|| {
+        format!(
+            "session-message commit outcome is unknown after: {}",
+            ErrorChain(error.as_ref())
+        )
+    })?;
     *lifecycle = durable;
     Ok(receipt)
 }
@@ -1023,7 +1029,7 @@ pub(crate) async fn kill_caused_request(
             Err(error) if local => return Err(error),
             Err(error) => tracing::warn!(
                 caused_request_doc_id = doc_id,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "peer interrupt of a killed session message was not written"
             ),
         }
@@ -1357,7 +1363,8 @@ mod hop_tests {
         .unwrap_err();
         assert!(
             error.to_string().contains("moved to hop"),
-            "unexpected error: {error:#}"
+            "unexpected error: {}",
+            ErrorChain(error.as_ref())
         );
         let PlannedWrite::Request { create, .. } = &planned.write else {
             panic!("a message without a Goal is a request");

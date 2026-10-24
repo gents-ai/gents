@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -297,8 +298,10 @@ where
             Ok(value) => value,
             Err(terminal_error) => {
                 if let Some(error) = reason {
-                    return Err(terminal_error
-                        .context(format!("auxiliary request failed first: {error:#}")));
+                    return Err(terminal_error.context(format!(
+                        "auxiliary request failed first: {}",
+                        ErrorChain(error.as_ref())
+                    )));
                 }
                 return Err(terminal_error);
             }

@@ -2998,6 +2998,7 @@ fn complete_confirmed_delete(
 mod delete_source_tests {
     use super::*;
     use anyhow::anyhow;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     #[test]
@@ -3013,8 +3014,11 @@ mod delete_source_tests {
         let error = local_hydration_start_evidence_from_response(&response)
             .expect_err("unknown lifecycle state must fail at the row boundary");
         assert!(
-            format!("{error:#}").contains("notARequestState"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("notARequestState"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

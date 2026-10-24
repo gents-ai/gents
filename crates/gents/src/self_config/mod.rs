@@ -6,6 +6,7 @@ pub use agent_management::configure_agent;
 use agent_management::load_agent_catalog;
 #[cfg(test)]
 use agent_management::{agent_mutate, agent_preview};
+use gents_protocol::error_chain::ErrorChain;
 mod command;
 pub(crate) use command::{is_help_call, ConfigCommandParams};
 mod execution;
@@ -95,7 +96,7 @@ pub struct SelfConfigError(anyhow::Error);
 
 impl std::fmt::Display for SelfConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -743,7 +744,7 @@ async fn agent_list(
                 "enabled": *reference,
                 "protected": catalog.protected_ids.contains(agent_id),
                 "is_default": default_agent_id.as_deref() == Some(agent_id.as_str()),
-                "configuration_error": format!("{error:#}"),
+                "configuration_error": ErrorChain(error.as_ref()).to_string(),
             }),
         };
         agents.push(snapshot);
@@ -1377,7 +1378,7 @@ impl PackInstaller {
                         "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
                         "artifact_digest": preferred.digest,
                         "installable": false,
-                        "error": format!("the stored archive could not be opened: {error:#}"),
+                        "error": format!("the stored archive could not be opened: {}", ErrorChain(error.as_ref())),
                     }));
                     continue;
                 }
@@ -1570,7 +1571,7 @@ impl PackInstaller {
                     });
                 result
                     .err()
-                    .map(|error| json!({"plugin":plugin.name,"reason":format!("{error:#}")}))
+                    .map(|error| json!({"plugin":plugin.name,"reason":ErrorChain(error.as_ref()).to_string()}))
             })
             .collect()
     }

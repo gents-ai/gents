@@ -5,6 +5,7 @@
 //! `gents_server::packs`, against the managed local agent's home; the
 //! desktop owns loading, gating and enable/disable.
 
+use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::State;
@@ -24,7 +25,7 @@ fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
 }
 
 fn failed(error: anyhow::Error) -> BridgeError {
-    BridgeError::untyped(format!("{error:#}"))
+    BridgeError::untyped(ErrorChain(error.as_ref()).to_string())
 }
 
 /// The operator's access to the agent `node_did`'s node: the principal a
@@ -42,7 +43,10 @@ fn operator_access(
     core.operator_access(node_did).map_err(|error| {
         BridgeError::new(
             BridgeErrorCode::EndpointUnreachable,
-            format!("resolving the operator's access to node {node_did}: {error:#}"),
+            format!(
+                "resolving the operator's access to node {node_did}: {}",
+                ErrorChain(error.as_ref())
+            ),
         )
     })
 }

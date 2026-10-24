@@ -163,6 +163,7 @@ mod tests {
 
     use super::*;
     use crate::config_client::ConfigAccess;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn native_input_shapes_preserve_compounds_relationships_literals_and_aliases() {
@@ -184,7 +185,12 @@ mod tests {
         ] {
             validate_filter(&access, "FilterBook", &filter)
                 .await
-                .unwrap_or_else(|error| panic!("valid native filter {filter}: {error:#}"));
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "valid native filter {filter}: {}",
+                        ErrorChain(error.as_ref())
+                    )
+                });
         }
         for filter in [
             json!({"and":[{"eq":{"title":"A"}}]}),
@@ -203,7 +209,7 @@ mod tests {
         let error = validate_filter(&access, "OAuthCredential", &json!({"unknown_field":"x"}))
             .await
             .unwrap_err();
-        let diagnostic = format!("{error:#}");
+        let diagnostic = format!("{}", ErrorChain(error.as_ref()));
         assert!(diagnostic.contains("credential_id"));
         for field in ["access_token", "refresh_token", "id_token"] {
             assert!(!diagnostic.contains(field), "{diagnostic}");
@@ -236,7 +242,7 @@ mod tests {
         let error = super::super::execute_command(&access, &args, &scope)
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("unknown filter field/operator"));
+        assert!(format!("{}", ErrorChain(error.as_ref())).contains("unknown filter field/operator"));
         let mut corrected = args;
         corrected.options.insert(
             "filter".into(),

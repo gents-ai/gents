@@ -30,8 +30,9 @@ impl FailureArtifacts {
         let directory = if retain_failures {
             fs::create_dir_all(root).map_err(|error| {
                 format!(
-                    "creating failure artifact root {}: {error:#}",
-                    root.display()
+                    "creating failure artifact root {}: {}",
+                    root.display(),
+                    ErrorChain(&error)
                 )
             })?;
             tempfile::Builder::new()
@@ -94,7 +95,7 @@ impl FailureArtifacts {
         if self.succeeded || !self.retain_failures {
             directory
                 .close()
-                .map_err(|error| format!("cleaning fixture artifacts: {error:#}"))?;
+                .map_err(|error| format!("cleaning fixture artifacts: {}", ErrorChain(&error)))?;
             return Ok(None);
         }
 
@@ -111,7 +112,11 @@ impl FailureArtifacts {
             prune_completed_failures(&self.root, &path, self.limit)
         })();
         retained.map_err(|error| {
-            format!("retaining failed fixture at {}: {error:#}", path.display())
+            format!(
+                "retaining failed fixture at {}: {}",
+                path.display(),
+                ErrorChain(&*error)
+            )
         })?;
         tracing::error!(path = %path.display(), "retained failed fixture for investigation");
         Ok(Some(path))
@@ -157,8 +162,13 @@ fn prune_completed_failures(root: &Path, current: &Path, limit: usize) -> TestRe
     });
     let remove = retained.len().saturating_sub(limit.max(1));
     for (path, _) in retained.into_iter().take(remove) {
-        fs::remove_dir_all(&path)
-            .map_err(|error| format!("pruning completed failure {}: {error:#}", path.display()))?;
+        fs::remove_dir_all(&path).map_err(|error| {
+            format!(
+                "pruning completed failure {}: {}",
+                path.display(),
+                ErrorChain(&error)
+            )
+        })?;
     }
     Ok(())
 }

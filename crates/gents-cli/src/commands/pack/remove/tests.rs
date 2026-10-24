@@ -3,6 +3,7 @@ use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
 use crate::commands::pack::test_support::{assets_pack_dir, fixture_dir};
 use crate::output_format::OutputFormat;
 use gents::pack::HomePackInstall;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 
 fn scope(home: &Path) -> ScopeArgs {
@@ -73,7 +74,9 @@ async fn a_bundled_assets_pack_removes_without_a_node() {
     let error = remove_pkg(home.path(), "fixture/assets_fixture")
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("is not installed"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("is not installed"));
 }
 
 #[tokio::test]
@@ -114,7 +117,9 @@ async fn a_cache_version_with_runs_is_retained_and_reported() {
     let error = remove_pkg(home.path(), "fixture/assets_fixture")
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("is not installed"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("is not installed"));
 }
 
 #[tokio::test]
@@ -129,8 +134,11 @@ async fn a_busy_cache_lock_fails_removal_loudly() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("pack cache is in use"),
-        "{error:#}"
+        ErrorChain(error.as_ref())
+            .to_string()
+            .contains("pack cache is in use"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 
     drop(lock);
@@ -161,7 +169,9 @@ async fn same_name_assets_have_independent_removal_locks() {
     assert!(!roots[0].exists());
     assert!(roots[1].exists());
     let error = remove_pkg(home.path(), "zeta/tools").await.unwrap_err();
-    assert!(format!("{error:#}").contains("pack cache is in use"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("pack cache is in use"));
     assert!(gents::pack::read_home_install(home.path(), "zeta/tools")
         .unwrap()
         .is_some());
@@ -195,7 +205,9 @@ async fn recorded_unscoped_assets_use_their_original_lock_and_retention_rules() 
     let error = remove_pkg(home.path(), &record.coordinate)
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("pack cache is in use"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("pack cache is in use"));
     assert!(root.exists());
 }
 
@@ -293,7 +305,9 @@ async fn unscoped_receipts_cannot_release_another_namespace_or_modified_assets()
     let error = remove_pkg(home.path(), &forged.coordinate)
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("digest belongs to a different pack"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("digest belongs to a different pack"));
     assert!(
         gents::pack::read_home_install(home.path(), &forged.coordinate)
             .unwrap()
@@ -305,7 +319,9 @@ async fn unscoped_receipts_cannot_release_another_namespace_or_modified_assets()
     let error = remove_pkg(home.path(), &record.coordinate)
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("does not match"));
+    assert!(ErrorChain(error.as_ref())
+        .to_string()
+        .contains("does not match"));
     assert!(root.exists());
 }
 
@@ -331,7 +347,9 @@ async fn forged_asset_paths_do_not_release_files_or_install_receipts() {
         let error = remove_pkg(home.path(), &record.coordinate)
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("recorded asset path"));
+        assert!(ErrorChain(error.as_ref())
+            .to_string()
+            .contains("recorded asset path"));
         assert!(home.path().join(&record.assets).exists());
         assert!(
             gents::pack::read_home_install(home.path(), &record.coordinate)

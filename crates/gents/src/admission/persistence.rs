@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -28,7 +29,10 @@ pub(crate) struct ProviderCallUsage {
 }
 
 pub(super) fn completion_persistence_error(error: anyhow::Error) -> AdmissionError {
-    AdmissionError(format!("persisting InferenceCall failed: {error:#}"))
+    AdmissionError(format!(
+        "persisting InferenceCall failed: {}",
+        ErrorChain(error.as_ref())
+    ))
 }
 
 fn extract_inference_call_doc_id(

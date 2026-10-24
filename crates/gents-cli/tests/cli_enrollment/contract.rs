@@ -1,5 +1,6 @@
 use super::*;
 use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 use support::mocks::fake_llm::{ChatAction, FakeLlm};
 use tokio::time::timeout;
@@ -554,7 +555,13 @@ async fn wait_for_replicated_reply(
                         body = presentation.body_markdown.clone();
                     }
                     Ok(_) => {}
-                    Err(error) => return Err(format!("canonical terminal reconstruction failed on the replica for {request}: {error:#}").into()),
+                    Err(error) => {
+                        return Err(format!(
+                        "canonical terminal reconstruction failed on the replica for {request}: {}",
+                        ErrorChain(error.as_ref())
+                    )
+                        .into())
+                    }
                 }
             }
             for (index, (stage, ready)) in [

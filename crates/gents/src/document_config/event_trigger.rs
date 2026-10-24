@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use gents_protocol::error_chain::ErrorChain;
 
 use super::error::DocumentConfigError;
 use defra_node::EmbeddedNode;
@@ -76,8 +77,10 @@ pub(crate) async fn load_trigger_next_run_at_batch(
             Ok(response) => response,
             Err(error) => {
                 for (result_index, _) in aliases {
-                    results[result_index] =
-                        Some(Err(anyhow!("query Trigger cursor failed: {error:#}")));
+                    results[result_index] = Some(Err(anyhow!(
+                        "query Trigger cursor failed: {}",
+                        ErrorChain(error.as_ref())
+                    )));
                 }
                 continue;
             }

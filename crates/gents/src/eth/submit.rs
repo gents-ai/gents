@@ -1262,7 +1262,11 @@ mod tests {
         )
         .await
         .expect_err("mismatched signer");
-        assert!(error.to_string().contains("does not match"), "{error:#}");
+        assert!(
+            error.to_string().contains("does not match"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]

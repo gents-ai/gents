@@ -208,6 +208,7 @@ pub async fn save_config_editor_on(
 mod tests {
     use super::*;
     use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -338,7 +339,8 @@ mod tests {
         let conflict = first.err().or_else(|| second.err()).unwrap();
         assert!(
             conflict.to_string().contains("Configuration changed"),
-            "{conflict:#}"
+            "{}",
+            ErrorChain(conflict.as_ref())
         );
         let current = read_config_editor_on(
             &access,

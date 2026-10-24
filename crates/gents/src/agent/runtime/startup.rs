@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -122,7 +123,7 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
             Ok(applied) => applied,
             Err(error) => {
                 self.admission_gate.close().await;
-                let rendered = format!("{error:#}");
+                let rendered = ErrorChain(error.as_ref()).to_string();
                 if self.fatal_error.send(error).is_err() {
                     tracing::error!(
                         error = %rendered,
@@ -371,7 +372,8 @@ async fn finish_run_agent(
 
     match (body_result, teardown_error) {
         (Err(error), Some(teardown_error)) => Err(error.context(format!(
-            "runtime status teardown also failed: {teardown_error:#}"
+            "runtime status teardown also failed: {}",
+            ErrorChain(teardown_error.as_ref())
         ))),
         (Err(error), None) => Err(error),
         (Ok(()), Some(error)) => Err(error),
@@ -416,19 +418,22 @@ async fn run_agent_owned(
     {
         Ok(subscription) => subscription,
         Err(error) => {
-            runtime_status.publish_error(&format!("{error:#}")).await;
+            let message = ErrorChain(error.as_ref()).to_string();
+            runtime_status.publish_error(&message).await;
             return Err(error);
         }
     };
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            runtime_status.publish_error(&format!("{error:#}")).await;
+            let message = ErrorChain(error.as_ref()).to_string();
+            runtime_status.publish_error(&message).await;
             return Err(error);
         }
     };
     if let Err(error) = validate_startup_snapshot(&agent, &tool_runtime, &resolved_snapshot).await {
-        runtime_status.publish_error(&format!("{error:#}")).await;
+        let message = ErrorChain(error.as_ref()).to_string();
+        runtime_status.publish_error(&message).await;
         return Err(error);
     }
     log_recovery(
@@ -554,7 +559,7 @@ async fn run_agent_owned(
         return match shutdown_result {
             Ok(()) => Err(error).context("durably publish startup agent_config readiness source"),
             Err(shutdown_error) => Err(error).context(format!(
-                "durably publish startup agent_config readiness source; agent_config slot shutdown also failed: {shutdown_error:#}"
+                "durably publish startup agent_config readiness source; agent_config slot shutdown also failed: {}", ErrorChain(shutdown_error.as_ref())
             )),
         };
     }
@@ -1061,9 +1066,10 @@ async fn run_agent_owned(
     }
 
     match (result, teardown_error) {
-        (Err(error), Some(teardown_error)) => {
-            Err(error.context(format!("runtime teardown also failed: {teardown_error:#}")))
-        }
+        (Err(error), Some(teardown_error)) => Err(error.context(format!(
+            "runtime teardown also failed: {}",
+            ErrorChain(teardown_error.as_ref())
+        ))),
         (Err(error), None) => Err(error),
         (Ok(()), Some(error)) => Err(error),
         (Ok(()), None) => Ok(()),

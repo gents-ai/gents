@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -211,7 +212,7 @@ pub fn list_readable_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> 
             match parsed {
                 Ok(record) => records.push(record),
                 Err(error) => {
-                    tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "unreadable pack install record; skipped")
+                    tracing::warn!(path = %path.display(), error = %ErrorChain(error.as_ref()), "unreadable pack install record; skipped")
                 }
             }
         }
@@ -305,7 +306,11 @@ mod tests {
             vec!["acme/tools".to_owned(), "zeta/tools".to_owned()]
         );
         let strict = list_home_installs(home.path()).unwrap_err();
-        assert!(format!("{strict:#}").contains("future.json"), "{strict:#}");
+        assert!(
+            format!("{}", ErrorChain(strict.as_ref())).contains("future.json"),
+            "{}",
+            ErrorChain(strict.as_ref())
+        );
     }
 
     #[test]

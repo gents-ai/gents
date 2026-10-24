@@ -5,6 +5,7 @@
 //! operator/bootstrap intent knob, and the prober's only doc write is the
 //! recurring `unknown → healthy` promotion.
 
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -416,7 +417,10 @@ async fn probe_selected_backends(
                         Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
                     }
                 }
-                Err(error) => (ProbeEvent::ProbeFail, Some(format!("{error:#}"))),
+                Err(error) => (
+                    ProbeEvent::ProbeFail,
+                    Some(ErrorChain(error.as_ref()).to_string()),
+                ),
             };
             record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
             continue;

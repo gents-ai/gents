@@ -1,5 +1,6 @@
 use crate::error::{BridgeError, BridgeErrorCode};
 use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult};
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 pub(crate) mod login;
@@ -281,7 +282,7 @@ pub(crate) async fn require_reachable_configuration(
             target: LOG_TARGET,
             node_did,
             provider,
-            error = %format!("{error:#}"),
+            error = %ErrorChain(error.as_ref()),
             "node configuration is not reachable; not starting provider sign-in"
         );
         BridgeError::new(
@@ -316,7 +317,7 @@ pub(crate) async fn upsert_through(
                 target: LOG_TARGET,
                 node_did = %stored.node_did,
                 provider = %stored.provider,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "labelling the added account failed; it keeps its default label"
             ),
         }
@@ -415,7 +416,7 @@ pub(crate) async fn observe_provider_accounts(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did,
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "reading stored provider accounts failed; reporting held sign-ins only"
             );
             Ok(held)

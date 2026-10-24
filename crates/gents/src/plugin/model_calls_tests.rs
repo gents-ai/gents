@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -353,7 +354,11 @@ async fn a_bound_slot_with_no_resolver_fails_loudly() {
         .call(&record, json!({}))
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("remote_ocr"), "{error:#}");
+    assert!(
+        format!("{}", ErrorChain(error.as_ref())).contains("remote_ocr"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
 }
 
 fn session(fake: &Fake) -> Session {
@@ -455,8 +460,9 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
     assert!(endpoint.api_key.is_none());
     let error = models.resolve(&binding("gone")).await.unwrap_err();
     assert!(
-        format!("{error:#}").contains("no longer exists"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("no longer exists"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 

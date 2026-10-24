@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -512,12 +513,12 @@ fn spawn_codex_shim_supervisor(
                         set_codex_shim_health(
                             &health,
                             CodexShimHealth::Disabled {
-                                reason: format!("{:#}", error.error()),
+                                reason: format!("{}", error.error()),
                             },
                         );
                         tracing::warn!(
                             "Codex endpoint disabled: agent {bound_agent_id:?} became runnable, \
-                             but the shim could not bind: {:#}",
+                             but the shim could not bind: {}",
                             error.error()
                         );
                         tracing::warn!(
@@ -838,7 +839,11 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                 gents::tool_surface::resolve_configured_tool_root(root)
                     .map(|resolved| resolved.to_string_lossy().into_owned())
                     .map_err(|error| {
-                        format!("tool root {} does not resolve: {error:#}", root.display())
+                        format!(
+                            "tool root {} does not resolve: {}",
+                            root.display(),
+                            ErrorChain(error.as_ref())
+                        )
                     })
             })
             .transpose(),
@@ -1043,7 +1048,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                         .await
                         {
                             Ok(bound_agent_id) => {
-                                tracing::warn!("Codex endpoint pending: {:#}", error.error());
+                                tracing::warn!("Codex endpoint pending: {}", error.error());
                                 tracing::warn!(
                                     "The server keeps running. The shim binds by itself once agent {bound_agent_id:?} \
                                      becomes runnable (for example after `gents config apply`) — no restart needed."
@@ -1051,13 +1056,13 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                                 codex_shim_output = Some(json!({
                                     "pending": true,
                                     "bound_agent_id": bound_agent_id,
-                                    "reason": format!("{:#}", error.error()),
+                                    "reason": format!("{}", error.error()),
                                 }));
                                 set_codex_shim_health(
                                     &codex_shim_health,
                                     CodexShimHealth::Pending {
                                         bound_agent_id: bound_agent_id.clone(),
-                                        reason: format!("{:#}", error.error()),
+                                        reason: format!("{}", error.error()),
                                     },
                                 );
                                 spawn_codex_shim_supervisor(
@@ -1070,7 +1075,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                                 );
                             }
                             Err(binding_error) => {
-                                let reason = format!("{binding_error:#}");
+                                let reason = ErrorChain(binding_error.as_ref()).to_string();
                                 tracing::warn!("Codex endpoint disabled: {reason}");
                                 codex_shim_output = Some(json!({
                                     "disabled": true,
@@ -1085,18 +1090,18 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                         None
                     }
                     Err(error) => {
-                        tracing::warn!("Codex endpoint disabled: {:#}", error.error());
+                        tracing::warn!("Codex endpoint disabled: {}", error.error());
                         tracing::warn!(
                             "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
                         );
                         codex_shim_output = Some(json!({
                             "disabled": true,
-                            "reason": format!("{:#}", error.error()),
+                            "reason": format!("{}", error.error()),
                         }));
                         set_codex_shim_health(
                             &codex_shim_health,
                             CodexShimHealth::Disabled {
-                                reason: format!("{:#}", error.error()),
+                                reason: format!("{}", error.error()),
                             },
                         );
                         None
@@ -1283,7 +1288,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                         Err(error) => {
                             tracing::error!(
                                 socket = %socket_path.display(),
-                                error = %format!("{error:#}"),
+                                error = %ErrorChain(error.as_ref()),
                                 "Grok TUI endpoint disabled: the leader could not bind"
                             );
                         }
@@ -1385,7 +1390,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                     grok_shutdown_error = Some(error.context("shutting down the Grok shim leader"));
                 } else {
                     tracing::warn!(
-                        error = %format!("{error:#}"),
+                        error = %ErrorChain(error.as_ref()),
                         "Grok shim leader shutdown also failed while the server was exiting with an error"
                     );
                 }
@@ -1462,9 +1467,10 @@ impl ServeRuntime {
         match (outcome, drained) {
             (Ok(()), drained) => drained,
             (Err(error), Ok(())) => Err(error),
-            (Err(error), Err(drain_error)) => {
-                Err(error.context(format!("runtime shutdown also failed: {drain_error:#}")))
-            }
+            (Err(error), Err(drain_error)) => Err(error.context(format!(
+                "runtime shutdown also failed: {}",
+                ErrorChain(drain_error.as_ref())
+            ))),
         }
     }
 }
@@ -1926,7 +1932,8 @@ mod shim_host_tests {
             .expect_err("unrelated listener must not satisfy readiness");
         assert!(
             error.to_string().contains("another service may own"),
-            "unexpected diagnostic: {error:#}"
+            "unexpected diagnostic: {}",
+            ErrorChain(&error)
         );
 
         server.abort();

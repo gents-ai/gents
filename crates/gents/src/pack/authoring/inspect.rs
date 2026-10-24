@@ -52,6 +52,7 @@ pub fn preview_config(
 mod tests {
     use super::super::build::PluginCompiler;
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use std::path::Path;
 
     struct RefusingCompiler {
@@ -116,8 +117,9 @@ mod tests {
         std::fs::write(&tampered, bytes).unwrap();
         let error = verify_pack_file(&tampered).unwrap_err();
         assert!(
-            format!("{error:#}").contains("is not a valid pack"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("is not a valid pack"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -163,8 +165,9 @@ mod tests {
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
         let error = preview_config(&manifest, &asset).unwrap_err();
         assert!(
-            format!("{error:#}").contains("GENTS_PREVIEW_ENDPOINT"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("GENTS_PREVIEW_ENDPOINT"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         std::fs::write(

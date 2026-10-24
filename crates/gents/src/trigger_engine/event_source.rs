@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::{BTreeMap, VecDeque};
 #[cfg(test)]
@@ -592,7 +593,7 @@ impl EventSource {
                 }
                 Err(err) => {
                     self.subscription_seed_failures
-                        .insert(collection.clone(), format!("{err:#}"));
+                        .insert(collection.clone(), ErrorChain(err.as_ref()).to_string());
                     tracing::warn!(
                         source_collection = %collection,
                         %err,

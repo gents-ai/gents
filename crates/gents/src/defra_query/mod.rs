@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
@@ -78,7 +79,7 @@ pub struct DefraQueryError(anyhow::Error);
 
 impl std::fmt::Display for DefraQueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 
@@ -142,8 +143,8 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
-            Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
-            Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
+            Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
+            Err(error) => Err(anyhow!("{}", json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
         }
     }
 }

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::io::{self, IsTerminal};
@@ -132,7 +133,10 @@ async fn watch_target(args: &JobWatchArgs) -> Result<(ConfigAccess, String, Stri
 
 /// The message and exit code of a watch that cannot start polling: not observable.
 fn pre_poll_failure(error: &anyhow::Error) -> (String, i32) {
-    (format!("{error:#}"), NOT_OBSERVABLE_EXIT)
+    (
+        format!("{}", ErrorChain(error.as_ref())),
+        NOT_OBSERVABLE_EXIT,
+    )
 }
 
 /// A Local access holds the home store claim, which would block `gents server`.

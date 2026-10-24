@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
@@ -199,7 +200,7 @@ impl EmbeddedRemoteP2pAdmin {
             },
         )
         .await
-        .map_err(|error| RemoteP2pAdminError::LocalError(format!("{error:#}")))?;
+        .map_err(|error| RemoteP2pAdminError::LocalError(ErrorChain(error.as_ref()).to_string()))?;
         Ok(response
             .pointer(&format!("/data/{collection}"))
             .and_then(serde_json::Value::as_array)
@@ -1390,8 +1391,9 @@ pub(super) mod tests {
                 .await
                 .unwrap_or_else(|error| {
                     panic!(
-                        "template '{}' filter set rejected by add_replicator: {error:#}",
-                        template.id
+                        "template '{}' filter set rejected by add_replicator: {}",
+                        template.id,
+                        ErrorChain(&error)
                     )
                 });
         }
@@ -2194,7 +2196,10 @@ pub(super) mod tests {
                     continue;
                 }
                 Err(error) => {
-                    panic!("reconstructing projected child result failed: {error:#}");
+                    panic!(
+                        "reconstructing projected child result failed: {}",
+                        ErrorChain(error.as_ref())
+                    );
                 }
             }
         }

@@ -1,5 +1,6 @@
 use super::*;
 use anyhow::Context;
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::session_message::{AgentMessageArgs, AgentNewArgs};
 
@@ -237,7 +238,10 @@ impl DefraSessionHook {
                 service_unavailable_payload(
                     tool_name,
                     "/session_id",
-                    format!("the target chat could not be read: {error:#}"),
+                    format!(
+                        "the target chat could not be read: {}",
+                        ErrorChain(error.as_ref())
+                    ),
                     true,
                 )
             ),
@@ -274,7 +278,10 @@ impl DefraSessionHook {
                         service_unavailable_payload(
                             tool_name,
                             "/",
-                            format!("the message could not be delivered: {error:#}"),
+                            format!(
+                                "the message could not be delivered: {}",
+                                ErrorChain(error.as_ref())
+                            ),
                             true,
                         )
                     );
@@ -289,7 +296,7 @@ impl DefraSessionHook {
             {
                 tracing::warn!(
                     target_session = %target.session_id,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "agent_message delivered, but interrupting the target's turn failed"
                 );
             }

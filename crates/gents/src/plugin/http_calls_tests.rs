@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -226,8 +227,10 @@ fn a_pack_cannot_declare_a_network_grant_the_host_cannot_serve() {
         );
         let error = plugin.validate().unwrap_err();
         assert!(
-            format!("{error:#}").contains("network grant the host cannot serve"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref()))
+                .contains("network grant the host cannot serve"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
     plugin.manifold = Some(
@@ -310,7 +313,7 @@ fn granting_a_network_allow_list_needs_grant_authority() {
     );
     let error = store::grant_on_install(home.path(), &record.namespace, &record.declaration, false)
         .unwrap_err();
-    let error = format!("{error:#}");
+    let error = format!("{}", ErrorChain(error.as_ref()));
     assert!(
         error.contains("HTTP to api.example.com") && error.contains("--grant-authority"),
         "{error}"

@@ -155,6 +155,7 @@ impl PackSource {
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use gents_protocol::error_chain::ErrorChain;
     use std::path::{Path, PathBuf};
 
     pub(crate) fn fixture_dir(name: &str) -> PathBuf {
@@ -166,7 +167,7 @@ pub(crate) mod test_support {
     pub(crate) fn every_fixture_dir() -> Vec<PathBuf> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs");
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
-            .unwrap_or_else(|error| panic!("reading {}: {error:#}", root.display()))
+            .unwrap_or_else(|error| panic!("reading {}: {}", root.display(), ErrorChain(&error)))
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .filter(|path| path.join("manifest.json").is_file())
@@ -192,15 +193,22 @@ pub(crate) mod test_support {
     pub(crate) fn build_unbuilt_plugins(dir: &Path, manifest: &super::PackManifest) {
         for plugin in &manifest.metadata.plugins {
             if plugin.source.is_some() && !dir.join(&plugin.artifact).is_file() {
-                super::build::build_plugin(dir, manifest, plugin)
-                    .unwrap_or_else(|error| panic!("building plugin {}: {error:#}", plugin.name));
+                super::build::build_plugin(dir, manifest, plugin).unwrap_or_else(|error| {
+                    panic!(
+                        "building plugin {}: {}",
+                        plugin.name,
+                        ErrorChain(error.as_ref())
+                    )
+                });
             }
         }
     }
 
     pub(crate) fn local_pack_source(dir: &Path, home: &Path) -> super::PackSource {
-        let archive = super::local::open(&super::local::LocalName::Path(dir), home)
-            .unwrap_or_else(|error| panic!("opening {}: {error:#}", dir.display()));
+        let archive =
+            super::local::open(&super::local::LocalName::Path(dir), home).unwrap_or_else(|error| {
+                panic!("opening {}: {}", dir.display(), ErrorChain(error.as_ref()))
+            });
         super::PackSource {
             archive,
             from: super::Source::Local,
@@ -941,6 +949,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
@@ -959,8 +968,11 @@ mod tests {
             .err()
             .expect("no pack is named src");
         assert!(
-            format!("{bare:#}").contains("is not in the pack store of"),
-            "{bare:#}"
+            ErrorChain(bare.as_ref())
+                .to_string()
+                .contains("is not in the pack store of"),
+            "{}",
+            ErrorChain(bare.as_ref())
         );
         let dotted = resolve_subject_pack(home.path(), "./src", unreachable)
             .await
@@ -1036,7 +1048,7 @@ mod tests {
         let Err(error) = result else {
             panic!("neither the store nor the registry has this pack");
         };
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(
             message.contains("is not in the pack store of")
                 && message.contains("could not be reached"),
@@ -1068,8 +1080,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("no inference slot"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("no inference slot"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -1205,8 +1220,11 @@ mod tests {
             assert_eq!(outcome.is_err(), invalid_binding, "{outcome:?}");
             if let Err(error) = outcome {
                 assert!(
-                    format!("{error:#}").contains("expected NAME=PROFILE_ID"),
-                    "{error:#}"
+                    ErrorChain(error.as_ref())
+                        .to_string()
+                        .contains("expected NAME=PROFILE_ID"),
+                    "{}",
+                    ErrorChain(error.as_ref())
                 );
             }
             let after = gents::config_client::ConfigAccess::local(retained_node.clone())
@@ -1271,7 +1289,13 @@ mod tests {
         let error = install_from(home.path(), second.path(), Vec::new())
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("were edited"), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("were edited"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         assert_eq!(
             gents::pack::read_home_install(home.path(), "gents/demo_pack").unwrap(),
@@ -1362,7 +1386,9 @@ mod tests {
             |_| anyhow::bail!("local publication rejected"),
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("local publication rejected"));
+        assert!(ErrorChain(error.as_ref())
+            .to_string()
+            .contains("local publication rejected"));
         assert_eq!(
             super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap(),
             before

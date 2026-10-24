@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::fmt;
 use std::time::Duration;
 
@@ -31,7 +32,7 @@ struct TransactionStorageFailure {
 
 impl fmt::Display for TransactionStorageFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:#}", self.error)
+        write!(formatter, "{}", ErrorChain(self.error.as_ref()))
     }
 }
 

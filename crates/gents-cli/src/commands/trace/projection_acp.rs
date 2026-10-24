@@ -733,6 +733,7 @@ pub(super) fn scope_value_matches<'a>(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
@@ -851,7 +852,8 @@ mod tests {
             error
                 .to_string()
                 .contains("ambiguous ProjectionAcpBinding rows"),
-            "unexpected error: {error:#}"
+            "unexpected error: {}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -882,7 +884,8 @@ mod tests {
             error
                 .to_string()
                 .contains("ambiguous ProjectionAcpBinding rows"),
-            "unexpected error: {error:#}"
+            "unexpected error: {}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -928,7 +931,8 @@ mod tests {
             error
                 .to_string()
                 .contains("non-operational publication_status draft"),
-            "unexpected error: {error:#}"
+            "unexpected error: {}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -1047,7 +1051,8 @@ mod tests {
             error
                 .to_string()
                 .contains("DefraDB ACP denied read access to root request req-root"),
-            "unexpected error: {error:#}"
+            "unexpected error: {}",
+            ErrorChain(error.as_ref())
         );
         Ok(())
     }

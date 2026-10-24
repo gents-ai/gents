@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -131,7 +132,8 @@ fn unchanged_non_utf8_git_entry_does_not_widen_changed_path_admission() {
             .unwrap_err();
     assert!(
         error.to_string().contains("non-UTF-8 Git path"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -169,6 +171,7 @@ fn opaque_git_basename_keeps_parent_alias_fence() {
         super::super::adapter::validate_tree_delta(&fx.repo, &base, &tree, &cap).unwrap_err();
     assert!(
         error.to_string().contains("component aliases conflict"),
-        "{error:#}"
+        "{}",
+        ErrorChain(&error)
     );
 }

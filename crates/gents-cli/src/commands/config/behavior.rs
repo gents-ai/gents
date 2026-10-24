@@ -313,6 +313,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
@@ -530,10 +531,11 @@ mod tests {
             tags: Vec::new(),
             created_at: None,
         };
-        assert!(
-            format!("{:#}", upsert_agent(&node, &agent).await.unwrap_err())
-                .contains("missing-profile")
-        );
+        assert!(format!(
+            "{}",
+            ErrorChain(upsert_agent(&node, &agent).await.unwrap_err().as_ref())
+        )
+        .contains("missing-profile"));
         let response = node
             .execute("{ Agent {agent_id} AgentContext {context_id} Tools {tools_id} }")
             .await;

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -33,7 +34,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     let manifest = match read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
-            report.problems.push(format!("{error:#}"));
+            report
+                .problems
+                .push(format!("{}", ErrorChain(error.as_ref())));
             return report;
         }
     };
@@ -47,7 +50,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     check_ux_plugins(dir, &manifest, &mut report.problems);
     if !unbuilt.is_empty() {
         if let Err(error) = crate::pack::validate_manifest(&manifest.name, &manifest) {
-            report.problems.push(format!("{error:#}"));
+            report
+                .problems
+                .push(format!("{}", ErrorChain(error.as_ref())));
         }
         if manifest.metadata.kind != PackKind::Plugins {
             report.problems.push(format!(
@@ -62,7 +67,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
         Ok(archive) => archive,
         Err(error) => {
-            report.problems.push(format!("{error:#}"));
+            report
+                .problems
+                .push(format!("{}", ErrorChain(error.as_ref())));
             return report;
         }
     };
@@ -79,7 +86,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
                         Ok(plans) => {
                             report.graphs = plans.into_iter().map(|plan| plan.graph_id).collect()
                         }
-                        Err(error) => report.problems.push(format!("{error:#}")),
+                        Err(error) => report
+                            .problems
+                            .push(format!("{}", ErrorChain(error.as_ref()))),
                     }
                     check_topology(dir, &config, &mut report.problems);
                 }
@@ -91,7 +100,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
                     report.unverified.push("event_source_filters");
                 }
             }
-            Err(error) => report.problems.push(format!("{error:#}")),
+            Err(error) => report
+                .problems
+                .push(format!("{}", ErrorChain(error.as_ref()))),
         }
     }
     if dir.join("experiment.json").is_file() {
@@ -137,7 +148,7 @@ pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Strin
         .collect();
     let mut present = Vec::new();
     if let Err(error) = walk(dir, dir, &mut present) {
-        problems.push(format!("{error:#}"));
+        problems.push(format!("{}", ErrorChain(error.as_ref())));
     }
     for path in present {
         if declared.binary_search(&path).is_err()
@@ -295,7 +306,7 @@ fn check_ux_plugins(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Stri
                 }
             }
         }
-        Err(error) => problems.push(format!("{error:#}")),
+        Err(error) => problems.push(format!("{}", ErrorChain(error.as_ref()))),
     }
 }
 

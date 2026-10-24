@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use super::{build_plugin_pack, ECHO_WAT};
@@ -171,8 +172,9 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("protected runtime permissions"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("protected runtime permissions"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(
             std::fs::read_to_string(&permissions).unwrap(),
@@ -213,7 +215,11 @@ fn a_pin_that_no_longer_matches_the_installed_plugin_is_refused() {
     let error = PluginTool::resolve(executor, &tool_ref(Some(&stale)), None)
         .err()
         .expect("a stale pin must not resolve");
-    assert!(format!("{error:#}").contains("not the pinned"), "{error:#}");
+    assert!(
+        format!("{}", ErrorChain(error.as_ref())).contains("not the pinned"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
 }
 
 #[test]
@@ -255,8 +261,9 @@ async fn a_removed_plugin_fails_closed_with_a_warm_cache() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("is not installed"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("is not installed"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
 }
 
@@ -328,7 +335,7 @@ mod bound {
     }
 
     async fn refusal(tool: &PluginTool, path: &std::path::Path) -> String {
-        format!("{:#}", tool.call(args(path)).await.unwrap_err())
+        format!("{}", ErrorChain(&tool.call(args(path)).await.unwrap_err()))
     }
 
     async fn in_session(
@@ -349,7 +356,7 @@ mod bound {
             approval::scope_interactive(interactive, tool.call(args(path))),
         )
         .await
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| format!("{}", ErrorChain(&error)))
     }
 
     fn answer(
@@ -473,8 +480,9 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("invocation changed"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("invocation changed"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(!docs.join("out.json").exists());
 
@@ -500,8 +508,9 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("permissions changed"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("permissions changed"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(!docs.join("out.json").exists());
     }
@@ -547,11 +556,14 @@ mod bound {
             std::fs::hard_link(&permission_file, &alias).unwrap();
             let error = match bound {
                 Some(bound) => format!(
-                    "{:#}",
-                    executor
-                        .call_bound(&fx.record, input, bound)
-                        .await
-                        .unwrap_err()
+                    "{}",
+                    ErrorChain(
+                        executor
+                            .call_bound(&fx.record, input, bound)
+                            .await
+                            .unwrap_err()
+                            .as_ref()
+                    )
                 ),
                 None => workspace::scope(
                     context.clone(),
@@ -831,12 +843,12 @@ mod bound {
             tool.call(input.to_string())
         };
 
-        let read = format!("{:#}", call(&reader, false).await.unwrap_err());
+        let read = format!("{}", ErrorChain(&call(&reader, false).await.unwrap_err()));
         assert!(
             read.contains("did not return a result") && !read.contains("dirs add"),
             "a reading call binds under a read-only folder and its sandbox refuses the write: {read}"
         );
-        let escalation = format!("{:#}", call(&reader, true).await.unwrap_err());
+        let escalation = format!("{}", ErrorChain(&call(&reader, true).await.unwrap_err()));
         for expected in [
             "allowed read-only",
             r#"sets "output""#,
@@ -846,14 +858,16 @@ mod bound {
             assert!(escalation.contains(expected), "{escalation}");
         }
         assert!(!reader.join("out.json").exists());
-        let both = format!(
-            "{:#}",
-            tool.call(
-                serde_json::json!({ "path": reader, "output": "out.json", "delete": true })
-                    .to_string()
-            )
-            .await
-            .unwrap_err()
+        let both =
+            format!(
+            "{}",
+            ErrorChain(&tool
+                .call(
+                    serde_json::json!({ "path": reader, "output": "out.json", "delete": true })
+                        .to_string()
+                )
+                .await
+                .unwrap_err())
         );
         assert!(
             both.contains(r#"call again without "output", "delete" to only read"#),
@@ -1096,8 +1110,9 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("gents plugin dirs add"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("gents plugin dirs add"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -1125,7 +1140,11 @@ mod bound {
             .call_bound(&fx.record, input, bound)
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("reinstalled"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("reinstalled"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1355,8 +1374,9 @@ async fn corrupted_store_bytes_are_refused_and_never_cached() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("do not match their digest"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("do not match their digest"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(executor.admitted_len(), 0);
 }
@@ -1464,7 +1484,7 @@ mod mounted {
             .call_bound(&record, serde_json::json!({}), bound)
             .await
             .unwrap_err();
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             message.contains("this call writes; run it without mounted workflows"),
             "{message}"
@@ -2571,7 +2591,7 @@ mod catalog {
         let (home, mut record) = mounted_plugin(ECHO_BIG_WAT, None);
         declare_catalog(&home, &mut record);
         let error = list(&home, &record, &test_node().await).await.unwrap_err();
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains(r#""argv":["catalog"]"#), "{message}");
         assert!(message.contains(r#""asset_mounts""#), "{message}");
         for key in ["protocol", "job", "caller", "ceiling"] {
@@ -2593,7 +2613,10 @@ mod catalog {
         let (home, mut record) = installed_plugin(ECHO_BIG_WAT, None);
         record.declaration.data = data.clone();
         declare_catalog(&home, &mut record);
-        let message = format!("{:#}", list(&home, &record, &node).await.unwrap_err());
+        let message = format!(
+            "{}",
+            ErrorChain(list(&home, &record, &node).await.unwrap_err().as_ref())
+        );
         assert!(message.contains(r#""data_calls":true"#), "{message}");
         assert!(!message.contains("job_calls"), "{message}");
         assert!(!message.contains("tool_calls"), "{message}");
@@ -2622,8 +2645,13 @@ mod catalog {
         let (home, mut record) = installed_plugin(&wat, None);
         declare_catalog(&home, &mut record);
         let message = format!(
-            "{:#}",
-            list(&home, &record, &test_node().await).await.unwrap_err()
+            "{}",
+            ErrorChain(
+                list(&home, &record, &test_node().await)
+                    .await
+                    .unwrap_err()
+                    .as_ref()
+            )
         );
         assert!(
             message.contains(&format!("{}/{}", record.namespace, record.name)),
@@ -2636,8 +2664,13 @@ mod catalog {
     async fn catalog_without_a_declaration_returns_the_next_call() {
         let (home, record) = installed_plugin(ECHO_BIG_WAT, None);
         let message = format!(
-            "{:#}",
-            list(&home, &record, &test_node().await).await.unwrap_err()
+            "{}",
+            ErrorChain(
+                list(&home, &record, &test_node().await)
+                    .await
+                    .unwrap_err()
+                    .as_ref()
+            )
         );
         assert!(
             message.contains(&format!("{}/{}", record.namespace, record.name)),

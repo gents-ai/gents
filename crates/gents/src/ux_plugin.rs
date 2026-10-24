@@ -23,6 +23,7 @@
 //! A UX plugin is an asset, never a document: nothing here touches the
 //! control plane.
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -195,7 +196,7 @@ pub fn list(home: &Path) -> Result<Vec<UxListing>> {
                 Err(error) => tracing::warn!(
                     pack = %record.coordinate,
                     plugin = %ux.name,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "ux plugin skipped"
                 ),
             }

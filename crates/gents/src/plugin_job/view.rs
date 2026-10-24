@@ -1,5 +1,6 @@
 //! A client's read of one plugin job row, through any [`ConfigAccess`].
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 
 use gents_protocol::job::{
@@ -64,7 +65,10 @@ fn malformed(message: impl std::fmt::Display) -> JobReadError {
 
 fn unavailable(error: anyhow::Error) -> JobReadError {
     JobReadError::Unavailable {
-        message: format!("{error:#}; retry when the node answers"),
+        message: format!(
+            "{}; retry when the node answers",
+            ErrorChain(error.as_ref())
+        ),
     }
 }
 

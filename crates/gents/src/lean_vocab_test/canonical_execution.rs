@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -443,7 +444,7 @@ fn observations_match(
 /// Asynchronous boundary for a stateful native execution fixture. The adapter
 /// receives the seed and operations, but never the expected observations.
 pub(crate) trait CanonicalExecutionAdapter {
-    type Error: std::fmt::Display;
+    type Error: std::fmt::Display + AsRef<dyn std::error::Error + Send + Sync + 'static>;
     type Native;
 
     fn initialize<'a>(
@@ -497,7 +498,12 @@ where
         let actual = adapter
             .apply(&mut native, *query_document, action)
             .await
-            .map_err(|error| format!("{name} step {index}: native adapter failed: {error:#}"))?;
+            .map_err(|error| {
+                format!(
+                    "{name} step {index}: native adapter failed: {}",
+                    ErrorChain(error.as_ref())
+                )
+            })?;
         if !observations_match(&actual, expected) {
             return Err(format!(
                 "{name} step {index} ({:?}): expected {expected:?}, got {actual:?}",

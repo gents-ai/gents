@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::output::{
     reconstruction::{reconstruct_stream, ObservedSegment},
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -133,7 +134,7 @@ fn plugin_writes_failed(error: anyhow::Error) -> anyhow::Error {
     if crate::config_client::is_transaction_step_unavailable(&error) {
         return error;
     }
-    let text = format!("{error:#}");
+    let text = ErrorChain(error.as_ref()).to_string();
     error.context(PluginWritesFailed(text))
 }
 
@@ -2891,7 +2892,8 @@ mod spawned_background_tests {
             error
                 .to_string()
                 .contains("not an exact extension of persisted raw output"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(tool.state, ToolCallState::Running);
 

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -547,8 +548,9 @@ pub fn capture_failure_message(
 ) -> String {
     format!(
         "rendered-request capture failed at stage {} for scope {capture_scope} turn {turn_index} \
-         attempt {attempt}; the provider call was not issued: {error:#}",
-        stage.as_str()
+         attempt {attempt}; the provider call was not issued: {}",
+        stage.as_str(),
+        ErrorChain(error.as_ref())
     )
 }
 

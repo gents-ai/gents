@@ -1,6 +1,7 @@
 #[path = "cli_enrollment/contract.rs"]
 mod contract;
 mod support;
+use gents_protocol::error_chain::ErrorChain;
 use support::*;
 
 use std::fs;
@@ -292,7 +293,8 @@ async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> 
             Err(error) => {
                 if Instant::now() >= deadline {
                     return Err(format!(
-                        "timed out waiting for /status enrollment token: {error:#}"
+                        "timed out waiting for /status enrollment token: {}",
+                        ErrorChain(&error)
                     )
                     .into());
                 }
@@ -375,7 +377,11 @@ async fn wait_for_runtime_agent_request(
             }
             Err(error) => {
                 if Instant::now() >= deadline {
-                    return Err(format!("runtime AgentRequest query failed: {error:#}").into());
+                    return Err(format!(
+                        "runtime AgentRequest query failed: {}",
+                        ErrorChain(&*error)
+                    )
+                    .into());
                 }
             }
         }

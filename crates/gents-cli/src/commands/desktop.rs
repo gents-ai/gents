@@ -6,6 +6,7 @@ use gents_desktop_core::{
         HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
     },
 };
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::{
     cli::DesktopCommand,
@@ -48,7 +49,8 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
                 None => "Reset finished. Reopen Gents to set up a new node.".into(),
             },
             Err(error) => format!(
-                "Reset could not finish: {error:#}. Run {retry} to review the remaining state and retry."
+                "Reset could not finish: {}. Run {retry} to review the remaining state and retry.",
+                ErrorChain(error.as_ref())
             ),
         };
         notify(&message);
@@ -405,7 +407,11 @@ mod tests {
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
             .unwrap_err();
-        assert!(format!("{error:#}").contains("store held"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("store held"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     fn initialized_reset(user: &std::path::Path) -> (std::path::PathBuf, HomeResetPlan) {
@@ -450,7 +456,11 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(!cleared, "browser data was cleared after {error:#}");
+        assert!(
+            !cleared,
+            "browser data was cleared after {}",
+            ErrorChain(error.as_ref())
+        );
         assert!(home.join("data/MANIFEST").is_file());
         assert!(home.join("init.json").is_file());
     }
@@ -474,7 +484,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains(&backup.display().to_string()), "{message}");
         assert!(
             message.contains("browser data was not cleared"),

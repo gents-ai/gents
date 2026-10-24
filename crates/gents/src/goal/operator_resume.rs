@@ -4,6 +4,7 @@ use crate::identity::NodeIdentity;
 use crate::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::row::AgentRequestRow;
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,7 +236,12 @@ pub async fn resume_goal_on_account(
                 .await
             }
             .await
-            .map_err(|error| anyhow::anyhow!("switch failed; nothing changed: {error:#}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "switch failed; nothing changed: {}",
+                    ErrorChain(error.as_ref())
+                )
+            })?;
             Some(receipt)
         }
         // The profile that served the call left the limited account: an
@@ -267,12 +273,14 @@ pub async fn resume_goal_on_account(
     .map_err(|error| match &switch {
         Some(receipt) => anyhow::anyhow!(
             "resume failed after the switch committed (profile {} is now on {}); run the \
-                 same command again with the same --from: {error:#}",
+                 same command again with the same --from: {}",
             receipt.profile,
-            receipt.account.label
+            receipt.account.label,
+            ErrorChain(error.as_ref())
         ),
         None => anyhow::anyhow!(
-            "resume failed; run the same command again with the same --from: {error:#}"
+            "resume failed; run the same command again with the same --from: {}",
+            ErrorChain(error.as_ref())
         ),
     })?;
     Ok(GoalResumeOnReceipt { switch, resume })

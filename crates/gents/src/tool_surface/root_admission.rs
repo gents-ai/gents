@@ -441,6 +441,7 @@ fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[test]
     fn nonexistent_descendant_is_retained_and_admitted() {
@@ -665,7 +666,8 @@ mod tests {
             error
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -706,7 +708,8 @@ mod tests {
             error
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -732,7 +735,8 @@ mod tests {
             error
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 

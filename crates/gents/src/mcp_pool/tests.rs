@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -592,7 +593,7 @@ async fn hung_connect_is_internally_bounded() {
     .await
     .expect("list_tools must internally bound a hung MCP connect");
     let error = result.expect_err("hung connect must surface an error");
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(error.as_ref()));
     assert!(
         message.contains("timed out"),
         "expected a timeout error, got: {message}"
@@ -611,7 +612,7 @@ async fn hung_list_call_is_internally_bounded() {
     .await
     .expect("list_tools must internally bound a hung tools/list call");
     let error = result.expect_err("hung list call must surface an error");
-    let message = format!("{error:#}");
+    let message = format!("{}", ErrorChain(error.as_ref()));
     assert!(
         message.contains("timed out"),
         "expected a timeout error, got: {message}"
@@ -756,7 +757,7 @@ async fn repeated_connect_failures_park_the_service() {
             .list_tools("down-service", "http://mcp.test/mcp")
             .await
             .expect_err("connects to a dead service must fail");
-        if format!("{error:#}").contains("parked") {
+        if format!("{}", ErrorChain(error.as_ref())).contains("parked") {
             parked_failures += 1;
         }
         tokio::time::advance(std::time::Duration::from_secs(30)).await;
@@ -829,7 +830,7 @@ async fn concurrent_callers_to_struck_service_share_one_dial() {
             .await
             .expect("task join")
             .expect_err("dials to a dead service must fail");
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         if message.contains("parked") || message.contains("already in flight") {
             fast_failures += 1;
         }
@@ -966,8 +967,9 @@ async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
         .expect_err("new endpoint still fails in this test connector");
 
     assert!(
-        format!("{error:#}").contains("connection refused"),
-        "new endpoint should dial and surface connector error, not inherit old endpoint park: {error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("connection refused"),
+        "new endpoint should dial and surface connector error, not inherit old endpoint park: {}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(
         connect_attempts.load(Ordering::SeqCst),
@@ -1008,8 +1010,8 @@ async fn parked_node_did_does_not_block_different_node_did_for_same_service_endp
         .expect_err("second node still fails in this test connector");
 
     assert!(
-        format!("{error:#}").contains("connection refused"),
-        "different node DID should dial and surface connector error, not inherit the first node's park: {error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("connection refused"),
+        "different node DID should dial and surface connector error, not inherit the first node's park: {}", ErrorChain(error.as_ref())
     );
     assert_eq!(
         connect_attempts.load(Ordering::SeqCst),

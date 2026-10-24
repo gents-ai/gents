@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 fn store_test_pack() -> (Vec<u8>, PackHeader) {
     test_pack_named("store_import_fixture", "1.0.0")
@@ -66,8 +67,9 @@ fn a_pack_with_another_digest_than_asked_for_is_not_stored() {
         .import(bytes.as_slice(), Some(&wanted))
         .expect_err("refused");
     assert!(
-        format!("{error:#}").contains("nothing was stored"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("nothing was stored"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(store_files(&store).is_empty(), "{:?}", store_files(&store));
 }
@@ -81,8 +83,9 @@ fn a_file_that_is_not_a_pack_is_not_stored() {
     bytes.extend_from_slice(b"trailing");
     let error = store.import(bytes.as_slice(), None).expect_err("refused");
     assert!(
-        format!("{error:#}").contains("data after the end"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref())).contains("data after the end"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(store_files(&store).is_empty(), "{:?}", store_files(&store));
 }

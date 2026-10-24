@@ -1563,6 +1563,7 @@ pub(super) use tests::{
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
@@ -2482,7 +2483,8 @@ mod tests {
         .unwrap_err();
         assert!(
             error.to_string().contains("prepares its input on the host"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         let runs = node.execute("{ GraphRun { run_id } }").await;
         assert!(!runs.has_errors(), "{:?}", runs.errors);
@@ -2534,7 +2536,8 @@ mod tests {
             error
                 .to_string()
                 .contains("does not declare a host prepare step"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         node.shutdown().await;
     }
@@ -2583,7 +2586,8 @@ mod tests {
         .unwrap_err();
         assert!(
             error.to_string().contains("does not satisfy its schema"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         let run = start_graph_run(
@@ -2734,7 +2738,8 @@ mod tests {
             assert_eq!(
                 error.downcast_ref::<super::super::GraphRunUnobservable>(),
                 Some(&refusal),
-                "{error:#}"
+                "{}",
+                ErrorChain(error.as_ref())
             );
         }
         assert_eq!(

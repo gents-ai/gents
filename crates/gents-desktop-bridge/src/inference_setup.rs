@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::time::Duration;
 
 use gents::inference_setup::{
@@ -179,7 +180,7 @@ pub async fn discover_inference_models_for_core(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did = %request.node_did.trim(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "resolving node configuration access for model discovery failed"
             );
             BridgeError::new(
@@ -198,7 +199,7 @@ pub async fn discover_inference_models_for_core(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did = %request.node_did.trim(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 "reading provider accounts for model discovery failed"
             );
             BridgeError::new(
@@ -346,7 +347,7 @@ async fn publish_discovered_catalog(
         tracing::warn!(
             target: LOG_TARGET,
             node_did,
-            error = %format!("{error:#}"),
+            error = %ErrorChain(error.as_ref()),
             "publishing the discovered model catalog failed; the previous catalog is kept"
         );
     }

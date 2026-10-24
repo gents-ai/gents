@@ -1,6 +1,7 @@
 #[cfg(test)]
 pub(crate) mod matrix;
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -1024,7 +1025,7 @@ pub async fn run_job(
     let definition = match load_definition(access, owner, &origin.definition.definition_id).await {
         Ok(definition) => definition,
         Err(error) if freeze_refused(error.as_ref()).is_some() => {
-            tracing::warn!(job_id = %job_id, error = %format!("{error:#}"), "optimization job's definition is gone or invalid");
+            tracing::warn!(job_id = %job_id, error = %ErrorChain(error.as_ref()), "optimization job's definition is gone or invalid");
             let state = JobState::Failed {
                 reason: "definition_changed".into(),
             };
@@ -2017,7 +2018,8 @@ mod tests {
         let error = append_all(&access, &mut stale, pair).await.unwrap_err();
         assert!(
             crate::optimization::job::journal_conflict(&error).is_some(),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         let after = load_job(&access, &origin.owner, "job-1")
             .await
@@ -2047,7 +2049,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let refusal = job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        let refusal =
+            job_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert!(refusal.0.contains("job_id"), "{}", refusal.0);
         assert!(std::fs::read_dir(home.path()).unwrap().next().is_none());
         assert!(proposer.calls.lock().unwrap().is_empty());

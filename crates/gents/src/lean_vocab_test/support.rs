@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
@@ -3957,8 +3958,12 @@ pub(crate) fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>
 }
 
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    let json = gents_lean_contract::load_contract_json()
-        .unwrap_or_else(|error| panic!("failed to load Lean conformance contract JSON: {error:#}"));
+    let json = gents_lean_contract::load_contract_json().unwrap_or_else(|error| {
+        panic!(
+            "failed to load Lean conformance contract JSON: {}",
+            ErrorChain(&error)
+        )
+    });
 
     serde_json::from_str(&json).unwrap_or_else(|error| {
         let excerpt = json_excerpt_at(&json, error.line(), error.column(), 512);

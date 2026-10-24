@@ -94,6 +94,7 @@ fn command_from_args(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::schemas::EVAL_VERDICT_NAME;
 
     use super::*;
@@ -167,7 +168,7 @@ mod tests {
         )
         .await
         .expect_err("EvalVerdict must never be readable through `gents query`");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
         assert!(message.contains("protected"), "{message}");
     }
@@ -185,7 +186,7 @@ mod tests {
         )
         .await
         .expect_err("a protected collection's field inventory must stay unlisted");
-        let message = format!("{error:#}");
+        let message = ErrorChain(error.as_ref()).to_string();
         assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
         assert!(message.contains("protected"), "{message}");
     }

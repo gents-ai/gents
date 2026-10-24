@@ -1,5 +1,6 @@
 use super::*;
 use crate::graph_pipeline::runtime::graph_test_owner;
+use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -324,7 +325,8 @@ async fn oversized_cancellation_reason_is_rejected_before_any_write() {
     .expect_err("the owner must reject a reason beyond its byte ceiling");
     assert!(
         error.to_string().contains("cancellation reason exceeds"),
-        "unexpected rejection: {error:#}"
+        "unexpected rejection: {}",
+        ErrorChain(error.as_ref())
     );
     let durable = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
         .await

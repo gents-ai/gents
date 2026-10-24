@@ -1,5 +1,6 @@
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, bail, Context, Result};
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Map, Value};
 
 use crate::config_client::ConfigAccess;
@@ -22,7 +23,7 @@ pub struct DefraWriteError(anyhow::Error);
 
 impl std::fmt::Display for DefraWriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{}", ErrorChain(self.0.as_ref()))
     }
 }
 

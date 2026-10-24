@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
 use futures::FutureExt;
+use gents_protocol::error_chain::ErrorChain;
 use std::panic::AssertUnwindSafe;
 
 async fn project_background_completion_if_owned<F>(
@@ -444,7 +445,7 @@ impl DefraSessionHook {
                 let result = background_invalid_tool_arguments_payload(
                     WAIT_PROCESS_TOOL_NAME,
                     "/tool_call_id",
-                    format!("{error:#}"),
+                    format!("{}", ErrorChain(error.as_ref())),
                 );
                 return self
                     .complete_control_tool_call(&mut lifecycle, WAIT_PROCESS_TOOL_NAME, result)
@@ -694,7 +695,7 @@ impl DefraSessionHook {
                 let result = background_invalid_tool_arguments_payload(
                     CANCEL_PROCESS_TOOL_NAME,
                     "/tool_call_id",
-                    format!("{error:#}"),
+                    format!("{}", ErrorChain(error.as_ref())),
                 );
                 return self
                     .complete_control_tool_call(

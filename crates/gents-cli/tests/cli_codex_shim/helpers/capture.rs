@@ -1,5 +1,6 @@
 use super::*;
 use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Debug)]
 pub(super) struct TurnCapture {
@@ -228,7 +229,12 @@ pub(super) async fn wait_for_request_input(
                     .cloned()
                     .ok_or_else(|| format!("AgentRequest row missing input: {row}"))?,
             )
-            .map_err(|error| format!("decoding canonical AgentRequest input: {error:#}"))?;
+            .map_err(|error| {
+                format!(
+                    "decoding canonical AgentRequest input: {}",
+                    ErrorChain(&error)
+                )
+            })?;
             return Ok((request_id.to_string(), session_id.to_string(), input));
         }
 
@@ -244,14 +250,27 @@ pub(super) async fn read_jsonrpc(ws: &mut ShimWebSocket) -> TestResult<codex::JS
         let frame = tokio::time::timeout(Duration::from_secs(60), ws.next())
             .await
             .map_err(|error| {
-                format!("timed out waiting for Codex shim websocket message: {error:#}")
+                format!(
+                    "timed out waiting for Codex shim websocket message: {}",
+                    ErrorChain(&error)
+                )
             })?
             .ok_or_else(|| "Codex shim websocket closed".to_string())?
-            .map_err(|error| format!("reading Codex shim websocket message: {error:#}"))?;
+            .map_err(|error| {
+                format!(
+                    "reading Codex shim websocket message: {}",
+                    ErrorChain(&error)
+                )
+            })?;
         let text = match frame {
             WsMessage::Text(text) => text,
             WsMessage::Binary(bytes) => String::from_utf8(bytes.to_vec())
-                .map_err(|error| format!("decoding binary websocket payload as UTF-8: {error:#}"))?
+                .map_err(|error| {
+                    format!(
+                        "decoding binary websocket payload as UTF-8: {}",
+                        ErrorChain(&error)
+                    )
+                })?
                 .into(),
             WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
             WsMessage::Close(close) => {
@@ -259,16 +278,18 @@ pub(super) async fn read_jsonrpc(ws: &mut ShimWebSocket) -> TestResult<codex::JS
             }
             WsMessage::Frame(_) => return Err("unexpected raw websocket frame".to_string().into()),
         };
-        return serde_json::from_str(&text)
-            .map_err(|error| format!("decoding JSON-RPC message: {text}: {error:#}").into());
+        return serde_json::from_str(&text).map_err(|error| {
+            format!("decoding JSON-RPC message: {text}: {}", ErrorChain(&error)).into()
+        });
     }
 }
 
 pub(super) fn server_notification_from_jsonrpc(
     notification: codex::JSONRPCNotification,
 ) -> TestResult<codex::ServerNotification> {
-    serde_json::from_value(serde_json::to_value(notification)?)
-        .map_err(|error| format!("decoding Codex server notification: {error:#}").into())
+    serde_json::from_value(serde_json::to_value(notification)?).map_err(|error| {
+        format!("decoding Codex server notification: {}", ErrorChain(&error)).into()
+    })
 }
 
 pub(super) async fn read_token_usage_notification(

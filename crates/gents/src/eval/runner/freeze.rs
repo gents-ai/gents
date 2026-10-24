@@ -22,6 +22,7 @@ use crate::eval::{
 use crate::pack::{declared_paths, digest_declared_assets, PackInstallOptions, PackManifest};
 use crate::tool_surface::BashMode;
 use crate::Collection;
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Clone, Debug)]
 pub enum CellSource {
@@ -244,8 +245,9 @@ pub(crate) async fn thaw(
         let pack_dir = run_dir.join("cells").join(&spec.cell_id).join("pack");
         let pack = load_pack(&CellSource::Directory(pack_dir.clone()), owner).map_err(|error| {
             refused(format!(
-                "cell {:?} materialized pack: {error:#}",
-                spec.cell_id
+                "cell {:?} materialized pack: {}",
+                spec.cell_id,
+                ErrorChain(error.as_ref())
             ))
         })?;
         if pack.digest != spec.subject.pack_digest {
@@ -390,8 +392,9 @@ pub(crate) async fn load_definition(
             .ok_or_else(|| refused(format!("no eval definition {definition_id:?} for {owner}")))?;
     definition.validate().map_err(|error| {
         refused(format!(
-            "eval definition {:?}: {error:#}",
-            definition.definition_id
+            "eval definition {:?}: {}",
+            definition.definition_id,
+            ErrorChain(&error)
         ))
     })?;
     Ok(definition)
@@ -536,8 +539,13 @@ async fn validate_cell(
     isolation: Isolation,
     run_dir: &Path,
 ) -> Result<(FrozenCell, LoadedPack)> {
-    let pack = load_pack(&cell.source, &request.owner)
-        .map_err(|error| refused(format!("cell {:?} pack: {error:#}", cell.cell_id)))?;
+    let pack = load_pack(&cell.source, &request.owner).map_err(|error| {
+        refused(format!(
+            "cell {:?} pack: {}",
+            cell.cell_id,
+            ErrorChain(error.as_ref())
+        ))
+    })?;
 
     if !pack
         .config
@@ -1158,7 +1166,12 @@ pub(crate) mod tests {
 
     fn refusal(error: &anyhow::Error) -> String {
         freeze_refused(error.as_ref())
-            .unwrap_or_else(|| panic!("expected a FreezeRefused, got {error:#}"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a FreezeRefused, got {}",
+                    ErrorChain(error.as_ref())
+                )
+            })
             .0
             .clone()
     }
@@ -1243,7 +1256,11 @@ pub(crate) mod tests {
             let error = freeze(&launching.access, &anonymous, Isolation::Embedded)
                 .await
                 .unwrap_err();
-            assert!(refusal(&error).contains("evaluator DID"), "{error:#}");
+            assert!(
+                refusal(&error).contains("evaluator DID"),
+                "{}",
+                ErrorChain(error.as_ref())
+            );
         }
     }
 
@@ -1268,7 +1285,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &empty, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("no cell"), "{error:#}");
+        assert!(
+            refusal(&error).contains("no cell"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         for escaping in ["..", "../sibling", "nested/cell", ""] {
             let mut unsafe_id = launching.request("run-1", &pack);
@@ -1288,7 +1309,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &unsafe_run, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("run_id"), "{error:#}");
+        assert!(
+            refusal(&error).contains("run_id"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1363,7 +1388,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &changed, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("different origin"), "{error:#}");
+        assert!(
+            refusal(&error).contains("different origin"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1376,7 +1405,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &unknown, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("nope"), "{error:#}");
+        assert!(
+            refusal(&error).contains("nope"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let mut off_split = launching.request("run-2", &pack);
         off_split.case_ids = Some(vec!["train-case".into()]);
@@ -1474,7 +1507,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &request, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("node_oauth"), "{error:#}");
+        assert!(
+            refusal(&error).contains("node_oauth"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1502,7 +1539,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &request, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("spare"), "{error:#}");
+        assert!(
+            refusal(&error).contains("spare"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1542,7 +1583,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &request, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("invalidated"), "{error:#}");
+        assert!(
+            refusal(&error).contains("invalidated"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1555,7 +1600,11 @@ pub(crate) mod tests {
             let error = freeze(&launching.access, &request, Isolation::Embedded)
                 .await
                 .unwrap_err();
-            assert!(refusal(&error).contains(malformed), "{error:#}");
+            assert!(
+                refusal(&error).contains(malformed),
+                "{}",
+                ErrorChain(error.as_ref())
+            );
         }
         for (run_id, purpose) in [
             ("plain", "eval"),
@@ -1598,7 +1647,11 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &changed, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("capture"), "{error:#}");
+        assert!(
+            refusal(&error).contains("capture"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1640,7 +1693,11 @@ pub(crate) mod tests {
         std::fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
         let error =
             read_frozen_definition(&frozen.run_dir, &frozen.record.origin.definition).unwrap_err();
-        assert!(refusal(&error).contains("no longer digests"), "{error:#}");
+        assert!(
+            refusal(&error).contains("no longer digests"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         let error = thaw(
             &launching.access,
             OWNER,
@@ -1650,7 +1707,11 @@ pub(crate) mod tests {
         )
         .await
         .unwrap_err();
-        assert!(refusal(&error).contains("no longer digests"), "{error:#}");
+        assert!(
+            refusal(&error).contains("no longer digests"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]

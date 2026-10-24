@@ -3,6 +3,7 @@ use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
 };
 use crate::types::{DesktopSessionSnapshot, SessionRowsView, SessionRowsWindow};
+use gents_protocol::error_chain::ErrorChain;
 
 pub async fn session_snapshot(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
@@ -372,7 +373,7 @@ pub async fn message_attachments(
     let rows = access
         .execute(&query)
         .await
-        .map_err(|e| BridgeError::untyped(format!("{e:#}")))?;
+        .map_err(|e| BridgeError::untyped(ErrorChain(e.as_ref()).to_string()))?;
     let rows = rows["data"]["AgentMessage"]
         .as_array()
         .ok_or_else(|| BridgeError::untyped("Message attachments are unavailable"))?;
@@ -391,7 +392,7 @@ pub async fn message_attachments(
         scope.requester_scope.as_deref(),
     )
     .await
-    .map_err(|e| BridgeError::untyped(format!("{e:#}")))?;
+    .map_err(|e| BridgeError::untyped(ErrorChain(e.as_ref()).to_string()))?;
     if header.session_id != session_id || header.message_key != message_key {
         return Err(BridgeError::untyped(
             "The attachment message belongs to another session",
@@ -466,7 +467,7 @@ pub async fn session_rows(
     };
     let error = |error: anyhow::Error| match error.downcast::<BridgeError>() {
         Ok(error) => error,
-        Err(error) => BridgeError::untyped(format!("{error:#}")),
+        Err(error) => BridgeError::untyped(ErrorChain(error.as_ref()).to_string()),
     };
     let store = core.store().snapshot();
     let render = |page: &SessionTranscriptQueryPage| {

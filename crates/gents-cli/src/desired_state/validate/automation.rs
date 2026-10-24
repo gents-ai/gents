@@ -14,7 +14,7 @@ pub(super) fn validate_automation(manifest: &DesiredStateManifest, errors: &mut 
             schedule
                 .cadence
                 .validate()
-                .map_err(|error| format!("{error:#}"))
+                .map_err(|error| format!("{}", ErrorChain(error.as_ref())))
         }))
         .chain(manifest.event_sources.iter().map(|source| {
             source
@@ -25,7 +25,7 @@ pub(super) fn validate_automation(manifest: &DesiredStateManifest, errors: &mut 
             binding
                 .projected_fields()
                 .map(|_| ())
-                .map_err(|error| format!("{error:#}"))
+                .map_err(|error| format!("{}", ErrorChain(error.as_ref())))
         }))
         .chain(manifest.repository_placements.iter().map(|placement| {
             placement

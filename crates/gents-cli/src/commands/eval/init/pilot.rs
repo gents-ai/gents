@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write;
@@ -71,7 +72,8 @@ pub(crate) async fn pilot(
             ) {
                 Ok(()) => Err(error),
                 Err(readme) => Err(error.context(format!(
-                    "the README could not record the pilot runs either: {readme:#}"
+                    "the README could not record the pilot runs either: {}",
+                    ErrorChain(readme.as_ref())
                 ))),
             };
         }
@@ -560,7 +562,8 @@ mod tests {
         let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
         assert!(
             gents::config_client::stale_expectation(&error).is_some(),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         let after = fixture.ctx.access.execute(query).await.unwrap();
         assert_eq!(before, after);
@@ -583,7 +586,8 @@ mod tests {
         let error = left.err().or_else(|| right.err()).unwrap();
         assert!(
             gents::config_client::stale_expectation(&error).is_some(),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 }

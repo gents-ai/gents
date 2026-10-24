@@ -75,6 +75,7 @@ pub(super) async fn list(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -247,8 +248,10 @@ mod tests {
         let (_dir, node, did, agent) = node_with_agent(Some(&["team/broken"])).await;
         let error = list(&node, &did, &agent, home.path()).await.unwrap_err();
         assert!(
-            format!("{error:#}").contains("reading the installed plugin bytes"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref()))
+                .contains("reading the installed plugin bytes"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
     }
 }

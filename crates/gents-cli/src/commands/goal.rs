@@ -6,6 +6,7 @@ use gents::goal::{
     GOAL_FIELDS,
 };
 use gents::graphql::escape_graphql_string;
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
@@ -47,7 +48,7 @@ async fn goal_show_value(
     let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
         .unwrap_or_else(|error| {
-            tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");
+            tracing::warn!(session_id, error = %format!("{}", ErrorChain(error.as_ref())), "blocked turn unreadable");
             None
         });
     value["blocked"] = serde_json::to_value(blocked)?;

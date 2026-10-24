@@ -1,4 +1,5 @@
 use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 use std::fs;
 use std::path::Path;
 
@@ -8,17 +9,19 @@ use serde_json::Value;
 use super::graphql::escape_graphql_string;
 
 pub fn copy_dir_all(from: &Path, to: &Path) -> TestResult<()> {
-    fs::create_dir_all(to).map_err(|error| format!("creating {}: {error:#}", to.display()))?;
-    for entry in
-        fs::read_dir(from).map_err(|error| format!("reading {}: {error:#}", from.display()))?
+    fs::create_dir_all(to)
+        .map_err(|error| format!("creating {}: {}", to.display(), ErrorChain(&error)))?;
+    for entry in fs::read_dir(from)
+        .map_err(|error| format!("reading {}: {}", from.display(), ErrorChain(&error)))?
     {
         let entry = entry?;
         let target = to.join(entry.file_name());
         if entry.file_type()?.is_dir() {
             copy_dir_all(&entry.path(), &target)?;
         } else {
-            fs::copy(entry.path(), &target)
-                .map_err(|error| format!("copying {}: {error:#}", entry.path().display()))?;
+            fs::copy(entry.path(), &target).map_err(|error| {
+                format!("copying {}: {}", entry.path().display(), ErrorChain(&error))
+            })?;
         }
     }
     Ok(())
@@ -27,19 +30,39 @@ pub fn copy_dir_all(from: &Path, to: &Path) -> TestResult<()> {
 pub fn write_json_file(path: &Path, value: &Value) -> TestResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
-            format!("creating parent directory {}: {error:#}", parent.display())
+            format!(
+                "creating parent directory {}: {}",
+                parent.display(),
+                ErrorChain(&error)
+            )
         })?;
     }
-    fs::write(path, serde_json::to_vec_pretty(value)?)
-        .map_err(|error| format!("writing JSON file {}: {error:#}", path.display()))?;
+    fs::write(path, serde_json::to_vec_pretty(value)?).map_err(|error| {
+        format!(
+            "writing JSON file {}: {}",
+            path.display(),
+            ErrorChain(&error)
+        )
+    })?;
     Ok(())
 }
 
 pub fn read_json_file(path: &Path) -> TestResult<Value> {
-    let bytes = fs::read(path)
-        .map_err(|error| format!("reading JSON file {}: {error:#}", path.display()))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| format!("decoding JSON file {}: {error:#}", path.display()).into())
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "reading JSON file {}: {}",
+            path.display(),
+            ErrorChain(&error)
+        )
+    })?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "decoding JSON file {}: {}",
+            path.display(),
+            ErrorChain(&error)
+        )
+        .into()
+    })
 }
 
 pub fn rewrite_manifest_node_dids(root: &Path, node_did: &str) -> TestResult<()> {
@@ -95,7 +118,7 @@ pub fn manifest_contains(root: &Path, needle: &str) -> TestResult<bool> {
     fn visit(path: &Path, needle: &str) -> TestResult<bool> {
         if path.is_dir() {
             for entry in fs::read_dir(path)
-                .map_err(|error| format!("reading {}: {error:#}", path.display()))?
+                .map_err(|error| format!("reading {}: {}", path.display(), ErrorChain(&error)))?
             {
                 if visit(&entry?.path(), needle)? {
                     return Ok(true);
@@ -107,7 +130,7 @@ pub fn manifest_contains(root: &Path, needle: &str) -> TestResult<bool> {
             return Ok(false);
         }
         let contents = fs::read_to_string(path)
-            .map_err(|error| format!("reading {}: {error:#}", path.display()))?;
+            .map_err(|error| format!("reading {}: {}", path.display(), ErrorChain(&error)))?;
         Ok(contents.contains(needle))
     }
 
@@ -118,8 +141,13 @@ pub fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> TestResult<St
     let Some(log) = log else {
         return Ok(String::new());
     };
-    let bytes = fs::read(log.path())
-        .map_err(|error| format!("reading captured log {}: {error:#}", log.path().display()))?;
+    let bytes = fs::read(log.path()).map_err(|error| {
+        format!(
+            "reading captured log {}: {}",
+            log.path().display(),
+            ErrorChain(&error)
+        )
+    })?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -153,10 +181,10 @@ pub fn read_runtime_state_json(home_dir: &Path) -> TestResult<Value> {
     } else {
         home_dir.join(".gents").join("runtime.json")
     };
-    let bytes =
-        fs::read(&path).map_err(|error| format!("reading {}: {error:#}", path.display()))?;
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("reading {}: {}", path.display(), ErrorChain(&error)))?;
     serde_json::from_slice(&bytes)
-        .map_err(|error| format!("decoding {}: {error:#}", path.display()).into())
+        .map_err(|error| format!("decoding {}: {}", path.display(), ErrorChain(&error)).into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -349,14 +377,14 @@ pub fn parse_jsonl(output: &str, label: &str) -> TestResult<Vec<Value>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             serde_json::from_str::<Value>(line)
-                .map_err(|error| format!("parsing {label} line: {error:#}").into())
+                .map_err(|error| format!("parsing {label} line: {}", ErrorChain(&error)).into())
         })
         .collect()
 }
 
 pub fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> TestResult<()> {
     let validator = jsonschema::validator_for(schema)
-        .map_err(|error| format!("compiling {label} schema: {error:#}"))?;
+        .map_err(|error| format!("compiling {label} schema: {}", ErrorChain(&error)))?;
     let errors = validator
         .iter_errors(instance)
         .map(|error| format!("{}: {error}", error.instance_path()))

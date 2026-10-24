@@ -6,6 +6,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use gents::default_agent_id_for_node;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -1418,8 +1419,11 @@ fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> 
     )
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("refusing to replace"),
-        "{error:#}"
+        ErrorChain(&*error)
+            .to_string()
+            .contains("refusing to replace"),
+        "{}",
+        ErrorChain(&*error)
     );
     assert_eq!(fs::read(&key_path)?, original);
     gents::identity::load_file_identity(&key_path)?;

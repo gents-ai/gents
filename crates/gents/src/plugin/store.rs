@@ -418,6 +418,7 @@ pub fn bound_to_profile(home: &Path, node_did: &str, profile_id: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[test]
     fn a_coordinate_that_would_escape_the_plugins_directory_is_refused() {
@@ -491,7 +492,7 @@ mod tests {
         .unwrap();
 
         let error = check_plugin_ownership(home.path(), "acme", "echo", "acme/gadget").unwrap_err();
-        let message = format!("{error:#}");
+        let message = format!("{}", ErrorChain(error.as_ref()));
         assert!(message.contains("acme/widget"), "{message}");
         assert!(message.contains("acme/gadget"), "{message}");
     }

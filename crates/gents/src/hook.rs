@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1140,7 +1141,9 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         let mut child = parent
             .admit_plugin_effect(ordinal, tool_name, arguments)
             .await
-            .map_err(|error| format!("cannot admit plugin effect: {error:#}"))?;
+            .map_err(|error| {
+                format!("cannot admit plugin effect: {}", ErrorChain(error.as_ref()))
+            })?;
         let internal_id = child.plugin_effect_internal_id().to_owned();
         if !crate::plugin::tool_calls::supported(
             tool_name,
@@ -1159,7 +1162,12 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                     &reason,
                 )
                 .await
-                .map_err(|error| format!("cannot persist plugin effect refusal: {error:#}"))?;
+                .map_err(|error| {
+                    format!(
+                        "cannot persist plugin effect refusal: {}",
+                        ErrorChain(error.as_ref())
+                    )
+                })?;
             return Err(reason);
         }
         let mut pending = self.effect_tool_calls.lock().await;
@@ -1245,7 +1253,12 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         if result.is_ok() {
             self.effect_lifecycles.lock().await.remove(internal_id);
         }
-        result.map_err(|error| format!("cannot settle plugin effect: {error:#}"))
+        result.map_err(|error| {
+            format!(
+                "cannot settle plugin effect: {}",
+                ErrorChain(error.as_ref())
+            )
+        })
     }
 
     async fn pending_steering_inputs(

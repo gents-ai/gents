@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -579,7 +580,7 @@ impl TurnManager {
                             )
                             .await
                         {
-                            tracing::warn!(error = %format_args!("{error:#}"),
+                            tracing::warn!(error = %format_args!("{}", ErrorChain(error.as_ref())),
                             session_id = %observed_session, "Grok graph run observation failed");
                         }
                         for error in job_cursor
@@ -592,7 +593,7 @@ impl TurnManager {
                             )
                             .await
                         {
-                            tracing::warn!(error = %format_args!("{error:#}"),
+                            tracing::warn!(error = %format_args!("{}", ErrorChain(error.as_ref())),
                             session_id = %observed_session, "Grok job observation failed");
                         }
                     }
@@ -5375,7 +5376,8 @@ mod tests {
         let error = result.expect_err("a prompt gated across disconnect must be rejected");
         assert!(
             error.to_string().contains("already disconnected"),
-            "rejection must name the closed connection, got: {error:#}"
+            "rejection must name the closed connection, got: {}",
+            ErrorChain(error.as_ref())
         );
 
         {

@@ -948,6 +948,7 @@ fn verify_exact_call_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn generated_plugin_child_terminal_presentation_matches_execution_owner() {
@@ -1266,7 +1267,8 @@ mod tests {
             error
                 .to_string()
                 .contains("invalid plugin effect provenance"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         drop(request_owner);
         node.shutdown().await;

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -119,7 +120,8 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
         return match cleanup {
             Ok(()) => Err(error).context("storing chain key in OS keyring"),
             Err(cleanup_error) => Err(error).context(format!(
-                "storing chain key in OS keyring; cleanup also failed: {cleanup_error:#}"
+                "storing chain key in OS keyring; cleanup also failed: {}",
+                ErrorChain(cleanup_error.as_ref())
             )),
         };
     }

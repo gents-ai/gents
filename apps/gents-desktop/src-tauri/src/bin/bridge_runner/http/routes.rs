@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{HttpRequestData, HttpResponse};
@@ -980,7 +981,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
     let response =
         gents::graphql::graphql_with_transaction_retry(core.node(), query, "AgentToolCall query")
             .await
-            .map_err(|error| format!("{error:#}"))?;
+            .map_err(|error| ErrorChain(error.as_ref()).to_string())?;
 
     let data = response
         .data

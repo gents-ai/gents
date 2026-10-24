@@ -333,6 +333,7 @@ fn test_access(url: &str) -> ConfigAccess {
 mod tests {
     use super::*;
     use defra_node::EmbeddedNode;
+    use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};
@@ -634,7 +635,8 @@ mod tests {
 
         assert!(
             error.downcast_ref::<SubmissionOutcomeUnknown>().is_none(),
-            "a definite rejection must not be reported as possibly delivered: {error:#}"
+            "a definite rejection must not be reported as possibly delivered: {}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(create_requests(&server).await.len(), 1);
     }
@@ -674,7 +676,12 @@ mod tests {
 
             let unknown = error
                 .downcast_ref::<SubmissionOutcomeUnknown>()
-                .unwrap_or_else(|| panic!("HTTP {status} must be an unknown outcome: {error:#}"));
+                .unwrap_or_else(|| {
+                    panic!(
+                        "HTTP {status} must be an unknown outcome: {}",
+                        ErrorChain(error.as_ref())
+                    )
+                });
             assert_eq!(unknown.request_id, test_result().request_id);
         }
     }
@@ -698,7 +705,8 @@ mod tests {
 
         assert!(
             error.downcast_ref::<SubmissionOutcomeUnknown>().is_some(),
-            "an existing-request rejection with no visible receipt may still be delivered: {error:#}"
+            "an existing-request rejection with no visible receipt may still be delivered: {}",
+            ErrorChain(error.as_ref())
         );
     }
 
@@ -720,7 +728,12 @@ mod tests {
 
         let unconfirmed = error
             .downcast_ref::<DeliveryUnconfirmed>()
-            .unwrap_or_else(|| panic!("absence must stay unresolved: {error:#}"));
+            .unwrap_or_else(|| {
+                panic!(
+                    "absence must stay unresolved: {}",
+                    ErrorChain(error.as_ref())
+                )
+            });
         assert_eq!(unconfirmed.request_id, result.request_id);
         assert_eq!(unconfirmed.session_id, result.session_id);
         assert!(

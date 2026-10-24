@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -50,5 +51,5 @@ pub async fn request_status_enrollment(
             view.server_label = server_label;
             view
         })
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+        .map_err(|error| BridgeError::untyped(ErrorChain(error.as_ref()).to_string()))
 }

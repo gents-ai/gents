@@ -1,5 +1,6 @@
 use super::super::DesiredStateManifest;
 use super::{automation, projection, tooling};
+use gents_protocol::error_chain::ErrorChain;
 
 pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     let plan =
@@ -12,7 +13,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             )
         });
     if let Err(error) = plan {
-        errors.push(format!("{error:#}"));
+        errors.push(format!("{}", ErrorChain(error.as_ref())));
         return;
     }
     tooling::validate_surfaces(manifest, errors);

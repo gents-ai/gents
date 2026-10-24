@@ -168,6 +168,7 @@ pub(crate) fn declaration_from_artifact(
 
 #[cfg(test)]
 pub(crate) mod testing {
+    use gents_protocol::error_chain::ErrorChain;
     pub(crate) fn build_plugin_afb(name: &str, main_rs: &[u8]) -> Vec<u8> {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join(name);
@@ -202,13 +203,15 @@ pub(crate) mod testing {
 
         let owner = format!("test plugin ({name})");
         let local = crate::commands::afterburner_build::load_and_validate(&owner, &root)
-            .unwrap_or_else(|error| panic!("loading the {name} package: {error:#}"));
+            .unwrap_or_else(|error| {
+                panic!("loading the {name} package: {}", ErrorChain(error.as_ref()))
+            });
         let out = dir.path().join(format!("{name}.afb"));
         let _guard = crate::commands::afterburner_build::compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::commands::afterburner_build::compile(&owner, &root, local, &out)
-            .unwrap_or_else(|error| panic!("compiling {name}: {error:#}"));
+            .unwrap_or_else(|error| panic!("compiling {name}: {}", ErrorChain(error.as_ref())));
         std::fs::read(&out).expect("reading the compiled .afb")
     }
 

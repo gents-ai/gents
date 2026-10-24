@@ -56,6 +56,7 @@ use crate::eval::{
     OutcomeKind, RunRecord, StageCompletion, TrialCompletion, TrialIdentity, TrialRecord,
     VerdictDraft,
 };
+use gents_protocol::error_chain::ErrorChain;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutcome {
@@ -379,7 +380,7 @@ pub(crate) async fn execute_frozen(
                     Some(Err(error)) => {
                         tracing::error!(
                             run_id,
-                            error = %format!("{error:#}"),
+                            error = %ErrorChain(error.as_ref()),
                             "eval trial failed; draining in-flight trials"
                         );
                         failed.get_or_insert(error);
@@ -688,7 +689,7 @@ impl ViewWriter {
             Err(error) => {
                 tracing::debug!(
                     run_id,
-                    error = %format!("{error:#}"),
+                    error = %ErrorChain(error.as_ref()),
                     "eval run report was not derived for watchers"
                 );
                 return;
@@ -1661,8 +1662,9 @@ mod tests {
         };
         let error = fixtures(pack.path(), Some(&escaping), None).unwrap_err();
         assert!(
-            format!("{error:#}").contains("inside the pack"),
-            "{error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("inside the pack"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         let absent = EvalFixtures {
@@ -1814,7 +1816,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("injected"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("injected"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let trials = load_trials(&launching.access, OWNER, "run-1")
             .await
@@ -1880,7 +1886,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("injected"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("injected"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
 
         let owed = plan(&frozen.record.origin, "run-1", &[], 1);
         assert_eq!(owed.len(), 1);
@@ -2079,7 +2089,7 @@ mod tests {
         .await
         .unwrap_err();
         let down = provider_down(error.as_ref())
-            .unwrap_or_else(|| panic!("expected ProviderDown: {error:#}"));
+            .unwrap_or_else(|| panic!("expected ProviderDown: {}", ErrorChain(error.as_ref())));
         assert_eq!(
             (down.outcome.run_id.as_str(), down.consecutive_not_evidence),
             ("run-1", 2)
@@ -2149,8 +2159,12 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let reason = freeze_refused(error.as_ref())
-            .unwrap_or_else(|| panic!("expected a FreezeRefused, got {error:#}"));
+        let reason = freeze_refused(error.as_ref()).unwrap_or_else(|| {
+            panic!(
+                "expected a FreezeRefused, got {}",
+                ErrorChain(error.as_ref())
+            )
+        });
         assert!(
             reason.0.contains("monitor-tools") && reason.0.contains("Unrestricted"),
             "{reason}"
@@ -2186,8 +2200,12 @@ mod tests {
         .await
         .unwrap_err();
 
-        let down = provider_down(error.as_ref())
-            .unwrap_or_else(|| panic!("expected a ProviderDown, got {error:#}"));
+        let down = provider_down(error.as_ref()).unwrap_or_else(|| {
+            panic!(
+                "expected a ProviderDown, got {}",
+                ErrorChain(error.as_ref())
+            )
+        });
         assert_eq!(down.consecutive_not_evidence, 2);
         assert!(down.outcome.breaker_tripped);
         assert_eq!(
@@ -2494,7 +2512,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("injected"), "{error:#}");
+        assert!(
+            format!("{}", ErrorChain(error.as_ref())).contains("injected"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         assert_eq!(
             executor.settled.load(Ordering::SeqCst),
             1,
@@ -2550,7 +2572,8 @@ mod tests {
             assert!(
                 freeze_refused(error.as_ref())
                     .is_some_and(|refusal| refusal.0.contains("still running")),
-                "{error:#}"
+                "{}",
+                ErrorChain(error.as_ref())
             );
         }
         holder.heartbeat(Duration::ZERO);
@@ -2573,13 +2596,15 @@ mod tests {
         let missing = request_cancel(dir.path(), "absent").unwrap_err();
         assert!(
             freeze_refused(&missing).is_some_and(|refusal| refusal.0.contains("has no directory")),
-            "{missing:#}"
+            "{}",
+            ErrorChain(&missing)
         );
         let escaping = request_cancel(dir.path(), "../elsewhere").unwrap_err();
         assert!(
             freeze_refused(&escaping)
                 .is_some_and(|refusal| refusal.0.contains("one ordinary path component")),
-            "{escaping:#}"
+            "{}",
+            ErrorChain(&escaping)
         );
         assert_eq!(
             run_dir(dir.path(), "run-1").unwrap(),
@@ -2611,7 +2636,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let reason = format!("{error:#}");
+        let reason = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             reason.contains("run-1") && reason.contains("invalidated"),
             "{reason}"

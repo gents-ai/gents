@@ -162,6 +162,7 @@ async fn execute(pool: &McpPool, request: Request) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -364,7 +365,9 @@ mod tests {
                 Err(error) => error,
                 Ok(_) => panic!("invalid speech result accepted"),
             };
-            assert!(!format!("{error:#}").contains("private-audio-marker"));
+            assert!(!ErrorChain(error.as_ref())
+                .to_string()
+                .contains("private-audio-marker"));
         }
     }
 }

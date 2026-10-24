@@ -1,5 +1,6 @@
 use super::*;
 use crate::pack::{write_home_install, HomePackInstall, InstalledPackPlugin, PackKind};
+use gents_protocol::error_chain::ErrorChain;
 
 fn dev_plugin(home: &Path, id: &str, source: &str, css: Option<&str>) {
     let dir = dev_root(home).join(id);
@@ -232,11 +233,16 @@ async fn resolves_an_afb_produced_module_through_the_supplied_runner() {
 #[test]
 fn a_producer_that_prints_the_wrong_shape_is_refused_by_name() {
     let error = module_from_producer_output(&serde_json::json!({ "code": "x" })).unwrap_err();
-    assert!(format!("{error:#}").contains("{\"module\""), "{error:#}");
+    assert!(
+        ErrorChain(&error).to_string().contains("{\"module\""),
+        "{}",
+        ErrorChain(&error)
+    );
     let error = module_from_producer_output(&serde_json::json!("just a string")).unwrap_err();
     assert!(
-        format!("{error:#}").contains("one JSON object"),
-        "{error:#}"
+        ErrorChain(&error).to_string().contains("one JSON object"),
+        "{}",
+        ErrorChain(&error)
     );
 }
 
@@ -244,7 +250,11 @@ fn a_producer_that_prints_the_wrong_shape_is_refused_by_name() {
 fn an_oversize_module_is_refused() {
     let big = "x".repeat(MAX_MODULE_BYTES + 1);
     let error = module_from_producer_output(&serde_json::json!({ "module": big })).unwrap_err();
-    assert!(format!("{error:#}").contains("limit"), "{error:#}");
+    assert!(
+        ErrorChain(&error).to_string().contains("limit"),
+        "{}",
+        ErrorChain(&error)
+    );
 }
 
 #[test]

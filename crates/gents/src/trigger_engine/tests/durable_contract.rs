@@ -1,5 +1,6 @@
 use super::*;
 use crate::trigger_engine::durable;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 use serde::Deserialize;
 
@@ -840,14 +841,21 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .await;
             let accepted = if commit {
                 checkpointed.unwrap_or_else(|error| {
-                    panic!("{}: unexpected checkpoint error: {error:#}", case["name"])
+                    panic!(
+                        "{}: unexpected checkpoint error: {}",
+                        case["name"],
+                        ErrorChain(error.as_ref())
+                    )
                 })
             } else {
                 let error = checkpointed.expect_err("injected checkpoint must roll back");
                 assert!(
-                    format!("{error:#}").contains("injected crash before checkpoint commit"),
-                    "{}: unexpected rollback error: {error:#}",
-                    case["name"]
+                    ErrorChain(error.as_ref())
+                        .to_string()
+                        .contains("injected crash before checkpoint commit"),
+                    "{}: unexpected rollback error: {}",
+                    case["name"],
+                    ErrorChain(error.as_ref())
                 );
                 false
             };
@@ -1082,7 +1090,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 })
                 .await;
             let accepted = if commit {
-                checkpointed.unwrap_or_else(|error| panic!("{name}: checkpoint error: {error:#}"))
+                checkpointed.unwrap_or_else(|error| {
+                    panic!("{name}: checkpoint error: {}", ErrorChain(error.as_ref()))
+                })
             } else {
                 assert!(
                     checkpointed.is_err(),

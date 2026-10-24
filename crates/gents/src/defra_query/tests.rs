@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use crate::llm::tool::Tool;
@@ -282,7 +283,7 @@ async fn refuses_a_protected_collection_even_when_unrestricted() {
     .await
     .expect_err("a protected collection must never be readable");
 
-    let message = format!("{err:#}");
+    let message = format!("{}", ErrorChain(&err));
     assert!(message.contains("protected"), "{message}");
     assert!(
         message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
@@ -308,7 +309,7 @@ async fn refuses_discovery_of_a_protected_collection() {
     .await
     .expect_err("a protected collection's field inventory must never be listed");
 
-    let message = format!("{err:#}");
+    let message = format!("{}", ErrorChain(&err));
     assert!(message.contains("protected"), "{message}");
     assert!(
         message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
@@ -764,7 +765,7 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     let error = execute_command(&access, &bad_field, &scope)
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("reference"));
+    assert!(format!("{}", ErrorChain(error.as_ref())).contains("reference"));
     let mut execute = args.clone();
     execute.options.insert("mode".into(), json!("execute"));
     let executed = execute_command(&access, &execute, &scope).await.unwrap();

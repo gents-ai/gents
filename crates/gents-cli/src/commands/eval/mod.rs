@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -277,7 +278,7 @@ async fn watch_while_held(
             }
             Err(error) if watch::store_locked(&error) => {
                 tracing::debug!(
-                    error = %format!("{error:#}"),
+                    error = %format!("{}", ErrorChain(error.as_ref())),
                     "node held, reading runner files"
                 );
                 let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());

@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 fn plugin_discovery_calls(plugins: &[(String, String)]) -> Vec<serde_json::Value> {
     plugins
@@ -67,7 +68,9 @@ impl PackInstaller {
                 &plugin.name,
                 &coordinate,
             ) {
-                blockers.push(json!({"plugin":plugin.name,"reason":format!("{error:#}")}));
+                blockers.push(
+                    json!({"plugin":plugin.name,"reason":ErrorChain(error.as_ref()).to_string()}),
+                );
             }
             crate::plugin::PluginRunner::compile(
                 distribution.0.archive.asset(&plugin.artifact)?,

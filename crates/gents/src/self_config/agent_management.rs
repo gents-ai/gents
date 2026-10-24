@@ -6,6 +6,7 @@ use crate::config_client::{
 use crate::document_config::{
     Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools,
 };
+use gents_protocol::error_chain::ErrorChain;
 
 fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::AgentCatalogView> {
     let mut view = agent::AgentCatalogView::default();
@@ -73,7 +74,7 @@ pub(super) async fn agent_preview(
     match agent_apply(node, owner, args, ceiling, true).await {
         Ok(result) => Ok(result),
         Err(error) => Ok(
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}
+            ordered! {"admitted":false,"committed":false,"rejection":ErrorChain(error.as_ref()).to_string()}
                 .pretty()?,
         ),
     }
@@ -143,7 +144,7 @@ pub(super) async fn model_agent_preview(
     {
         Ok(result) => Ok(result),
         Err(error) => Ok(
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}
+            ordered! {"admitted":false,"committed":false,"rejection":ErrorChain(error.as_ref()).to_string()}
                 .pretty()?,
         ),
     }

@@ -1,5 +1,6 @@
 use super::support;
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 use serde_json::json;
 use support::*;
@@ -168,7 +169,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                     }
                 }
                 "denied" | "illegal" | "conflict" => {
-                    let error = format!("{:#}", result.unwrap_err());
+                    let error = format!("{}", ErrorChain(result.unwrap_err().as_ref()));
                     let expected_reason = match case.name.as_str() {
                         "unauthorized_cannot_publish" => "target node",
                         "foreign_parent_cannot_recover" => "predecessor must uniquely belong",
@@ -225,7 +226,9 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             case.target
         );
         if let Err(error) = result {
-            assert!(format!("{error:#}").contains("requires goal resume-request"));
+            assert!(
+                format!("{}", ErrorChain(error.as_ref())).contains("requires goal resume-request")
+            );
         }
         let mut expected = before;
         if case.allowed {

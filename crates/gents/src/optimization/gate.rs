@@ -117,7 +117,12 @@ pub fn text_gate(
 }
 
 fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), StructuralRejection> {
-    let invalid = |error: anyhow::Error| reject("template_invalid", format!("{error:#}"));
+    let invalid = |error: anyhow::Error| {
+        reject(
+            "template_invalid",
+            format!("{}", ErrorChain(error.as_ref())),
+        )
+    };
     let mut config = baseline.config.clone();
     let task = config
         .tasks

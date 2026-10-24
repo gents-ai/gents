@@ -279,6 +279,7 @@ fn unobserved(run_id: &str, run: &Observed) -> Value {
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
+    use gents_protocol::error_chain::ErrorChain;
     use std::collections::BTreeMap;
 
     use super::super::observation_cursor::{ABANDONED_REVISION, MAX_RETRY_DELAY_SECS};
@@ -597,7 +598,7 @@ mod tests {
         assert!(delays.iter().all(|delay| *delay <= MAX_RETRY_DELAY_SECS));
         let reports = reports
             .iter()
-            .map(|error| format!("{error:#}"))
+            .map(|error| format!("{}", ErrorChain(error.as_ref())))
             .collect::<Vec<_>>();
         assert_eq!(reports, ["graph run run-1: retrying: storage unavailable"]);
         assert!(!cursor.runs.subjects["run-1"].finished);
@@ -675,7 +676,7 @@ mod tests {
         assert_eq!(loads["run-1"], 5);
         let reports = reports
             .iter()
-            .map(|error| format!("{error:#}"))
+            .map(|error| format!("{}", ErrorChain(error.as_ref())))
             .collect::<Vec<_>>();
         assert_eq!(
             reports,
@@ -1162,7 +1163,7 @@ mod tests {
                     .refresh(&node, &owner, "session", &sender, &projections)
                     .await
                     .iter()
-                    .map(|error| format!("{error:#}")),
+                    .map(|error| format!("{}", ErrorChain(error.as_ref()))),
             );
         }
         let subject = format!("run_graph reply {poison}");
@@ -1205,7 +1206,7 @@ mod tests {
                     })
                     .await
                     .iter()
-                    .map(|error| format!("{error:#}")),
+                    .map(|error| format!("{}", ErrorChain(error.as_ref()))),
             );
         }
         assert_eq!(loads.load(Ordering::SeqCst), 2);

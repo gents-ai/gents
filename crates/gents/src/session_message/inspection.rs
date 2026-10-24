@@ -465,6 +465,7 @@ pub(crate) async fn agent_session_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[test]
     fn bounded_inspection_excludes_reasoning_and_tool_arguments() {
@@ -530,7 +531,7 @@ mod tests {
             let error = decode_queued_input(&row).unwrap_err();
             for rendered in [
                 error.to_string(),
-                format!("{error:#}"),
+                ErrorChain(error.as_ref()).to_string(),
                 format!("{error:?}"),
             ] {
                 assert!(rendered.contains(request_id), "{rendered}");
@@ -796,7 +797,11 @@ mod tests {
         let error = agent_session_read(&node, &foreign, &tools, &args)
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("not messageable"), "{error:#}");
+        assert!(
+            error.to_string().contains("not messageable"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         drop(worker);
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();

@@ -987,7 +987,10 @@ async fn prepare_command_launch(
             artifact_policy_denial("artifact_write requires a runtime-owned artifact grant")
         })?;
         grant.validate_for_launch().await.map_err(|error| {
-            artifact_policy_denial(format!("artifact execution grant rejected: {error:#}"))
+            artifact_policy_denial(format!(
+                "artifact execution grant rejected: {}",
+                ErrorChain(error.as_ref())
+            ))
         })?;
         let source_root = std::fs::canonicalize(source_root).map_err(|error| {
             artifact_policy_denial(format!("artifact source unavailable: {error}"))

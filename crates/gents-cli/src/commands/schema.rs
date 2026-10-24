@@ -484,6 +484,7 @@ fn filter_existing_field_adds(
 #[cfg(test)]
 mod pack_schema_tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use std::fs;
     use tempfile::tempdir;
 
@@ -510,8 +511,11 @@ mod pack_schema_tests {
         fs::write(&path, "type Widget { message: Int }").unwrap();
         let error = apply_sdl_file(&access, &path).await.unwrap_err();
         assert!(
-            format!("{error:#}").contains("does not match requested schema"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("does not match requested schema"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         fs::write(
             &path,
@@ -526,8 +530,11 @@ mod pack_schema_tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("missing declared fields"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("missing declared fields"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(!access
             .collection_fields("Widget")

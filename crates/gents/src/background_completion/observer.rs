@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::error_chain::ErrorChain;
 
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
@@ -90,7 +91,7 @@ impl BackgroundCompletionObserver {
                 {
                     tracing::warn!(
                         request_doc_id = %change.doc_id,
-                        error = %format!("{error:#}"),
+                        error = %ErrorChain(error.as_ref()),
                         "session-message settlement from a request update failed; the periodic scan retries"
                     );
                 }
@@ -104,7 +105,7 @@ impl BackgroundCompletionObserver {
                 {
                     tracing::warn!(
                         request_doc_id = %change.doc_id,
-                        error = %format!("{error:#}"),
+                        error = %ErrorChain(error.as_ref()),
                         "job wake from a request update failed"
                     );
                 }
@@ -158,7 +159,7 @@ impl BackgroundCompletionObserver {
             Ok(0) => {}
             Ok(ticked) => tracing::debug!(ticked, "plugin job recovery sweep ticked running jobs"),
             Err(error) => {
-                tracing::warn!(error = %format!("{error:#}"), "plugin job recovery sweep failed; will retry");
+                tracing::warn!(error = %ErrorChain(error.as_ref()), "plugin job recovery sweep failed; will retry");
             }
         }
         let wake_redrive =

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::path::Path;
 
 use gents::document_config::{Agent, PluginToolRef, Tools};
@@ -94,7 +95,7 @@ fn plugin_rows(
             rows.push(row(
                 "plugin_record_unreadable",
                 "fail",
-                format!("{plugin}: {error:#}"),
+                format!("{plugin}: {}", ErrorChain(error.as_ref())),
                 format!("gents plugin install {plugin}"),
             ));
             return;

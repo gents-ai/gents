@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeSet;
 use std::io::Write;
 
@@ -113,7 +114,7 @@ pub(super) async fn run(
         futures.push(async move {
             let mut buffered = Vec::new();
             let result = run::run_prepared(ctx, run_args, request, shared, &mut buffered).await;
-            let mut error = result.err().map(|e| format!("{e:#}"));
+            let mut error = result.err().map(|e| format!("{}", ErrorChain(e.as_ref())));
             let report = match load_report(
                 &ctx.access,
                 &ctx.owner,
@@ -124,7 +125,7 @@ pub(super) async fn run(
             {
                 Ok(report) => Some(report),
                 Err(e) => {
-                    let message = format!("loading report: {e:#}");
+                    let message = format!("loading report: {}", ErrorChain(e.as_ref()));
                     error = Some(error.map_or(message.clone(), |e| format!("{e}; {message}")));
                     None
                 }
@@ -252,7 +253,8 @@ mod tests {
             .unwrap_err();
         assert!(
             error.to_string().contains("missing-definition"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(executor.calls.lock().unwrap().is_empty());
     }

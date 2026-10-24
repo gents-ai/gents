@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -396,7 +397,7 @@ async fn next_turns_use_the_target_credentials() {
             std::time::Duration::from_secs(5),
         )
         .await
-        .unwrap_or_else(|error| panic!("{agent_id}: {error:#}"));
+        .unwrap_or_else(|error| panic!("{agent_id}: {}", ErrorChain(error.as_ref())));
         let bearer = crate::oauth_credential::test_support::bound_bearer(
             &fixture.credentials["b"].credential_id,
         )
@@ -493,7 +494,11 @@ async fn an_account_without_the_model_is_not_listed() {
 async fn assert_refused(fixture: &Fixture, to: &str, message: &str) {
     let before = fixture.profiles().await;
     let error = fixture.switch("p", to, true).await.unwrap_err();
-    assert!(format!("{error:#}").contains(message), "{error:#}");
+    assert!(
+        format!("{}", ErrorChain(error.as_ref())).contains(message),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
     assert_eq!(fixture.profiles().await, before, "nothing written");
 }
 
@@ -544,7 +549,7 @@ async fn no_candidate_says_how_to_add_one() {
     let fixture = Fixture::build(DID, &["a"]).await;
     let error = fixture.plan().await.unwrap_err();
     assert_eq!(
-        format!("{error:#}"),
+        format!("{}", ErrorChain(error.as_ref())),
         "no other Claude account offers model-x; add one with `gents claude-login --label <label>`"
     );
 }

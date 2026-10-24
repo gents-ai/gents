@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashSetExt, RapidHashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -4494,7 +4495,12 @@ async fn timeline_tools(
 ) -> Vec<gents::TimelineToolCallRow> {
     load_run_timeline_rows(&ConfigAccess::local(node.clone()), request_id)
         .await
-        .unwrap_or_else(|error| panic!("load canonical timeline for {request_id}: {error:#}"))
+        .unwrap_or_else(|error| {
+            panic!(
+                "load canonical timeline for {request_id}: {}",
+                ErrorChain(error.as_ref())
+            )
+        })
         .tool_calls
 }
 
@@ -4653,7 +4659,10 @@ async fn load_session_messages(
     load_run_timeline_rows(&ConfigAccess::local(node.clone()), request_id)
         .await
         .unwrap_or_else(|error| {
-            panic!("load canonical session timeline for {request_id}: {error:#}")
+            panic!(
+                "load canonical session timeline for {request_id}: {}",
+                ErrorChain(error.as_ref())
+            )
         })
         .messages
         .into_iter()

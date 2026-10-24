@@ -204,6 +204,7 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     fn params(collection: &str, fields: &[&str]) -> DefraQueryParams {
@@ -223,7 +224,7 @@ mod tests {
                 CollectionScope::restricted(vec![name.to_string()]),
             ] {
                 let err = build_query(&params(name, &["x"]), &scope).unwrap_err();
-                let message = format!("{err:#}");
+                let message = format!("{}", ErrorChain(err.as_ref()));
                 assert!(message.contains("protected"), "{message}");
                 assert!(message.contains(name), "{message}");
             }

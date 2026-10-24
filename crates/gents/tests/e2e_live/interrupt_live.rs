@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -178,7 +179,10 @@ async fn assert_terminal_partial(
             )
             .await
             .map_err(|error| {
-                format!("reconstructing interrupted partial assistant header: {error:#}")
+                format!(
+                    "reconstructing interrupted partial assistant header: {}",
+                    ErrorChain(error.as_ref())
+                )
             })?;
             assert!(header.role == MessageRole::Assistant);
             assert!(header.request_doc_id.as_deref() == Some(request_doc_id));

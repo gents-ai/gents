@@ -1,5 +1,6 @@
 use super::*;
 use crate::support::TestResult;
+use gents_protocol::error_chain::ErrorChain;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
@@ -8,7 +9,12 @@ async fn codex_shim_live_protocol_uses_real_backend() -> TestResult<()> {
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
+        .map_err(|error| {
+            format!(
+                "connecting to live codex-shim websocket: {}",
+                ErrorChain(&error)
+            )
+        })?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -40,7 +46,12 @@ async fn codex_shim_live_gents_filesystem_tools_project_to_codex_items() -> Test
     let smoke = start_live_codex_shim_with_write_tools(true, None).await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
+        .map_err(|error| {
+            format!(
+                "connecting to live codex-shim websocket: {}",
+                ErrorChain(&error)
+            )
+        })?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -94,7 +105,12 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> TestR
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
+        .map_err(|error| {
+            format!(
+                "connecting to live codex-shim websocket: {}",
+                ErrorChain(&error)
+            )
+        })?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -396,7 +412,12 @@ async fn codex_shim_live_protocol_supports_multiturn_memory() -> TestResult<()> 
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
+        .map_err(|error| {
+            format!(
+                "connecting to live codex-shim websocket: {}",
+                ErrorChain(&error)
+            )
+        })?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -447,7 +468,12 @@ async fn codex_shim_live_three_prompt_regression_writes_codex_home_trace() -> Te
     let smoke = start_live_codex_shim_with_write_tools(true, Some(broad_tool_root)).await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
+        .map_err(|error| {
+            format!(
+                "connecting to live codex-shim websocket: {}",
+                ErrorChain(&error)
+            )
+        })?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &repo_root).await?;

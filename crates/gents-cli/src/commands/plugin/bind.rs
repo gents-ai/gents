@@ -48,6 +48,7 @@ pub(super) fn unbind(args: PluginUnbindArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
     fn install_record(home: &std::path::Path, model_slot: Option<&str>, bound: bool) {
@@ -96,7 +97,13 @@ mod tests {
         })
         .await
         .unwrap_err();
-        assert!(format!("{error:#}").contains("local host"), "{error:#}");
+        assert!(
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("local host"),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -105,8 +112,11 @@ mod tests {
         install_record(home.path(), None, false);
         let error = unbind(unbind_args(home.path())).unwrap_err();
         assert!(
-            format!("{error:#}").contains("no slot to bind"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("no slot to bind"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         let error = bind(PluginBindArgs {
             name: "team/ocr".to_owned(),
@@ -120,8 +130,11 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            format!("{error:#}").contains("no slot to bind"),
-            "{error:#}"
+            ErrorChain(error.as_ref())
+                .to_string()
+                .contains("no slot to bind"),
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert!(unbind(PluginUnbindArgs {
             name: "team/missing".to_owned(),

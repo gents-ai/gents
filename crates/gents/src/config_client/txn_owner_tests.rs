@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashSetExt, RapidHashSet};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -355,8 +356,10 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
     assert_eq!(count, 1);
     let error = failure.expect_err("existing mutation fault still fires");
     assert!(
-        format!("{error:#}").contains("injected failure after successful transaction mutation 1"),
-        "{error:#}"
+        format!("{}", ErrorChain(error.as_ref()))
+            .contains("injected failure after successful transaction mutation 1"),
+        "{}",
+        ErrorChain(error.as_ref())
     );
     node.shutdown().await;
 }
@@ -605,7 +608,8 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
         .expect_err("abandoned statement must fail its transaction");
     assert!(
         crate::config_client::is_transaction_step_unavailable(&error),
-        "abandoned native work remains a storage-unavailable result: {error:#}"
+        "abandoned native work remains a storage-unavailable result: {}",
+        ErrorChain(error.as_ref())
     );
     assert_eq!(
         attempts.load(Ordering::SeqCst),
@@ -843,7 +847,8 @@ async fn stalled_callback_releases_the_embedded_write_gate() {
     tokio::time::resume();
     assert!(
         error.to_string().contains("callback timed out"),
-        "{error:#}"
+        "{}",
+        ErrorChain(error.as_ref())
     );
     assert!(
         super::retry::is_transaction_storage_failure(&error),
@@ -885,7 +890,7 @@ async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate(
     })
     .await
     .expect_err("a canonical write cannot recursively acquire its transaction's gate");
-    let diagnostic = format!("{error:#}");
+    let diagnostic = format!("{}", ErrorChain(error.as_ref()));
     assert!(diagnostic.contains("test.inner_write"), "{diagnostic}");
     assert!(
         diagnostic.contains("test.outer_transaction"),
@@ -950,7 +955,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
         .await
         .expect_err("a nested idempotent write remains an ownership violation");
 
-    let diagnostic = format!("{error:#}");
+    let diagnostic = format!("{}", ErrorChain(error.as_ref()));
     assert!(
         diagnostic.contains("test.inner_idempotent_write"),
         "{diagnostic}"
@@ -1009,7 +1014,7 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
         Ok(_) => panic!("waiting operation acquired a gate that is still owned"),
         Err(error) => error,
     };
-    let diagnostic = format!("{error:#}");
+    let diagnostic = format!("{}", ErrorChain(error.as_ref()));
     assert!(
         diagnostic.contains("test.waiting_operation"),
         "{diagnostic}"
@@ -1864,8 +1869,10 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     .await
     .unwrap_err();
     assert!(
-        format!("{error:#}").contains("cannot execute mutation in read-only transaction"),
-        "mutation must reach DefraDB's native read-only transaction guard: {error:#}"
+        format!("{}", ErrorChain(error.as_ref()))
+            .contains("cannot execute mutation in read-only transaction"),
+        "mutation must reach DefraDB's native read-only transaction guard: {}",
+        ErrorChain(error.as_ref())
     );
     let after =
         ConfigAccess::transact_local_readonly(&node, None, "test.readonly_new_snapshot", |txn| {
@@ -2045,7 +2052,11 @@ async fn non_conflict_commit_failure_does_not_replay_callback() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("HTTP 500"), "{error:#}");
+    assert!(
+        error.to_string().contains("HTTP 500"),
+        "{}",
+        ErrorChain(error.as_ref())
+    );
     assert_eq!(callbacks.load(Ordering::SeqCst), 1);
     assert_eq!(&*lock(&state.committed_ids), &["0"]);
     assert!(lock(&state.discarded_ids).is_empty());

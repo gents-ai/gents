@@ -708,6 +708,7 @@ mod tests {
     use super::*;
     use crate::defra_node::EmbeddedNode;
     use crate::eval::TAXONOMY_VERSION;
+    use gents_protocol::error_chain::ErrorChain;
     use std::sync::Arc;
 
     const OWNER: &str = "did:key:eval-owner";
@@ -866,7 +867,11 @@ mod tests {
         let error = invalidate_run(&access, OWNER, "run-1", "did:key:other", "second thoughts")
             .await
             .unwrap_err();
-        assert!(already_invalidated(&error).is_some(), "{error:#}");
+        assert!(
+            already_invalidated(&error).is_some(),
+            "{}",
+            ErrorChain(error.as_ref())
+        );
         let again = load_run(&access, OWNER, "run-1").await.unwrap().unwrap();
         assert_eq!(
             again.invalidated.expect("still invalidated"),
@@ -901,7 +906,7 @@ mod tests {
         let error = complete_trial(&access, OWNER, "trial-1", &rival_completion())
             .await
             .unwrap_err();
-        assert!(already_completed(&error), "{error:#}");
+        assert!(already_completed(&error), "{}", ErrorChain(error.as_ref()));
         let after = load_trials(&access, OWNER, "run-2").await.unwrap();
         let stored = after[0].completion.as_ref().expect("the trial completed");
         assert_eq!(stored.usage.output_tokens, None, "missing usage stays null");
@@ -1004,7 +1009,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(feedback_off_train(&error), "{error:#}");
+        assert!(feedback_off_train(&error), "{}", ErrorChain(error.as_ref()));
         append_verdict(
             &access,
             OWNER,
@@ -1055,8 +1060,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("10001"),
-            "the error names the offending score: {error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("10001"),
+            "the error names the offending score: {}",
+            ErrorChain(error.as_ref())
         );
         assert!(
             load_verdicts(&access, OWNER, "r3")
@@ -1098,7 +1104,7 @@ mod tests {
         .await
         .unwrap();
         let error = load_verdicts(&access, OWNER, "r4").await.unwrap_err();
-        let rendered = format!("{error:#}");
+        let rendered = format!("{}", ErrorChain(error.as_ref()));
         assert!(
             rendered.contains("unknown provider_reason") && rendered.contains("bogus"),
             "{rendered}"

@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::EmbeddedNode;
@@ -773,7 +774,9 @@ mod lifecycle_tests {
         let (node, path, mut tool) = published_spawn_parent("native-terminal").await;
         tool.complete("done").await.unwrap();
         let error = tool.fail("late", FailureClass::External).await.unwrap_err();
-        assert!(format!("{error:#}").contains("illegal tool call transition"));
+        assert!(ErrorChain(error.as_ref())
+            .to_string()
+            .contains("illegal tool call transition"));
         teardown(node, path).await;
     }
 
@@ -781,7 +784,9 @@ mod lifecycle_tests {
     async fn admitted_native_rejects_duplicate_dispatch_without_duplicate_row() {
         let (node, path, mut tool) = published_spawn_parent("native-duplicate").await;
         let error = tool.start_running().await.unwrap_err();
-        assert!(format!("{error:#}").contains("cannot re-dispatch"));
+        assert!(ErrorChain(error.as_ref())
+            .to_string()
+            .contains("cannot re-dispatch"));
         assert_eq!(
             row(&node, "session-native-duplicate").await["lifecycle_state"],
             "running"

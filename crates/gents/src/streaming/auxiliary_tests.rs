@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -678,7 +679,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         );
         if !case.expected.native_publication_accepted {
             let error = publication.unwrap_err();
-            let diagnostic = format!("{error:#}");
+            let diagnostic = ErrorChain(error.as_ref()).to_string();
             assert!(
                 diagnostic.contains("provider publication does not bind its request generation"),
                 "{}: empty auxiliary header failed outside publication owner: {diagnostic}",
@@ -734,7 +735,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         );
         if !case.expected.stale_close_replay_accepted {
             let error = stale_replay.unwrap_err();
-            let diagnostic = format!("{error:#}");
+            let diagnostic = ErrorChain(error.as_ref()).to_string();
             assert!(
                 matches!(
                     error.downcast_ref::<canonical::ProviderCloseRejection>(),

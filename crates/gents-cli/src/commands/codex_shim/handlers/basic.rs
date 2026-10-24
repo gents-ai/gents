@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use gents::config_client::load_inference_backend_in_txn;
 use gents::usage_observation::{usage_for_backend, StoredUsage};
 use gents_codex_protocol as codex;
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 
 use super::super::bound_behavior::load_bound_model_selection_id_for_state;
@@ -244,7 +245,7 @@ async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
         Ok(stored)
     };
     load.await.unwrap_or_else(|error: anyhow::Error| {
-        tracing::warn!(error = %format!("{error:#}"), "reading the session account's usage failed");
+        tracing::warn!(error = %format!("{}", ErrorChain(error.as_ref())), "reading the session account's usage failed");
         None
     })
 }

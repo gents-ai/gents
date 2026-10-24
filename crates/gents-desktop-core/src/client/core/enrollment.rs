@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -145,7 +146,7 @@ impl ClientCore {
                             .filter(|(persisted, _)| persisted == &request)
                             .with_context(|| {
                                 format!(
-                                    "enrollment request commit was not observably recovered after: {write_error:#}"
+                                    "enrollment request commit was not observably recovered after: {}", ErrorChain(write_error.as_ref())
                                 )
                             })?;
                         recovered.1
@@ -1016,7 +1017,10 @@ async fn load_status_enrollment_approvals(
             Err(error) => add_scoped_conflict(
                 &mut conflicts,
                 &server_peer,
-                format!("invalid enrollment authority: {error:#}"),
+                format!(
+                    "invalid enrollment authority: {}",
+                    ErrorChain(error.as_ref())
+                ),
             ),
         }
     }
@@ -3522,7 +3526,8 @@ mod tests {
             .expect_err("a retired request must not be reused or replaced under its offer");
         assert!(
             error.to_string().contains("fetch a fresh offer"),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
 
         Arc::new(core).shutdown().await.unwrap();

@@ -12,6 +12,7 @@ use crate::eval::runner::executor::{Capture, StageSpec};
 use crate::eval::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
 use crate::graphql::graphql_with_transaction_retry;
 use crate::Collection;
+use gents_protocol::error_chain::ErrorChain;
 
 const CONFIGURATION: [Collection; 11] = [
     Collection::Agent,
@@ -168,7 +169,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
     let response = graphql_with_transaction_retry(node, query, "eval trial last tool call")
         .await
         .map_err(|error| {
-            tracing::debug!(error = %format!("{error:#}"), "eval trial last tool call was not read");
+            tracing::debug!(error = %ErrorChain(error.as_ref()), "eval trial last tool call was not read");
         })
         .ok()?;
     let row = response
@@ -188,7 +189,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
     )
     .await
     .map_err(|error| {
-        tracing::debug!(error = %format!("{error:#}"), "eval last tool presentation was not read");
+        tracing::debug!(error = %ErrorChain(error.as_ref()), "eval last tool presentation was not read");
     })
     .ok()
     .and_then(|read| read.result);
@@ -219,7 +220,7 @@ async fn count(node: &EmbeddedNode, query: &str, collection: &str) -> Option<u64
         ),
         Err(error) => {
             tracing::debug!(
-                error = %format!("{error:#}"),
+                error = %ErrorChain(error.as_ref()),
                 collection,
                 "eval trial live count was not read"
             );

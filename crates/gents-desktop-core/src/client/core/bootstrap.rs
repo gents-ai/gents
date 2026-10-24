@@ -583,6 +583,7 @@ fn write_client_store_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {
@@ -804,7 +805,8 @@ mod tests {
                 .downcast_ref::<gents::home::HomeError>()
                 .and_then(gents::home::HomeError::lock_held)
                 .is_some(),
-            "{error:#}"
+            "{}",
+            ErrorChain(error.as_ref())
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
         let core = Arc::new(core);

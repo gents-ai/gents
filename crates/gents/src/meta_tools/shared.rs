@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -129,7 +130,7 @@ impl MetaToolError {
 impl std::fmt::Display for MetaToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            MetaToolErrorKind::Other(error) => write!(f, "{error:#}"),
+            MetaToolErrorKind::Other(error) => write!(f, "{}", ErrorChain(error.as_ref())),
             MetaToolErrorKind::Structured(error) => f.write_str(&error.to_result_text()),
         }
     }

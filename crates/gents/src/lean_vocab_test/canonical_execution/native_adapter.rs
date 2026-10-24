@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
@@ -2400,7 +2401,10 @@ impl NativeCanonicalExecution {
                 return self.observe(false).await;
             }
             Err(error) => {
-                let detail = format!("native provider publication owner failed: {error:#}");
+                let detail = format!(
+                    "native provider publication owner failed: {}",
+                    ErrorChain(error.as_ref())
+                );
                 return Err(error.context(detail));
             }
         };
@@ -3048,7 +3052,8 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
             let error = changed.expect_err("DateTime schema must reject malformed deadline input");
             assert!(
                 error.to_string().contains("Invalid DateTime format"),
-                "malformed deadline must fail at the schema boundary: {error:#}"
+                "malformed deadline must fail at the schema boundary: {}",
+                ErrorChain(error.as_ref())
             );
             assert_eq!(native.observe(true).await.unwrap(), before);
             continue;
@@ -3070,14 +3075,16 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         .await
         .expect_err("invalid durable deadline cannot authorize a fresh append");
         assert!(
-            format!("{error:#}").contains("no accepted deadline"),
-            "missing deadline must fail at the deadline integrity check: {error:#}"
+            format!("{}", ErrorChain(error.as_ref())).contains("no accepted deadline"),
+            "missing deadline must fail at the deadline integrity check: {}",
+            ErrorChain(error.as_ref())
         );
         assert!(
             error
                 .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
                 .is_none(),
-            "{label} deadline is an integrity error, not a modeled rejection: {error:#}"
+            "{label} deadline is an integrity error, not a modeled rejection: {}",
+            ErrorChain(error.as_ref())
         );
         let mut expected_unchanged = before.clone();
         expected_unchanged.accepted = false;
