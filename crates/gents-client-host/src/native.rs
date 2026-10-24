@@ -111,11 +111,13 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
         crate::editor_store::frames(tokio::io::join(tokio::io::stdin(), tokio::io::stdout()))
     });
     let build = installation_build().await?;
+    let mut bootstrap_finished = false;
     let connection = tokio::time::timeout(Duration::from_secs(90), async {
         if matches!(inspect_installation(&paths, &build).await?, Installation::Current) {
             let connection = local::connect(&paths).await?;
             if let Some(bootstrap) = &mut bootstrap {
                 crate::editor_store::send(bootstrap, &crate::editor_store::Message::Ready).await?;
+                bootstrap_finished = true;
             }
             return Ok(connection);
         }
@@ -125,6 +127,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
             let connection = local::connect(&paths).await?;
             if let Some(bootstrap) = &mut bootstrap {
                 crate::editor_store::send(bootstrap, &crate::editor_store::Message::Ready).await?;
+                bootstrap_finished = true;
             }
             return Ok(connection);
         }
@@ -136,6 +139,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                         error: gents_desktop_bridge::BridgeError::new(
                             gents_desktop_bridge::BridgeErrorCode::Unsupported, message),
                     }).await?;
+                    bootstrap_finished = true;
                 }
                 bail!(message);
             }
@@ -183,6 +187,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 let failed = matches!(message, crate::editor_store::Message::Error { .. });
                 if ready { child.ready = true; }
                 bootstrap.send(frame.freeze()).await?;
+                if failed || ready { bootstrap_finished = true; }
                 if failed { bail!("local history needs attention in the editor"); }
                 if ready { break; }
                 let reply = crate::editor_store::receive(bootstrap).await?;
@@ -200,7 +205,24 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
         }
     })
     .await
-    .context("waiting for the native client installation")??;
+    .context("waiting for the native client installation")
+    .and_then(std::convert::identity);
+    let connection = match connection {
+        Ok(connection) => connection,
+        Err(error) => {
+            if !bootstrap_finished {
+                if let Some(bootstrap) = &mut bootstrap {
+                    let _ = crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
+                        error: gents_desktop_bridge::BridgeError::new(
+                            gents_desktop_bridge::BridgeErrorCode::ClientStartFailed,
+                            "The shared history process could not be initialized. Reconnect. If this repeats, close the application serving this history, wait up to three minutes, then reconnect. Your chats are unchanged.",
+                        ),
+                    }).await;
+                }
+            }
+            return Err(error);
+        }
+    };
     drop(bootstrap);
     let (mut reader, mut writer) = tokio::io::split(connection);
     let input = async {

@@ -21,6 +21,9 @@ use windows as platform;
 
 pub use platform::{connect, Connection};
 
+/// Maximum concurrent local attachments admitted by one installation listener.
+pub const MAX_ATTACHMENTS: usize = 64;
+
 /// The listener lock is independent of the core's store lock. Discovery never
 /// permits a second core to open a store held by another process.
 pub struct LocalListener {
@@ -90,7 +93,7 @@ impl LocalListener {
                     _ = &mut idle, if idle_timeout.is_some() && attachments.is_empty() => break,
                     accepted = self.listener.accept() => {
                         let stream = accepted?;
-                        if stop.is_cancelled() || attachments.len() >= 64 { continue; }
+                        if stop.is_cancelled() || attachments.len() >= MAX_ATTACHMENTS { continue; }
                         phase = State { phase, attachments: attachments.len() }
                             .step(Action::Attach).context("client installation is retiring")?.phase;
                         attachments.spawn(host.clone().serve(stream, stop.clone()));
