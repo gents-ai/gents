@@ -24,6 +24,8 @@ use console::ConsoleChild as Child;
 
 #[path = "support/configured_actions.rs"]
 mod configured_actions;
+#[path = "support/editor_delivery.rs"]
+mod editor_delivery;
 #[path = "support/editor_goal_recovery.rs"]
 mod editor_goal_recovery;
 #[path = "support/editor_goal_removal.rs"]
@@ -143,7 +145,8 @@ async fn editor_recovers_the_original_message_after_a_lost_helper_reply() -> Res
             })
             .join("\n")
         })?;
-    copy_editor_evidence(temp.path(), "editor-delivery-canonical.json")
+    copy_editor_evidence(temp.path(), "editor-delivery-canonical.json")?;
+    copy_editor_evidence(temp.path(), "editor-fork-canonical.json")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -536,29 +539,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         None,
         Arc::new(move |request| {
             if matches!(journey, Journey::EditorDelivery) {
-                let user = request["messages"]
-                    .as_array()
-                    .and_then(|messages| {
-                        messages
-                            .iter()
-                            .rev()
-                            .find(|message| message["role"] == "user")
-                    })
-                    .map(Value::to_string)
-                    .unwrap_or_default();
-                for (prompt, reply) in [
-                    (
-                        "Keep this later draft after recovery.",
-                        "Follow-up delivery response.",
-                    ),
-                    (
-                        "Return the installed delivery recovery response.",
-                        "Installed delivery response.",
-                    ),
-                ] {
-                    if user.contains(prompt) {
-                        return ChatAction::Sse(fake_llm::completion_text_sse(reply));
-                    }
+                if let Some(reply) = editor_delivery::reply(request) {
+                    return reply;
                 }
             }
             if matches!(
@@ -1882,61 +1864,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "delivery",
         )
         .await?;
-        let marker: Value =
-            serde_json::from_slice(&std::fs::read(root.join("editor-reply-loss.json"))?)?;
-        let request_id = marker["requestId"]
-            .as_str()
-            .context("missing retained caller identity in dropped reply")?;
-        let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id session_id content admission_signature lifecycle_state}} }}",
-            gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session));
-        let rows = tokio::time::timeout(Duration::from_secs(20), async {
-            loop {
-                let rows = access.execute(&query).await?;
-                let requests = rows["data"]["AgentRequest"]
-                    .as_array()
-                    .context("missing admitted request rows")?;
-                let original: Vec<_> = requests
-                    .iter()
-                    .filter(|row| row["request_id"] == request_id)
-                    .collect();
-                let follow_up: Vec<_> = requests
-                    .iter()
-                    .filter(|row| row["content"] == "Keep this later draft after recovery.")
-                    .collect();
-                ensure!(
-                    original.len() == 1 && follow_up.len() == 1,
-                    "installed recovery duplicated or lost its authored requests: {rows}"
-                );
-                ensure!(
-                    original[0]["content"] == "Return the installed delivery recovery response.",
-                    "installed recovery changed its authored input"
-                );
-                ensure!(
-                    requests
-                        .iter()
-                        .all(|row| row["content"] != "Next draft remains editable."),
-                    "the unsent draft was submitted"
-                );
-                ensure!(
-                    original[0]["admission_signature"]
-                        .as_str()
-                        .is_some_and(|signature| !signature.is_empty()),
-                    "installed request has no admission signature"
-                );
-                if original[0]["lifecycle_state"] == "completed"
-                    && follow_up[0]["lifecycle_state"] == "completed"
-                {
-                    return Ok::<_, anyhow::Error>(rows);
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        })
-        .await
-        .context("installed recovered conversation did not complete")??;
-        std::fs::write(
-            root.join("editor-delivery-canonical.json"),
-            serde_json::to_vec_pretty(&rows)?,
-        )?;
+        let (requests, fork) = editor_delivery::verify(
+            &access,
+            &mut client,
+            &mut id,
+            node_did,
+            session,
+            &client_did,
+            root,
+        )
+        .await?;
+        for (name, evidence) in [
+            ("editor-delivery-canonical.json", requests),
+            ("editor-fork-canonical.json", fork),
+        ] {
+            std::fs::write(root.join(name), serde_json::to_vec_pretty(&evidence)?)?;
+        }
     }
     if matches!(journey, Journey::EditorRetry) {
         std::fs::write(
