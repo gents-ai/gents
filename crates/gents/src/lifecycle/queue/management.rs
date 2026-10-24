@@ -28,6 +28,8 @@ pub struct PendingQueueEntry {
     pub content: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captured_context: Vec<gents_protocol::request_input::CapturedContext>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<gents_protocol::request_input::AttachmentView>,
     pub editable: bool,
     pub steerable: bool,
     pub edit_group: Option<String>,
@@ -102,6 +104,16 @@ pub async fn pending_user_queue_projection(
                                 row.input
                                     .as_ref()
                                     .map(|input| input.captured_context.clone())
+                                    .unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            },
+                            attachments: if row.requester_did.as_deref() == Some(requester_did) {
+                                row.input
+                                    .as_ref()
+                                    .map(|input| {
+                                        input.attachments.iter().map(|a| a.view()).collect()
+                                    })
                                     .unwrap_or_default()
                             } else {
                                 Vec::new()

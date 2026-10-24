@@ -70,7 +70,7 @@ pub(super) fn build_pending_turn(
         .lifecycle_state
         .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())
-        .or_else(|| (!request_input.captured_context.is_empty()).then(String::new))?;
+        .or_else(|| request_input.has_authored_input("").then(String::new))?;
     let owner = gents::lifecycle::input_message_owner(request);
     if folded_into.is_some() && owner.is_none() {
         return None;
@@ -122,6 +122,8 @@ pub(super) fn build_pending_turn(
         content: content.to_string(),
         captured_context: (!request_input.captured_context.is_empty())
             .then_some(request_input.captured_context),
+        attachments: Some(request_input.attachments.iter().map(|a| a.view()).collect())
+            .filter(|v: &Vec<_>| !v.is_empty()),
         selected_skill_ids: request_input.selected_skill_ids,
         lifecycle_state,
         folded_into_request_id: folded_into.map(str::to_owned),

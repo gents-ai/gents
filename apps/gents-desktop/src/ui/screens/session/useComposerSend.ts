@@ -1,3 +1,5 @@
+import type { RequestAttachment } from "@source-inc/gents-desktop-client";
+import { writeAttachments } from "../../../hooks/draftStore";
 import { useApp, useView } from "@/app/AppContext";
 import { navigate } from "@/lib/router";
 import { workspace } from "@/app/workspace";
@@ -22,12 +24,29 @@ export function useComposerSend(agentId: string | null | undefined) {
   const draftKey = useView((view) => view.draftKey);
   const [draft, setDraft] = useDraft(drafts, draftKey);
   const selectedSessionId = stores.selection.use.sessionId();
+  const selectedNodeDid = stores.selection.use.nodeDid();
+  const failure = stores.chat.use.submissionError();
+  const error =
+    failure?.nodeDid === selectedNodeDid && failure?.sessionId === selectedSessionId
+      ? failure.message
+      : null;
 
-  const send = async (text: string) => {
-    const pending = sendMessage(text, agentId);
+  const send = async (text: string, supplied?: RequestAttachment[]) => {
+    const selected = drafts.getState().attachments[draftKey] ?? [];
+    if (!supplied && selected.some((a) => !a.content || a.error)) return false;
+    const attachments =
+      supplied ?? selected.flatMap((a) => (a.content ? [a.content] : []));
+    const ids = new Set(selected.map((a) => a.id));
+    const pending = sendMessage(text, agentId, attachments);
     const intentGeneration = captureComposeIntent();
     const result = await pending;
-    if (result) setDraft((current) => (current === text ? "" : current));
+    if (result) {
+      if (!supplied) setDraft((current) => (current === text ? "" : current));
+      if (!supplied)
+        writeAttachments(drafts, draftKey, (current) =>
+          current.filter((a) => !ids.has(a.id)),
+        );
+    }
     if (
       acceptsComposeIntent(intentGeneration) &&
       result &&
@@ -39,5 +58,5 @@ export function useComposerSend(agentId: string | null | undefined) {
     return Boolean(result);
   };
 
-  return { draft, setDraft, send };
+  return { draft, setDraft, send, error };
 }

@@ -49,6 +49,10 @@ export function createBridgeHttpAdapter(
   observers: BridgeAdapterObservers = {},
 ): DesktopApiAdapter {
   return {
+    readAttachment: async () => {
+      throw new Error("Native picker is unavailable in the live browser bridge");
+    },
+    requestAttachments: unsupported("requestAttachments"),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
     listWorkspace: unsupported("listWorkspace"),

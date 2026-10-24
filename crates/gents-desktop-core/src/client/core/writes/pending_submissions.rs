@@ -14,6 +14,44 @@ use super::super::super::mutations::{
 use super::{observe_submitted_request, ClientCore};
 
 impl ClientCore {
+    pub async fn verify_submission_attachments(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        request_id: &str,
+        attachments: &[gents_protocol::request_input::RequestAttachment],
+    ) -> Result<()> {
+        let retained =
+            super::super::super::mutations::submission_journal::load(&self.node, request_id)
+                .await?;
+        if let Some(pending) = retained {
+            anyhow::ensure!(
+                pending.node_did == node_did && pending.session_id == session_id,
+                "The retained request belongs to another session"
+            );
+            anyhow::ensure!(
+                pending.create.input.attachments == attachments,
+                "The retained request contains different attachments"
+            );
+        } else if let Ok(row) = self.request_in_scope(request_id, Some(node_did)) {
+            anyhow::ensure!(
+                row.session_id.as_deref() == Some(session_id),
+                "The retained request belongs to another session"
+            );
+            anyhow::ensure!(
+                row.input
+                    .as_ref()
+                    .map(|i| i.attachments.as_slice())
+                    .unwrap_or_default()
+                    == attachments,
+                "The retained request contains different attachments"
+            );
+        } else {
+            anyhow::ensure!(attachments.is_empty(), "Attachment delivery is still unknown; reconnect to recover the original request before retrying");
+        }
+        Ok(())
+    }
+
     /// Map a submit failure, keeping the signed payload of an unknown-outcome
     /// send for identical replay. An unknown outcome is not recorded as a
     /// mutation failure: the request may have been delivered.

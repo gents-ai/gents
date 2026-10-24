@@ -1,3 +1,4 @@
+import { SentAttachments } from "./session/attachments";
 import {
   Fragment,
   createContext,
@@ -183,15 +184,29 @@ const TranscriptItem = memo(function TranscriptItem({
       const sender = parentWork?.sentBy(item.requestId) ?? null;
       if (!sender) {
         return (
-          <UserInputWithState
-            content={item.content ?? ""}
-            state={state}
-            actions={copyActions(item.content)}
-          />
+          <div>
+            <UserInputWithState
+              content={item.content ?? ""}
+              state={state}
+              actions={copyActions(item.content)}
+            />
+            <SentAttachments
+              items={item.attachments}
+              requestId={item.requestId}
+              messageKey={item.kind === "userMessage" ? item.itemKey : undefined}
+            />
+          </div>
         );
       }
       const message = (
-        <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
+        <div>
+          <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
+          <SentAttachments
+            items={item.attachments}
+            requestId={item.requestId}
+            messageKey={item.kind === "userMessage" ? item.itemKey : undefined}
+          />
+        </div>
       );
       const senderName = sender.summary?.title ?? "another session";
       return (
@@ -424,7 +439,11 @@ function shapeOf(entry: TranscriptEntry): RowShape {
     case "userMessage":
     case "pendingUserTurn":
     case "automatedInput":
-      return { kind: "user", text: item.content ?? "" };
+      return {
+        kind: "user",
+        text: item.content ?? "",
+        attachments: "attachments" in item ? item.attachments?.length : 0,
+      };
     case "assistantMessage":
     case "liveAssistant":
       return { kind: "reply", text: item.content ?? "" };
@@ -761,6 +780,17 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                     <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
                       {responseError}
                     </pre>
+                    {session?.timelineItems.some(
+                      (item) =>
+                        (item.kind === "userMessage" ||
+                          item.kind === "pendingUserTurn") &&
+                        !!item.attachments?.length,
+                    ) && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Attachments stay in this conversation. Start a new chat to
+                        continue without them.
+                      </p>
+                    )}
                     {session?.retryEligibility?.eligible && (
                       <Button
                         size="sm"

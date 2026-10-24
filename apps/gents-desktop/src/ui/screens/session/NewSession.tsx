@@ -1,4 +1,5 @@
-import { Fragment } from "react";
+import { AttachmentTray, useAttachmentDraft } from "./attachments";
+import { Fragment, useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -108,7 +109,14 @@ function NewSessionComposer() {
   const sending = stores.chat.use.sending();
   const deployment = useSelectedNode();
   const choice = useAgentChoice();
-  const { draft, setDraft, send } = useComposerSend(choice.agentId);
+  const { draft, setDraft, send, error: sendError } = useComposerSend(choice.agentId);
+  const attachmentRoot = useRef<HTMLDivElement | null>(null);
+  const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const attachments = useAttachmentDraft(
+    attachmentRoot,
+    sendStatus.kind === "disabled",
+    textarea,
+  );
   const agent = agentOf(deployment, choice.agentId);
   const slash = useSlashSkills(
     draft,
@@ -117,16 +125,42 @@ function NewSessionComposer() {
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
   );
   return (
-    <div data-testid="composer">
+    <div
+      data-testid="composer"
+      ref={attachmentRoot}
+      {...attachments.dropProps}
+      className={attachments.over ? "rounded-2xl ring-2 ring-ring" : undefined}
+    >
+      <input
+        {...attachments.fileInputProps}
+        className="hidden"
+        aria-label="Choose attachments"
+      />
       <Composer
+        className="text-foreground"
         value={draft}
         onChange={setDraft}
         onSend={send}
         models={[]}
+        textareaRef={textarea}
+        onAttach={attachments.pick}
+        hasAttachments={attachments.hasAttachments}
+        submitDisabled={attachments.pending}
+        onPaste={attachments.onPaste}
         disabled={sendStatus.kind === "disabled"}
         above={
           <>
             <ReplyingTo />
+            {attachments.over && (
+              <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">
+                Drop files to attach
+              </p>
+            )}
+            <AttachmentTray
+              items={attachments.items}
+              remove={attachments.remove}
+              error={attachments.error}
+            />
             <SlashSkillMenu
               items={slash.items}
               active={slash.active}
@@ -144,10 +178,15 @@ function NewSessionComposer() {
         }
         sending={sending}
         placeholder={placeholderFor(
-          presentedComposerSendStatus(draft, sendStatus),
+          presentedComposerSendStatus(draft, sendStatus, attachments.hasAttachments),
           "Ask anything",
         )}
       />
+      {sendError && (
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          {sendError}
+        </p>
+      )}
       <ComposerFooter
         folder={<SelectedChatFolder />}
         status={<SessionSubmissionStatus activityStatus={activityStatus} />}
