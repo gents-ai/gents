@@ -1778,6 +1778,7 @@ mod tests {
             .expect("the configurator grant names its categories");
         assert!(categories.iter().any(|category| category == "profile"));
         let tools = gents::self_config::build_self_config_tools(
+            std::sync::Arc::default(),
             node.clone(),
             owner.clone(),
             Some(identity.clone()),

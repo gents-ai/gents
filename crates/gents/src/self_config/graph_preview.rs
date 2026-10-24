@@ -655,6 +655,7 @@ mod tests {
             ..Default::default()
         };
         assert!(!super::super::build_self_config_tools(
+            std::sync::Arc::default(),
             node.clone(),
             OWNER.to_owned(),
             None,
@@ -666,6 +667,7 @@ mod tests {
 
         config.enable_graph_tools = true;
         assert!(!super::super::build_self_config_tools(
+            std::sync::Arc::default(),
             node.clone(),
             OWNER.to_owned(),
             None,
@@ -683,6 +685,7 @@ mod tests {
             .iter()
             .any(|name| name == PREVIEW_GRAPH_TOOL_NAME));
         assert!(super::super::build_self_config_tools(
+            std::sync::Arc::default(),
             node.clone(),
             OWNER.to_owned(),
             None,

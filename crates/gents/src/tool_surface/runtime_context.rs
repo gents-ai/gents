@@ -9,6 +9,7 @@ use crate::NodeIdentity;
 
 #[derive(Clone)]
 pub struct ToolRuntimeContext {
+    pub(crate) usage_cache: Arc<crate::usage_observation::UsageCache>,
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) mcp_pool: McpPool,
     pub(crate) lsp_pool: LspPool,
@@ -49,6 +50,7 @@ impl ToolRuntimeContext {
         identity: Option<Arc<dyn NodeIdentity>>,
     ) -> Self {
         Self {
+            usage_cache: Arc::default(),
             node,
             mcp_pool,
             lsp_pool: LspPool::new(),
@@ -67,6 +69,7 @@ impl ToolRuntimeContext {
 
     pub fn oneshot_with_node_did(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
         Self {
+            usage_cache: Arc::default(),
             node,
             mcp_pool: McpPool::default(),
             lsp_pool: LspPool::new(),
@@ -77,6 +80,11 @@ impl ToolRuntimeContext {
             identity: None,
             plugins: Arc::default(),
         }
+    }
+
+    pub fn with_usage_cache(mut self, cache: Arc<crate::usage_observation::UsageCache>) -> Self {
+        self.usage_cache = cache;
+        self
     }
 
     pub fn with_plugins(mut self, plugins: Arc<crate::plugin::executor::PluginExecutor>) -> Self {

@@ -190,11 +190,6 @@ struct MutationWriteGuard {
     lease_id: u64,
 }
 
-#[cfg(test)]
-pub(crate) struct MutationWriteGateFillers {
-    _guards: Vec<MutationWriteGuard>,
-}
-
 impl Drop for MutationWriteGuard {
     fn drop(&mut self) {
         self.gate
@@ -1383,30 +1378,6 @@ impl<'a> ConfigApplyTxn<'a> {
             cleanup_scheduled: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn fill_mutation_write_gate_for_test(
-        node: &EmbeddedNode,
-    ) -> MutationWriteGateFillers {
-        let gate = mutation_write_gate(node);
-        let held = gate
-            .owners
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .len();
-        let mut fillers = Vec::with_capacity(MUTATION_WRITE_GATE_CAPACITY.saturating_sub(held));
-        for _ in held..MUTATION_WRITE_GATE_CAPACITY {
-            fillers.push(
-                gate.acquire(
-                    WriteOperation::new("test.write_gate_capacity_filler")
-                        .expect("static write operation"),
-                )
-                .await
-                .expect("fill the remaining write admission permits"),
-            );
-        }
-        MutationWriteGateFillers { _guards: fillers }
     }
 
     #[cfg(test)]

@@ -64,6 +64,7 @@ where
 
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
     pub async fn build(
+        cache: Arc<crate::usage_observation::UsageCache>,
         node: Arc<EmbeddedNode>,
         node_did: &str,
         account_ref: Option<&str>,
@@ -81,6 +82,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
             bearer,
             http: ReqwestClient::new(),
             usage: Some(UsageReporter::new(
+                cache,
                 node,
                 UsageAccount::for_credential(&credential),
             )),

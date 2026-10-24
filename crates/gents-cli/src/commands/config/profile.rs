@@ -43,7 +43,16 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
+        None => {
+            list_candidates(
+                &access,
+                &node_did,
+                &args.profile,
+                &slots,
+                args.home.as_deref(),
+            )
+            .await?
+        }
         Some(account) => {
             set_account(
                 &access,
@@ -81,13 +90,31 @@ async fn list_candidates(
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
+    home: Option<&std::path::Path>,
 ) -> Result<Value> {
+    let observations = if let ConfigAccess::Graphql(graphql) = access {
+        let identity = crate::commands::p2p::enrollment_admin::resolve_home_identity(home)?;
+        crate::commands::accounts::request_usage_reads(
+            identity.as_ref(),
+            graphql,
+            gents::usage_observation::UsageTrigger::Cached,
+            None,
+        )
+        .await
+        .ok()
+        .filter(|read| read.node_did == node_did)
+        .map(|read| read.reads)
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let plan = gents::config_client::switch_candidates(
         access,
         node_did,
         profile_id,
         plugin_slots,
         chrono::Utc::now(),
+        &observations,
     )
     .await?;
     Ok(serde_json::to_value(plan)?)
@@ -867,7 +894,7 @@ mod tests {
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
         with_agents(&access).await;
-        let output = list_candidates(&access, DID, "p-original", &[])
+        let output = list_candidates(&access, DID, "p-original", &[], None)
             .await
             .unwrap();
         assert_eq!(output["profile"], json!("p-original"));
