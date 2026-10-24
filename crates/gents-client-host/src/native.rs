@@ -130,7 +130,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
         }
         if let Installation::Outdated { build: previous, control } = observed {
             if control != u64::from(gents_desktop_bridge::host::protocol::INSTALLATION_CONTROL_VERSION) {
-                let message = "The application serving this history does not support automatic updates. Close its clients, allow up to three minutes for the shared process to stop, then reconnect. Your history is unchanged.";
+                let message = "The application serving this history does not support automatic updates. Close the application serving this history, or close all its clients and allow up to three minutes for its shared process to stop, then reconnect. Your history is unchanged.";
                 if let Some(bootstrap) = &mut bootstrap {
                     crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
                         error: gents_desktop_bridge::BridgeError::new(
