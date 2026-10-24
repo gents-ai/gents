@@ -120,6 +120,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "Skills",
             WorkspaceTest("crates/gents/src/skills.rs"),
         ),
+        ("StorageFailure", Module("storage_failure.rs")),
         (
             "StorageObservation",
             Boundary("daemon-visible classification is an accepted boundary (Boundaries.lean)"),

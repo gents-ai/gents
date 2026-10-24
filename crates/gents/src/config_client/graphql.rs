@@ -38,8 +38,11 @@ pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> R
         .await
         .with_context(|| format!("decoding GraphQL mutation response from {endpoint}"))?;
     if graphql_response_has_errors(&value) {
-        let errors = &value["errors"];
-        anyhow::bail!("graphql returned errors: {errors}")
+        return Err(gents_protocol::database_error::GraphqlFailure::new(
+            "config mutation",
+            value["errors"].clone(),
+        )
+        .into());
     }
     Ok(value)
 }
@@ -73,6 +76,10 @@ pub(super) async fn txn_begin(
     let status = response.status();
     let bytes = response.bytes().await.context("reading tx begin body")?;
     if !status.is_success() {
+        if let Some(cause) = storage_full_response(&bytes) {
+            return Err(anyhow::Error::new(cause)
+                .context(format!("tx begin returned HTTP {status} from {endpoint}",)));
+        }
         anyhow::bail!(
             "tx begin returned HTTP {status} from {endpoint}: {}",
             String::from_utf8_lossy(&bytes)
@@ -115,8 +122,11 @@ pub(super) async fn txn_execute(
         return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
     }
     if graphql_response_has_errors(&value) {
-        let errors = &value["errors"];
-        anyhow::bail!("graphql returned errors: {errors}");
+        return Err(gents_protocol::database_error::GraphqlFailure::new(
+            "config mutation",
+            value["errors"].clone(),
+        )
+        .into());
     }
     Ok(value)
 }
@@ -153,6 +163,13 @@ pub(super) async fn txn_commit(
         return Ok(());
     }
     let body = String::from_utf8_lossy(&bytes);
+    if let Some(cause) = storage_full_response(&bytes) {
+        return Err(TxnCommitError::TransactionConsumed(
+            anyhow::Error::new(cause).context(format!(
+                "tx commit returned HTTP {status} from {endpoint}: {body}"
+            )),
+        ));
+    }
     if status == reqwest::StatusCode::CONFLICT && retry::is_transaction_conflict_text(&body) {
         return Err(TxnCommitError::TransactionConsumed(
             retry::transaction_conflict(ConflictSource::HttpStatusTextFallback),
@@ -224,6 +241,13 @@ pub(crate) fn ensure_query_document(document: &str) -> Result<()> {
     } else {
         anyhow::bail!("ConfigAccess::execute requires a GraphQL query document")
     }
+}
+
+fn storage_full_response(bytes: &[u8]) -> Option<gents_protocol::database_error::StorageFull> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    gents_protocol::database_error::StorageFull::from_code(
+        value.get("code").and_then(Value::as_str),
+    )
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+import Proofs.StorageFailure
 import Proofs.Basic
 import Proofs.Process
 import Proofs.Persistence

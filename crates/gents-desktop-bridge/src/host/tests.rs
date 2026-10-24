@@ -543,3 +543,29 @@ async fn session_provenance_read_reaches_the_existing_lineage_owner() {
     task.await.unwrap().unwrap();
     core.shutdown().await.unwrap();
 }
+
+#[test]
+fn generated_storage_failures_keep_their_code_in_host_errors() {
+    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = contract["storage_failure_cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
+            "host command",
+            json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+        ))
+        .context("preparing a request");
+        let error = super::backend_error(error);
+        assert_eq!(
+            error.code,
+            if case["full"].as_bool().unwrap() {
+                crate::BridgeErrorCode::StorageFull
+            } else {
+                crate::BridgeErrorCode::Backend
+            }
+        );
+        if case["stop_automatic_retry"].as_bool().unwrap() {
+            assert!(!error.retryable);
+        }
+    }
+}

@@ -736,10 +736,11 @@ fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<se
         .cloned()
         .unwrap_or_default();
     if !errors.is_empty() {
-        anyhow::bail!(
-            "graphql returned errors from {graphql}: {}",
-            serde_json::Value::Array(errors)
-        );
+        return Err(crate::database_error::GraphqlFailure::new(
+            format!("from {graphql}"),
+            serde_json::Value::Array(errors),
+        )
+        .into());
     }
     Ok(value)
 }
@@ -769,6 +770,9 @@ fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
 /// Whether an anyhow error is retryable under the GraphQL transport policy.
 #[cfg(feature = "native")]
 pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
+    if crate::database_error::is_storage_full(error) {
+        return false;
+    }
     graphql_transport_error_in_chain(error)
         || error
             .chain()

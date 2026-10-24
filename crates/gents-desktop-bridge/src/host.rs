@@ -688,7 +688,11 @@ fn encode(value: impl Serialize) -> Result<Value, BridgeError> {
 }
 
 fn backend_error(error: anyhow::Error) -> BridgeError {
-    BridgeError::new(BridgeErrorCode::Backend, error.to_string())
+    if gents::graphql::is_storage_full(&error) {
+        BridgeError::storage_full()
+    } else {
+        BridgeError::new(BridgeErrorCode::Backend, error.to_string())
+    }
 }
 
 #[cfg(test)]

@@ -40,6 +40,9 @@ pub struct ChatSendResult {
     /// Absent when the owner accepted the request.
     #[ts(optional = nullable)]
     pub outcome: Option<ChatSendOutcome>,
+    /// Recovery information does not change the retained request's delivery outcome.
+    #[ts(optional = nullable)]
+    pub delivery_error: Option<crate::error::BridgeError>,
 }
 
 /// A send the owner has not confirmed.
@@ -61,6 +64,7 @@ impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
             node_did: receipt.node_did,
             agent_id: receipt.agent_id,
             outcome: None,
+            delivery_error: None,
         }
     }
 }

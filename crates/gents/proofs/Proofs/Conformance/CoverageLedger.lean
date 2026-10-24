@@ -1122,6 +1122,11 @@ def caseCoverage : List CoverageEntry :=
       "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "storage_failure_cases"
+      "StorageFailureCases"
+      "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_request_closure_cases"
       "ClientRequestClosureCases"
       "client::query::request_closure::tests::generated_request_closures_use_exact_database_dependencies")

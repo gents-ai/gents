@@ -29,10 +29,17 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
     };
     let error = match error.downcast::<SubmissionOutcomeUnknown>() {
         Ok(unknown) => {
-            return Ok(ChatSendResult::with_outcome(
+            let delivery_error = unknown
+                .cause
+                .as_ref()
+                .filter(|cause| gents::graphql::is_storage_full(cause))
+                .map(|_| crate::error::BridgeError::storage_full());
+            let mut result = ChatSendResult::with_outcome(
                 unknown.pending.result,
                 ChatSendOutcome::DeliveryUnknown,
-            ))
+            );
+            result.delivery_error = delivery_error;
+            return Ok(result);
         }
         Err(error) => error,
     };
@@ -85,5 +92,57 @@ pub(super) async fn resolve_chat_submission(
             ChatSendOutcome::NotDelivered,
         )),
         Err(error) => sent(Err(error)),
+    }
+}
+
+#[cfg(test)]
+mod storage_failure_tests {
+    use super::*;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    #[test]
+    fn uncertain_storage_delivery_keeps_identity_and_actionable_reason() {
+        let mut create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "request",
+            "did:test:node",
+            "did:test:node",
+            "agent",
+            "session",
+            "retained message",
+            "interactive",
+            "2026-10-25T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self("did:test:node"),
+        );
+        create.admission.signature = vec![7; 64];
+        let receipt = SubmittedRequest {
+            request_id: "request".into(),
+            session_id: "session".into(),
+            node_did: "did:test:node".into(),
+            agent_id: Some("agent".into()),
+        };
+        let pending = serde_json::from_value(serde_json::json!({
+            "request_id": "request", "session_id": "session", "node_did": "did:test:node",
+            "mutation": create.graphql_mutation().unwrap(), "create": create,
+            "result": receipt,
+        }))
+        .unwrap();
+        let unknown = SubmissionOutcomeUnknown {
+            request_id: "request".into(),
+            session_id: "session".into(),
+            pending,
+            cause: Some(anyhow::Error::new(
+                gents_protocol::database_error::StorageFull,
+            )),
+        };
+        let result = sent(Err(unknown.into())).unwrap();
+        assert_eq!(result.request_id, "request");
+        assert_eq!(result.session_id, "session");
+        assert_eq!(result.outcome, Some(ChatSendOutcome::DeliveryUnknown));
+        let encoded = serde_json::to_value(result).unwrap();
+        assert_eq!(encoded["deliveryError"]["code"], "storageFull");
+        assert_eq!(encoded["deliveryError"]["retryable"], false);
     }
 }
