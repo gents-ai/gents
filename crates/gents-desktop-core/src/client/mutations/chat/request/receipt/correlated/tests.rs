@@ -149,8 +149,7 @@ fn identity(value: u64) -> String {
 /// Only serialized identity/byte facts and a retained storage vector live here.
 /// Decisions run through the production receipt owner; all expected transitions
 /// are emitted by the executable model, including malformed initial records.
-#[tokio::test]
-async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result<()> {
+fn model_cases() -> Result<Vec<Value>> {
     let proofs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
     let output = Command::new("lake")
         .args([
@@ -168,6 +167,12 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
     );
     let cases: Vec<Value> = serde_json::from_slice(&output.stdout)?;
     anyhow::ensure!(!cases.is_empty(), "the model emitted no receipt traces");
+    Ok(cases)
+}
+
+#[tokio::test]
+async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result<()> {
+    let cases = tokio::task::spawn_blocking(model_cases).await??;
     let mut facts = Facts::new()?;
     for case in cases {
         let mut records = Vec::new();
@@ -242,4 +247,220 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
         }
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result<()> {
+    use super::super::journal;
+    use gents::config_client::ConfigAccess;
+    use gents::graphql::graphql_with_transaction_retry;
+    use std::sync::Arc;
+
+    let cases = tokio::task::spawn_blocking(model_cases).await??;
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    gents::ensure_runtime_schemas(&node).await?;
+    let result = async {
+        let mut count = 0;
+        for case in cases {
+            let steps = case["trace"].as_array().context("receipt trace")?;
+            if case["initial"].as_array().context("initial")?.len() != 0
+                || steps.iter().any(|step| step["input"]["durable"] == false)
+            {
+                continue;
+            }
+            ConfigAccess::write_local(
+                &node,
+                "test.receipt.clear",
+                "mutation { delete_PendingChatSubmission { _docID } }",
+            )
+            .await?;
+            let mut facts = Facts::new()?;
+            let context = &steps[0]["input"]["intent"];
+            for step in steps {
+                let input = &step["input"];
+                match input["kind"].as_str().context("receipt action")? {
+                    "prepare" => {
+                        let proposal = facts.proposal(&input["intent"], &input["proposal"]).await?;
+                        let output = match journal::caller::reserve(&node, &proposal).await {
+                            Ok(record) => record.result(),
+                            Err(_) if step["output"]["kind"] == "refused" => Decision::Refused,
+                            Err(error) => return Err(error.context("reserving modeled receipt")),
+                        };
+                        assert_eq!(
+                            facts.decision_json(output)?,
+                            step["output"],
+                            "{} reservation",
+                            case["name"]
+                        );
+                    }
+                    "observe" | "acknowledge" => {
+                        let mut binding = facts.intent(context)?;
+                        binding.client_did =
+                            format!("client-{}", number(&input["caller"], "requester")?);
+                        binding.request_id = identity(number(&input["caller"], "request")?);
+                        let reference = facts.reference(&input["prepared"], context).await?;
+                        let observation = if input["kind"] == "observe" {
+                            Some(serde_json::from_value(input["outcome"].clone())?)
+                        } else {
+                            None
+                        };
+                        let _ =
+                            journal::caller::update(&node, &binding, &reference, observation).await;
+                    }
+                    "reconnect" => {}
+                    _ => anyhow::bail!("unknown receipt action"),
+                }
+                let response = graphql_with_transaction_retry(
+                    &node,
+                    "{ PendingChatSubmission { payload } }",
+                    "test.receipt.snapshot",
+                )
+                .await?;
+                let rows = response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data["PendingChatSubmission"].as_array())
+                    .context("journal snapshot")?;
+                let mut records = Vec::new();
+                for row in rows {
+                    let envelope: Value =
+                        serde_json::from_str(row["payload"].as_str().context("payload")?)?;
+                    records.push(serde_json::from_value::<Record>(
+                        envelope["record"].clone(),
+                    )?);
+                }
+                records.sort_by(|a, b| a.intent.request_id.cmp(&b.intent.request_id));
+                assert_eq!(
+                    facts.records_json(&records)?,
+                    step["after"],
+                    "{} after {}",
+                    case["name"],
+                    input["kind"]
+                );
+                for record in &records {
+                    let recovered = journal::caller::recover(&node, &record.intent)
+                        .await?
+                        .context("durable caller binding")?;
+                    assert_eq!(recovered.reference, record.reference);
+                    let pending = journal::load(&node, &record.intent.request_id).await?;
+                    assert_eq!(pending.is_some(), record.outcome == Outcome::Unresolved);
+                    if let Some(pending) = pending {
+                        assert_eq!(
+                            digest(pending.mutation.as_bytes()),
+                            record.reference.signed_payload_hash
+                        );
+                    }
+                    journal::forget(&node, &record.intent.request_id).await;
+                    assert!(
+                        journal::caller::recover(&node, &record.intent)
+                            .await?
+                            .is_some(),
+                        "cleanup erased caller correlation"
+                    );
+                }
+            }
+            count += 1;
+        }
+        anyhow::ensure!(count >= 15, "durable traces were not exercised");
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    node.shutdown().await;
+    result
+}
+
+#[tokio::test]
+async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<()> {
+    use super::super::journal;
+    use std::sync::Arc;
+
+    let cases = tokio::task::spawn_blocking(model_cases).await??;
+    let case = cases
+        .iter()
+        .find(|case| case["name"] == "acknowledgement_loss")
+        .context("modeled acknowledgement-loss trace")?;
+    let trace = case["trace"].as_array().context("receipt trace")?;
+    let first = &trace[0]["input"];
+    let mut facts = Facts::new()?;
+    let proposal = facts.proposal(&first["intent"], &first["proposal"]).await?;
+    let home = tempfile::tempdir()?;
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(&proposal.intent.node_did)
+            .data_path(home.path())
+            .build()
+            .await?,
+    );
+    node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+        .await?;
+    let (left, right) = tokio::join!(
+        journal::caller::reserve(&node, &proposal),
+        journal::caller::reserve(&node, &proposal),
+    );
+    let left = left?;
+    let right = right?;
+    assert_eq!(left.reference, right.reference);
+    assert_eq!(facts.decision_json(left.result())?, trace[0]["output"]);
+    node.shutdown().await;
+    drop(node);
+
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(&proposal.intent.node_did)
+            .data_path(home.path())
+            .build()
+            .await?,
+    );
+    let result = async {
+        let recovered = journal::caller::recover(&node, &proposal.intent)
+            .await?
+            .context("reopened receipt")?;
+        assert_eq!(facts.records_json(&[recovered])?, trace[0]["after"]);
+        let accepted = journal::caller::update(
+            &node,
+            &proposal.intent,
+            &proposal.reference,
+            Some(serde_json::from_value(
+                trace[1]["input"]["outcome"].clone(),
+            )?),
+        )
+        .await?;
+        assert_eq!(facts.records_json(&[accepted])?, trace[1]["after"]);
+        let acknowledged =
+            journal::caller::update(&node, &proposal.intent, &proposal.reference, None).await?;
+        assert_eq!(facts.records_json(&[acknowledged])?, trace[2]["after"]);
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    node.shutdown().await;
+    drop(node);
+    result?;
+
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(&proposal.intent.node_did)
+            .data_path(home.path())
+            .build()
+            .await?,
+    );
+    let result = async {
+        let recovered = journal::caller::recover(&node, &proposal.intent)
+            .await?
+            .context("acknowledged receipt survived reopen")?;
+        assert_eq!(facts.records_json(&[recovered])?, trace[2]["after"]);
+        assert!(journal::load(&node, &proposal.intent.request_id)
+            .await?
+            .is_none());
+        let retry = &trace.last().context("retry")?["input"];
+        let replacement = facts.proposal(&retry["intent"], &retry["proposal"]).await?;
+        let original = journal::caller::reserve(&node, &replacement).await?;
+        assert_eq!(
+            facts.decision_json(original.result())?,
+            trace.last().unwrap()["output"]
+        );
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    node.shutdown().await;
+    result
 }

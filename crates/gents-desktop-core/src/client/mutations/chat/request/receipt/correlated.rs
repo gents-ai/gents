@@ -103,7 +103,7 @@ impl Record {
         })
     }
 
-    fn result(&self) -> Decision {
+    pub(super) fn result(&self) -> Decision {
         if !self.bound() {
             return Decision::Refused;
         }
@@ -125,19 +125,8 @@ pub(crate) fn prepare(
     proposal: &Record,
     durable: bool,
 ) -> (Option<Record>, Decision) {
-    let mut matching = records.iter().filter(|record| {
-        record.intent.client_did == proposal.intent.client_did
-            && record.intent.request_id == proposal.intent.request_id
-    });
-    if let Some(record) = matching.next() {
-        return (
-            None,
-            if matching.next().is_none() && record.intent == proposal.intent {
-                record.result()
-            } else {
-                Decision::Refused
-            },
-        );
+    if let Some(decision) = recover(records, &proposal.intent) {
+        return (None, decision);
     }
     if !durable
         || !proposal.bound()
@@ -148,6 +137,19 @@ pub(crate) fn prepare(
         return (None, Decision::Refused);
     }
     (Some(proposal.clone()), proposal.result())
+}
+
+pub(crate) fn recover(records: &[Record], intent: &Intent) -> Option<Decision> {
+    let mut matching = records.iter().filter(|record| {
+        record.intent.client_did == intent.client_did
+            && record.intent.request_id == intent.request_id
+    });
+    let record = matching.next()?;
+    Some(if matching.next().is_none() && record.intent == *intent {
+        record.result()
+    } else {
+        Decision::Refused
+    })
 }
 
 fn unique(records: &[Record], client_did: &str, request_id: &str) -> Option<usize> {
