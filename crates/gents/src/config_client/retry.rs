@@ -15,9 +15,8 @@ pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
 /// Exposes the DefraDB access error a transaction callback failed with, so the
 /// transaction owner classifies conflicts and storage failures by type. A
 /// caller error that wraps [`ConfigClientError`] or [`GraphqlResponseError`]
-/// returns it here; an `#[error(transparent)]` wrapper converted into
-/// `anyhow::Error` hides it from the source-chain search below unless
-/// `access_error_in` names that wrapper.
+/// returns it here; an `#[error(transparent)]` wrapper hides it from the
+/// source-chain search below unless `access_error_in` names that wrapper.
 pub trait TransactionFailure {
     fn config_client_error(&self) -> Option<&ConfigClientError>;
 }
@@ -192,16 +191,16 @@ mod tests {
 
     #[test]
     fn graph_run_callback_failures_keep_their_classification() {
-        let conflict = anyhow::Error::from(crate::graph_pipeline::GraphPipelineError::Config(
-            transaction_conflict(ConflictSource::StructuredCode),
+        let conflict = crate::graph_pipeline::GraphPipelineError::Config(transaction_conflict(
+            ConflictSource::StructuredCode,
         ));
         assert_eq!(
             classified_transaction_conflict(&conflict),
             Some(ConflictSource::StructuredCode)
         );
-        let storage = anyhow::Error::from(crate::graph_pipeline::GraphPipelineError::Config(
+        let storage = crate::graph_pipeline::GraphPipelineError::Config(
             transaction_storage_failure(ConfigClientError::InjectedReadStorageFailure),
-        ));
+        );
         assert!(is_transaction_storage_failure(&storage));
     }
 
