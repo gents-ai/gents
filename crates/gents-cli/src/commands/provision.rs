@@ -289,9 +289,11 @@ mod tests {
             Ok(_) => panic!("bootstrap must hold the exclusive store lock"),
             Err(error) => error,
         };
-        assert!(find_source::<gents::home::HomeError>(error.as_ref())
-            .and_then(gents::home::HomeError::lock_held)
-            .is_some());
+        assert!(
+            find_source::<crate::commands::init::InitError>(error.as_ref()).is_some_and(|error| {
+                matches!(error, crate::commands::init::InitError::Home(home) if home.lock_held().is_some())
+            })
+        );
         assert!(!gents::home::init_config_path(&new_home).exists());
     }
 }

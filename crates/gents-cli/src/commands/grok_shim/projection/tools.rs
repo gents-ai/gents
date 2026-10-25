@@ -11,6 +11,20 @@ use serde_json::{json, Map, Value};
 
 use super::nonempty;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolRowsError {
+    #[error("tool node missing")]
+    NodeMissing,
+    #[error("tool session missing")]
+    SessionMissing,
+    #[error("tool request physical identity missing")]
+    PhysicalIdentityMissing,
+    #[error("missing AgentToolCall rows")]
+    RowsMissing,
+    #[error("invalid AgentToolCall row")]
+    InvalidRow(#[source] serde_json::Error),
+}
+
 mod background;
 
 pub(crate) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
@@ -307,7 +321,7 @@ pub(super) async fn project_tools(
         .doc_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .context("tool request physical identity missing")?;
+        .ok_or(ToolRowsError::PhysicalIdentityMissing)?;
     let tool_response = graphql_with_transaction_retry(
         node,
         &tool_calls_query(request)?,
@@ -795,20 +809,25 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
     }
 }
 
-fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
+fn tool_calls_query(
+    request: &gents_protocol::row::AgentRequestRow,
+) -> Result<String, ToolRowsError> {
     let scope = gents::session::session_scope_filter(
-        request.node_did.as_deref().context("tool node missing")?,
+        request
+            .node_did
+            .as_deref()
+            .ok_or(ToolRowsError::NodeMissing)?,
         request
             .session_id
             .as_deref()
-            .context("tool session missing")?,
+            .ok_or(ToolRowsError::SessionMissing)?,
         request.requester_did.as_deref(),
     );
     let doc = request
         .doc_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .context("tool request physical identity missing")?;
+        .ok_or(ToolRowsError::PhysicalIdentityMissing)?;
     Ok(format!(
         r#"{{ AgentToolCall(filter: {{ {scope}, request_id: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}} }}, order: {{started_at: ASC}}) {{ {TOOL_CALL_FIELDS} }} }}"#,
         escape_graphql_string(&request.request_id),
@@ -816,16 +835,18 @@ fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<St
     ))
 }
 
-fn decode_tool_call_rows(response: &defra_node::QueryResponse) -> Result<Vec<ToolCallRow>> {
+fn decode_tool_call_rows(
+    response: &defra_node::QueryResponse,
+) -> Result<Vec<ToolCallRow>, ToolRowsError> {
     serde_json::from_value(
         response
             .data
             .as_ref()
             .and_then(|data| data.get("AgentToolCall"))
             .cloned()
-            .context("missing AgentToolCall rows")?,
+            .ok_or(ToolRowsError::RowsMissing)?,
     )
-    .context("invalid AgentToolCall row")
+    .map_err(ToolRowsError::InvalidRow)
 }
 
 #[cfg(test)]

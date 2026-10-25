@@ -212,6 +212,8 @@ enum BackgroundError {
     NotBackground { tool_call_key: String },
     #[error("Codex process id `{tool_call_key}` is not a GENTS background tool key")]
     UnrecognizedKey { tool_call_key: String },
+    #[error(transparent)]
+    Store(#[from] crate::commands::codex_shim::store::StoreError),
 }
 
 async fn send_background_tool_completion(

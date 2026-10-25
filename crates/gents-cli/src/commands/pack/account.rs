@@ -239,7 +239,7 @@ mod tests {
         })
         .await
         .unwrap_err();
-        let message = ErrorChain(error.as_ref()).to_string();
+        let message = ErrorChain(&error).to_string();
         assert!(message.contains("acme/widget"), "{message}");
         assert!(message.contains("new_owner"), "{message}");
         assert!(message.contains("cannot be undone"), "{message}");

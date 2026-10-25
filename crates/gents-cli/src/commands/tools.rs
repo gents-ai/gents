@@ -61,7 +61,7 @@ pub(crate) enum ToolsCommandError {
     )]
     UnusableRuntimeRoot { mode: String, error: String },
     #[error("the GraphQL endpoint has no gents runtime status to read its tool ceiling")]
-    RuntimeStatusUnavailable(#[source] crate::commands::status::StatusError),
+    RuntimeStatusUnavailable(#[source] Box<crate::commands::status::StatusError>),
     #[error("init.json tool ceiling")]
     InitToolCeiling(#[source] crate::resolve_helpers::ResolveHelpersError),
     #[error(transparent)]
@@ -363,7 +363,7 @@ impl HostCeiling {
     async fn live(endpoint: &GraphqlEndpoint) -> Result<Self, ToolsCommandError> {
         let status = fetch_runtime_status(endpoint, Duration::from_secs(10))
             .await
-            .map_err(ToolsCommandError::RuntimeStatusUnavailable)?;
+            .map_err(|error| ToolsCommandError::RuntimeStatusUnavailable(Box::new(error)))?;
         let field = |name: &str| status.get(name).and_then(Value::as_str).map(str::to_owned);
         let mode_text = field("tool_ceiling").ok_or(ToolsCommandError::StatusMissingToolCeiling)?;
         let mode = ToolCeilingArg::from_str(&mode_text, false).map_err(|error| {

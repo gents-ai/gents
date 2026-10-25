@@ -1326,7 +1326,7 @@ async fn steering_input_for_request(
         .and_then(Value::as_array)
         .ok_or(CodexShimError::SteeringRequestRowsOmitted)?;
     if rows.len() != 1 {
-        return Err(CodexShimError::SteeringRequestAmbiguous.into());
+        return Err(CodexShimError::SteeringRequestAmbiguous);
     }
     let content = rows[0]
         .get("content")

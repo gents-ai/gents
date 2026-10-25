@@ -89,6 +89,10 @@ pub(crate) enum StreamError {
     },
     #[error("canonical terminal output for request {request_id} resolved only to retained partial diagnostics")]
     RetainedPartialOnly { request_id: String },
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    Join(#[from] tokio::task::JoinError),
 }
 
 pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {

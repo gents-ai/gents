@@ -245,13 +245,9 @@ async fn reset(
     let _client_lock = lock_client_state(&desktop)?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
-    Ok(retire_then_clear(
-        &settled,
-        disposition,
-        backup.as_deref(),
-        retry,
-        || run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT),
-    )?)
+    retire_then_clear(&settled, disposition, backup.as_deref(), retry, || {
+        run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT)
+    })
 }
 
 fn retire_then_clear(

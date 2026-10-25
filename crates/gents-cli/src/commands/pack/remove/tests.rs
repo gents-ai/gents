@@ -14,32 +14,38 @@ fn scope(home: &Path) -> ScopeArgs {
     }
 }
 
-async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
-    crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
-        package,
-        bindings: None,
-        inference_slots: Vec::new(),
-        preview: false,
-        scope: scope(home),
-        output: OutputFormat::Json,
-        force_rebind_concrete_did: false,
-        registry: None,
-        drift: PackDriftArgs::default(),
-        grant_authority: false,
-        wire: Vec::new(),
-        expect_digest: None,
-        explicit: true,
-    }))
-    .await
+type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+async fn install(home: &Path, package: String) -> TestResult<Value> {
+    Ok(
+        crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+            package,
+            bindings: None,
+            inference_slots: Vec::new(),
+            preview: false,
+            scope: scope(home),
+            output: OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: None,
+            drift: PackDriftArgs::default(),
+            grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
+            explicit: true,
+        }))
+        .await?,
+    )
 }
 
-async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
-    crate::request_helpers::capture_report(remove(PackRemoveArgs {
-        package: package.to_owned(),
-        scope: scope(home),
-        drift: PackDriftArgs::default(),
-    }))
-    .await
+async fn remove_pkg(home: &Path, package: &str) -> TestResult<Value> {
+    Ok(
+        crate::request_helpers::capture_report(remove(PackRemoveArgs {
+            package: package.to_owned(),
+            scope: scope(home),
+            drift: PackDriftArgs::default(),
+        }))
+        .await?,
+    )
 }
 
 fn assets_fixture_spec() -> String {

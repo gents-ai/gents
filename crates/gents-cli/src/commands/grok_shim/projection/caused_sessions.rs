@@ -13,6 +13,22 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{effective_context_window_tokens, nonempty};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CausedSessionProjectionError {
+    #[error("caused session {field} query returned no rows array")]
+    RowsMissing { field: String },
+    #[error("decoding {field}")]
+    DecodeRow {
+        field: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    SessionOrigin(#[from] gents::session_origin::SessionOriginError),
+}
 use crate::caused_sessions::{
     load_caused_session, load_caused_sessions, load_direct_caused_sessions, CausedSession,
     SessionScope,
@@ -505,7 +521,7 @@ async fn load_activity(
     node: &EmbeddedNode,
     sessions: &[CausedSession],
     parent_doc_id: Option<&str>,
-) -> Result<Activity> {
+) -> Result<Activity, CausedSessionProjectionError> {
     let heads = sessions
         .iter()
         .filter_map(|session| {
@@ -615,7 +631,10 @@ fn quoted_list<'a>(ids: impl IntoIterator<Item = &'a str>) -> String {
         .join(",")
 }
 
-fn decode_rows<T>(response: &defra_node::QueryResponse, field: &str) -> Result<Vec<T>>
+fn decode_rows<T>(
+    response: &defra_node::QueryResponse,
+    field: &str,
+) -> Result<Vec<T>, CausedSessionProjectionError>
 where
     T: DeserializeOwned,
 {
@@ -624,10 +643,17 @@ where
         .as_ref()
         .and_then(|data| data.get(field))
         .and_then(Value::as_array)
-        .with_context(|| format!("caused session {field} query returned no rows array"))?
+        .ok_or_else(|| CausedSessionProjectionError::RowsMissing {
+            field: field.to_owned(),
+        })?
         .iter()
         .cloned()
-        .map(|row| serde_json::from_value(row).with_context(|| format!("decoding {field}")))
+        .map(|row| {
+            serde_json::from_value(row).map_err(|source| CausedSessionProjectionError::DecodeRow {
+                field: field.to_owned(),
+                source,
+            })
+        })
         .collect()
 }
 
@@ -679,7 +705,10 @@ fn progress_update(
 }
 
 /// The title the job gave its child session when it spawned it.
-async fn spawn_title(node: &Arc<EmbeddedNode>, session: &CausedSession) -> Result<Option<String>> {
+async fn spawn_title(
+    node: &Arc<EmbeddedNode>,
+    session: &CausedSession,
+) -> Result<Option<String>, CausedSessionProjectionError> {
     let access = ConfigAccess::local(node.clone());
     let loaded = load_session(
         &access,

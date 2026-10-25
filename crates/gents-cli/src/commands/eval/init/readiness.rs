@@ -144,7 +144,7 @@ mod tests {
         )
         .await;
         server.abort();
-        let error = format!("{}", ErrorChain(result.unwrap_err().as_ref()));
+        let error = format!("{}", ErrorChain(&result.unwrap_err()));
         assert!(error.contains("did not become ready"), "{error}");
     }
 }

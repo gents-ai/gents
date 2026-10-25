@@ -488,7 +488,7 @@ async fn load_thread_request_rows(
             let mut labels=BTreeSet::new();
             for row in &rows {
                 if !labels.insert(row.request_id.clone()) {
-                    return Err(CodexShimError::AmbiguousScopedActiveRequestLabel.into());
+                    return Err(CodexShimError::AmbiguousScopedActiveRequestLabel);
                 }
             }
             Ok(rows)
@@ -582,8 +582,7 @@ fn steering_lineage_has_superseded_request<'a>(
         if !seen.insert(current.request_id.clone()) {
             return Err(CodexShimError::SteeringQueueCycle {
                 request_id: current.request_id.clone(),
-            }
-            .into());
+            });
         }
         if current
             .superseded_by_request
@@ -613,8 +612,7 @@ fn codex_turn_root_and_depth<'a>(
         if !seen.insert(current.request_id.clone()) {
             return Err(CodexShimError::SteeringQueueCycle {
                 request_id: current.request_id.clone(),
-            }
-            .into());
+            });
         }
 
         let Some(parent_id) = steering_parent_id(current) else {

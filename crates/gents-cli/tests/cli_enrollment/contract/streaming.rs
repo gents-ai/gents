@@ -26,10 +26,11 @@ async fn emission_deadline(
     let emitted = *emission.wait_for(|timestamp| timestamp.is_some()).await?;
     let emitted = emitted.expect("provider first-frame timestamp missing");
     let deadline = tokio::time::Instant::from_std(emitted + budget);
-    assert!(
-        tokio::time::Instant::now() < deadline,
-        "provider content visibility deadline already elapsed before observation"
-    );
+    if tokio::time::Instant::now() >= deadline {
+        return Err(
+            "provider content visibility deadline already elapsed before observation".into(),
+        );
+    }
     Ok((emitted, deadline))
 }
 

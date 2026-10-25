@@ -1609,7 +1609,7 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf, InitErr
 mod tests {
     use super::*;
 
-    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
+    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock, InitError> {
         lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
     }
 
@@ -1706,9 +1706,9 @@ mod tests {
         let error = lock_init_store_for_user(&home, &home.join("data"), true, Some(&missing))
             .expect_err("an unresolvable user home is not compared lexically");
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("cannot be resolved"),
+            format!("{}", ErrorChain(&error)).contains("cannot be resolved"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(home.join("init.json").is_file(), "nothing was wiped");
         lock_init_store_for_user(&home, &home.join("data"), false, None)

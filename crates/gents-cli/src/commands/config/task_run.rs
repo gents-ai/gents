@@ -550,9 +550,9 @@ mod tests {
         .unwrap_err();
         server.abort();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("signature"),
+            format!("{}", ErrorChain(&error)).contains("signature"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         Ok(())
     }

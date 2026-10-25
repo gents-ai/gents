@@ -311,11 +311,9 @@ pub(crate) mod tests {
         };
         let error = resolve(None).unwrap_err();
         assert!(
-            ErrorChain(error.as_ref())
-                .to_string()
-                .contains("gents pack login"),
+            ErrorChain(&error).to_string().contains("gents pack login"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         gents::pack_registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
         assert_eq!(resolve(None).unwrap(), "gcpat_saved");
