@@ -8,7 +8,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::CallbackError;
+use super::{CallbackError, CallbackFieldError};
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 
 use crate::workspace::{
@@ -59,7 +59,7 @@ pub use crate::document_config::{
 };
 
 impl CallbackBindingDoc {
-    pub fn projected_fields(&self) -> Result<Vec<String>, CallbackError> {
+    pub fn projected_fields(&self) -> Result<Vec<String>, CallbackFieldError> {
         validate_callback_binding(self)?;
         Ok(self.input_fields.clone())
     }
@@ -184,7 +184,7 @@ pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<(), CallbackError> {
+pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<(), CallbackFieldError> {
     for (name, value) in [
         ("binding_id", &binding.binding_id),
         ("node_did", &binding.node_did),
@@ -192,19 +192,19 @@ pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<(), Cal
         ("event_source_id", &binding.event_source_id),
     ] {
         if value.trim().is_empty() {
-            return Err(CallbackError::BindingFieldEmpty { name });
+            return Err(CallbackFieldError::BindingFieldEmpty { name });
         }
     }
     let mut unique = RapidHashSet::new();
     for field in &binding.input_fields {
         crate::graphql::validate_graphql_name(field)?;
         if !unique.insert(field) {
-            return Err(CallbackError::DuplicateInputField {
+            return Err(CallbackFieldError::DuplicateInputField {
                 field: field.clone(),
             });
         }
         if crate::toolset::is_secret_env_name(field) {
-            return Err(CallbackError::SecretSourceField {
+            return Err(CallbackFieldError::SecretSourceField {
                 binding_id: binding.binding_id.clone(),
                 field: field.clone(),
             });
@@ -217,11 +217,11 @@ pub fn reject_secret_bearing_callback_fields(
     binding_id: &str,
     filter: Option<&str>,
     source_fields: Option<&str>,
-) -> Result<(), CallbackError> {
+) -> Result<(), CallbackFieldError> {
     if let Some(filter) = filter.map(str::trim).filter(|filter| !filter.is_empty()) {
         crate::graphql::validate_graphql_filter_fragment(filter)?;
         if let Some(field) = secret_field_in_filter(filter) {
-            return Err(CallbackError::SecretFilterField {
+            return Err(CallbackFieldError::SecretFilterField {
                 binding_id: binding_id.to_owned(),
                 field,
             });
@@ -230,7 +230,7 @@ pub fn reject_secret_bearing_callback_fields(
     for field in parse_string_list(source_fields) {
         crate::graphql::validate_graphql_name(&field)?;
         if crate::toolset::is_secret_env_name(&field) {
-            return Err(CallbackError::SecretSourceField {
+            return Err(CallbackFieldError::SecretSourceField {
                 binding_id: binding_id.to_owned(),
                 field,
             });

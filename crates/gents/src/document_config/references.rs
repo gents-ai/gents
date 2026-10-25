@@ -400,7 +400,7 @@ impl ConfigReferences {
                     .filter(|((collection, _), _)| *collection == Collection::AgentTarget)
                     .map(|(_, value)| decode::<AgentTargetDocument>(value))
                     .collect::<Result<Vec<_>, DocumentConfigError>>()?;
-                crate::tool_surface::AgentToolConfig::from_document_with_targets(&doc, &targets)?;
+                doc.resolve_agent_targets(&targets)?;
                 if let Some(datastore) = doc.datastore {
                     for surface in datastore.datastore_tool_surface_ids.unwrap_or_default() {
                         require(

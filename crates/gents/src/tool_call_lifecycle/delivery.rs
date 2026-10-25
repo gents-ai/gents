@@ -86,12 +86,8 @@ pub enum DeliveryError {
     JobRecords(#[from] crate::plugin_job::records::JobRecordsError),
     /// A deferred plugin write was refused or failed inside the terminal's
     /// transaction, which rolled back whole.
-    #[error("{text}")]
-    PluginWritesRefused {
-        text: String,
-        #[source]
-        source: crate::application_write::PluginWritesError,
-    },
+    #[error("plugin data writes were refused")]
+    PluginWritesRefused(#[source] crate::application_write::PluginWritesError),
     #[error("tool presentation range is not a UTF-8 source boundary")]
     PresentationRangeInvalid,
     #[error("interrupted tool call has no resolved output budget")]
@@ -119,7 +115,7 @@ pub enum DeliveryError {
     #[error("spawned background child is no longer pending")]
     SpawnedBackgroundChildIsNoLongerPending,
     #[error("spawned background admission requires the accepted spawn_process owner")]
-    SpawnedBackgroundAdmissionRequiresTheAcceptedSpawn,
+    SpawnedBackgroundAdmissionRequiresAcceptedSpawnOwner,
     #[error("spawned admission requires parent document")]
     SpawnedAdmissionRequiresParentDocument,
     #[error("spawned admission requires parent request")]
@@ -131,17 +127,17 @@ pub enum DeliveryError {
     #[error("spawned admission lookup omitted rows")]
     SpawnedAdmissionLookupOmittedRows,
     #[error("accepted spawn_process already has ambiguous background children")]
-    AcceptedSpawnProcessAlreadyHasAmbiguousBackground,
+    AmbiguousSpawnProcessBackgroundChildren,
     #[error("spawned replay omitted child deadline")]
     SpawnedReplayOmittedChildDeadline,
     #[error("spawned admission replay conflicts with immutable parent provenance")]
-    SpawnedAdmissionReplayConflictsWithImmutableParent,
+    SpawnedAdmissionReplayConflictsWithParentProvenance,
     #[error("spawned replay omitted child physical ID")]
     SpawnedReplayOmittedChildPhysicalID,
     #[error("spawned admission parent is not exactly bound by its accepted provider header")]
-    SpawnedAdmissionParentIsNotExactlyBound,
+    SpawnedAdmissionParentNotBoundByAcceptedHeader,
     #[error("spawned admission lost its exact running accepted parent")]
-    SpawnedAdmissionLostItsExactRunningAccepted,
+    SpawnedAdmissionLostRunningAcceptedParent,
     #[error("spawned admission lost live request generation ownership")]
     SpawnedAdmissionLostLiveRequestGenerationOwnership,
     #[error("spawned admission request lacks lease")]
@@ -151,19 +147,19 @@ pub enum DeliveryError {
     #[error("spawned admission request lacks logical identity")]
     SpawnedAdmissionRequestLacksLogicalIdentity,
     #[error("spawned admission created child could not be rehydrated by physical provenance")]
-    SpawnedAdmissionCreatedChildCouldNotBe,
+    SpawnedAdmissionChildNotRehydrated,
     #[error("accepted tool lifecycle binding was altered or is no longer pending")]
-    AcceptedToolLifecycleBindingWasAlteredOr,
+    AcceptedToolLifecycleBindingAlteredOrNotPending,
     #[error("canonical tool terminalization requires accepted physical tool identity")]
-    CanonicalToolTerminalizationRequiresAcceptedPhysicalTool,
+    CanonicalToolTerminalizationRequiresAcceptedPhysicalIdentity,
     #[error("canonical tool terminalization requires accepted request binding")]
     CanonicalToolTerminalizationRequiresAcceptedRequestBinding,
     #[error("canonical tool terminalization requires accepted header binding")]
     CanonicalToolTerminalizationRequiresAcceptedHeaderBinding,
     #[error("canonical direct tool terminalization requires accepted argument reference")]
-    CanonicalDirectToolTerminalizationRequiresAcceptedArgument,
+    CanonicalDirectToolTerminalizationRequiresAcceptedArgumentReference,
     #[error("retaining file images requires the configured node identity")]
-    RetainingFileImagesRequiresTheConfiguredNode,
+    RetainingFileImagesRequiresNodeIdentity,
     #[error("competing tool terminal lifecycle query omitted rows")]
     CompetingToolTerminalLifecycleQueryOmittedRows,
     #[error("competing tool terminal has no unique lifecycle")]
@@ -173,7 +169,7 @@ pub enum DeliveryError {
     #[error("competing tool terminal has unknown lifecycle vocabulary")]
     CompetingToolTerminalHasUnknownLifecycleVocabulary,
     #[error("tool terminal contender lost to a non-terminal lifecycle")]
-    ToolTerminalContenderLostToANon,
+    ToolTerminalContenderLostToNonTerminal,
     #[error("invalid plugin effect terminal identity")]
     InvalidPluginEffectTerminalIdentity,
     #[error("plugin effect terminal arguments changed")]
@@ -187,11 +183,11 @@ pub enum DeliveryError {
     #[error("spawned parent lacks tool name")]
     SpawnedParentLacksToolName,
     #[error("spawned terminalization has no exact accepted spawn_process parent")]
-    SpawnedTerminalizationHasNoExactAcceptedSpawn,
+    SpawnedTerminalizationHasNoAcceptedSpawnParent,
     #[error("canonical direct terminalization requires accepted arguments")]
     CanonicalDirectTerminalizationRequiresAcceptedArguments,
     #[error("accepted tool header does not bind this exact physical invocation")]
-    AcceptedToolHeaderDoesNotBindThis,
+    AcceptedToolHeaderDoesNotBindInvocation,
     #[error("plugin receipt tool query omitted rows")]
     PluginReceiptToolQueryOmittedRows,
     #[error("plugin receipt lacks exact physical tool invocation")]
@@ -209,27 +205,27 @@ pub enum DeliveryError {
     #[error("ambiguous canonical tool delivery replay")]
     AmbiguousCanonicalToolDeliveryReplay,
     #[error("canonical tool delivery replay conflicts with accepted invocation")]
-    CanonicalToolDeliveryReplayConflictsWithAccepted,
+    CanonicalToolDeliveryReplayConflictsWithAcceptedInvocation,
     #[error("canonical tool delivery replay lifecycle query omitted rows")]
-    CanonicalToolDeliveryReplayLifecycleQueryOmitted,
+    CanonicalToolDeliveryReplayLifecycleQueryOmittedRows,
     #[error("canonical tool delivery replay has no unique lifecycle")]
-    CanonicalToolDeliveryReplayHasNoUnique,
+    CanonicalToolDeliveryReplayHasNoUniqueLifecycle,
     #[error("canonical tool delivery replay lifecycle omitted state")]
     CanonicalToolDeliveryReplayLifecycleOmittedState,
     #[error("canonical tool delivery replay has unknown lifecycle vocabulary")]
-    CanonicalToolDeliveryReplayHasUnknownLifecycle,
+    CanonicalToolDeliveryReplayHasUnknownLifecycleVocabulary,
     #[error("canonical tool delivery exists without a terminal lifecycle")]
-    CanonicalToolDeliveryExistsWithoutATerminal,
+    CanonicalToolDeliveryWithoutTerminalLifecycle,
     #[error("canonical tool delivery replay conflicts with terminal cause")]
-    CanonicalToolDeliveryReplayConflictsWithTerminal,
+    CanonicalToolDeliveryReplayConflictsWithTerminalCause,
     #[error("canonical tool delivery replay has a non-native payload reference")]
-    CanonicalToolDeliveryReplayHasANon,
+    CanonicalToolDeliveryReplayHasNonNativePayload,
     #[error("canonical tool delivery replay payload does not name this tool closure")]
-    CanonicalToolDeliveryReplayPayloadDoesNot,
+    CanonicalToolDeliveryReplayPayloadNamesOtherClosure,
     #[error("canonical tool delivery replay payload differs from terminal plan")]
-    CanonicalToolDeliveryReplayPayloadDiffersFrom,
+    CanonicalToolDeliveryReplayPayloadDiffersFromPlan,
     #[error("tool terminal source already has a closure")]
-    ToolTerminalSourceAlreadyHasAClosure,
+    ToolTerminalSourceAlreadyClosed,
     #[error("closed tool source lifecycle query omitted rows")]
     ClosedToolSourceLifecycleQueryOmittedRows,
     #[error("closed tool source has no unique lifecycle")]
@@ -241,19 +237,19 @@ pub enum DeliveryError {
     #[error("closed tool source conflicts with terminal cause")]
     ClosedToolSourceConflictsWithTerminalCause,
     #[error("closed tool source has a foreign writer")]
-    ClosedToolSourceHasAForeignWriter,
+    ClosedToolSourceHasForeignWriter,
     #[error("closed tool source has ambiguous closures")]
     ClosedToolSourceHasAmbiguousClosures,
     #[error("closed tool source has a non-complete closure")]
-    ClosedToolSourceHasANonComplete,
+    ClosedToolSourceHasIncompleteClosure,
     #[error("closed tool source differs from terminal plan")]
     ClosedToolSourceDiffersFromTerminalPlan,
     #[error("plugin terminal is missing its canonical presentation")]
-    PluginTerminalIsMissingItsCanonicalPresentation(#[source] serde_json::Error),
+    PluginTerminalMissingCanonicalPresentation(#[source] serde_json::Error),
     #[error("plugin terminal presentation names a foreign source closure")]
-    PluginTerminalPresentationNamesAForeignSource,
+    PluginTerminalPresentationNamesForeignClosure,
     #[error("plugin terminal replay changed its presentation")]
-    PluginTerminalReplayChangedItsPresentation,
+    PluginTerminalReplayChangedPresentation,
     #[error("plugin terminal presentation lookup omitted rows")]
     PluginTerminalPresentationLookupOmittedRows,
     #[error("open plugin effect already carries terminal output")]
@@ -261,53 +257,53 @@ pub enum DeliveryError {
     #[error("tool terminal source has unexpected multiple streams")]
     ToolTerminalSourceHasUnexpectedMultipleStreams,
     #[error("tool raw output has an invalid created_at")]
-    ToolRawOutputHasAnInvalidCreated(#[source] chrono::ParseError),
+    ToolRawOutputInvalidCreatedAt(#[source] chrono::ParseError),
     #[error("clock moved backwards while closing canonical tool output")]
-    ClockMovedBackwardsWhileClosingCanonicalTool,
+    ClockMovedBackwardsClosingToolOutput,
     #[error("tool output exceeds canonical segment size")]
     ToolOutputExceedsCanonicalSegmentSize(#[source] std::num::TryFromIntError),
     #[error("published tool terminal omitted logical request identity")]
     PublishedToolTerminalOmittedLogicalRequestIdentity,
     #[error("plugin terminal presentation lost its physical lifecycle binding")]
-    PluginTerminalPresentationLostItsPhysicalLifecycle,
+    PluginTerminalPresentationLostLifecycleBinding,
     #[error("background receipt lookup omitted AgentMessage rows")]
     BackgroundReceiptLookupOmittedAgentMessageRows,
     #[error("background bridge terminalization requires one immutable receipt")]
     BackgroundBridgeTerminalizationRequiresOneImmutableReceipt,
     #[error("background receipt conflicts with the accepted bridge invocation")]
-    BackgroundReceiptConflictsWithTheAcceptedBridge,
+    BackgroundReceiptConflictsWithAcceptedBridge,
     #[error("empty tool output has no physical append receipt")]
-    EmptyToolOutputHasNoPhysicalAppend,
+    EmptyToolOutputHasNoAppendReceipt,
     #[error("tool output append query omitted physical rows")]
     ToolOutputAppendQueryOmittedPhysicalRows,
     #[error("tool output append has no unique physical binding")]
-    ToolOutputAppendHasNoUniquePhysical,
+    ToolOutputAppendHasNoUniqueBinding,
     #[error("tool output append has malformed lifecycle state")]
     ToolOutputAppendHasMalformedLifecycleState,
     #[error("canonical tool output append has ambiguous retry identity")]
-    CanonicalToolOutputAppendHasAmbiguousRetry,
+    CanonicalToolOutputAppendHasAmbiguousRetryIdentity,
     #[error("cannot append raw output after tool source closure")]
-    CannotAppendRawOutputAfterToolSource,
+    RawOutputAppendAfterSourceClosure,
     #[error("tool raw output source has unexpected multiple streams")]
-    ToolRawOutputSourceHasUnexpectedMultiple,
+    ToolRawOutputSourceHasMultipleStreams,
     #[error("tool output chunk too large")]
     ToolOutputChunkTooLarge(#[source] std::num::TryFromIntError),
     #[error("canonical tool output retry conflicts with the recorded segment")]
-    CanonicalToolOutputRetryConflictsWithThe,
+    CanonicalToolOutputRetryConflictsWithSegment,
     #[error("tool output append has no accepted deadline")]
     ToolOutputAppendHasNoAcceptedDeadline,
     #[error("tool output append has malformed accepted deadline")]
     ToolOutputAppendHasMalformedAcceptedDeadline(#[source] chrono::ParseError),
     #[error("background receipt replay conflicts with physical tool binding")]
-    BackgroundReceiptReplayConflictsWithPhysicalTool,
+    BackgroundReceiptReplayConflictsWithPhysicalToolBinding,
     #[error("background receipt replay has a non-native payload reference")]
-    BackgroundReceiptReplayHasANonNative,
+    BackgroundReceiptReplayHasNonNativePayload,
     #[error("background receipt replay omitted authored close")]
     BackgroundReceiptReplayOmittedAuthoredClose,
     #[error("background receipt replay close is missing or ambiguous")]
-    BackgroundReceiptReplayCloseIsMissingOr,
+    BackgroundReceiptReplayCloseMissingOrAmbiguous,
     #[error("background receipt replay conflicts with immutable authored delivery")]
-    BackgroundReceiptReplayConflictsWithImmutableAuthored,
+    BackgroundReceiptReplayConflictsWithAuthoredDelivery,
     #[error("background receipt lacks exact accepted invocation")]
     BackgroundReceiptLacksExactAcceptedInvocation,
     #[error("background receipt bridge is no longer running")]
@@ -317,7 +313,7 @@ pub enum DeliveryError {
     #[error("background receipt lost running bridge fence")]
     BackgroundReceiptLostRunningBridgeFence,
     #[error("accepted header does not bind this exact dispatch")]
-    AcceptedHeaderDoesNotBindThisExact,
+    AcceptedHeaderDoesNotBindDispatch,
     #[error("dispatch request lookup omitted rows")]
     DispatchRequestLookupOmittedRows,
     #[error("dispatch request is missing or ambiguous")]
@@ -409,7 +405,7 @@ impl crate::config_client::TransactionFailure for DeliveryError {
             Self::JobRecords(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
-            Self::PluginWrites(error) | Self::PluginWritesRefused { source: error, .. } => {
+            Self::PluginWrites(error) | Self::PluginWritesRefused(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             _ => None,
@@ -524,10 +520,7 @@ fn plugin_writes_failed(error: crate::application_write::PluginWritesError) -> D
     if crate::config_client::is_transaction_step_unavailable(&error) {
         return DeliveryError::PluginWrites(error);
     }
-    DeliveryError::PluginWritesRefused {
-        text: ErrorChain(&error).to_string(),
-        source: error,
-    }
+    DeliveryError::PluginWritesRefused(error)
 }
 
 pub(super) struct RawPresentation<'a> {
@@ -860,7 +853,7 @@ impl ToolCallLifecycle {
             && self.plugin_effect.is_none()
             && self.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME)
         {
-            return Err(DeliveryError::SpawnedBackgroundAdmissionRequiresTheAcceptedSpawn);
+            return Err(DeliveryError::SpawnedBackgroundAdmissionRequiresAcceptedSpawnOwner);
         }
         let parent_doc_id = self
             .doc_id
@@ -933,7 +926,7 @@ impl ToolCallLifecycle {
                     let rows = existing["data"]["AgentToolCall"].as_array()
                         .ok_or(DeliveryError::SpawnedAdmissionLookupOmittedRows)?;
                     if !(rows.len() <= 1) {
- return Err(DeliveryError::AcceptedSpawnProcessAlreadyHasAmbiguousBackground);
+ return Err(DeliveryError::AmbiguousSpawnProcessBackgroundChildren);
  }
                     if let Some(child) = rows.first() {
                         let persisted_deadline = child["deadline_at"].as_str()
@@ -950,7 +943,7 @@ impl ToolCallLifecycle {
                                 && child["selected_tool_name"].as_str()
                                     == selected.as_ref().map(|(_, tool)| tool.as_str())
                                 && persisted_deadline == deadline_at) {
- return Err(DeliveryError::SpawnedAdmissionReplayConflictsWithImmutableParent);
+ return Err(DeliveryError::SpawnedAdmissionReplayConflictsWithParentProvenance);
  }
                         return Ok(child["_docID"].as_str().ok_or(DeliveryError::SpawnedReplayOmittedChildPhysicalID)?.to_owned());
                     }
@@ -976,7 +969,7 @@ impl ToolCallLifecycle {
                                 if tool_call_doc_id == &parent_doc_id
                                     && id == &parent_tool_call_id
                                     && name == crate::toolset::SPAWN_PROCESS_TOOL_NAME))) {
- return Err(DeliveryError::SpawnedAdmissionParentIsNotExactlyBound);
+ return Err(DeliveryError::SpawnedAdmissionParentNotBoundByAcceptedHeader);
  }
                     let parent_row = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{
                         _docID: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
@@ -986,7 +979,7 @@ impl ToolCallLifecycle {
                     }}, limit: 2) {{ _docID spawned_by_tool_call_doc_id }} }}"#, escape_graphql_string(&parent_tool_call_id))).await?;
                     if !(parent_row["data"]["AgentToolCall"].as_array().is_some_and(|rows|
                         rows.len() == 1 && rows[0]["spawned_by_tool_call_doc_id"].is_null())) {
- return Err(DeliveryError::SpawnedAdmissionLostItsExactRunningAccepted);
+ return Err(DeliveryError::SpawnedAdmissionLostRunningAcceptedParent);
  }
                     let request_row = &crate::hook::persistence::reserve_background_slot_in_txn(
                         txn, &request_doc_id, crate::hook::persistence::BackgroundSlot::Requested,
@@ -1038,7 +1031,7 @@ impl ToolCallLifecycle {
             self.requester_did.as_deref(),
         )
         .await?
-        .ok_or(DeliveryError::SpawnedAdmissionCreatedChildCouldNotBe)
+        .ok_or(DeliveryError::SpawnedAdmissionChildNotRehydrated)
     }
     pub(crate) fn tool_output_binding(&self) -> Result<ToolOutputBinding, DeliveryError> {
         if self.state != ToolCallState::Running {
@@ -1116,7 +1109,7 @@ impl ToolCallLifecycle {
         )
         .await?;
         let started_at =
-            started_at.ok_or(DeliveryError::AcceptedToolLifecycleBindingWasAlteredOr)?;
+            started_at.ok_or(DeliveryError::AcceptedToolLifecycleBindingAlteredOrNotPending)?;
         self.mark_started(started_at);
         Ok(())
     }
@@ -1253,7 +1246,7 @@ impl ToolCallLifecycle {
         let doc_id = self
             .doc_id
             .as_deref()
-            .ok_or(DeliveryError::CanonicalToolTerminalizationRequiresAcceptedPhysicalTool)?;
+            .ok_or(DeliveryError::CanonicalToolTerminalizationRequiresAcceptedPhysicalIdentity)?;
         let request_doc_id = self
             .request_doc_id
             .as_deref()
@@ -1263,7 +1256,9 @@ impl ToolCallLifecycle {
             .as_deref()
             .ok_or(DeliveryError::CanonicalToolTerminalizationRequiresAcceptedHeaderBinding)?;
         if !self.is_spawned_background() && !(self.arguments.is_some()) {
-            return Err(DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgument);
+            return Err(
+                DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgumentReference,
+            );
         }
         let output_budget = if fields.state == ToolCallState::Completed {
             None
@@ -1416,12 +1411,12 @@ impl ToolCallLifecycle {
         if self.file_changes.is_some()
             && !(self.node.node_identity_did() == Some(self.node_did.as_str()))
         {
-            return Err(DeliveryError::RetainingFileImagesRequiresTheConfiguredNode);
+            return Err(DeliveryError::RetainingFileImagesRequiresNodeIdentity);
         }
         let doc_id = self
             .doc_id
             .clone()
-            .ok_or(DeliveryError::CanonicalToolTerminalizationRequiresAcceptedPhysicalTool)?;
+            .ok_or(DeliveryError::CanonicalToolTerminalizationRequiresAcceptedPhysicalIdentity)?;
         let request_doc_id = self
             .request_doc_id
             .clone()
@@ -1439,7 +1434,9 @@ impl ToolCallLifecycle {
         let message_sequence = self.message_sequence;
         let arguments = self.arguments.clone();
         if !self.is_spawned_background() && !(arguments.is_some()) {
-            return Err(DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgument);
+            return Err(
+                DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgumentReference,
+            );
         }
         let tool_name = self.tool_name.clone();
         let deadline_at = self.deadline_at;
@@ -1563,9 +1560,10 @@ impl ToolCallLifecycle {
         let published = match published {
             Ok(published) => published,
             Err(error) => match &error {
-                DeliveryError::PluginWritesRefused { text: refused, .. } => {
+                DeliveryError::PluginWritesRefused(refused) => {
                     let text = format!(
-                        "plugin data writes were refused and nothing was committed: {refused}"
+                        "plugin data writes were refused and nothing was committed: {}",
+                        ErrorChain(refused)
                     );
                     let fields = TerminalFields {
                         state: ToolCallState::Failed,
@@ -1669,7 +1667,7 @@ async fn terminalize_transaction(
             let durable_state = ToolCallState::from_persisted(durable_state)
                 .ok_or(DeliveryError::CompetingToolTerminalHasUnknownLifecycleVocabulary)?;
             if !(durable_state.is_terminal()) {
-                return Err(DeliveryError::ToolTerminalContenderLostToANon);
+                return Err(DeliveryError::ToolTerminalContenderLostToNonTerminal);
             }
             return Ok(false);
         }
@@ -1765,7 +1763,7 @@ async fn terminalize_transaction(
                     if tool_call_doc_id == parent_doc_id && id == parent_id && name == parent_name)
             }))
         {
-            return Err(DeliveryError::SpawnedTerminalizationHasNoExactAcceptedSpawn);
+            return Err(DeliveryError::SpawnedTerminalizationHasNoAcceptedSpawnParent);
         }
     } else {
         let arguments = arguments
@@ -1788,7 +1786,7 @@ async fn terminalize_transaction(
                         && accepted_arguments == arguments)
             }))
         {
-            return Err(DeliveryError::AcceptedToolHeaderDoesNotBindThis);
+            return Err(DeliveryError::AcceptedToolHeaderDoesNotBindInvocation);
         }
     }
 
@@ -1887,7 +1885,9 @@ async fn terminalize_transaction(
                     if id == tool_doc_id && result_id == tool_call_id
                         && result_call_id.as_deref() == call_id))
             {
-                return Err(DeliveryError::CanonicalToolDeliveryReplayConflictsWithAccepted);
+                return Err(
+                    DeliveryError::CanonicalToolDeliveryReplayConflictsWithAcceptedInvocation,
+                );
             }
             let lifecycle = txn
                 .execute(&format!(
@@ -1901,25 +1901,26 @@ async fn terminalize_transaction(
                 .await?;
             let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
                 .as_array()
-                .ok_or(DeliveryError::CanonicalToolDeliveryReplayLifecycleQueryOmitted)?;
+                .ok_or(DeliveryError::CanonicalToolDeliveryReplayLifecycleQueryOmittedRows)?;
             if !(lifecycle_rows.len() == 1) {
-                return Err(DeliveryError::CanonicalToolDeliveryReplayHasNoUnique);
+                return Err(DeliveryError::CanonicalToolDeliveryReplayHasNoUniqueLifecycle);
             }
             let durable_state = lifecycle_rows[0]["lifecycle_state"]
                 .as_str()
                 .ok_or(DeliveryError::CanonicalToolDeliveryReplayLifecycleOmittedState)?;
             if adopt_competing_terminal && durable_state != fields.state.as_str() {
-                let durable_state = ToolCallState::from_persisted(durable_state)
-                    .ok_or(DeliveryError::CanonicalToolDeliveryReplayHasUnknownLifecycle)?;
+                let durable_state = ToolCallState::from_persisted(durable_state).ok_or(
+                    DeliveryError::CanonicalToolDeliveryReplayHasUnknownLifecycleVocabulary,
+                )?;
                 if !(durable_state.is_terminal()) {
-                    return Err(DeliveryError::CanonicalToolDeliveryExistsWithoutATerminal);
+                    return Err(DeliveryError::CanonicalToolDeliveryWithoutTerminalLifecycle);
                 }
                 return Ok(false);
             }
             if durable_state == fields.state.as_str()
                 && !(terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status))
             {
-                return Err(DeliveryError::CanonicalToolDeliveryReplayConflictsWithTerminal);
+                return Err(DeliveryError::CanonicalToolDeliveryReplayConflictsWithTerminalCause);
             }
 
             let result_payload = match existing.message.blocks.as_slice() {
@@ -1934,7 +1935,7 @@ async fn terminalize_transaction(
                     };
                     text
                 }
-                _ => return Err(DeliveryError::CanonicalToolDeliveryReplayHasANon),
+                _ => return Err(DeliveryError::CanonicalToolDeliveryReplayHasNonNativePayload),
             };
             let result_output = &result_payload.output;
             let replay_rows = crate::session::load_source_rows_in_txn(
@@ -1957,7 +1958,7 @@ async fn terminalize_transaction(
                         })
                     )
             })) {
-                return Err(DeliveryError::CanonicalToolDeliveryReplayPayloadDoesNot);
+                return Err(DeliveryError::CanonicalToolDeliveryReplayPayloadNamesOtherClosure);
             }
             let observed = replay_rows
                 .iter()
@@ -1988,7 +1989,7 @@ async fn terminalize_transaction(
                             == plan.rendered
                 })
             {
-                return Err(DeliveryError::CanonicalToolDeliveryReplayPayloadDiffersFrom);
+                return Err(DeliveryError::CanonicalToolDeliveryReplayPayloadDiffersFromPlan);
             }
             return Ok(false);
         }
@@ -2005,7 +2006,7 @@ async fn terminalize_transaction(
     .await?;
     if source_rows.iter().any(|row| row.segment.close.is_some()) {
         if !(adopt_competing_terminal || plugin_effect.is_some()) {
-            return Err(DeliveryError::ToolTerminalSourceAlreadyHasAClosure);
+            return Err(DeliveryError::ToolTerminalSourceAlreadyClosed);
         }
         let lifecycle = txn
             .execute(&format!(
@@ -2033,7 +2034,7 @@ async fn terminalize_transaction(
             return Err(DeliveryError::ClosedToolSourceConflictsWithTerminalCause);
         }
         if !(source_rows.iter().all(|row| row.segment.writer == writer)) {
-            return Err(DeliveryError::ClosedToolSourceHasAForeignWriter);
+            return Err(DeliveryError::ClosedToolSourceHasForeignWriter);
         }
         let closures = source_rows
             .iter()
@@ -2050,7 +2051,7 @@ async fn terminalize_transaction(
                 ..
             })
         )) {
-            return Err(DeliveryError::ClosedToolSourceHasANonComplete);
+            return Err(DeliveryError::ClosedToolSourceHasIncompleteClosure);
         }
         let observed = source_rows
             .iter()
@@ -2082,9 +2083,9 @@ async fn terminalize_transaction(
         if plugin_effect.is_some() {
             let stored: PresentedPayload =
                 serde_json::from_value(lifecycle_rows[0]["terminal_output"].clone())
-                    .map_err(DeliveryError::PluginTerminalIsMissingItsCanonicalPresentation)?;
+                    .map_err(DeliveryError::PluginTerminalMissingCanonicalPresentation)?;
             if !(stored.output.close_doc_id == close.doc_id && stored.output.stream == 0) {
-                return Err(DeliveryError::PluginTerminalPresentationNamesAForeignSource);
+                return Err(DeliveryError::PluginTerminalPresentationNamesForeignClosure);
             }
             if !(if plan.diagnostic {
                 diagnostic_replay_matches(&reconstructed.text, text, &stored.presentation)?
@@ -2093,7 +2094,7 @@ async fn terminalize_transaction(
                     && render_presentation(&reconstructed.text, &stored.presentation)?
                         == plan.rendered
             }) {
-                return Err(DeliveryError::PluginTerminalReplayChangedItsPresentation);
+                return Err(DeliveryError::PluginTerminalReplayChangedPresentation);
             }
         }
         return Ok(false);
@@ -2134,10 +2135,10 @@ async fn terminalize_transaction(
         .unwrap_or("");
     if let Some(last_created_at) = extent.last_created_at.as_deref() {
         let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
-            .map_err(DeliveryError::ToolRawOutputHasAnInvalidCreated)?
+            .map_err(DeliveryError::ToolRawOutputInvalidCreatedAt)?
             .with_timezone(&Utc);
         if !(now > last_created_at) {
-            return Err(DeliveryError::ClockMovedBackwardsWhileClosingCanonicalTool);
+            return Err(DeliveryError::ClockMovedBackwardsClosingToolOutput);
         }
     }
     let plan = terminal_output_plan(
@@ -2289,7 +2290,7 @@ async fn terminalize_transaction(
             .as_array()
             .is_some_and(|rows| rows.len() == 1))
         {
-            return Err(DeliveryError::PluginTerminalPresentationLostItsPhysicalLifecycle);
+            return Err(DeliveryError::PluginTerminalPresentationLostLifecycleBinding);
         }
     }
 
@@ -2388,7 +2389,7 @@ async fn ensure_background_receipt_before_bridge_close(
                 if id == tool_call_doc_id && result_id == tool_call_id
                     && result_call_id.as_deref() == call_id))
     {
-        return Err(DeliveryError::BackgroundReceiptConflictsWithTheAcceptedBridge);
+        return Err(DeliveryError::BackgroundReceiptConflictsWithAcceptedBridge);
     }
     Ok(())
 }
@@ -2445,7 +2446,7 @@ async fn append_tool_output_with_time(
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<ToolOutputAppendReceipt> {
     if !(!bytes.is_empty()) {
-        return Err(DeliveryError::EmptyToolOutputHasNoPhysicalAppend);
+        return Err(DeliveryError::EmptyToolOutputHasNoAppendReceipt);
     }
     let created_at = operation_created_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let payload = bytes.to_owned();
@@ -2489,7 +2490,7 @@ async fn append_tool_output_with_time(
                     .as_array()
                     .ok_or(DeliveryError::ToolOutputAppendQueryOmittedPhysicalRows)?;
                 if !(tools.len() == 1) {
-                    return Err(DeliveryError::ToolOutputAppendHasNoUniquePhysical);
+                    return Err(DeliveryError::ToolOutputAppendHasNoUniqueBinding);
                 }
                 let state = tools[0]["lifecycle_state"]
                     .as_str()
@@ -2518,10 +2519,10 @@ async fn append_tool_output_with_time(
                     .filter(|row| row.segment.created_at == created_at)
                     .collect::<Vec<_>>();
                 if !(same_attempt.len() <= 1) {
-                    return Err(DeliveryError::CanonicalToolOutputAppendHasAmbiguousRetry);
+                    return Err(DeliveryError::CanonicalToolOutputAppendHasAmbiguousRetryIdentity);
                 }
                 if !(rows.iter().all(|row| row.segment.close.is_none())) {
-                    return Err(DeliveryError::CannotAppendRawOutputAfterToolSource);
+                    return Err(DeliveryError::RawOutputAppendAfterSourceClosure);
                 }
                 let prior = rows
                     .iter()
@@ -2538,7 +2539,7 @@ async fn append_tool_output_with_time(
                     &writer,
                 )?;
                 if !(extent.streams.len() <= 1) {
-                    return Err(DeliveryError::ToolRawOutputSourceHasUnexpectedMultiple);
+                    return Err(DeliveryError::ToolRawOutputSourceHasMultipleStreams);
                 }
                 let ordinal = extent.segments;
                 let start = extent.stream_bytes.first().copied().unwrap_or(0);
@@ -2566,7 +2567,7 @@ async fn append_tool_output_with_time(
                 };
                 if let Some(existing) = same_attempt.first() {
                     if !(existing.segment == segment) {
-                        return Err(DeliveryError::CanonicalToolOutputRetryConflictsWithThe);
+                        return Err(DeliveryError::CanonicalToolOutputRetryConflictsWithSegment);
                     }
                     return Ok(ToolOutputAppendReceipt {
                         range: start..start + segment.payload.len() as u64,
@@ -2609,17 +2610,14 @@ mod plugin_writes_failed_tests {
         assert!(crate::config_client::is_classified_transaction_conflict(
             &wrapped
         ));
-        assert!(!matches!(
-            wrapped,
-            DeliveryError::PluginWritesRefused { .. }
-        ));
+        assert!(!matches!(wrapped, DeliveryError::PluginWritesRefused(_)));
 
         let refused =
             plugin_writes_failed(crate::application_write::PluginWritesError::UpdateNeedsField);
         assert!(!crate::config_client::is_classified_transaction_conflict(
             &refused
         ));
-        assert!(matches!(refused, DeliveryError::PluginWritesRefused { .. }));
+        assert!(matches!(refused, DeliveryError::PluginWritesRefused(_)));
     }
 }
 
@@ -3740,7 +3738,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
             && matches!(existing.message.blocks.as_slice(), [MessageBlock::ToolResult { tool_call_doc_id, id, call_id: existing_call_id, .. }]
                     if tool_call_doc_id == &tool_doc_id && id == &tool_call_id && existing_call_id.as_deref() == call_id.as_deref()))
         {
-            return Err(DeliveryError::BackgroundReceiptReplayConflictsWithPhysicalTool);
+            return Err(DeliveryError::BackgroundReceiptReplayConflictsWithPhysicalToolBinding);
         }
         let close_doc_id = match existing.message.blocks.as_slice() {
             [MessageBlock::ToolResult { parts, .. }] => match parts.as_slice() {
@@ -3750,7 +3748,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
                 {
                     &text.output.close_doc_id
                 }
-                _ => return Err(DeliveryError::BackgroundReceiptReplayHasANonNative),
+                _ => return Err(DeliveryError::BackgroundReceiptReplayHasNonNativePayload),
             },
             _ => unreachable!("physical binding guard established one ToolResult"),
         };
@@ -3759,7 +3757,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
             .as_array()
             .ok_or(DeliveryError::BackgroundReceiptReplayOmittedAuthoredClose)?;
         if !(close_rows.len() == 1) {
-            return Err(DeliveryError::BackgroundReceiptReplayCloseIsMissingOr);
+            return Err(DeliveryError::BackgroundReceiptReplayCloseMissingOrAmbiguous);
         }
         let close = decode_output_segment_row(&close_rows[0])?;
         if !(close.segment.source == OutputSource::Authored { key: key.clone() }
@@ -3772,7 +3770,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
                     outcome: OutputOutcome::Complete, segments: 1, ref stream_bytes
                 }) if stream_bytes.as_slice() == [receipt.len() as u64]))
         {
-            return Err(DeliveryError::BackgroundReceiptReplayConflictsWithImmutableAuthored);
+            return Err(DeliveryError::BackgroundReceiptReplayConflictsWithAuthoredDelivery);
         }
         return Ok(false);
     }
@@ -3935,7 +3933,7 @@ pub(crate) async fn start_running_in_txn(
                         && block_arguments == &start.arguments)
         }))
     {
-        return Err(DeliveryError::AcceptedHeaderDoesNotBindThisExact);
+        return Err(DeliveryError::AcceptedHeaderDoesNotBindDispatch);
     }
     let request_id = escape_graphql_string(&start.request);
     let request_row = txn

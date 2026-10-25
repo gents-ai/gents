@@ -455,13 +455,17 @@ pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
 ];
 
+pub(crate) fn is_protected_collection_name(collection: &str) -> bool {
+    PROTECTED_DATASTORE_COLLECTIONS.contains(&collection)
+}
+
 /// Reject a collection a datastore create/query tool may never name. Sits
 /// beside `validate_collection_identifier` rather than inside it: that check
 /// lives in `gents-protocol` and is shared far beyond datastore surfaces.
 pub(crate) fn reject_protected_collection_name(
     collection: &str,
 ) -> Result<(), DocumentConfigError> {
-    if PROTECTED_DATASTORE_COLLECTIONS.contains(&collection) {
+    if is_protected_collection_name(collection) {
         return Err(DocumentConfigError::ProtectedCollection {
             collection: collection.to_owned(),
         });

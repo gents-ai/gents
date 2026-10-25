@@ -39,45 +39,7 @@ impl AgentToolConfig {
         targets: impl IntoIterator<Item = &'a crate::document_config::AgentTargetDocument>,
     ) -> Result<Self, super::ToolSurfaceError> {
         let mut resolved = Self::from_document(tools)?;
-        let mut by_id = rapidhash::RapidHashMap::default();
-        for target in targets {
-            if !(by_id
-                .insert(
-                    (target.node_did.as_str(), target.target_id.as_str()),
-                    target,
-                )
-                .is_none())
-            {
-                return Err(super::ToolSurfaceError::DuplicateScopedAgentTarget {
-                    target_id: target.target_id.clone(),
-                });
-            }
-        }
-        let mut names = rapidhash::RapidHashSet::default();
-        for id in tools
-            .agents
-            .as_ref()
-            .into_iter()
-            .flat_map(|group| &group.target_ids)
-        {
-            let target = by_id
-                .get(&(tools.node_did.as_str(), id.as_str()))
-                .ok_or_else(|| super::ToolSurfaceError::MissingSameOwnerAgentTarget {
-                    id: id.clone(),
-                })?;
-            if !(!target.name.trim().is_empty()
-                && !target.target_node_did.trim().is_empty()
-                && !target.agent_id.trim().is_empty())
-            {
-                return Err(super::ToolSurfaceError::InvalidAgentTarget { id: id.clone() });
-            }
-            if !names.insert(target.name.as_str()) {
-                return Err(super::ToolSurfaceError::DuplicateAgentTargetName {
-                    name: target.name.clone(),
-                });
-            }
-            resolved.targets.push((*target).clone());
-        }
+        resolved.targets = tools.resolve_agent_targets(targets)?;
         Ok(resolved)
     }
 

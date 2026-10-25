@@ -73,14 +73,6 @@ pub enum ToolSurfaceError {
     BackgroundableToolUnregistered { agent_name: String, name: String },
     #[error("required MCP services are not measured available: {services}")]
     McpServicesUnmeasured { services: String },
-    #[error("duplicate scoped AgentTarget {target_id}")]
-    DuplicateScopedAgentTarget { target_id: String },
-    #[error("missing same-owner AgentTarget {id}")]
-    MissingSameOwnerAgentTarget { id: String },
-    #[error("invalid AgentTarget {id}")]
-    InvalidAgentTarget { id: String },
-    #[error("duplicate agent target name {name}")]
-    DuplicateAgentTargetName { name: String },
     #[error("agent {agent_id} has active host tools but no explicit root under current WorkspaceRoot policy")]
     ActiveHostToolsWithoutRoot { agent_id: String },
     #[error("agent {agent_id} persisted root {} re-resolved to {} at the execution boundary", selected_root.display(), resolved_root.display())]

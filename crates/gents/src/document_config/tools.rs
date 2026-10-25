@@ -929,6 +929,54 @@ impl Tools {
         errors
     }
 
+    /// The same-owner targets `agents.target_ids` names, in that order.
+    pub(crate) fn resolve_agent_targets<'a>(
+        &self,
+        targets: impl IntoIterator<Item = &'a super::AgentTargetDocument>,
+    ) -> Result<Vec<super::AgentTargetDocument>, DocumentConfigError> {
+        let mut by_id = rapidhash::RapidHashMap::default();
+        for target in targets {
+            if by_id
+                .insert(
+                    (target.node_did.as_str(), target.target_id.as_str()),
+                    target,
+                )
+                .is_some()
+            {
+                return Err(DocumentConfigError::DuplicateScopedAgentTarget {
+                    target_id: target.target_id.clone(),
+                });
+            }
+        }
+        let mut names = rapidhash::RapidHashSet::default();
+        let mut resolved = Vec::new();
+        for id in self
+            .agents
+            .as_ref()
+            .into_iter()
+            .flat_map(|group| &group.target_ids)
+        {
+            let target = by_id
+                .get(&(self.node_did.as_str(), id.as_str()))
+                .ok_or_else(|| DocumentConfigError::MissingSameOwnerAgentTarget {
+                    id: id.clone(),
+                })?;
+            if target.name.trim().is_empty()
+                || target.target_node_did.trim().is_empty()
+                || target.agent_id.trim().is_empty()
+            {
+                return Err(DocumentConfigError::InvalidAgentTarget { id: id.clone() });
+            }
+            if !names.insert(target.name.as_str()) {
+                return Err(DocumentConfigError::DuplicateAgentTargetName {
+                    name: target.name.clone(),
+                });
+            }
+            resolved.push((*target).clone());
+        }
+        Ok(resolved)
+    }
+
     pub fn validate(&self) -> Result<(), DocumentConfigError> {
         let violations = self.validation_violations();
         if violations.is_empty() {

@@ -2050,7 +2050,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents/src/toolset/session_history/discovery.rs",
     "crates/gents/src/toolset/title_audit_usage.rs",
     "crates/gents/src/trace_export.rs",
-    "crates/gents/src/trigger_engine/event_source/durable.rs",
     "crates/gents/src/trigger_engine/goal_source.rs",
     "crates/gents/src/trigger_engine/mod.rs",
     "crates/gents/src/trigger_engine/production_materializer.rs",

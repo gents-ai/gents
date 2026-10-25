@@ -31,6 +31,20 @@ pub(crate) use documents::{idempotency_key, load_invocation};
 pub(crate) use run::recover_local_invocations;
 
 #[derive(Debug, thiserror::Error)]
+pub enum CallbackFieldError {
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error("CallbackBinding {name} must be non-empty")]
+    BindingFieldEmpty { name: &'static str },
+    #[error("duplicate callback input field {field}")]
+    DuplicateInputField { field: String },
+    #[error("CallbackBinding {binding_id} source field `{field}` is secret-bearing")]
+    SecretSourceField { binding_id: String, field: String },
+    #[error("CallbackBinding {binding_id} filter field `{field}` is secret-bearing")]
+    SecretFilterField { binding_id: String, field: String },
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum CallbackError {
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
@@ -42,14 +56,8 @@ pub enum CallbackError {
     DesiredState(Box<crate::config_client::DesiredStateError>),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("CallbackBinding {name} must be non-empty")]
-    BindingFieldEmpty { name: &'static str },
-    #[error("duplicate callback input field {field}")]
-    DuplicateInputField { field: String },
-    #[error("CallbackBinding {binding_id} source field `{field}` is secret-bearing")]
-    SecretSourceField { binding_id: String, field: String },
-    #[error("CallbackBinding {binding_id} filter field `{field}` is secret-bearing")]
-    SecretFilterField { binding_id: String, field: String },
+    #[error(transparent)]
+    Field(#[from] CallbackFieldError),
     #[error("ambiguous or foreign CallbackBinding")]
     AmbiguousOrForeignBinding,
     #[error("query CallbackInvocation {invocation_id}")]

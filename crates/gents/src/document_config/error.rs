@@ -559,6 +559,14 @@ pub enum DocumentConfigError {
     DefaultAgentDisabled { agent_id: String, node_did: String },
     #[error("AgentTarget {id} requires target_node_did and agent_id")]
     AgentTargetRequiresIds { id: String },
+    #[error("duplicate scoped AgentTarget {target_id}")]
+    DuplicateScopedAgentTarget { target_id: String },
+    #[error("missing same-owner AgentTarget {id}")]
+    MissingSameOwnerAgentTarget { id: String },
+    #[error("invalid AgentTarget {id}")]
+    InvalidAgentTarget { id: String },
+    #[error("duplicate agent target name {name}")]
+    DuplicateAgentTargetName { name: String },
     #[error("trigger task missing")]
     TriggerTaskMissing,
     #[error("trigger event source missing")]
@@ -643,13 +651,11 @@ pub enum DocumentConfigError {
     #[error(transparent)]
     DocumentView(Box<crate::agent::document_view::DocumentViewError>),
     #[error(transparent)]
-    ToolSurface(Box<crate::tool_surface::ToolSurfaceError>),
-    #[error(transparent)]
     BackendRegistry(Box<crate::backend_registry::BackendRegistryError>),
     #[error(transparent)]
-    Callback(Box<crate::callback::CallbackError>),
+    CallbackField(#[from] crate::callback::CallbackFieldError),
     #[error(transparent)]
-    CallbackPlugin(Box<crate::callback::plugin::CallbackPluginError>),
+    CallbackHandler(#[from] crate::callback::plugin::CallbackHandlerError),
 }
 
 impl From<crate::config_client::DesiredStateError> for DocumentConfigError {
@@ -664,27 +670,9 @@ impl From<crate::agent::document_view::DocumentViewError> for DocumentConfigErro
     }
 }
 
-impl From<crate::tool_surface::ToolSurfaceError> for DocumentConfigError {
-    fn from(error: crate::tool_surface::ToolSurfaceError) -> Self {
-        Self::ToolSurface(Box::new(error))
-    }
-}
-
 impl From<crate::backend_registry::BackendRegistryError> for DocumentConfigError {
     fn from(error: crate::backend_registry::BackendRegistryError) -> Self {
         Self::BackendRegistry(Box::new(error))
-    }
-}
-
-impl From<crate::callback::CallbackError> for DocumentConfigError {
-    fn from(error: crate::callback::CallbackError) -> Self {
-        Self::Callback(Box::new(error))
-    }
-}
-
-impl From<crate::callback::plugin::CallbackPluginError> for DocumentConfigError {
-    fn from(error: crate::callback::plugin::CallbackPluginError) -> Self {
-        Self::CallbackPlugin(Box::new(error))
     }
 }
 
@@ -694,7 +682,6 @@ impl crate::config_client::TransactionFailure for DocumentConfigError {
             Self::ConfigClient(error) => Some(error),
             Self::DesiredState(error) => error.config_client_error(),
             Self::BackendRegistry(error) => error.config_client_error(),
-            Self::Callback(error) => error.config_client_error(),
             _ => None,
         }
     }

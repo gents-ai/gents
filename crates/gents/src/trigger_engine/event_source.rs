@@ -75,6 +75,8 @@ pub enum EventSourceError {
     ArrivalNextCursorMissing,
     #[error("source document {doc_id} could not be rendered into a fire")]
     SourceDocNotRendered { doc_id: String },
+    #[error(transparent)]
+    Cursor(#[from] crate::config_client::event_source_cursor::EventSourceCursorError),
 }
 
 impl crate::config_client::TransactionFailure for EventSourceError {
@@ -88,6 +90,9 @@ impl crate::config_client::TransactionFailure for EventSourceError {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             Self::GraphPipeline(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Cursor(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             _ => None,

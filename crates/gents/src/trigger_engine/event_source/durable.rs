@@ -278,7 +278,7 @@ impl EventSource {
         &mut self,
         snapshot: &ActiveRuntimeSnapshot,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-    ) -> anyhow::Result<Option<FireIntent>> {
+    ) -> Result<Option<FireIntent>> {
         let owner = Self::delivery(snapshot, trigger)?.owner().to_owned();
         let consumer = EventConsumer::Trigger {
             trigger_id: trigger.trigger_id.clone(),
@@ -356,8 +356,7 @@ impl EventSource {
                 }
                 return Err(EventSourceError::SourceDocNotRendered {
                     doc_id: doc_id.to_owned(),
-                }
-                .into());
+                });
             };
             let source_document = intent.doc_vars.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -401,7 +400,7 @@ impl EventSource {
         owner: &str,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         position: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         ConfigAccess::transact_local_write(&self.node, None, "trigger.exclude_arrival", |txn| {
             Box::pin(async {
                 crate::config_client::event_source_cursor::exclude_arrival(
@@ -416,7 +415,7 @@ impl EventSource {
                 .await
             })
         })
-        .await
-        .map_err(anyhow::Error::from)
+        .await?;
+        Ok(())
     }
 }

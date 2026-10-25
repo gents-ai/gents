@@ -285,22 +285,26 @@ impl CallbackEngine {
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding.binding_id.clone(),
         };
-        ConfigAccess::transact_local_write(&self.node, None, "callback.advance_arrival", |txn| {
-            let consumer = &consumer;
-            Box::pin(async move {
-                event_source_cursor::checkpoint_prefix(
-                    txn,
-                    &binding.node_did,
-                    consumer,
-                    collection,
-                    position,
-                    false,
-                )
-                .await
-            })
-        })
-        .await
-        .map_err(anyhow::Error::from)
+        Ok(ConfigAccess::transact_local_write(
+            &self.node,
+            None,
+            "callback.advance_arrival",
+            |txn| {
+                let consumer = &consumer;
+                Box::pin(async move {
+                    event_source_cursor::checkpoint_prefix(
+                        txn,
+                        &binding.node_did,
+                        consumer,
+                        collection,
+                        position,
+                        false,
+                    )
+                    .await
+                })
+            },
+        )
+        .await?)
     }
 
     pub(super) async fn deliver_arrivals(&mut self, collection: Option<&str>) {

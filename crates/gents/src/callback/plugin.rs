@@ -34,13 +34,15 @@ use crate::workspace::journal::advance;
 use crate::workspace::{ActionJournalEntry, ActionJournalState};
 
 #[derive(Debug, thiserror::Error)]
-pub enum CallbackPluginError {
+pub enum CallbackHandlerError {
     #[error(transparent)]
     Graphql(#[from] GraphqlError),
     #[error("a plugin cannot write {collection}, which belongs to the runtime")]
     RuntimeCollection { collection: String },
-    #[error(transparent)]
-    ProtectedCollection(Box<crate::document_config::DocumentConfigError>),
+    #[error(
+        "collection {collection:?} is protected and cannot be exposed through a datastore tool"
+    )]
+    ProtectedCollection { collection: String },
     #[error(transparent)]
     Coordinate(#[from] crate::plugin::store::PluginStoreError),
     #[error("callback plugin {plugin} pins {digest:?}, which is not sha256:<64 hex>")]
@@ -51,6 +53,14 @@ pub enum CallbackPluginError {
         "callback plugin {plugin} writes {collection} with a correlation field but reads none from its source"
     )]
     OutputWithoutCorrelation { plugin: String, collection: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CallbackPluginError {
+    #[error(transparent)]
+    Graphql(#[from] GraphqlError),
+    #[error(transparent)]
+    Handler(#[from] CallbackHandlerError),
     #[error("CallbackInvocation {invocation_id} is no longer running")]
     NotRunning { invocation_id: String },
     #[error(transparent)]
@@ -71,15 +81,19 @@ impl crate::config_client::TransactionFailure for CallbackPluginError {
 
 /// A plugin writes only a pack's own collections: never the runtime's
 /// documents and never a protected collection.
-pub(crate) fn writable_output_collection(collection: &str) -> Result<(), CallbackPluginError> {
+pub(crate) fn writable_output_collection(collection: &str) -> Result<(), CallbackHandlerError> {
     crate::graphql::validate_collection_identifier(collection)?;
     if gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection) {
-        return Err(CallbackPluginError::RuntimeCollection {
+        return Err(CallbackHandlerError::RuntimeCollection {
             collection: collection.to_owned(),
         });
     }
-    crate::document_config::reject_protected_collection_name(collection)
-        .map_err(|error| CallbackPluginError::ProtectedCollection(Box::new(error)))
+    if crate::document_config::is_protected_collection_name(collection) {
+        return Err(CallbackHandlerError::ProtectedCollection {
+            collection: collection.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 pub fn validate_handler(
@@ -87,11 +101,11 @@ pub fn validate_handler(
     digest: &str,
     correlation_field: Option<&str>,
     outputs: &[PortSpec],
-) -> Result<(), CallbackPluginError> {
+) -> Result<(), CallbackHandlerError> {
     crate::plugin::store::parse_coordinate(plugin)?;
     let hex = digest.strip_prefix("sha256:").unwrap_or_default();
     if !(hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())) {
-        return Err(CallbackPluginError::DigestNotSha256 {
+        return Err(CallbackHandlerError::DigestNotSha256 {
             plugin: plugin.to_owned(),
             digest: digest.to_owned(),
         });
@@ -104,13 +118,13 @@ pub fn validate_handler(
         writable_output_collection(&output.collection)?;
         crate::graphql::validate_graphql_name(&output.correlation_field)?;
         if !names.insert(output.name.as_str()) {
-            return Err(CallbackPluginError::DuplicateOutput {
+            return Err(CallbackHandlerError::DuplicateOutput {
                 plugin: plugin.to_owned(),
                 name: output.name.clone(),
             });
         }
         if correlation_field.is_none() {
-            return Err(CallbackPluginError::OutputWithoutCorrelation {
+            return Err(CallbackHandlerError::OutputWithoutCorrelation {
                 plugin: plugin.to_owned(),
                 collection: output.collection.clone(),
             });

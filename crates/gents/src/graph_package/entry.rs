@@ -50,8 +50,8 @@ pub enum EntryError {
     },
     #[error("entry {entry_name:?} prepare plugin is not pinned")]
     PreparePluginNotPinned { entry_name: String },
-    #[error("{message}")]
-    PreparePluginFailed { message: String },
+    #[error(transparent)]
+    PreparePluginFailed(Box<PreparePluginFailure>),
     #[error("the {coordinate} plugin returned a malformed prepare result")]
     PrepareOutputMalformed {
         coordinate: String,
@@ -430,47 +430,76 @@ async fn persist_prepared_documents(
         .await
 }
 
-fn describe_prepare_plugin_failure(
-    coordinate: &str,
-    plugin: &crate::pack::PackPlugin,
-    verdict: crate::plugin::PluginVerdict,
-    diagnostics: &str,
-    diff_bytes: Option<usize>,
-) -> String {
-    use crate::plugin::PluginVerdict;
-    let limits = plugin.limits.as_ref();
-    if let Some(bytes) = diff_bytes {
-        let bound = match verdict {
-            PluginVerdict::BadOutput => limits
-                .and_then(|limits| limits.max_output_mib)
-                .map(|mib| format!("its declared {mib} MiB output bound")),
-            PluginVerdict::OutOfMemory => limits
-                .and_then(|limits| limits.memory_mib)
-                .map(|mib| format!("its declared {mib} MiB memory bound")),
-            PluginVerdict::Timeout => limits
-                .and_then(|limits| limits.wall_clock_secs)
-                .map(|secs| format!("its declared {secs}s time bound")),
+#[derive(Debug)]
+pub struct PreparePluginFailure {
+    pub coordinate: String,
+    pub verdict: crate::plugin::PluginVerdict,
+    pub diagnostics: String,
+    /// The declared limit the verdict names, when the plugin declares one.
+    pub declared_limit: Option<u32>,
+    pub diff_bytes: Option<usize>,
+}
+
+impl PreparePluginFailure {
+    fn new(
+        coordinate: &str,
+        plugin: &crate::pack::PackPlugin,
+        verdict: crate::plugin::PluginVerdict,
+        diagnostics: &str,
+        diff_bytes: Option<usize>,
+    ) -> Self {
+        use crate::plugin::PluginVerdict;
+        let limits = plugin.limits.as_ref();
+        let declared_limit = match verdict {
+            PluginVerdict::BadOutput => limits.and_then(|limits| limits.max_output_mib),
+            PluginVerdict::OutOfMemory => limits.and_then(|limits| limits.memory_mib),
+            PluginVerdict::Timeout => limits.and_then(|limits| limits.wall_clock_secs),
             _ => None,
         };
-        if let Some(bound) = bound {
-            return format!(
-                "the {coordinate} plugin exceeded {bound} for a {bytes}-byte diff; narrow base..head"
-            );
+        Self {
+            coordinate: coordinate.to_owned(),
+            verdict,
+            diagnostics: diagnostics.to_owned(),
+            declared_limit,
+            diff_bytes,
         }
     }
-    let what = match verdict {
-        PluginVerdict::Success => {
-            unreachable!("describe_prepare_plugin_failure is only called on a non-success verdict")
-        }
-        PluginVerdict::Refused => "declined to run",
-        PluginVerdict::OutOfFuel => "ran out of its execution budget",
-        PluginVerdict::OutOfMemory => "exceeded its memory bound",
-        PluginVerdict::Timeout => "exceeded its time bound",
-        PluginVerdict::BadOutput => "did not return a valid result",
-        PluginVerdict::Failed => "exited with a failure",
-    };
-    format!("the {coordinate} plugin {what}: {diagnostics}")
 }
+
+impl std::fmt::Display for PreparePluginFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use crate::plugin::PluginVerdict;
+        let coordinate = &self.coordinate;
+        if let (Some(bytes), Some(limit)) = (self.diff_bytes, self.declared_limit) {
+            let bound = match self.verdict {
+                PluginVerdict::BadOutput => Some(format!("its declared {limit} MiB output bound")),
+                PluginVerdict::OutOfMemory => {
+                    Some(format!("its declared {limit} MiB memory bound"))
+                }
+                PluginVerdict::Timeout => Some(format!("its declared {limit}s time bound")),
+                _ => None,
+            };
+            if let Some(bound) = bound {
+                return write!(
+                    f,
+                    "the {coordinate} plugin exceeded {bound} for a {bytes}-byte diff; narrow base..head"
+                );
+            }
+        }
+        let what = match self.verdict {
+            PluginVerdict::Success => "succeeded",
+            PluginVerdict::Refused => "declined to run",
+            PluginVerdict::OutOfFuel => "ran out of its execution budget",
+            PluginVerdict::OutOfMemory => "exceeded its memory bound",
+            PluginVerdict::Timeout => "exceeded its time bound",
+            PluginVerdict::BadOutput => "did not return a valid result",
+            PluginVerdict::Failed => "exited with a failure",
+        };
+        write!(f, "the {coordinate} plugin {what}: {}", self.diagnostics)
+    }
+}
+
+impl std::error::Error for PreparePluginFailure {}
 
 pub async fn prepare_entry_run(
     access: &ConfigAccess,
@@ -512,16 +541,16 @@ pub async fn prepare_entry_run(
     let stdin = prepare_stdin(Value::Object(admitted), &nonce, Value::Object(host));
     let call = request.plugins.call(&record, stdin).await?;
     if call.outcome.verdict != crate::plugin::PluginVerdict::Success {
-        return Err(EntryError::PreparePluginFailed {
-            message: describe_prepare_plugin_failure(
+        return Err(
+            EntryError::PreparePluginFailed(Box::new(PreparePluginFailure::new(
                 &call.coordinate,
                 &record.declaration,
                 call.outcome.verdict,
                 &call.outcome.diagnostics,
                 diff_bytes,
-            ),
-        }
-        .into());
+            )))
+            .into(),
+        );
     }
     let output: PreparePluginOutput =
         serde_json::from_value(call.outcome.output).map_err(|source| {

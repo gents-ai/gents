@@ -23,8 +23,8 @@ use crate::{Collection, InferenceBackend};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileSwitchError {
-    #[error("{note}")]
-    NoCandidate { note: String },
+    #[error("{}", no_switch_candidate_note(provider, model))]
+    NoCandidate { provider: String, model: String },
     #[error("no backend {backend_id:?}")]
     NoBackend { backend_id: String },
     #[error(
@@ -180,7 +180,8 @@ pub async fn switch_candidates(
     }
     if candidates.is_empty() {
         return Err(ProfileSwitchError::NoCandidate {
-            note: no_switch_candidate_note(&own_provider, &snapshot.profile.model_name),
+            provider: own_provider.to_string(),
+            model: snapshot.profile.model_name.clone(),
         });
     }
     candidates.sort_by(|a, b| a.label.cmp(&b.label));
