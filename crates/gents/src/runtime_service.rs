@@ -3,6 +3,63 @@ use std::sync::{Arc, Mutex};
 use gents_protocol::serve_lifecycle::replacement::{Action, Phase, RetirementAuthority, State};
 use tokio::sync::watch;
 
+/// Captured before the serving process publishes readiness. The digest fences
+/// that executable; it is neither node identity nor evidence of build ordering.
+pub async fn executable_build_id() -> anyhow::Result<String> {
+    use anyhow::Context as _;
+    static BUILD: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    let build = BUILD
+        .get_or_try_init(|| async {
+            tokio::task::spawn_blocking(|| {
+                use sha2::{Digest, Sha256};
+                use std::io::Read as _;
+                let mut file = std::fs::File::open(std::env::current_exe()?)?;
+                let mut digest = Sha256::new();
+                let mut buffer = [0u8; 64 * 1024];
+                loop {
+                    let length = file.read(&mut buffer)?;
+                    if length == 0 {
+                        break;
+                    }
+                    digest.update(&buffer[..length]);
+                }
+                Ok::<_, anyhow::Error>(format!("{:x}", digest.finalize()))
+            })
+            .await
+            .context("joining runtime executable observation")?
+        })
+        .await?;
+    Ok(build.clone())
+}
+
+pub fn verify_control_receipt(
+    command: &gents_protocol::serve_lifecycle::control::RuntimeControlCommand,
+    receipt: &gents_protocol::serve_lifecycle::control::RuntimeControlReceipt,
+) -> anyhow::Result<()> {
+    receipt.validate_for(command, chrono::Utc::now())?;
+    anyhow::ensure!(
+        crate::identity::verify_did_signature(
+            &command.node_did,
+            &receipt.signing_payload()?,
+            &receipt.signature,
+        )?,
+        "runtime control receipt signature is invalid"
+    );
+    Ok(())
+}
+
+pub async fn sign_control_receipt(
+    identity: &dyn crate::identity::NodeIdentity,
+    receipt: &mut gents_protocol::serve_lifecycle::control::RuntimeControlReceipt,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        receipt.node_did == identity.did(),
+        "runtime receipt belongs to another node"
+    );
+    receipt.signature = identity.sign(&receipt.signing_payload()?).await?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RetirementError {
     #[error("runtime operator authorization is required")]
@@ -43,6 +100,14 @@ impl Default for RuntimeServiceAdmission {
 }
 
 impl RuntimeServiceAdmission {
+    pub fn is_retiring(&self) -> Result<bool, RetirementError> {
+        let state = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| RetirementError::Unavailable)?;
+        Ok(state.phase != Phase::Accepting)
+    }
     pub(crate) fn admit(&self) -> Result<RuntimeServiceWork, RetirementError> {
         let mut state = self
             .0

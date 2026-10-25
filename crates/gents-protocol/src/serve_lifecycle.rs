@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod control;
 pub mod replacement;
 
 pub const STATUS_LIFECYCLE_FIELD: &str = "lifecycle";
