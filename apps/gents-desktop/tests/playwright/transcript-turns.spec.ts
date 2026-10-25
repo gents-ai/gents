@@ -243,15 +243,24 @@ test.describe("a sent turn kept near the top", () => {
     );
     /* far up the session, with the history between held */
     await panel.hover();
-    for (let i = 0; i < 20; i += 1) {
-      await page.mouse.wheel(0, -1500);
-      await page.waitForTimeout(150);
-    }
-    await page.waitForTimeout(600);
     const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
-    expect(
-      await viewport.evaluate((s) => s.scrollHeight - s.clientHeight - s.scrollTop),
-    ).toBeGreaterThan(15_000);
+    const minimumDistance = 15_000;
+    const distanceFromBottom = () =>
+      viewport.evaluate((s) => s.scrollHeight - s.clientHeight - s.scrollTop);
+    /* Wheel dispatch returns before scrolling settles. Start observation only
+       after the required reading distance has been reached. */
+    await expect
+      .poll(
+        async () => {
+          const distance = await distanceFromBottom();
+          if (distance <= minimumDistance) await page.mouse.wheel(0, -1500);
+          return distance;
+        },
+        { timeout: 10_000, intervals: [150] },
+      )
+      .toBeGreaterThan(minimumDistance);
+    await page.waitForTimeout(600);
+    expect(await distanceFromBottom()).toBeGreaterThan(minimumDistance);
 
     /* every row drawn from the send until the turn is in place */
     await page.evaluate(() => {
