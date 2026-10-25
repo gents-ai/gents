@@ -38,6 +38,29 @@ pub enum WatcherError {
     AuxiliaryProvenance,
     #[error(transparent)]
     ToolCallTransition(#[from] IllegalToolCallTransition),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Durable(#[from] crate::trigger_engine::durable::DurableTriggerError),
+}
+
+impl crate::config_client::TransactionFailure for WatcherError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Durable(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -220,7 +243,7 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<(), WatcherError> {
 pub trait Watcher: Send + Sync {
     fn next_request(
         &mut self,
-    ) -> impl std::future::Future<Output = Option<Result<AgentRequest>>> + Send;
+    ) -> impl std::future::Future<Output = Option<Result<AgentRequest, WatcherError>>> + Send;
 }
 
 pub struct DefraWatcher {
@@ -267,7 +290,7 @@ async fn wait_for_request_change(
 }
 
 impl Watcher for DefraWatcher {
-    async fn next_request(&mut self) -> Option<Result<AgentRequest>> {
+    async fn next_request(&mut self) -> Option<Result<AgentRequest, WatcherError>> {
         loop {
             let now = Instant::now();
             prune_processed_requests(&mut self.processed_request_ids, now);

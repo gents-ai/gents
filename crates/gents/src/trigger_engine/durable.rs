@@ -29,12 +29,29 @@ pub enum DurableTriggerError {
     OutcomeSourceHandoffMissing,
     #[error("Task outcome query omitted rows")]
     OutcomeRowsOmitted,
+    #[error(transparent)]
+    Queue(Box<crate::lifecycle::queue::QueueError>),
+    #[error("arrival query omitted entries")]
+    ArrivalEntriesMissing,
+    #[error("arrival entry omitted cursor")]
+    ArrivalCursorMissing,
+    #[error("arrival entry has invalid cursor")]
+    ArrivalCursorInvalid(#[source] std::num::ParseIntError),
+    #[error("arrival entry omitted docID")]
+    ArrivalDocIdMissing,
+    #[error("arrival query omitted next cursor")]
+    ArrivalNextMissing,
+    #[error("arrival query omitted snapshot head")]
+    ArrivalHeadMissing,
+    #[error("arrival cursor did not advance")]
+    ArrivalCursorStalled,
 }
 
 impl TransactionFailure for DurableTriggerError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         match self {
             Self::Config(error) => Some(error),
+            Self::Queue(error) => error.config_client_error(),
             _ => None,
         }
     }
@@ -407,14 +424,18 @@ pub(crate) async fn publish_goal_outcomes(
 pub async fn request_arrival_order(
     txn: &ConfigApplyTxn<'_>,
     doc_ids: &[String],
-) -> anyhow::Result<Vec<String>> {
+) -> Result<Vec<String>> {
     if doc_ids.is_empty() {
         return Ok(Vec::new());
     }
     const DOC_ID_BATCH_SIZE: usize = 512;
     let mut slots = Vec::new();
     for batch in doc_ids.chunks(DOC_ID_BATCH_SIZE) {
-        slots.extend(crate::lifecycle::queue::effective_slots(txn, batch).await?);
+        slots.extend(
+            crate::lifecycle::queue::effective_slots(txn, batch)
+                .await
+                .map_err(|error| DurableTriggerError::Queue(Box::new(error)))?,
+        );
     }
     if slots.is_empty() {
         return Ok(Vec::new());
@@ -433,31 +454,33 @@ pub async fn request_arrival_order(
             let page = &response["data"]["_documentArrivals"];
             let entries = page["entries"]
                 .as_array()
-                .ok_or_else(|| anyhow::anyhow!("arrival query omitted entries"))?;
+                .ok_or(DurableTriggerError::ArrivalEntriesMissing)?;
             for entry in entries {
                 let arrival = entry["cursor"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("arrival entry omitted cursor"))?
+                    .ok_or(DurableTriggerError::ArrivalCursorMissing)?
                     .parse::<u64>()
-                    .context("arrival entry has invalid cursor")?;
+                    .map_err(DurableTriggerError::ArrivalCursorInvalid)?;
                 ordered.push((
                     arrival,
                     entry["docID"]
                         .as_str()
-                        .ok_or_else(|| anyhow::anyhow!("arrival entry omitted docID"))?
+                        .ok_or(DurableTriggerError::ArrivalDocIdMissing)?
                         .to_owned(),
                 ));
             }
             let next = page["next"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("arrival query omitted next cursor"))?;
+                .ok_or(DurableTriggerError::ArrivalNextMissing)?;
             let head = page["head"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("arrival query omitted snapshot head"))?;
+                .ok_or(DurableTriggerError::ArrivalHeadMissing)?;
             if next == head || entries.is_empty() {
                 break;
             }
-            ensure!(next != cursor, "arrival cursor did not advance");
+            if next == cursor {
+                return Err(DurableTriggerError::ArrivalCursorStalled);
+            }
             cursor = next.into();
         }
     }

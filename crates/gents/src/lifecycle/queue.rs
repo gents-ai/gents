@@ -225,6 +225,9 @@ impl crate::config_client::TransactionFailure for QueueError {
             Self::Durable(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::Watcher(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
             _ => None,
         }
     }

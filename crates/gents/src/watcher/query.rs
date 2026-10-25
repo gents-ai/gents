@@ -5,6 +5,8 @@ use gents_protocol::row::AgentRequestRow;
 
 use super::{AgentRequest, DefraWatcher, WatcherError};
 
+type Result<T, E = WatcherError> = std::result::Result<T, E>;
+
 mod rows;
 use rows::{is_aged_background_completion_wakeup, is_pending, preclaim_signal, PreclaimSignal};
 
@@ -43,7 +45,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
 "#;
 
 impl DefraWatcher {
-    pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
+    pub async fn try_fetch_request(&self, doc_id: &str) -> Result<Option<AgentRequest>> {
         let escaped_doc_id = crate::graphql::escape_graphql_string(doc_id);
         let escaped_node_did = crate::graphql::escape_graphql_string(&self.node_did);
         let query = format!(
@@ -93,7 +95,7 @@ impl DefraWatcher {
         Ok(Some(request))
     }
 
-    pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
+    pub(super) async fn pending_requests(&self) -> Result<Vec<AgentRequest>> {
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let node_did = crate::graphql::escape_graphql_string(&self.node_did);
         let query = format!(
@@ -200,7 +202,7 @@ impl DefraWatcher {
     /// Candidate delivery must use the same native arrival order as the claim
     /// owner; timestamp ties otherwise hide the only claimable session head.
     /// Pre-journal rows retain their legacy order ahead of journaled requests.
-    async fn order_by_native_arrival(&self, rows: &mut [AgentRequestRow]) -> anyhow::Result<()> {
+    async fn order_by_native_arrival(&self, rows: &mut [AgentRequestRow]) -> Result<()> {
         let doc_ids = rows
             .iter()
             .filter_map(|row| row.doc_id.clone())
@@ -234,7 +236,7 @@ impl DefraWatcher {
         &self,
         row: &AgentRequestRow,
         request: &AgentRequest,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         if !is_pending(row) {
             return Ok(false);
         }
@@ -355,12 +357,12 @@ fn parse_active_runtime_rows(
 pub(crate) fn agent_request_from_mutation_response(
     response: &defra_node::QueryResponse,
     field: &str,
-) -> anyhow::Result<Option<AgentRequest>> {
+) -> Result<Option<AgentRequest>> {
     let row = crate::graphql::single_mutation_document(response, field)?
         .cloned()
         .map(serde_json::from_value::<AgentRequestRow>)
         .transpose()?;
-    Ok(row.map(AgentRequest::try_from).transpose()?)
+    row.map(AgentRequest::try_from).transpose()
 }
 
 fn prioritize_aged_background_wakes(

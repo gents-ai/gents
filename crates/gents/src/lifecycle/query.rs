@@ -54,7 +54,7 @@ pub(super) async fn request_view(
 pub(super) async fn claim_queue_allows(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
-) -> anyhow::Result<bool> {
+) -> Result<bool> {
     let owner = escape_graphql_string(&request.node_did);
     let nonterminal = RequestLifecycleState::graphql_list(
         RequestLifecycleState::ALL
@@ -106,7 +106,7 @@ pub(super) async fn claim_queue_allows(
         session_requests.append(&mut page);
         let Some(next) = next else { break };
         if after.as_deref() == Some(next.as_str()) {
-            return Err(LifecycleError::ClaimSessionCursorStalled.into());
+            return Err(LifecycleError::ClaimSessionCursorStalled);
         }
         after = Some(next);
     }
@@ -182,7 +182,7 @@ pub(super) async fn claim_queue_allows(
                 break;
             };
             if after_request.as_deref() == Some(next_request.as_str()) {
-                return Err(LifecycleError::ClaimRequestCursorStalled.into());
+                return Err(LifecycleError::ClaimRequestCursorStalled);
             }
             after_request = Some(next_request);
         }

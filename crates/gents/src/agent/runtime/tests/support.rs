@@ -630,11 +630,11 @@ pub(super) async fn update_backend_probe_status(
 }
 
 pub(super) struct ScriptedWatcher {
-    pub(super) rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
+    pub(super) rx: mpsc::Receiver<Result<AgentRequest, crate::watcher::WatcherError>>,
 }
 
 impl Watcher for ScriptedWatcher {
-    async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
+    async fn next_request(&mut self) -> Option<Result<AgentRequest, crate::watcher::WatcherError>> {
         self.rx.recv().await
     }
 }

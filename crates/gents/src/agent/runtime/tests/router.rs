@@ -7,12 +7,12 @@ use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 struct CountingWatcher {
-    rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
+    rx: mpsc::Receiver<Result<AgentRequest, crate::watcher::WatcherError>>,
     calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl crate::watcher::Watcher for CountingWatcher {
-    async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
+    async fn next_request(&mut self) -> Option<Result<AgentRequest, crate::watcher::WatcherError>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.rx.recv().await
     }

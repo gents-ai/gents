@@ -79,6 +79,7 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::lifecycle::CanonicalRecoveryError>(cause))
         .or_else(|| wrapped::<crate::lifecycle::queue::QueueError>(cause))
         .or_else(|| wrapped::<crate::trigger_engine::durable::DurableTriggerError>(cause))
+        .or_else(|| wrapped::<crate::watcher::WatcherError>(cause))
         .or_else(|| wrapped::<crate::trigger_engine::event_delivery::EventDeliveryError>(cause))
         .or_else(|| wrapped::<crate::trigger_engine::event_source::EventSourceError>(cause))
         .or_else(|| wrapped::<super::desired_state::DesiredStateError>(cause))

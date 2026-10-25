@@ -399,6 +399,8 @@ pub enum LifecycleError {
     Config(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
     Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Durable(#[from] crate::trigger_engine::durable::DurableTriggerError),
     #[error("background wake query has no data")]
     BackgroundWakeQueryData,
     #[error("decoding {what}")]
@@ -436,6 +438,9 @@ impl crate::config_client::TransactionFailure for LifecycleError {
         match self {
             Self::Config(error) => Some(error),
             Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Durable(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             _ => None,
