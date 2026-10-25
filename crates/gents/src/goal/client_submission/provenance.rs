@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
+use gents_protocol::output::{MessageRole, TranscriptMessage};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
@@ -32,6 +33,62 @@ pub async fn load_applied_opening_goal_ids(
     access: &dyn ConfigRead,
     observed: &[&AgentRequestRow],
 ) -> Result<BTreeMap<String, String>> {
+    Ok(load_applied_opening_goal_provenance(access, observed, &[])
+        .await?
+        .by_request_doc_id)
+}
+
+enum Hint<'a> {
+    Request(&'a AgentRequestRow),
+    Origin(&'a TranscriptMessage),
+}
+
+impl Hint<'_> {
+    fn doc_id(&self) -> Option<&str> {
+        match self {
+            Self::Request(row) => row.doc_id.as_deref(),
+            Self::Origin(message) => message.request_doc_id.as_deref(),
+        }
+    }
+
+    fn matches(&self, request: &AgentRequestRow) -> bool {
+        match self {
+            Self::Request(hint) => {
+                request.request_id == hint.request_id
+                    && request.node_did == hint.node_did
+                    && request.session_id == hint.session_id
+                    && request.requester_did == hint.requester_did
+                    && request.input == hint.input
+                    && request.content == hint.content
+            }
+            Self::Origin(message) => {
+                message.role == MessageRole::User
+                    && request.node_did.as_deref() == Some(message.node_did.as_str())
+                    && request.session_id.as_deref() == Some(message.session_id.as_str())
+                    && request.requester_did == message.requester_did
+                    && crate::lifecycle::input_message_owner(request).is_some_and(|(doc, key)| {
+                        Some(doc.as_str()) == message.request_doc_id.as_deref()
+                            && key == message.message_key
+                    })
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct OpeningGoalProvenance {
+    pub by_request_doc_id: BTreeMap<String, String>,
+    pub by_message_key: BTreeMap<String, String>,
+}
+
+/// Origins must come from canonical fork resolution, including its denial and
+/// metadata checks. A copied message can name the opening request without a
+/// local request projection; its original authored key still binds that input.
+pub async fn load_applied_opening_goal_provenance(
+    access: &dyn ConfigRead,
+    observed: &[&AgentRequestRow],
+    origins: &[&TranscriptMessage],
+) -> Result<OpeningGoalProvenance> {
     let hints = observed
         .iter()
         .copied()
@@ -43,12 +100,22 @@ pub async fn load_applied_opening_goal_ids(
                     .and_then(|input| input.goal_assignment.as_ref())
                     .is_some_and(|assignment| assignment.root_request_doc_id.is_none())
         })
+        .map(Hint::Request)
+        .chain(
+            origins
+                .iter()
+                .copied()
+                .filter(|message| {
+                    message.request_doc_id.is_some() && message.role == MessageRole::User
+                })
+                .map(Hint::Origin),
+        )
         .collect::<Vec<_>>();
-    let mut confirmed = BTreeMap::new();
+    let mut confirmed = OpeningGoalProvenance::default();
     for page in hints.chunks(PAGE_SIZE) {
         let ids = page
             .iter()
-            .filter_map(|row| row.doc_id.as_deref())
+            .filter_map(Hint::doc_id)
             .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
             .collect::<Vec<_>>()
             .join(", ");
@@ -66,16 +133,11 @@ pub async fn load_applied_opening_goal_ids(
         let candidates = page
             .iter()
             .filter_map(|hint| {
-                let mut rows = requests.iter().filter(|row| row.doc_id == hint.doc_id);
+                let mut rows = requests
+                    .iter()
+                    .filter(|row| row.doc_id.as_deref() == hint.doc_id());
                 let request = rows.next()?;
-                if rows.next().is_some()
-                    || request.request_id != hint.request_id
-                    || request.node_did != hint.node_did
-                    || request.session_id != hint.session_id
-                    || request.requester_did != hint.requester_did
-                    || request.input != hint.input
-                    || request.content != hint.content
-                {
+                if rows.next().is_some() || !hint.matches(request) {
                     return None;
                 }
                 let goal_id = super::super::request_assignment::verified_opening_goal_id(request)?;
@@ -125,8 +187,24 @@ pub async fn load_applied_opening_goal_ids(
                 continue;
             };
             if applied(candidate, control)? {
-                if let Some(doc) = candidate.request.doc_id.as_ref() {
-                    confirmed.insert(doc.clone(), candidate.goal_id.to_owned());
+                for hint in page.iter().filter(|hint| {
+                    hint.doc_id() == candidate.request.doc_id.as_deref()
+                        && hint.matches(candidate.request)
+                }) {
+                    match hint {
+                        Hint::Request(request) => {
+                            if let Some(doc) = request.doc_id.as_ref() {
+                                confirmed
+                                    .by_request_doc_id
+                                    .insert(doc.clone(), candidate.goal_id.to_owned());
+                            }
+                        }
+                        Hint::Origin(message) => {
+                            confirmed
+                                .by_message_key
+                                .insert(message.message_key.clone(), candidate.goal_id.to_owned());
+                        }
+                    }
                 }
             }
         }

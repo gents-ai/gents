@@ -1,13 +1,21 @@
 use std::collections::BTreeSet;
 
 use gents::config_client::ConfigRead;
+use gents::session::canonical_rows::TranscriptMessageRow;
+use gents_desktop_core::client::CanonicalTranscriptDependencies;
+use gents_protocol::output::{
+    origin::{resolve_origin, ObservedMessage},
+    MessagePublication, MessageRole,
+};
 use gents_protocol::row::AgentRequestRow;
 
-use crate::types::{DesktopSessionSnapshot, RenderedTimelineItem};
+use crate::types::{DesktopSessionSnapshot, ReconstructionState, RenderedTimelineItem};
 
 pub(crate) async fn attach(
     access: &dyn ConfigRead,
     requests: &[AgentRequestRow],
+    headers: &[TranscriptMessageRow],
+    dependencies: Option<&CanonicalTranscriptDependencies>,
     snapshot: &mut DesktopSessionSnapshot,
 ) {
     let mut read = BTreeSet::new();
@@ -41,7 +49,54 @@ pub(crate) async fn attach(
         }
         candidates.push(request);
     }
-    let confirmed = match gents::goal::load_applied_opening_goal_ids(access, &candidates).await {
+    let observed = headers
+        .iter()
+        .chain(
+            dependencies
+                .into_iter()
+                .flat_map(|deps| &deps.origin_headers),
+        )
+        .map(|row| ObservedMessage {
+            doc_id: &row.doc_id,
+            message: &row.message,
+        })
+        .collect::<Vec<_>>();
+    let denied = dependencies.map_or(&[][..], |deps| deps.denied_header_doc_ids.as_slice());
+    let copied = headers
+        .iter()
+        .filter(|row| {
+            row.message.session_id == snapshot.session_id
+                && snapshot.node_did.as_deref() == Some(row.message.node_did.as_str())
+                && row.message.role == MessageRole::User
+                && matches!(row.message.publication, MessagePublication::Fork { .. })
+                && snapshot.messages.iter().any(|message| {
+                    message.message_key == row.message.message_key
+                        && message.reconstruction_state == ReconstructionState::Ready
+                })
+        })
+        .filter_map(|row| {
+            let origin = resolve_origin(
+                &observed,
+                denied,
+                &row.doc_id,
+                &row.message.node_did,
+                row.message.requester_did.as_deref(),
+            )
+            .ok()?;
+            Some((row.message.message_key.as_str(), origin.message))
+        })
+        .collect::<Vec<_>>();
+    let origins = copied
+        .iter()
+        .map(|(_, message)| *message)
+        .collect::<Vec<_>>();
+    let confirmed = match gents::goal::load_applied_opening_goal_provenance(
+        access,
+        &candidates,
+        &origins,
+    )
+    .await
+    {
         Ok(confirmed) => confirmed,
         Err(error) => {
             tracing::warn!(error = %error, "opening Goal provenance unavailable");
@@ -52,7 +107,7 @@ pub(crate) async fn attach(
         let Some(doc) = request.doc_id.as_deref() else {
             continue;
         };
-        let Some(goal_id) = confirmed.get(doc) else {
+        let Some(goal_id) = confirmed.by_request_doc_id.get(doc) else {
             continue;
         };
         let owner = gents::lifecycle::input_message_owner(request);
@@ -102,4 +157,30 @@ pub(crate) async fn attach(
             }
         }
     }
+    for (key, origin) in copied {
+        let Some(goal_id) = confirmed.by_message_key.get(&origin.message_key) else {
+            continue;
+        };
+        for message in &mut snapshot.messages {
+            if message.message_key == key {
+                message.started_goal_id = Some(goal_id.clone());
+            }
+        }
+        for item in &mut snapshot.timeline_items {
+            if let RenderedTimelineItem::UserMessage {
+                item_key,
+                started_goal_id,
+                ..
+            } = item
+            {
+                if item_key == key {
+                    *started_goal_id = Some(goal_id.clone());
+                }
+            }
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "goal_provenance/tests.rs"]
+pub(crate) mod tests;
