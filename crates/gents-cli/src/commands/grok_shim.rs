@@ -16,95 +16,14 @@ mod session_record;
 mod sessions;
 mod task_control;
 #[cfg(test)]
-pub(crate) mod test_fixtures;
+pub(crate) use super::shim_test_fixtures as test_fixtures;
 pub(crate) mod turn;
 mod usage;
 mod workflow_catalog;
 mod workflow_command;
 
 #[cfg(test)]
-async fn seed_test_agent_configuration(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    agent_id: &str,
-    default_agent_id: &str,
-    model_name: &str,
-    enabled: bool,
-) {
-    gents::ensure_node(node, node_did)
-        .await
-        .expect("seed test principal");
-    gents::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "grok.test_agent_configuration",
-        |txn| {
-            Box::pin(async move {
-                use gents::config_client::{
-                    apply_desired_state_plan, read_desired_state_record_in_txn,
-                    DesiredStateApplyDocument, DesiredStateApplyPlan,
-                };
-                use gents::Collection;
-
-                let (_, mut principal) =
-                    read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
-                        .await?
-                        .expect("seeded principal");
-                principal["default_agent_id"] = default_agent_id.into();
-                let backend_id = format!("{agent_id}-backend");
-                let profile_id = format!("{agent_id}-inference");
-                let values = [
-                    (Collection::Node, principal),
-                    (
-                        Collection::InferenceBackend,
-                        serde_json::json!({
-                            "node_did": node_did,
-                            "backend_id": backend_id,
-                            "name": format!("{agent_id} test backend"),
-                            "provider_kind": "OpenAiCompatible",
-                            "openai_wire_api": "chat_completions",
-                            "endpoint": "http://127.0.0.1:1/v1",
-                            "auth": {"kind": "unauthenticated"},
-                            "enabled": true
-                        }),
-                    ),
-                    (
-                        Collection::InferenceProfile,
-                        serde_json::json!({
-                            "node_did": node_did,
-                            "profile_id": profile_id,
-                            "backend_id": backend_id,
-                            "model_name": model_name
-                        }),
-                    ),
-                    (
-                        Collection::Agent,
-                        serde_json::json!({
-                            "node_did": node_did,
-                            "agent_id": agent_id,
-                            "display_name": agent_id,
-                            "inference_profile_id": profile_id,
-                            "enabled": enabled
-                        }),
-                    ),
-                ];
-                let plan = DesiredStateApplyPlan::new(
-                    values
-                        .into_iter()
-                        .map(|(collection, value)| DesiredStateApplyDocument {
-                            collection,
-                            add: value.clone(),
-                            update: value,
-                        })
-                        .collect(),
-                )?;
-                apply_desired_state_plan(txn, &plan).await
-            })
-        },
-    )
-    .await
-    .expect("seed canonical test agent configuration");
-}
+use super::shim_test_fixtures::seed_test_agent_configuration;
 
 use crate::commands::grok_shim::projection::resolve_bound_model_context;
 use crate::commands::grok_shim::server::{
