@@ -102,6 +102,23 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::tool_call_lifecycle::ToolCallRecoveryError>(cause))
         .or_else(|| wrapped::<crate::optimization::target::TargetError>(cause))
         .or_else(|| wrapped::<crate::optimization::job::OptimizationError>(cause))
+        .or_else(|| wrapped::<super::agent_behavior::AgentWriteError>(cause))
+        .or_else(|| wrapped::<crate::application_write::ApplicationWriteError>(cause))
+        .or_else(|| wrapped::<crate::background_completion_diagnostics::BackgroundCompletionDiagnosticsError>(cause))
+        .or_else(|| wrapped::<crate::callback::plugin::CallbackPluginError>(cause))
+        .or_else(|| wrapped::<crate::goal::GoalError>(cause))
+        .or_else(|| wrapped::<crate::hook::HookError>(cause))
+        .or_else(|| wrapped::<super::inference_backend::InferenceBackendError>(cause))
+        .or_else(|| wrapped::<super::inference_profile::InferenceProfileError>(cause))
+        .or_else(|| wrapped::<crate::plugin_job::records::JobRecordsError>(cause))
+        .or_else(|| wrapped::<crate::defra_query::NativeFilterError>(cause))
+        .or_else(|| wrapped::<crate::application_write::PluginWritesError>(cause))
+        .or_else(|| wrapped::<super::profile_switch::ProfileSwitchError>(cause))
+        .or_else(|| wrapped::<crate::tool_call_lifecycle::ToolCallLifecycleError>(cause))
+        .or_else(|| wrapped::<crate::tool_call_lifecycle::query::ToolCallQueryError>(cause))
+        .or_else(|| wrapped::<crate::tool_surface::ToolSurfaceError>(cause))
+        .or_else(|| wrapped::<super::tools::ToolsWriteError>(cause))
+        .or_else(|| wrapped::<crate::tool_call_lifecycle::TransitionError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {
