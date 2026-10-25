@@ -112,10 +112,9 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
     let mut bootstrap = editor_store.then(|| {
         crate::editor_store::frames(tokio::io::join(tokio::io::stdin(), tokio::io::stdout()))
     });
-    let build = installation_build().await?;
     let mut bootstrap_finished = false;
     let connection = tokio::time::timeout(Duration::from_secs(90), async {
-        if matches!(inspect_installation(&paths, &build).await?, Installation::Current) {
+        if matches!(inspect_installation(&paths).await?, Installation::Current) {
             let connection = local::connect(&paths).await?;
             if let Some(bootstrap) = &mut bootstrap {
                 crate::editor_store::send(bootstrap, &crate::editor_store::Message::Ready).await?;
@@ -124,7 +123,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
             return Ok(connection);
         }
         let _startup = local::startup_lock(&paths).await?;
-        let observed = inspect_installation(&paths, &build).await?;
+        let observed = inspect_installation(&paths).await?;
         if matches!(observed, Installation::Current) {
             let connection = local::connect(&paths).await?;
             if let Some(bootstrap) = &mut bootstrap {
@@ -146,7 +145,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 bail!(message);
             }
             retire_installation(&paths, &previous).await?;
-            wait_for_store_release(&paths).await?;
+            gents::home::wait_for_store_release(paths.root(), paths.node_data_dir()).await?;
             gents_protocol::client_installation::State {
                 phase: gents_protocol::client_installation::Phase::Released,
                 attachments: 0,
@@ -284,14 +283,14 @@ async fn installation_build() -> Result<String> {
     .context("reading client installation build identity")?
 }
 
-async fn inspect_installation(paths: &DesktopPaths, build: &str) -> Result<Installation> {
+async fn inspect_installation(paths: &DesktopPaths) -> Result<Installation> {
     let Ok(connection) = local::connect(paths).await else {
         return Ok(Installation::Missing);
     };
-    inspect_connection(connection, build).await
+    inspect_connection(connection).await
 }
 
-async fn inspect_connection<S>(connection: S, build: &str) -> Result<Installation>
+async fn inspect_connection<S>(connection: S) -> Result<Installation>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -315,19 +314,22 @@ where
             && hello["commands"].as_array().is_some_and(|commands| commands.iter().all(serde_json::Value::is_string)),
         "the shared client returned invalid initialization metadata; reconnect and inspect its output if this repeats"
     );
-    let current = hello["version"] == PROTOCOL_VERSION
-        && (hello["installationBuild"] == build
-            || (hello["installationBuild"].is_null() && hello["installationControlVersion"] == 0))
-        && hello["maxFrameBytes"] == MAX_FRAME_BYTES
-        && hello["commands"].as_array().is_some_and(|commands| {
-            gents_desktop_bridge::host::protocol::ClientCommand::NAMES
-                .iter()
-                .all(|name| {
-                    commands
-                        .iter()
-                        .any(|command| command.as_str() == Some(*name))
-                })
-        });
+    let required_commands = gents_desktop_bridge::host::protocol::ClientCommand::NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    let available_commands = hello["commands"]
+        .as_array()
+        .expect("validated command inventory")
+        .iter()
+        .map(|command| command.as_str().expect("validated command name").to_owned())
+        .collect::<Vec<_>>();
+    let current = gents_protocol::client_installation::can_reuse(
+        hello["version"] == PROTOCOL_VERSION,
+        hello["maxFrameBytes"] == MAX_FRAME_BYTES,
+        &required_commands,
+        &available_commands,
+    );
     if current {
         Ok(Installation::Current)
     } else {
@@ -384,21 +386,6 @@ async fn retire_installation(paths: &DesktopPaths, expected: &str) -> Result<()>
     Ok(())
 }
 
-async fn wait_for_store_release(paths: &DesktopPaths) -> Result<()> {
-    loop {
-        match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
-            Ok(reservation) => {
-                drop(reservation);
-                return Ok(());
-            }
-            Err(error) if error.downcast_ref::<gents::home::StoreLockHeld>().is_some() => {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-            Err(error) => return Err(error).context("waiting for the previous client store owner"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,13 +408,21 @@ mod tests {
             ),
             (json!({}), false),
             (
-                json!({ "installationBuild": "previous", "installationControlVersion": 1 }),
+                json!({ "installationBuild": "different-compatible-build", "installationControlVersion": 1 }),
+                true,
+            ),
+            (
+                json!({ "installationBuild": "different-incompatible-build", "installationControlVersion": 1 }),
                 false,
             ),
         ] {
             let (client, server) = tokio::io::duplex(64 * 1024);
+            let mut commands = ClientCommand::NAMES.to_vec();
+            if metadata["installationBuild"] == "different-incompatible-build" {
+                commands.retain(|name| *name != ClientCommand::NAMES[0]);
+            }
             let mut hello = json!({ "kind": "hello", "version": PROTOCOL_VERSION,
-                "commands": ClientCommand::NAMES, "maxFrameBytes": MAX_FRAME_BYTES });
+                "commands": commands, "maxFrameBytes": MAX_FRAME_BYTES });
             hello
                 .as_object_mut()
                 .unwrap()
@@ -447,7 +442,7 @@ mod tests {
                     .await
                     .unwrap();
             };
-            let (observed, ()) = tokio::join!(inspect_connection(client, "expected"), serve);
+            let (observed, ()) = tokio::join!(inspect_connection(client), serve);
             assert_eq!(
                 matches!(observed.unwrap(), Installation::Current),
                 usable,
@@ -472,7 +467,7 @@ mod tests {
                         .unwrap();
                 }
             };
-            let (observed, ()) = tokio::join!(inspect_connection(client, "expected"), serve);
+            let (observed, ()) = tokio::join!(inspect_connection(client), serve);
             assert!(
                 observed.is_err(),
                 "an unidentified host must not be selected for retirement"

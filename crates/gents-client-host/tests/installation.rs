@@ -143,9 +143,15 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     .await
     .unwrap();
     let listener = local::LocalListener::bind(&paths).await.unwrap();
-    let host = Arc::new(ClientHost::for_installation(
+    let mut previous_commands = protocol::ClientCommand::NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    previous_commands.retain(|name| name != protocol::ClientCommand::NAMES[0]);
+    let host = Arc::new(ClientHost::for_installation_with_command_inventory(
         Arc::clone(&core),
         "previous-build".into(),
+        previous_commands,
     ));
     let old = tokio::spawn(async move {
         listener
@@ -254,4 +260,80 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
         "retained-session"
     );
     reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn different_build_with_compatible_inventory_is_reused_without_retirement() {
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use gents_desktop_bridge::host::{protocol, ClientHost};
+    use serde_json::{json, Value};
+    use tokio_util::codec::LengthDelimitedCodec;
+    use tokio_util::sync::CancellationToken;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = DesktopPaths::from_root(dir.path().join("client"));
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+            .await
+            .unwrap(),
+    );
+    let stop = CancellationToken::new();
+    let listener = local::LocalListener::bind(&paths).await.unwrap();
+    let host = Arc::new(ClientHost::for_installation(
+        Arc::clone(&core),
+        "different-compatible-build".into(),
+    ));
+    let server_stop = stop.clone();
+    let server_core = Arc::clone(&core);
+    let server = tokio::spawn(async move {
+        listener.serve(host, server_stop).await.unwrap();
+        server_core.shutdown().await.unwrap();
+    });
+
+    let mut old_host_observer = LengthDelimitedCodec::builder()
+        .max_frame_length(protocol::MAX_FRAME_BYTES)
+        .new_framed(local::connect(&paths).await.unwrap());
+    old_host_observer
+        .send(Bytes::from(
+            serde_json::to_vec(&json!({"kind":"hello", "version":protocol::PROTOCOL_VERSION}))
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let hello: Value =
+        serde_json::from_slice(&old_host_observer.next().await.unwrap().unwrap()).unwrap();
+    assert_eq!(hello["installationBuild"], "different-compatible-build");
+
+    let mut attachment = Attachment::start(&paths).await;
+    assert_eq!(
+        attachment.snapshot(1).await["client"]["localPeerId"],
+        core.local_peer_id()
+    );
+    assert!(
+        !server.is_finished(),
+        "a compatible different build was retired"
+    );
+    let hello: Value = {
+        let mut current = LengthDelimitedCodec::builder()
+            .max_frame_length(protocol::MAX_FRAME_BYTES)
+            .new_framed(local::connect(&paths).await.unwrap());
+        current
+            .send(Bytes::from(
+                serde_json::to_vec(&json!({"kind":"hello", "version":protocol::PROTOCOL_VERSION}))
+                    .unwrap(),
+            ))
+            .await
+            .unwrap();
+        serde_json::from_slice(&current.next().await.unwrap().unwrap()).unwrap()
+    };
+    assert_eq!(hello["installationBuild"], "different-compatible-build");
+
+    attachment.close().await;
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .expect("compatible host did not stop after cancellation")
+        .unwrap();
+    assert!(old_host_observer.next().await.is_none());
 }

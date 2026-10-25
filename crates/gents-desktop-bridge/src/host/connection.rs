@@ -57,10 +57,7 @@ where
     frames
         .send(pack(HostMessage::Hello {
             version: PROTOCOL_VERSION,
-            commands: ClientCommand::NAMES
-                .iter()
-                .map(|name| (*name).to_owned())
-                .collect(),
+            commands: host.advertised_commands.clone(),
             max_frame_bytes: MAX_FRAME_BYTES,
             installation_build: host.installation_build.clone(),
             installation_control_version: if host.installation_build.is_some() {

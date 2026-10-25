@@ -47,4 +47,20 @@ def casesJson : String :=
     [.retire, .attach, .replace true, .detach, .release, .detach, .release, .replace false, .replace true]
   (toJson (retirement :: generated)).compress
 
+private def compatibilityCase (protocolMatches frameLimitMatches : Bool)
+    (requiredCommands availableCommands : List String) : Json := Json.mkObj
+  [("protocolMatches", toJson protocolMatches),
+   ("frameLimitMatches", toJson frameLimitMatches),
+   ("requiredCommands", toJson requiredCommands),
+   ("availableCommands", toJson availableCommands),
+   ("reuse", toJson (canReuse protocolMatches frameLimitMatches requiredCommands availableCommands))]
+
+def compatibilityCasesJson : String :=
+  let commandSets := [([], []), (["a"], ["a"]), (["a"], ["a", "b"]),
+    (["a", "b"], ["a"]), (["a"], [])]
+  (toJson (([false, true].flatMap fun protocolMatches =>
+    [false, true].flatMap fun frameMatches =>
+      commandSets.map fun (required, available) =>
+        compatibilityCase protocolMatches frameMatches required available))).compress
+
 end Conformance.ClientInstallation

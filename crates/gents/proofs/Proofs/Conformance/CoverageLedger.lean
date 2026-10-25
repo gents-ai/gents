@@ -1107,6 +1107,11 @@ def caseCoverage : List CoverageEntry :=
       "client_installation::tests::generated_installation_traces_preserve_draining_and_replacement_guards")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_installation_compatibility_cases"
+      "ClientInstallationCompatibilityCases"
+      "client_installation::compatibility_tests::generated_installation_compatibility_matches_lean")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_observation_scope_cases"
       "ClientObservationScopeCases"
       "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")

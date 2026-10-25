@@ -332,6 +332,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"client_installation_cases\":"
       ++ Conformance.ClientInstallation.casesJson ++ ","
+    ++ "\"client_installation_compatibility_cases\":"
+      ++ Conformance.ClientInstallation.compatibilityCasesJson ++ ","
     ++ "\"client_observation_scope_cases\":"
       ++ Conformance.ClientObservationScope.casesJson ++ ","
     ++ "\"client_settings_cases\":"

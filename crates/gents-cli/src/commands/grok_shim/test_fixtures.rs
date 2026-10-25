@@ -2,13 +2,12 @@ use std::sync::Arc;
 
 pub(crate) use crate::commands::test_fixtures::{
     insert_output_segment, insert_transcript_header, next_request_sequence,
-    seed_background_receipt, seed_canonical_tool_call, seed_job_row,
+    seed_canonical_tool_call, seed_job_row,
 };
 
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
 use gents::defra_node::QueryRequest;
-use gents::graphql::{ensure_no_errors, single_mutation_document};
+use gents::graphql::single_mutation_document;
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -18,7 +17,6 @@ use gents_protocol::output::{
     OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, ReasoningPart, SegmentRun,
     SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
 };
-use serde_json::json;
 
 #[path = "../../../../gents/tests/support/streaming_backend.rs"]
 #[expect(

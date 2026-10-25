@@ -22,6 +22,20 @@ inductive Action where
   | replace (startupReserved : Bool)
   deriving DecidableEq, Repr
 
+/-- Reuse is based on the wire contract the caller needs. Executable identity
+is retained for fencing a later retirement request, but it cannot establish
+which of two builds is newer. Same-protocol command changes therefore remain
+additive; incompatible wire changes require a protocol version change. -/
+def canReuse (protocolMatches frameLimitMatches : Bool)
+    (requiredCommands availableCommands : List String) : Bool :=
+  protocolMatches && frameLimitMatches && requiredCommands.all availableCommands.contains
+
+theorem compatible_host_reuses_regardless_of_build_identity
+    (requiredCommands availableCommands : List String)
+    (commandsPresent : requiredCommands.all availableCommands.contains = true) :
+    canReuse true true requiredCommands availableCommands = true := by
+  simp [canReuse, commandsPresent]
+
 /-- The listener owns admission and its store lock. Retirement stops new
 attachments; existing attachments remain counted until their non-cancellable
 operations settle through the connection owner. Only then may shutdown release

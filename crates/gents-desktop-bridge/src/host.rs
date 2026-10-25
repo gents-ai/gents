@@ -31,6 +31,7 @@ use protocol::ClientCommand;
 pub struct ClientHost {
     core: Arc<ClientCore>,
     installation_build: Option<String>,
+    advertised_commands: Vec<String>,
     policy: ResolvedBridgePolicy,
     speech: speech::SpeechClient,
     pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
@@ -49,12 +50,29 @@ impl ClientHost {
         host
     }
 
+    pub fn for_installation_with_command_inventory(
+        core: Arc<ClientCore>,
+        build: String,
+        commands: Vec<String>,
+    ) -> Self {
+        assert!(commands
+            .iter()
+            .all(|command| { ClientCommand::NAMES.contains(&command.as_str()) }));
+        let mut host = Self::for_installation(core, build);
+        host.advertised_commands = commands;
+        host
+    }
+
     pub(crate) fn with_accounts(
         core: Arc<ClientCore>,
         pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
     ) -> Self {
         Self {
             installation_build: None,
+            advertised_commands: ClientCommand::NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
             policy: ResolvedBridgePolicy {
                 desktop_paths: core.paths().clone(),
                 node_home: None,

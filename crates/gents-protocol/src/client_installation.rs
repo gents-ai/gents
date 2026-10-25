@@ -22,6 +22,19 @@ pub enum Action {
     Replace { startup_reserved: bool },
 }
 
+pub fn can_reuse(
+    protocol_matches: bool,
+    frame_limit_matches: bool,
+    required_commands: &[String],
+    available_commands: &[String],
+) -> bool {
+    protocol_matches
+        && frame_limit_matches
+        && required_commands
+            .iter()
+            .all(|required| available_commands.contains(required))
+}
+
 impl State {
     pub fn step(self, action: Action) -> Option<Self> {
         let mut next = self;
@@ -44,6 +57,41 @@ impl State {
             _ => return None,
         }
         Some(next)
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::can_reuse;
+    use serde_json::Value;
+
+    #[test]
+    fn generated_installation_compatibility_matches_lean() {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["client_installation_compatibility_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let strings = |key: &str| {
+                case[key]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                can_reuse(
+                    case["protocolMatches"].as_bool().unwrap(),
+                    case["frameLimitMatches"].as_bool().unwrap(),
+                    &strings("requiredCommands"),
+                    &strings("availableCommands"),
+                ),
+                case["reuse"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
     }
 }
 

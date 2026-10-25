@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use gents_protocol::session::SessionArchiveVisibility;
 use serde::{Deserialize, Serialize};
 
+use crate::snapshot::{session_summary_order_key, SessionSummaryOrderKey};
 use crate::types::{SessionHistoryPage, SessionHistoryRequest, SessionSummary};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -10,10 +11,11 @@ struct Cursor {
     node_did: String,
     visibility: SessionArchiveVisibility,
     query: String,
-    session_id: String,
-    requester_did: Option<String>,
+    order: SessionSummaryOrderKey,
 }
 
+/// Pages follow the live runtime projection. Rows that move ahead of a saved
+/// cursor are visible after refreshing the history list.
 pub async fn session_history(
     core: &gents_desktop_core::client::ClientCore,
     request: SessionHistoryRequest,
@@ -73,14 +75,11 @@ fn select_page(
         })
         .collect::<Vec<_>>();
     if let Some(cursor) = cursor {
-        let offset = sessions
-            .iter()
-            .position(|session| {
-                session.session_id == cursor.session_id
-                    && session.requester_did == cursor.requester_did
-            })
-            .context("history changed since this page; reload the history list")?;
-        sessions.drain(..=offset);
+        sessions.retain(|session| {
+            session_summary_order_key(session)
+                .cmp(&cursor.order)
+                .is_gt()
+        });
     }
     let has_more = sessions.len() > limit;
     sessions.truncate(limit);
@@ -92,8 +91,7 @@ fn select_page(
                     node_did: request.node_did,
                     visibility: request.visibility,
                     query,
-                    session_id: last.session_id.clone(),
-                    requester_did: last.requester_did.clone(),
+                    order: session_summary_order_key(last),
                 })
             })
             .transpose()?

@@ -180,8 +180,8 @@ impl UnresolvedSubmission {
 ///
 /// Returns `Ok(true)` only when the scoped row matches the request identity and
 /// the prepared admission signature; a row that matches the identity but not
-/// the signature is an error, never an absence. Non-GraphQL access has no
-/// remote owner to reconcile against, so it reports absence.
+/// the signature is an error, never an absence. Local access reads the same
+/// receipt from the embedded owner.
 pub(super) async fn owner_receipt(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
@@ -192,28 +192,31 @@ pub(super) async fn owner_receipt(
 }
 
 async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
-    let ConfigAccess::Graphql(endpoint) = access else {
-        return Ok(false);
-    };
     let scope = gents::session::session_scope_filter(
         &create.node_did,
         &create.session_id,
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
     );
     let logical = escape_graphql_string(&create.request_id);
-    let response = gents::config_client::query_graphql_with_options(
-        endpoint,
-        &format!(
-            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
-            gents::SIGNED_REQUEST_FIELDS
-        ),
-        GraphqlRequestOptions {
-            timeout: Duration::from_secs(30),
-            max_attempts: 1,
-            retry_backoff: Duration::ZERO,
-        },
-    )
-    .await?;
+    let query = format!(
+        "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
+        gents::SIGNED_REQUEST_FIELDS
+    );
+    let response = match access {
+        ConfigAccess::Graphql(endpoint) => {
+            gents::config_client::query_graphql_with_options(
+                endpoint,
+                &query,
+                GraphqlRequestOptions {
+                    timeout: Duration::from_secs(30),
+                    max_attempts: 1,
+                    retry_backoff: Duration::ZERO,
+                },
+            )
+            .await?
+        }
+        ConfigAccess::Local(_) => access.execute(&query).await?,
+    };
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -267,6 +270,12 @@ pub(super) async fn commit_signed_submission(
         return Err(pending.outcome_unknown(Some(error)));
     }
     if !matches!(access, ConfigAccess::Graphql(_)) {
+        if owner_rejected(&error) && reports_existing_request(&error) {
+            return match owner_receipt(access, &pending.create).await {
+                Ok(true) => Ok(pending.result),
+                Ok(false) | Err(_) => Err(pending.outcome_unknown(Some(error))),
+            };
+        }
         return Err(error);
     }
     let receipt_unreadable = error
@@ -760,6 +769,46 @@ mod tests {
             .expect("a matching receipt proves the earlier commit");
 
         assert_eq!(submitted, test_result());
+    }
+
+    #[tokio::test]
+    async fn local_receipt_confirms_the_exact_committed_signed_request() {
+        let home = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        node.add_schema(gents_protocol::schemas::AGENT_REQUEST)
+            .await
+            .unwrap();
+        let access = ConfigAccess::local(std::sync::Arc::clone(&node));
+        let pending = test_pending();
+
+        access
+            .write("test.local_submission_receipt", &pending.mutation)
+            .await
+            .unwrap();
+
+        let resolved = resolve_unresolved_submission(&access, &pending)
+            .await
+            .expect("the embedded signed receipt proves the original commit");
+        assert_eq!(resolved, pending.result);
+        let rows = access
+            .execute(&format!(
+                "{{AgentRequest(filter:{{request_id:{{_eq:\"{}\"}}}}){{request_id}}}}",
+                escape_graphql_string(&pending.request_id)
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rows["data"]["AgentRequest"].as_array().unwrap().len(), 1);
+
+        let mut different_signature = pending.create.clone();
+        different_signature.admission.signature[0] ^= 1;
+        assert!(owner_receipt(&access, &different_signature).await.is_err());
+        node.shutdown().await;
     }
 
     #[tokio::test]
