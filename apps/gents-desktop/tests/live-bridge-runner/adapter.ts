@@ -158,6 +158,10 @@ export function createBridgeHttpAdapter(
     },
     editPendingQueue: async (request) =>
       client.postJson("/desktop/queue/edit", request),
+    setSessionArchived: async (request) =>
+      client.postJson("/desktop/session/archive", request),
+    sessionHistory: async (request) =>
+      client.postJson("/desktop/session/history", request),
     renameSession: async (request) => {
       await client.postJson("/desktop/session/rename", request);
     },

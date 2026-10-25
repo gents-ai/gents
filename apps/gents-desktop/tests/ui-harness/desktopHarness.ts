@@ -763,6 +763,8 @@ export function createDesktopUiHarness(
           requesterDid: null,
           latestRequestDocId: null,
           closedAt: null,
+          archivedAt: null,
+          archiveRevision: "0",
           tags: [],
           provenance,
           title: session.title,
@@ -869,6 +871,12 @@ export function createDesktopUiHarness(
     },
     async editPendingQueue() {
       throw new Error("Pending queue edits are unavailable in this fixture.");
+    },
+    async setSessionArchived() {
+      throw new Error("Archive controls are unavailable in this fixture.");
+    },
+    async sessionHistory() {
+      throw new Error("Archive history is unavailable in this fixture.");
     },
     async forkSessionBeforeMessage() {
       throw new Error("Message editing is unavailable in this fixture.");
