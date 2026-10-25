@@ -1,3 +1,4 @@
+import Proofs.StorageFailure
 import Proofs.Basic
 import Proofs.Process
 import Proofs.Persistence
@@ -14,6 +15,7 @@ import Proofs.TitleText
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
 import Proofs.AgentSession
+import Proofs.Session.Archive
 import Proofs.SessionFork
 import Proofs.SessionRecovery
 import Proofs.SessionHydration

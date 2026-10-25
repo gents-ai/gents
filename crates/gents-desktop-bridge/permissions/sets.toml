@@ -32,6 +32,7 @@ permissions = [
   "allow-desktop-request-attachments",
   "allow-desktop-session-live-delta",
   "allow-desktop-session-rows",
+  "allow-desktop-session-history",
   "allow-desktop-session-goal",
 ]
 
@@ -52,14 +53,17 @@ permissions = ["allow-desktop-tool-surface-explain"]
 
 [[set]]
 identifier = "chat-write"
-description = "Chat submission, branching, and rename"
+description = "Chat submission, branching, rename and archive"
 permissions = [
   "allow-desktop-chat-send",
+  "allow-desktop-chat-submission-recover",
+  "allow-desktop-chat-submission-acknowledge",
   "allow-desktop-pending-queue-edit",
   "allow-desktop-pending-message-steer",
   "allow-desktop-goal-control",
   "allow-desktop-session-fork-before-message",
   "allow-desktop-session-rename",
+  "allow-desktop-session-archive",
 ]
 
 [[set]]

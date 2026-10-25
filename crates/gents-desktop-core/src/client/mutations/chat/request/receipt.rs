@@ -17,7 +17,24 @@ use serde_json::Value;
 
 use super::SubmittedRequest;
 
+pub(crate) mod correlated;
+pub(crate) mod delivery;
 pub(crate) mod journal;
+
+/// Confirmed rejection of the original caller-bound signed preparation.
+/// The original identity remains recoverable until the caller acknowledges it.
+#[derive(Debug)]
+pub struct SubmissionNotDelivered {
+    pub request: SubmittedRequest,
+}
+
+impl std::fmt::Display for SubmissionNotDelivered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "request {} was not delivered", self.request.request_id)
+    }
+}
+
+impl std::error::Error for SubmissionNotDelivered {}
 
 /// A prepared owner submission whose commit outcome could not be determined.
 ///
@@ -54,6 +71,7 @@ pub struct SubmissionOutcomeUnknown {
     pub request_id: String,
     pub session_id: String,
     pub pending: UnresolvedSubmission,
+    pub cause: Option<anyhow::Error>,
 }
 
 impl std::fmt::Display for SubmissionOutcomeUnknown {
@@ -66,7 +84,11 @@ impl std::fmt::Display for SubmissionOutcomeUnknown {
     }
 }
 
-impl std::error::Error for SubmissionOutcomeUnknown {}
+impl std::error::Error for SubmissionOutcomeUnknown {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_ref().map(|cause| cause.as_ref())
+    }
+}
 
 /// An earlier send whose delivery cannot be decided without its signed
 /// payload (for example after a restart).
@@ -98,6 +120,21 @@ impl std::error::Error for DeliveryUnconfirmed {}
 const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
 
 impl UnresolvedSubmission {
+    fn validate_binding(&self, request_id: &str) -> Result<()> {
+        ensure!(
+            self.request_id == request_id
+                && self.request_id == self.create.request_id
+                && self.node_did == self.create.node_did
+                && self.session_id == self.create.session_id
+                && self.result.request_id == self.request_id
+                && self.result.node_did == self.node_did
+                && self.result.session_id == self.session_id
+                && self.mutation == self.create.graphql_mutation().map_err(anyhow::Error::msg)?,
+            "retained submission is inconsistent with its signed request"
+        );
+        Ok(())
+    }
+
     pub(crate) fn accepts_composer_content(&self, content: &str) -> bool {
         if content.trim().is_empty() {
             return true;
@@ -121,7 +158,7 @@ impl UnresolvedSubmission {
         })
     }
 
-    fn outcome_unknown(&self) -> anyhow::Error {
+    fn outcome_unknown(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
         tracing::warn!(
             action = "chat_submit_receipt_unresolved",
             request_id = %self.request_id,
@@ -133,6 +170,7 @@ impl UnresolvedSubmission {
             request_id: self.request_id.clone(),
             session_id: self.session_id.clone(),
             pending: self.clone(),
+            cause,
         }
         .into()
     }
@@ -142,8 +180,8 @@ impl UnresolvedSubmission {
 ///
 /// Returns `Ok(true)` only when the scoped row matches the request identity and
 /// the prepared admission signature; a row that matches the identity but not
-/// the signature is an error, never an absence. Non-GraphQL access has no
-/// remote owner to reconcile against, so it reports absence.
+/// the signature is an error, never an absence. Local access reads the same
+/// receipt from the embedded owner.
 pub(super) async fn owner_receipt(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
@@ -154,28 +192,31 @@ pub(super) async fn owner_receipt(
 }
 
 async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
-    let ConfigAccess::Graphql(endpoint) = access else {
-        return Ok(false);
-    };
     let scope = gents::session::session_scope_filter(
         &create.node_did,
         &create.session_id,
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
     );
     let logical = escape_graphql_string(&create.request_id);
-    let response = gents::config_client::query_graphql_with_options(
-        endpoint,
-        &format!(
-            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
-            gents::SIGNED_REQUEST_FIELDS
-        ),
-        GraphqlRequestOptions {
-            timeout: Duration::from_secs(30),
-            max_attempts: 1,
-            retry_backoff: Duration::ZERO,
-        },
-    )
-    .await?;
+    let query = format!(
+        "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
+        gents::SIGNED_REQUEST_FIELDS
+    );
+    let response = match access {
+        ConfigAccess::Graphql(endpoint) => {
+            gents::config_client::query_graphql_with_options(
+                endpoint,
+                &query,
+                GraphqlRequestOptions {
+                    timeout: Duration::from_secs(30),
+                    max_attempts: 1,
+                    retry_backoff: Duration::ZERO,
+                },
+            )
+            .await?
+        }
+        ConfigAccess::Local(_) => access.execute(&query).await?,
+    };
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -205,7 +246,8 @@ async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) 
 
 /// Commit a retained signed submission, reconciling ambiguous outcomes.
 ///
-/// Embedded (local) writes are atomic, so their errors are definite. An owner
+/// Full-storage errors retain uncertain delivery even for embedded writes:
+/// failure to sync or roll back a WAL is not proof that nothing committed. An owner
 /// write is only a definite rejection when the owner answered with a GraphQL
 /// `errors` body and the receipt proves it holds no such request; every other
 /// post-send failure (HTTP status, transport, undecodable body, unreadable
@@ -224,8 +266,16 @@ pub(super) async fn commit_signed_submission(
     let Err(error) = written else {
         return Ok(pending.result);
     };
-    if !matches!(access, ConfigAccess::Graphql(_)) {
-        return Err(error);
+    reconcile_commit_failure(access, pending, error).await
+}
+
+async fn reconcile_commit_failure(
+    access: &ConfigAccess,
+    pending: UnresolvedSubmission,
+    error: anyhow::Error,
+) -> Result<SubmittedRequest> {
+    if gents::graphql::is_storage_full(&error) {
+        return Err(pending.outcome_unknown(Some(error)));
     }
     let receipt_unreadable = error
         .chain()
@@ -237,7 +287,7 @@ pub(super) async fn commit_signed_submission(
             _ => {}
         }
     }
-    Err(pending.outcome_unknown())
+    Err(pending.outcome_unknown(Some(error)))
 }
 
 /// The owner processed the mutation and answered with GraphQL errors.
@@ -336,7 +386,7 @@ pub async fn resolve_unresolved_submission(
     match owner_receipt(access, &pending.create).await {
         Ok(true) => Ok(pending.result.clone()),
         Ok(false) => commit_signed_submission(access, pending.clone()).await,
-        Err(_) => Err(pending.outcome_unknown()),
+        Err(error) => Err(pending.outcome_unknown(Some(error))),
     }
 }
 
@@ -633,6 +683,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generated_storage_failures_retain_signed_submissions_without_replay() {
+        let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        for case in contract["storage_failure_cases"].as_array().unwrap() {
+            let server = MockServer::start().await;
+            mount_create(
+                &server,
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "errors": [{"message": case["message"], "extensions": {"code": case["code"]}}]
+                })),
+            )
+            .await;
+            mount_receipt(&server, Vec::new()).await;
+            let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+            let pending = test_pending();
+            let error = commit_signed_submission(&access, pending.clone())
+                .await
+                .unwrap_err();
+            let unknown = error.downcast_ref::<SubmissionOutcomeUnknown>();
+            assert_eq!(
+                unknown.is_some(),
+                case["outcome_unknown"].as_bool().unwrap()
+            );
+            if let Some(unknown) = unknown {
+                assert_eq!(unknown.request_id, pending.request_id);
+                assert_eq!(unknown.session_id, pending.session_id);
+                assert_eq!(unknown.pending.mutation, pending.mutation);
+                assert_eq!(
+                    unknown.pending.create.admission.signature,
+                    pending.create.admission.signature
+                );
+                assert!(gents::graphql::is_storage_full(&error));
+                assert_eq!(
+                    server.received_requests().await.unwrap().len(),
+                    1,
+                    "storage failure must not trigger another write or receipt probe"
+                );
+                assert!(case["same_request"].as_bool().unwrap());
+                assert!(case["same_bytes"].as_bool().unwrap());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn definite_owner_rejection_stays_an_ordinary_error() {
         let server = MockServer::start().await;
         mount_create(
@@ -675,6 +768,75 @@ mod tests {
             .expect("a matching receipt proves the earlier commit");
 
         assert_eq!(submitted, test_result());
+    }
+
+    #[tokio::test]
+    async fn local_receipt_confirms_the_exact_committed_signed_request() {
+        let home = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        node.add_schema(gents_protocol::schemas::AGENT_REQUEST)
+            .await
+            .unwrap();
+        let access = ConfigAccess::local(std::sync::Arc::clone(&node));
+        let pending = test_pending();
+
+        access
+            .write("test.local_submission_receipt", &pending.mutation)
+            .await
+            .unwrap();
+
+        let resolved = resolve_unresolved_submission(&access, &pending)
+            .await
+            .expect("the embedded signed receipt proves the original commit");
+        assert_eq!(resolved, pending.result);
+        let rows = access
+            .execute(&format!(
+                "{{AgentRequest(filter:{{request_id:{{_eq:\"{}\"}}}}){{request_id}}}}",
+                escape_graphql_string(&pending.request_id)
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rows["data"]["AgentRequest"].as_array().unwrap().len(), 1);
+
+        let mut different_signature = pending.create.clone();
+        different_signature.admission.signature[0] ^= 1;
+        assert!(owner_receipt(&access, &different_signature).await.is_err());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn local_non_graphql_failure_preserves_unknown_delivery() {
+        let home = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        let access = ConfigAccess::local(std::sync::Arc::clone(&node));
+        let pending = test_pending();
+
+        let error = reconcile_commit_failure(
+            &access,
+            pending.clone(),
+            anyhow::anyhow!("native operation abandoned after send"),
+        )
+        .await
+        .expect_err("a local post-send failure does not prove rejection");
+
+        let unknown = error
+            .downcast_ref::<SubmissionOutcomeUnknown>()
+            .expect("local non-GraphQL errors remain uncertain");
+        assert_eq!(unknown.request_id, pending.request_id);
+        assert_eq!(unknown.pending.mutation, pending.mutation);
+        node.shutdown().await;
     }
 
     #[tokio::test]

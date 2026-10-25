@@ -374,6 +374,8 @@ fn session_row(session_id: &str, node_did: &str, requester: Option<&str>) -> Age
         agent_id: "default".into(),
         created_at: "2026-08-25T00:00:00Z".into(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: None,
         tags: Vec::new(),

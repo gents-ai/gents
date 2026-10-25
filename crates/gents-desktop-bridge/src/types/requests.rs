@@ -71,37 +71,65 @@ pub struct EnrollmentStatusRequest {
     pub server_address: String,
 }
 
-#[derive(Debug, Clone, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatSubmissionQuery {
+    pub client_did: String,
+    pub node_did: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {
+    /// Allocated and retained by the caller before the first helper call.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Existing local client DID captured with the operation, so switching
+    /// history identities cannot reinterpret an unresolved caller operation.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_did: Option<String>,
     pub node_did: String,
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub content: String,
     #[serde(default)]
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
     #[serde(default)]
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<gents_protocol::request_input::RequestAttachment>>,
     #[serde(default)]
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<gents_protocol::request_input::QueueDelivery>,
     #[serde(default)]
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub caused_by_source_doc_id: Option<String>,
     #[serde(default)]
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<gents_protocol::mailbox_question::MailboxQuestionAnswer>,
     #[serde(default)]
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     /// Reconcile this earlier send whose delivery is unknown instead of sending
     /// a new request; the original signed request is replayed or confirmed.
     #[serde(default)]
     #[ts(optional = nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resolve_request_id: Option<String>,
 }
 
@@ -117,6 +145,8 @@ pub struct SessionForkBeforeRequest {
     pub node_did: String,
     pub session_id: String,
     pub message_key: String,
+    pub client_did: String,
+    pub child_session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -132,6 +162,16 @@ pub struct SessionRenameRequest {
     pub node_did: String,
     pub session_id: String,
     pub title: String,
+}
+
+/// Archive revisions are decimal strings so browser callers retain all native bits.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionArchiveRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub expected_revision: String,
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -607,4 +647,22 @@ pub struct DesktopBackgroundToolRequest {
     pub session_id: String,
     pub request_id: String,
     pub tool_call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionHistoryRequest {
+    pub node_did: String,
+    #[serde(default)]
+    pub visibility: gents_protocol::session::SessionArchiveVisibility,
+    pub query: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHistoryPage {
+    pub sessions: Vec<super::SessionSummary>,
+    pub next_cursor: Option<String>,
 }

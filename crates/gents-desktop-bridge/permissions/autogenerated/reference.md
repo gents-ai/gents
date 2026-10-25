@@ -336,6 +336,58 @@ Denies the desktop_chat_send command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-chat-submission-acknowledge`
+
+</td>
+<td>
+
+Enables the desktop_chat_submission_acknowledge command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-chat-submission-acknowledge`
+
+</td>
+<td>
+
+Denies the desktop_chat_submission_acknowledge command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-chat-submission-recover`
+
+</td>
+<td>
+
+Enables the desktop_chat_submission_recover command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-chat-submission-recover`
+
+</td>
+<td>
+
+Denies the desktop_chat_submission_recover command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-claude-login`
 
 </td>
@@ -2624,6 +2676,32 @@ Denies the desktop_schedule_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-session-archive`
+
+</td>
+<td>
+
+Enables the desktop_session_archive command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-archive`
+
+</td>
+<td>
+
+Denies the desktop_session_archive command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-session-fork-before-message`
 
 </td>
@@ -2669,6 +2747,32 @@ Enables the desktop_session_goal command without any pre-configured scope.
 <td>
 
 Denies the desktop_session_goal command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-session-history`
+
+</td>
+<td>
+
+Enables the desktop_session_history command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-history`
+
+</td>
+<td>
+
+Denies the desktop_session_history command without any pre-configured scope.
 
 </td>
 </tr>
@@ -3409,7 +3513,7 @@ Tool-surface explain (config family)
 </td>
 <td>
 
-Chat submission, branching, and rename
+Chat submission, branching, rename and archive
 
 </td>
 </tr>

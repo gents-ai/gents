@@ -820,6 +820,8 @@ mod paging_coverage_tests {
                 agent_id: "agent".into(),
                 created_at: "2026-10-21T00:00:00Z".into(),
                 closed_at: None,
+                archived_at: None,
+                archive_revision: 0,
                 stopped_at: None,
                 title: None,
                 tags: Vec::new(),

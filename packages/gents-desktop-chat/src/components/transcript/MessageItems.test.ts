@@ -206,3 +206,44 @@ describe("received session-message presentation", () => {
     expect(html).not.toContain("Message details");
   });
 });
+
+const goalMessage: User = {
+  kind: "userMessage",
+  itemKey: "goal-input",
+  ownsTurn: true,
+  sequence: 1,
+  content: "Review the changes",
+  timestamp: null,
+  startedGoalId: "goal-1",
+  reconstruction: { state: "ready" },
+};
+
+it("preserves message actions alongside the saved goal attribution", () => {
+  const html = renderToStaticMarkup(
+    createElement(UserMessageItem, { item: goalMessage }),
+  );
+  expect(html).toContain("Sent as goal");
+  expect(html).toContain("message-copy");
+  expect(html).toContain("message-goal-attribution");
+});
+
+it.each(["loading", "denied", "invalid"] as const)(
+  "hides the goal attribution for %s content",
+  (state) => {
+    const html = renderToStaticMarkup(
+      createElement(UserMessageItem, {
+        item: { ...goalMessage, reconstruction: { state } },
+      }),
+    );
+    expect(html).not.toContain("Sent as goal");
+  },
+);
+
+it("does not mark an ordinary follow-up as a goal", () => {
+  const html = renderToStaticMarkup(
+    createElement(UserMessageItem, {
+      item: { ...goalMessage, startedGoalId: undefined },
+    }),
+  );
+  expect(html).not.toContain("Sent as goal");
+});

@@ -10,6 +10,8 @@ fn timeline_session() -> AgentSession {
         agent_id: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: None,
         tags: Vec::new(),
@@ -148,6 +150,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
     .expect("snapshot");
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::UserMessage {
+            started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: Some(format!("request-{index:03}")),
             owns_turn: true,
@@ -191,6 +194,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
     .expect("snapshot");
     snapshot.timeline_items = (0..81)
         .map(|index| RenderedTimelineItem::UserMessage {
+            started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: None,
             owns_turn: true,
@@ -934,6 +938,8 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
         agent_id: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: None,
         tags: Vec::new(),
@@ -1373,4 +1379,72 @@ fn a_rows_read_draws_the_rows_the_session_snapshot_draws() {
             RenderedTimelineItem::AssistantMessage { .. },
         ] if prompt == "req-1"
     ));
+}
+
+#[test]
+fn only_the_authored_opening_goal_input_keeps_its_marker_after_reload() {
+    for (assignment, expected) in [
+        (None, None),
+        (
+            Some(serde_json::json!({ "goal_id": "goal-1" })),
+            Some("goal-1"),
+        ),
+        (
+            Some(serde_json::json!({ "goal_id": "goal-1", "root_request_doc_id": "opening-doc" })),
+            None,
+        ),
+    ] {
+        let mut rows = ClientStoreRows {
+            sessions: vec![timeline_session()],
+            requests: vec![AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                doc_id: Some("request-doc".into()),
+                request_id: "request-1".into(),
+                node_did: Some("did:test:amy".into()),
+                session_id: Some("sess-1".into()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
+                content: Some("Review the changes".into()),
+                input: Some(
+                    serde_json::from_value(serde_json::json!({ "goal_assignment": assignment }))
+                        .unwrap(),
+                ),
+                ..Default::default()
+            }],
+            ..ClientStoreRows::default()
+        };
+        for (key, sequence, role) in [
+            ("authored:request-doc:context", 1, MessageRole::User),
+            ("authored:request-doc:prompt", 2, MessageRole::User),
+            ("answer", 3, MessageRole::Assistant),
+        ] {
+            push_canonical_text_message(
+                &mut rows,
+                key,
+                "sess-1",
+                Some("request-doc"),
+                sequence,
+                role,
+                "Review the changes",
+            );
+        }
+        for _ in 0..2 {
+            let snapshot = build_session_snapshot_from_store(
+                &ClientStore::from_rows(rows.clone()),
+                "sess-1",
+                None,
+            )
+            .unwrap();
+            let markers = snapshot
+                .timeline_items
+                .iter()
+                .filter_map(|item| match item {
+                    RenderedTimelineItem::UserMessage {
+                        started_goal_id, ..
+                    } => started_goal_id.as_deref(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(markers, expected.into_iter().collect::<Vec<_>>());
+        }
+    }
 }

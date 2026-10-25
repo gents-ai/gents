@@ -241,6 +241,8 @@ pub struct SessionSummary {
     pub requester_did: Option<String>,
     pub latest_request_doc_id: Option<String>,
     pub closed_at: Option<String>,
+    pub archived_at: Option<String>,
+    pub archive_revision: String,
     pub tags: Vec<String>,
     pub provenance: Option<gents_protocol::session::SessionProvenance>,
     pub title: Option<String>,
@@ -388,6 +390,7 @@ pub struct DeploymentView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopRuntimeSnapshot {
+    pub client_did: String,
     pub local_peer_id: String,
     pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,

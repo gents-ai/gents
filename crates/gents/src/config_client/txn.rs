@@ -945,7 +945,7 @@ where
             .begin_transaction_guard(read_only)
             .await
             .map_err(|error| {
-                retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
+                retry::transaction_storage_failure(anyhow::Error::new(error).context("begin_txn"))
             })?;
         let _ = registered.send(transaction.handle().clone());
         std::future::pending::<()>().await;
@@ -1064,7 +1064,9 @@ impl TransactionMode {
     }
 
     fn retries_callback_error(self, error: &anyhow::Error) -> bool {
-        matches!(self, Self::Idempotent(_)) && retry::is_transaction_storage_failure(error)
+        matches!(self, Self::Idempotent(_))
+            && !crate::graphql::is_storage_full(error)
+            && retry::is_transaction_storage_failure(error)
     }
 
     fn retries_begin_error(self, error: &anyhow::Error) -> bool {
@@ -1884,7 +1886,7 @@ impl<'a> ConfigApplyTxn<'a> {
                             })
                         } else {
                             Err(CommitFailure {
-                                error: anyhow::anyhow!("commit_txn: {error}"),
+                                error: anyhow::Error::new(error).context("commit_txn"),
                                 cleanup: CommitCleanup::NotNeeded,
                             })
                         }
@@ -1927,7 +1929,9 @@ impl<'a> ConfigApplyTxn<'a> {
                 })
                 .await
                 {
-                    Ok(result) => result.map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
+                    Ok(result) => {
+                        result.map_err(|error| anyhow::Error::new(error).context("rollback_txn"))
+                    }
                     Err(_) => {
                         let error = embedded_phase_timeout(
                             "rollback",
@@ -2355,9 +2359,10 @@ where
                                 CommitCleanup::Required => RollbackStatus::Scheduled,
                             };
                             Err(TransactionAttemptFailure {
+                                retry_generic: mode.retries_generic_errors()
+                                    && !crate::graphql::is_storage_full(&error),
                                 error,
                                 rollback,
-                                retry_generic: mode.retries_generic_errors(),
                             })
                         }
                     }
@@ -2867,7 +2872,8 @@ impl ConfigAccess {
         }
     }
 
-    /// Replay a stable-key transaction after any callback or commit error.
+    /// Replay a stable-key transaction under its bounded retry policy.
+    /// Full storage returns for recovery without replaying the mutation.
     /// Callers must make the callback idempotent across an ambiguous commit:
     /// creates need stable unique identities and retries must reconcile an
     /// already-durable winner before attempting another create.

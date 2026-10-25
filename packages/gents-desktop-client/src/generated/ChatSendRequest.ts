@@ -4,7 +4,16 @@ import type { MailboxQuestionAnswer } from "./MailboxQuestionAnswer.js";
 import type { QueueDelivery } from "./QueueDelivery.js";
 import type { RequestAttachment } from "./RequestAttachment.js";
 
-export type ChatSendRequest = { nodeDid: string, agentId?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null,
+export type ChatSendRequest = {
+/**
+ * Allocated and retained by the caller before the first helper call.
+ */
+requestId?: string | null,
+/**
+ * Existing local client DID captured with the operation, so switching
+ * history identities cannot reinterpret an unresolved caller operation.
+ */
+clientDid?: string | null, nodeDid: string, agentId?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null,
 /**
  * Reconcile this earlier send whose delivery is unknown instead of sending
  * a new request; the original signed request is replayed or confirmed.

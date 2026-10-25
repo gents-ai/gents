@@ -1102,6 +1102,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "client_installation_cases"
+      "ClientInstallationCases"
+      "client_installation::tests::generated_installation_traces_preserve_draining_and_replacement_guards")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_installation_compatibility_cases"
+      "ClientInstallationCompatibilityCases"
+      "client_installation::compatibility_tests::generated_installation_compatibility_matches_lean")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_observation_scope_cases"
       "ClientObservationScopeCases"
       "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
@@ -1120,6 +1130,11 @@ def caseCoverage : List CoverageEntry :=
       "client_request_patch_publication_cases"
       "ClientRequestPatchPublicationCases"
       "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "storage_failure_cases"
+      "StorageFailureCases"
+      "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_request_closure_cases"
@@ -2516,6 +2531,9 @@ def caseCoverage : List CoverageEntry :=
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"
       "session::fork::tests::generated_edit_anchors_select_exact_canonical_user_messages")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"
+      "session::fork::tests::generated_edit_fork_bindings_control_destination_reuse")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"
       "session::tests::editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source")

@@ -1,9 +1,11 @@
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::DesktopPaths;
 use tokio::net::{UnixListener, UnixStream};
+
+pub type Connection = UnixStream;
 
 pub(super) struct Listener {
     listener: UnixListener,
@@ -95,10 +97,31 @@ fn endpoint(paths: &DesktopPaths) -> Result<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let root = std::fs::canonicalize(paths.root())?;
     let path = root.join("client.sock");
-    if path.as_os_str().as_bytes().len() > 100 {
-        bail!("client home is too long for a local socket; select a shorter client home");
+    if path.as_os_str().as_bytes().len() <= 100 {
+        return Ok(path);
     }
-    Ok(path)
+    let directory = PathBuf::from(format!("/tmp/gents-client-{}", current_user()));
+    private_socket_directory(&directory)?;
+    let digest = blake3::hash(root.as_os_str().as_bytes());
+    Ok(directory.join(format!("{}.sock", &digest.to_hex()[..40])))
+}
+
+/// Long history paths cannot fit in sockaddr_un. Only the socket moves into a
+/// private per-user directory; store and startup locks remain in the canonical
+/// history home. Refuse pre-existing symlinks or non-private directories rather
+/// than changing their permissions or trusting a caller-controlled temp path.
+fn private_socket_directory(path: &std::path::Path) -> Result<()> {
+    match std::fs::DirBuilder::new().mode(0o700).create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("creating the client socket directory"),
+    }
+    let metadata = std::fs::symlink_metadata(path)?;
+    anyhow::ensure!(
+        metadata.is_dir() && metadata.uid() == current_user() && metadata.mode() & 0o077 == 0,
+        "client socket directory must be private and owned by the current user"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -107,6 +130,58 @@ mod tests {
     use super::*;
     use gents::file_lock::FileLock;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn long_history_homes_attach_without_moving_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir
+            .path()
+            .join("history-with-a-long-configured-location-".repeat(4));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("retained-history"), b"keep").unwrap();
+        let paths = DesktopPaths::from_root(&root);
+        let first = LocalListener::bind(&paths).await.unwrap();
+        let socket = endpoint(&paths).unwrap();
+        assert!(!socket.starts_with(&root));
+        assert!(socket.as_os_str().len() <= 100);
+        let _client = connect(&paths).await.unwrap();
+        let _accepted = first.listener.listener.accept().await.unwrap();
+        assert!(LocalListener::bind(&paths).await.is_err());
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        assert_eq!(socket, endpoint(&DesktopPaths::from_root(alias)).unwrap());
+        let other_root = dir.path().join("another-long-history-location-".repeat(5));
+        std::fs::create_dir(&other_root).unwrap();
+        assert_ne!(
+            socket,
+            endpoint(&DesktopPaths::from_root(other_root)).unwrap()
+        );
+        drop(first);
+        assert!(!socket.exists());
+        let stale = UnixListener::bind(&socket).unwrap();
+        drop(stale);
+        assert!(LocalListener::bind(&paths).await.is_ok());
+        assert_eq!(
+            std::fs::read(root.join("retained-history")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn socket_directory_rejects_symlinks_files_and_shared_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("private");
+        private_socket_directory(&directory).unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&directory, &alias).unwrap();
+        assert!(private_socket_directory(&alias).is_err());
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"keep").unwrap();
+        assert!(private_socket_directory(&file).is_err());
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(private_socket_directory(&directory).is_err());
+        assert_eq!(std::fs::metadata(&directory).unwrap().mode() & 0o777, 0o755);
+    }
 
     #[tokio::test]
     async fn concurrent_startup_waits_for_the_previous_discovery_owner() {

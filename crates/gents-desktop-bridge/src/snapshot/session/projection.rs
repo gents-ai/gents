@@ -1604,6 +1604,11 @@ pub(super) fn project_transcript_rows(
             };
 
             MessageView {
+                started_goal_id: input_request
+                    .and_then(|request| request.input.as_ref())
+                    .and_then(|input| input.goal_assignment.as_ref())
+                    .filter(|assignment| assignment.root_request_doc_id.is_none())
+                    .map(|assignment| assignment.goal_id.clone()),
                 request_turn: row
                     .message
                     .request_doc_id

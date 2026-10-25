@@ -55,6 +55,9 @@ structure Document where
   agent : AgentId
   createdAt : Time
   closedAt : Option Time := none
+  stoppedAt : Option Time := none
+  archivedAt : Option Time := none
+  archiveRevision : Nat := 0
   title : Option Title := none
   tags : List String := []
   provenance : Option Provenance := none

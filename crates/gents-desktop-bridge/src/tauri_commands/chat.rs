@@ -152,6 +152,30 @@ pub async fn desktop_chat_send(
 
     send_chat_message(core.as_ref(), request)
         .await
+        .map_err(BridgeError::classify_transport_error)
+}
+
+#[tauri::command]
+pub async fn desktop_chat_submission_recover(
+    query: crate::types::ChatSubmissionQuery,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::ChatSubmissionRecovery, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::recover_chat_submission(&core, query)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_chat_submission_acknowledge(
+    receipt: crate::types::ChatSubmissionReceipt,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::acknowledge_chat_submission(&core, receipt)
+        .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
@@ -163,6 +187,30 @@ pub async fn desktop_session_fork_before_message(
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     crate::commands::fork_session_before_message(&core, request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_session_history(
+    request: crate::types::SessionHistoryRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::SessionHistoryPage, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::session_history(&core, request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_session_archive(
+    request: crate::types::SessionArchiveRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<gents_protocol::session::SessionArchiveReceipt, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::set_session_archived(&core, request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

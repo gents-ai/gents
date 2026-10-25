@@ -18,10 +18,13 @@ required-features = ["runtime-e2e"]
 anyhow.workspace = true
 async-trait = "0.1"
 bytes.workspace = true
+blake3 = "1"
 clap.workspace = true
 futures = "0.3"
 gents = { path = "../gents" }
+gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-desktop-core.workspace = true
+gents-protocol.workspace = true
 gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["rt", "codec"] }
@@ -30,14 +33,18 @@ serde_json.workspace = true
 serde.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 rapidhash.workspace = true
 bs58 = "0.5"
 axum = "0.8"
 futures-util = "0.3"
-gents-protocol.workspace = true
 tempfile = "3"
 
 [target.'cfg(windows)'.dev-dependencies]

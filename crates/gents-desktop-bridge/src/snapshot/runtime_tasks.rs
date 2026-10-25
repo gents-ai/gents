@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use rapidhash::{HashMapExt, RapidHashMap};
 
 use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
@@ -71,6 +73,22 @@ pub(super) fn recent_runs_for_task_views(
             })
             .count(),
     })
+}
+
+pub(crate) type SessionSummaryOrderKey = (
+    Reverse<Option<String>>,
+    Reverse<Option<String>>,
+    String,
+    Option<String>,
+);
+
+pub(crate) fn session_summary_order_key(summary: &SessionSummary) -> SessionSummaryOrderKey {
+    (
+        Reverse(summary.updated_at.clone()),
+        Reverse(summary.created_at.clone()),
+        summary.session_id.clone(),
+        summary.requester_did.clone(),
+    )
 }
 
 pub(crate) fn session_summaries(
@@ -163,6 +181,8 @@ pub(crate) fn session_summaries(
                     .and_then(|request| request.doc_id.clone())
                     .or_else(|| indexed.map(|indexed| indexed.request_doc_id.clone())),
                 closed_at: session.closed_at.clone(),
+                archived_at: session.archived_at.clone(),
+                archive_revision: session.archive_revision.to_string(),
                 tags: session.tags.clone(),
                 provenance: session.provenance.clone(),
                 title: session
@@ -197,14 +217,7 @@ pub(crate) fn session_summaries(
             }
         })
         .collect::<Vec<_>>();
-    summaries.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then_with(|| right.created_at.cmp(&left.created_at))
-            .then_with(|| left.session_id.cmp(&right.session_id))
-            .then_with(|| left.requester_did.cmp(&right.requester_did))
-    });
+    summaries.sort_by_cached_key(session_summary_order_key);
     summaries
 }
 

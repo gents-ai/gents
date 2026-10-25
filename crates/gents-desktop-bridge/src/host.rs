@@ -30,6 +30,8 @@ use protocol::ClientCommand;
 /// The installation host must stop and join attachments before closing the core.
 pub struct ClientHost {
     core: Arc<ClientCore>,
+    installation_build: Option<String>,
+    advertised_commands: Vec<String>,
     policy: ResolvedBridgePolicy,
     speech: speech::SpeechClient,
     pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
@@ -40,11 +42,37 @@ impl ClientHost {
         Self::with_accounts(core, Arc::default())
     }
 
+    /// The executable digest is compatibility metadata, never runtime identity
+    /// or document authority. Embedded application hosts retain their own lifetime.
+    pub fn for_installation(core: Arc<ClientCore>, build: String) -> Self {
+        let mut host = Self::new(core);
+        host.installation_build = Some(build);
+        host
+    }
+
+    pub fn for_installation_with_command_inventory(
+        core: Arc<ClientCore>,
+        build: String,
+        commands: Vec<String>,
+    ) -> Self {
+        assert!(commands
+            .iter()
+            .all(|command| { ClientCommand::NAMES.contains(&command.as_str()) }));
+        let mut host = Self::for_installation(core, build);
+        host.advertised_commands = commands;
+        host
+    }
+
     pub(crate) fn with_accounts(
         core: Arc<ClientCore>,
         pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
     ) -> Self {
         Self {
+            installation_build: None,
+            advertised_commands: ClientCommand::NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
             policy: ResolvedBridgePolicy {
                 desktop_paths: core.paths().clone(),
                 node_home: None,
@@ -600,6 +628,16 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::RecoverSubmission { query } => encode(
+                crate::commands::recover_chat_submission(&self.core, query)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::AcknowledgeSubmission { receipt } => encode(
+                crate::commands::acknowledge_chat_submission(&self.core, receipt)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::Retry {
                 request_id,
                 node_did,
@@ -633,6 +671,16 @@ impl ClientHost {
             ),
             ClientCommand::ForkBeforeMessage { request } => encode(
                 crate::commands::fork_session_before_message(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::SessionHistory { request } => encode(
+                crate::commands::session_history(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::Archive { request } => encode(
+                crate::commands::set_session_archived(&self.core, request)
                     .await
                     .map_err(backend_error)?,
             ),
@@ -688,7 +736,11 @@ fn encode(value: impl Serialize) -> Result<Value, BridgeError> {
 }
 
 fn backend_error(error: anyhow::Error) -> BridgeError {
-    BridgeError::new(BridgeErrorCode::Backend, error.to_string())
+    if gents::graphql::is_storage_full(&error) {
+        BridgeError::storage_full()
+    } else {
+        BridgeError::new(BridgeErrorCode::Backend, error.to_string())
+    }
 }
 
 #[cfg(test)]

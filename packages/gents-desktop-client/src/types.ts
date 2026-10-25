@@ -72,6 +72,12 @@ export type {
   SessionForkBeforeRequest,
   SessionForkResult,
   SessionRenameRequest,
+  SessionArchiveRequest,
+  SessionArchiveReceipt,
+  SessionArchiveOutcome,
+  SessionArchiveVisibility,
+  SessionHistoryRequest,
+  SessionHistoryPage,
   DesktopInitRequest,
   TriggerSaveRequest,
   InferenceProbeResult,
@@ -103,6 +109,9 @@ export type {
 } from "./types/requests.js";
 export type {
   ChatSendResult,
+  ChatSubmissionReceipt,
+  ChatSubmissionRecovery,
+  ChatSubmissionQuery,
   CommandDenialView,
   DesktopSessionSnapshot,
   SessionHydrationView,

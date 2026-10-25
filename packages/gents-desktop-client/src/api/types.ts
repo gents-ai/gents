@@ -42,6 +42,9 @@ import type {
   AgentSaveRequest,
   ChatSendRequest,
   ChatSendResult,
+  ChatSubmissionReceipt,
+  ChatSubmissionRecovery,
+  ChatSubmissionQuery,
   CodexLoginResult,
   ClaudeLoginResult,
   GrokLoginResult,
@@ -51,6 +54,10 @@ import type {
   DesktopSessionProvenanceRequest,
   DesktopSessionSnapshot,
   SessionRenameRequest,
+  SessionArchiveRequest,
+  SessionArchiveReceipt,
+  SessionHistoryRequest,
+  SessionHistoryPage,
   SessionLiveDeltaView,
   SessionRowsView,
   SessionRowsWindow,
@@ -222,6 +229,10 @@ export type DesktopApiAdapter = {
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
+  recoverChatSubmission: (
+    query: ChatSubmissionQuery,
+  ) => Promise<ChatSubmissionRecovery>;
+  acknowledgeChatSubmission: (receipt: ChatSubmissionReceipt) => Promise<void>;
   steerPendingMessage: (
     request: PendingMessageSteerRequest,
   ) => Promise<PendingQueueEditResult>;
@@ -235,6 +246,12 @@ export type DesktopApiAdapter = {
     request: SessionForkBeforeRequest,
   ) => Promise<SessionForkResult>;
   renameSession: (request: SessionRenameRequest) => Promise<void>;
+  setSessionArchived: (
+    request: SessionArchiveRequest,
+  ) => Promise<SessionArchiveReceipt>;
+  sessionHistory: (
+    request: SessionHistoryRequest,
+  ) => Promise<SessionHistoryPage>;
   resendRequest: (
     requestId: string,
     nodeDid?: string,

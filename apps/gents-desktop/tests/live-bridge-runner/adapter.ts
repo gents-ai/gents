@@ -60,6 +60,8 @@ export function createBridgeHttpAdapter(
     fetchSessionGoal: unsupported("fetchSessionGoal"),
     steerPendingMessage: unsupported("steerPendingMessage"),
     controlGoal: unsupported("controlGoal"),
+    recoverChatSubmission: unsupported("recoverChatSubmission"),
+    acknowledgeChatSubmission: unsupported("acknowledgeChatSubmission"),
     explainToolSurface: unsupported("explainToolSurface"),
     fetchNetworkStatus: unsupported("fetchNetworkStatus"),
     listMailbox: unsupported("listMailbox"),
@@ -158,6 +160,10 @@ export function createBridgeHttpAdapter(
     },
     editPendingQueue: async (request) =>
       client.postJson("/desktop/queue/edit", request),
+    setSessionArchived: async (request) =>
+      client.postJson("/desktop/session/archive", request),
+    sessionHistory: async (request) =>
+      client.postJson("/desktop/session/history", request),
     renameSession: async (request) => {
       await client.postJson("/desktop/session/rename", request);
     },

@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::file_lock::FileLock;
 use gents_desktop_core::client::DesktopPaths;
+use gents_protocol::client_installation::{Action, Phase, State};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -18,7 +19,10 @@ use unix as platform;
 #[cfg(windows)]
 use windows as platform;
 
-pub use platform::connect;
+pub use platform::{connect, Connection};
+
+/// Maximum concurrent local attachments admitted by one installation listener.
+pub const MAX_ATTACHMENTS: usize = 64;
 
 /// The listener lock is independent of the core's store lock. Discovery never
 /// permits a second core to open a store held by another process.
@@ -79,6 +83,7 @@ impl LocalListener {
         idle_timeout: Option<Duration>,
     ) -> Result<()> {
         let mut attachments = JoinSet::new();
+        let mut phase = Phase::Accepting;
         let idle = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(180)));
         tokio::pin!(idle);
         let result: Result<()> = async {
@@ -88,10 +93,14 @@ impl LocalListener {
                     _ = &mut idle, if idle_timeout.is_some() && attachments.is_empty() => break,
                     accepted = self.listener.accept() => {
                         let stream = accepted?;
-                        if attachments.len() >= 64 { continue; }
-                        attachments.spawn(host.clone().serve(stream, stop.child_token()));
+                        if stop.is_cancelled() || attachments.len() >= MAX_ATTACHMENTS { continue; }
+                        phase = State { phase, attachments: attachments.len() }
+                            .step(Action::Attach).context("client installation is retiring")?.phase;
+                        attachments.spawn(host.clone().serve(stream, stop.clone()));
                     }
                     done = attachments.join_next(), if !attachments.is_empty() => {
+                        phase = State { phase, attachments: attachments.len() + 1 }
+                            .step(Action::Detach).context("client installation attachment count is invalid")?.phase;
                         report_attachment(done);
                         if let Some(timeout) = idle_timeout.filter(|_| attachments.is_empty()) {
                             idle.as_mut().reset(tokio::time::Instant::now() + timeout);
@@ -102,10 +111,30 @@ impl LocalListener {
             Ok(())
         }
         .await;
+        phase = State {
+            phase,
+            attachments: attachments.len(),
+        }
+        .step(Action::Retire)
+        .context("client installation cannot retire")?
+        .phase;
         stop.cancel();
         while let Some(done) = attachments.join_next().await {
+            phase = State {
+                phase,
+                attachments: attachments.len() + 1,
+            }
+            .step(Action::Detach)
+            .context("retiring client attachment count is invalid")?
+            .phase;
             report_attachment(Some(done));
         }
+        State {
+            phase,
+            attachments: attachments.len(),
+        }
+        .step(Action::Release)
+        .context("client installation still has attached work")?;
         result
     }
 }

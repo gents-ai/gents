@@ -84,3 +84,10 @@ export type { ConfigComponentsPatchRequest } from "../generated/ConfigComponents
 export type { ConfigComponentPatch } from "../generated/ConfigComponentPatch.js";
 export type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
 export type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
+
+export type { SessionArchiveRequest } from "../generated/SessionArchiveRequest.js";
+export type { SessionArchiveReceipt } from "../generated/SessionArchiveReceipt.js";
+export type { SessionArchiveOutcome } from "../generated/SessionArchiveOutcome.js";
+export type { SessionArchiveVisibility } from "../generated/SessionArchiveVisibility.js";
+export type { SessionHistoryRequest } from "../generated/SessionHistoryRequest.js";
+export type { SessionHistoryPage } from "../generated/SessionHistoryPage.js";

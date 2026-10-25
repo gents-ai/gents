@@ -1,3 +1,4 @@
+mod archive;
 mod file_inventory;
 mod runtime;
 
@@ -542,4 +543,138 @@ async fn session_provenance_read_reaches_the_existing_lineage_owner() {
     drop(client);
     task.await.unwrap().unwrap();
     core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn retirement_requires_the_current_installation_build_and_never_retires_an_embedded_host() {
+    for build in [None, Some("current-build")] {
+        let (core, _directory) = crate::tests::support::boot_core().await;
+        let host = Arc::new(match build {
+            Some(build) => ClientHost::for_installation(core.clone(), build.into()),
+            None => ClientHost::new(core.clone()),
+        });
+        let stop = CancellationToken::new();
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let task = tokio::spawn(host.serve(server, stop.clone()));
+        let mut client = LengthDelimitedCodec::builder()
+            .max_frame_length(protocol::MAX_FRAME_BYTES)
+            .new_framed(client);
+        client
+            .send(Bytes::from(
+                serde_json::to_vec(&json!({"kind":"hello", "version":protocol::PROTOCOL_VERSION}))
+                    .unwrap(),
+            ))
+            .await
+            .unwrap();
+        let hello: Value = serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+        assert_eq!(hello["installationBuild"], json!(build));
+        client
+            .send(Bytes::from_static(
+                br#"{"kind":"retire","id":1,"expectedBuild":"stale-build"}"#,
+            ))
+            .await
+            .unwrap();
+        loop {
+            let response: Value =
+                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+            if response["kind"] == "response" && response["id"] == 1 {
+                assert_eq!(response["error"]["code"], "invalidArgument");
+                break;
+            }
+        }
+        assert!(!stop.is_cancelled());
+        client
+            .send(Bytes::from_static(
+                br#"{"kind":"call","id":2,"command":{"name":"desktop_client_snapshot","args":{}}}"#,
+            ))
+            .await
+            .unwrap();
+        loop {
+            let response: Value =
+                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+            if response["kind"] == "response" && response["id"] == 2 {
+                assert!(response["error"].is_null(), "{response}");
+                assert_eq!(
+                    response["result"]["client"]["localPeerId"],
+                    core.local_peer_id()
+                );
+                break;
+            }
+        }
+        drop(client);
+        task.await.unwrap().unwrap();
+        core.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn retirement_acknowledgement_is_flushed_before_the_attachment_closes() {
+    let (core, _directory) = crate::tests::support::boot_core().await;
+    let host = Arc::new(ClientHost::for_installation(
+        core.clone(),
+        "current-build".into(),
+    ));
+    let stop = CancellationToken::new();
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(host.serve(server, stop.clone()));
+    let mut client = LengthDelimitedCodec::builder()
+        .max_frame_length(protocol::MAX_FRAME_BYTES)
+        .new_framed(client);
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&json!({ "kind": "hello", "version": protocol::PROTOCOL_VERSION }))
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    client.next().await.unwrap().unwrap();
+    client
+        .send(Bytes::from_static(
+            br#"{"kind":"retire","id":1,"expectedBuild":"current-build"}"#,
+        ))
+        .await
+        .unwrap();
+    let mut acknowledged = false;
+    while let Some(frame) = tokio::time::timeout(std::time::Duration::from_secs(5), client.next())
+        .await
+        .unwrap()
+    {
+        let response: Value = serde_json::from_slice(&frame.unwrap()).unwrap();
+        if response["kind"] == "response" && response["id"] == 1 {
+            assert!(response["error"].is_null(), "{response}");
+            acknowledged = true;
+        }
+    }
+    assert!(
+        acknowledged,
+        "retirement closed without its acknowledgement"
+    );
+    assert!(stop.is_cancelled());
+    task.await.unwrap().unwrap();
+    core.shutdown().await.unwrap();
+}
+#[test]
+fn generated_storage_failures_keep_their_code_in_host_errors() {
+    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = contract["storage_failure_cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
+            "host command",
+            json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+        ))
+        .context("preparing a request");
+        let error = super::backend_error(error);
+        assert_eq!(
+            error.code,
+            if case["full"].as_bool().unwrap() {
+                crate::BridgeErrorCode::StorageFull
+            } else {
+                crate::BridgeErrorCode::Backend
+            }
+        );
+        if case["stop_automatic_retry"].as_bool().unwrap() {
+            assert!(!error.retryable);
+        }
+    }
 }

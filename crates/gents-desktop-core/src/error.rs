@@ -7,6 +7,8 @@ pub enum BridgeErrorCode {
     ClientNotRunning,
     ClientStartFailed,
     LocalHistoryLocked,
+    /// Storage recovery preserves retained history and unresolved submission identity.
+    StorageFull,
     /// The read could not publish against the current observation fence.
     ProjectionPending,
     /// A verified runtime Goal-control rejection, never transport or message classification.
@@ -32,6 +34,7 @@ impl BridgeErrorCode {
             Self::ClientNotRunning => "clientNotRunning",
             Self::ClientStartFailed => "clientStartFailed",
             Self::LocalHistoryLocked => "localHistoryLocked",
+            Self::StorageFull => "storageFull",
             Self::ProjectionPending => "projectionPending",
             Self::GoalControlRejected => "goalControlRejected",
             Self::NotFound => "notFound",
@@ -92,7 +95,15 @@ impl BridgeError {
         }
     }
 
+    pub fn storage_full() -> Self {
+        Self::new(BridgeErrorCode::StorageFull,
+            "Storage is full. Free disk space, then restart Gents to reopen the same store. Your saved chats and pending message are kept.")
+    }
+
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
+        if gents::graphql::is_storage_full(&error) {
+            return Self::storage_full();
+        }
         let transport = error
             .chain()
             .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
@@ -197,5 +208,21 @@ mod tests {
         ));
         assert_eq!(lookalike.code, BridgeErrorCode::Unknown);
         assert_eq!(lookalike.endpoint, None);
+    }
+}
+
+#[cfg(test)]
+mod storage_failure_tests {
+    use super::*;
+
+    #[test]
+    fn full_storage_is_actionable_and_does_not_authorize_retry() {
+        let error = anyhow::Error::new(gents_protocol::database_error::StorageFull)
+            .context("a database operation");
+        let error = BridgeError::classify_transport_error(error);
+        assert_eq!(error.code, BridgeErrorCode::StorageFull);
+        assert!(!error.retryable);
+        assert!(error.message.contains("Free disk space"));
+        assert!(error.message.contains("pending message"));
     }
 }

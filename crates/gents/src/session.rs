@@ -5,11 +5,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
+mod archive;
 pub mod canonical_rows;
+pub use archive::{set_session_archived, set_session_archived_on};
 mod compaction_entries;
 mod control;
 mod fork;
 mod history;
+#[cfg(test)]
+mod model_test_support;
 mod observations;
 mod output;
 #[cfg(test)]
@@ -38,7 +42,8 @@ pub(crate) use compaction_entries::{
 pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
 pub use control::{resume_session, stop_session, SessionStopReceipt};
 pub use fork::{
-    fork, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome, ForkParams,
+    fork, fork_edit_on, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome,
+    ForkParams,
 };
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;

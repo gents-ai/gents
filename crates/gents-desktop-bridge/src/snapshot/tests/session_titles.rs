@@ -11,6 +11,8 @@ fn generated_title_text_cases_reach_history_and_transcript_without_rewriting_use
             agent_id: "agent".into(),
             created_at: "2026-10-18T00:00:00Z".into(),
             closed_at: None,
+            archived_at: None,
+            archive_revision: 0,
             stopped_at: None,
             title: Some(SessionTitle {
                 text: case["raw"].as_str().unwrap().to_owned(),

@@ -23,6 +23,8 @@ use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPip
 mod security;
 use security::{descriptor, require_private_file, Sid};
 
+pub type Connection = NamedPipeClient;
+
 pub(super) struct Listener {
     next: NamedPipeServer,
     name: OsString,

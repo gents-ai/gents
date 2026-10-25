@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-chat-submission-acknowledge"
+description = "Enables the desktop_chat_submission_acknowledge command without any pre-configured scope."
+commands.allow = ["desktop_chat_submission_acknowledge"]
+
+[[permission]]
+identifier = "deny-desktop-chat-submission-acknowledge"
+description = "Denies the desktop_chat_submission_acknowledge command without any pre-configured scope."
+commands.deny = ["desktop_chat_submission_acknowledge"]

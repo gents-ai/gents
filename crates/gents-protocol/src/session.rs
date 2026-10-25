@@ -15,6 +15,16 @@ pub struct AgentSession {
     /// Authoritative request execution state remains on AgentRequest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
+    /// Shared history visibility; independent of closing, stopping and request execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<String>,
+    /// Native transaction fence for archive/restore observations, including ABA changes.
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "archive_revision_is_zero"
+    )]
+    pub archive_revision: u64,
     /// Durable explicit-stop latch. Interrupts pause autonomous Goal work but
     /// leave this unset so subsequent ordinary messages remain admissible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +126,16 @@ pub struct SessionProvenance {
 pub struct SessionFork {
     pub source_session_id: String,
     pub at_user_turn: u32,
+    /// Exact edit anchor committed with the child. Absence does not authorize
+    /// replay of a caller-selected destination (Lean `SessionFork.decideEditFork`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub before_message_key: Option<String>,
+    /// Native DID that authored the retained fork, independent of a shared
+    /// runtime operator requester scope. This records creation, not a grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub edit_client_did: Option<String>,
 }
 
 fn provenance_is_empty(value: &Option<SessionProvenance>) -> bool {
@@ -138,4 +158,49 @@ where
     } else {
         value
     })
+}
+
+fn archive_revision_is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum SessionArchiveOutcome {
+    Applied,
+    Unchanged,
+    Conflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionArchiveReceipt {
+    pub node_did: String,
+    pub session_id: String,
+    pub archived_at: Option<String>,
+    /// Decimal text preserves the database revision range in JavaScript clients.
+    pub revision: String,
+    pub outcome: SessionArchiveOutcome,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum SessionArchiveVisibility {
+    #[default]
+    Active,
+    Archived,
+    All,
+}
+
+impl SessionArchiveVisibility {
+    pub fn includes(self, archived: bool) -> bool {
+        match self {
+            Self::Active => !archived,
+            Self::Archived => archived,
+            Self::All => true,
+        }
+    }
 }

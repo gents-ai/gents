@@ -56,6 +56,27 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/database_error.rs",
+            module_path: "gents_protocol::database_error::tests",
+            function: "generated_storage_failures_preserve_recovery_evidence",
+        },
+        ConformanceConsumer::RustTest {
+            id: "client_installation::tests::generated_installation_traces_preserve_draining_and_replacement_guards",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/client_installation.rs",
+            module_path: "client_installation::tests",
+            function: "generated_installation_traces_preserve_draining_and_replacement_guards",
+        },
+        ConformanceConsumer::RustTest {
+            id: "client_installation::compatibility_tests::generated_installation_compatibility_matches_lean",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/client_installation.rs",
+            module_path: "client_installation::compatibility_tests",
+            function: "generated_installation_compatibility_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_request_coverage_uses_only_selected_physical_scope",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",
@@ -418,6 +439,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/session/fork.rs",
             module_path: "session::fork::tests",
             function: "generated_edit_anchors_select_exact_canonical_user_messages",
+        },
+        ConformanceConsumer::RustTest {
+            id: "session::fork::tests::generated_edit_fork_bindings_control_destination_reuse",
+            package: "gents",
+            source_path: "crates/gents/src/session/fork.rs",
+            module_path: "session::fork::tests",
+            function: "generated_edit_fork_bindings_control_destination_reuse",
         },
         ConformanceConsumer::RustTest {
             id: "completion_factory::tests::generated_service_tier_cases_drive_loop_config",

@@ -84,7 +84,11 @@ pub(crate) fn into_data_envelope(data: Option<Value>) -> Value {
 
 pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {
     if response.has_errors() {
-        anyhow::bail!("{operation} failed: {:?}", response.errors);
+        return Err(gents_protocol::database_error::GraphqlFailure::new(
+            operation,
+            serde_json::to_value(&response.errors)?,
+        )
+        .into());
     }
     Ok(())
 }
@@ -485,6 +489,17 @@ pub fn response_has_documents(value: &serde_json::Value) -> bool {
         serde_json::Value::Object(map) => map.contains_key("_docID"),
         _ => false,
     }
+}
+
+/// Storage exhaustion retains its native or structured wire cause through
+/// context wrappers. It never grants automatic mutation replay authority.
+pub fn is_storage_full(error: &anyhow::Error) -> bool {
+    gents_protocol::database_error::is_storage_full(error)
+        || error.chain().any(|cause| {
+            cause
+                .downcast_ref::<storage::corekv::Error>()
+                .is_some_and(storage::corekv::Error::is_storage_full)
+        })
 }
 
 #[cfg(test)]

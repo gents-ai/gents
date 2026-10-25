@@ -27,9 +27,33 @@ mod editor_store;
 #[cfg(any(unix, windows))]
 mod native;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+#[cfg(windows)]
+mod windows_stdio;
+
+fn main() -> Result<()> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| !argument.to_string_lossy().starts_with('-'))
+    {
+        return gents_server::run_cli_without_keychain_prompts();
+    }
     let args = Args::parse();
+    let attachment_process = !args.serve && !args.describe;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()?;
+    let result = runtime.block_on(client_main(args));
+    if attachment_process {
+        // Tokio's stdin read cannot be cancelled while editor stdin is open.
+        // The server owns request execution and database cleanup; this
+        // attachment must exit without joining its remaining input read.
+        runtime.shutdown_background();
+    }
+    result
+}
+
+async fn client_main(args: Args) -> Result<()> {
     if args.describe {
         use gents_desktop_bridge::host::protocol;
         let mut output = std::io::stdout().lock();
@@ -44,6 +68,7 @@ async fn main() -> Result<()> {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
+                "localRuntimeCli": true,
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
             }),
         )?;

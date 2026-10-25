@@ -1,6 +1,7 @@
 import Proofs.ClientShell.Types
 import Proofs.ClientShell.SessionTurn
 import Proofs.ClientShell.Submission
+import Proofs.ClientShell.SubmissionReceipt
 import Proofs.ClientShell.Transition
 import Proofs.ClientShell.Projection
 import Proofs.ClientShell.PresentationAgreement
@@ -9,5 +10,6 @@ import Proofs.ClientShell.Theorems
 import Proofs.ClientShell.ObservationOrdering
 import Proofs.ClientShell.RequestCacheIdentity
 import Proofs.ClientShell.ObservationScope
+import Proofs.ClientShell.Installation
 import Proofs.ClientShell.Voice
 import Proofs.ClientShell.Settings

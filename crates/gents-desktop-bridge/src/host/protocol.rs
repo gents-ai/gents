@@ -4,14 +4,15 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingMessageSteerRequest,
-    PendingQueueEditRequest, SessionRenameRequest,
+    ChatSendRequest, ChatSubmissionQuery, DesktopInterruptRequest, EnrollmentStatusRequest,
+    PendingMessageSteerRequest, PendingQueueEditRequest, SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
 /// Typed captures require a host that preserves their submitted snapshots.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
+pub const INSTALLATION_CONTROL_VERSION: u32 = 1;
 /// The private store-key channel completes before ordinary host framing begins.
 /// Its failures use the canonical bridge error contract and never raw causes.
 pub const EDITOR_STORE_BOOTSTRAP_VERSION: u32 = 2;
@@ -22,9 +23,23 @@ pub const MAX_PENDING_CALLS: usize = 32;
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub enum ClientMessage {
-    Hello { version: u32 },
-    Call { id: u32, command: Value },
-    Cancel { id: u32 },
+    Hello {
+        version: u32,
+    },
+    Call {
+        id: u32,
+        command: Value,
+    },
+    Cancel {
+        id: u32,
+    },
+    /// The acknowledgement must flush before EOF. EOF follows attachment
+    /// draining; the store lock remains the authority for replacement startup.
+    Retire {
+        id: u32,
+        #[serde(rename = "expectedBuild")]
+        expected_build: String,
+    },
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -255,6 +270,12 @@ pub enum ClientCommand {
     },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
+    #[serde(rename = "desktop_chat_submission_recover")]
+    RecoverSubmission { query: ChatSubmissionQuery },
+    #[serde(rename = "desktop_chat_submission_acknowledge")]
+    AcknowledgeSubmission {
+        receipt: crate::types::ChatSubmissionReceipt,
+    },
     #[serde(rename = "desktop_request_retry")]
     Retry {
         #[serde(rename = "requestId")]
@@ -270,8 +291,16 @@ pub enum ClientCommand {
     ForkBeforeMessage {
         request: crate::types::SessionForkBeforeRequest,
     },
+    #[serde(rename = "desktop_session_history")]
+    SessionHistory {
+        request: crate::types::SessionHistoryRequest,
+    },
     #[serde(rename = "desktop_session_rename")]
     Rename { request: SessionRenameRequest },
+    #[serde(rename = "desktop_session_archive")]
+    Archive {
+        request: crate::types::SessionArchiveRequest,
+    },
     #[serde(rename = "desktop_interrupt_request")]
     Interrupt { request: DesktopInterruptRequest },
 }
@@ -323,11 +352,15 @@ impl ClientCommand {
         "desktop_session_provenance",
         "desktop_goal_control",
         "desktop_chat_send",
+        "desktop_chat_submission_recover",
+        "desktop_chat_submission_acknowledge",
         "desktop_request_retry",
         "desktop_pending_queue_edit",
         "desktop_pending_message_steer",
         "desktop_session_fork_before_message",
         "desktop_session_rename",
+        "desktop_session_archive",
+        "desktop_session_history",
         "desktop_interrupt_request",
     ];
 
@@ -359,6 +392,7 @@ impl ClientCommand {
                 | Self::SessionLiveDelta(_)
                 | Self::SessionGoal(_)
                 | Self::SessionProvenance { .. }
+                | Self::SessionHistory { .. }
         )
     }
 }
@@ -416,6 +450,10 @@ pub enum HostMessage {
         commands: Vec<String>,
         #[serde(rename = "maxFrameBytes")]
         max_frame_bytes: usize,
+        #[serde(rename = "installationBuild")]
+        installation_build: Option<String>,
+        #[serde(rename = "installationControlVersion")]
+        installation_control_version: u32,
     },
     Response {
         id: u32,

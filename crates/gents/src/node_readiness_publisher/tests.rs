@@ -8,6 +8,7 @@ use super::*;
 enum WritePlan {
     Success,
     Fail,
+    StorageFull,
     BlockForever,
     BlockThenFail,
     BlockThenSucceed,
@@ -40,6 +41,11 @@ impl NodeReadinessWriter for ControlledWriter {
         match plan {
             WritePlan::Success => {}
             WritePlan::Fail => anyhow::bail!("injected readiness persistence failure"),
+            WritePlan::StorageFull => {
+                return Err(anyhow::Error::new(
+                    gents_protocol::database_error::StorageFull,
+                ))
+            }
             WritePlan::BlockForever => std::future::pending().await,
             WritePlan::BlockThenFail => {
                 self.release.acquire().await.unwrap().forget();
@@ -571,4 +577,51 @@ async fn ordered_writer_retries_without_overtake_and_flushes_terminal_state() {
             NodeReadinessProcessState::Shutdown,
         ]
     );
+}
+
+#[tokio::test]
+async fn full_storage_stops_readiness_retries_and_keeps_close_bounded() {
+    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
+    let writer = Arc::new(ControlledWriter {
+        plans: std::sync::Mutex::new(VecDeque::from([WritePlan::StorageFull])),
+        attempts: attempts_tx,
+        release: Semaphore::new(0),
+        persisted: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
+        writer.clone(),
+        "did:test:full-storage",
+        Duration::from_secs(60),
+    );
+    let error = tokio::time::timeout(Duration::from_secs(1), publisher.initialize("general"))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(crate::graphql::is_storage_full(&error));
+    assert!(attempts_rx.try_recv().is_ok());
+    assert!(attempts_rx.try_recv().is_err());
+    assert!(writer.persisted.lock().await.is_empty());
+    assert_eq!(
+        publisher.observation(),
+        AgentAdmissionObservation::default()
+    );
+    tokio::time::timeout(Duration::from_secs(1), owner.close())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn generated_storage_failure_cases_bind_readiness_classification() {
+    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    for case in contract["storage_failure_cases"].as_array().unwrap() {
+        let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
+            "test",
+            serde_json::json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+        ));
+        assert_eq!(
+            is_fatal_node_readiness_write(&error),
+            case["fatal_readiness"].as_bool().unwrap()
+        );
+    }
 }

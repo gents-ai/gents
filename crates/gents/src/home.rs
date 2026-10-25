@@ -111,6 +111,45 @@ impl StoreLock {
 }
 
 pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
+    lock_store_with_wait(home_dir, data_dir, false)
+}
+
+/// Wait for the current store owner to release its OS lock, then release the
+/// reservation immediately. A dedicated OS thread keeps the blocking lock
+/// call out of Tokio's shared blocking pool, so an abandoned wait cannot keep
+/// that runtime pool alive. Cancellation stops awaiting the result but cannot
+/// cancel the OS lock call; the thread drops any lock it later acquires.
+/// Callers must be standalone startup processes, with at most one waiter per
+/// process, so a previous process can finish releasing the store.
+pub async fn wait_for_store_release(home_dir: &Path, data_dir: &Path) -> Result<()> {
+    let (receive, worker) = start_store_release_waiter(home_dir, data_dir)?;
+    drop(worker);
+    receive
+        .await
+        .context("store release waiter stopped before completing")?
+}
+
+fn start_store_release_waiter(
+    home_dir: &Path,
+    data_dir: &Path,
+) -> Result<(
+    tokio::sync::oneshot::Receiver<Result<()>>,
+    std::thread::JoinHandle<()>,
+)> {
+    let home_dir = home_dir.to_path_buf();
+    let data_dir = data_dir.to_path_buf();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let worker = std::thread::Builder::new()
+        .name("gents-store-release-wait".into())
+        .spawn(move || {
+            let result = lock_store_with_wait(&home_dir, &data_dir, true).map(drop);
+            let _ = send.send(result);
+        })
+        .context("starting store release waiter")?;
+    Ok((receive, worker))
+}
+
+fn lock_store_with_wait(home_dir: &Path, data_dir: &Path, wait: bool) -> Result<StoreLock> {
     let canonical = fs::canonicalize(data_dir)
         .with_context(|| format!("resolving data directory {}", data_dir.display()))?;
     let (Some(parent), Some(name)) = (canonical.parent(), canonical.file_name()) else {
@@ -119,9 +158,10 @@ pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
             canonical.display()
         );
     };
-    lock_path(
+    lock_path_with_wait(
         home_dir,
         parent.join(format!("{}.lock", name.to_string_lossy())),
+        wait,
     )
 }
 
@@ -175,6 +215,10 @@ impl std::fmt::Display for StoreLockHeld {
 impl std::error::Error for StoreLockHeld {}
 
 fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
+    lock_path_with_wait(home_dir, path, false)
+}
+
+fn lock_path_with_wait(home_dir: &Path, path: PathBuf, wait: bool) -> Result<StoreLock> {
     use std::io::{Read as _, Seek as _, Write as _};
 
     let mut options = fs::OpenOptions::new();
@@ -196,18 +240,23 @@ fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
     {
         anyhow::bail!("store lock {} is not a regular file", path.display());
     }
-    match file.try_lock() {
-        Ok(()) => {}
-        Err(fs::TryLockError::WouldBlock) => {
-            let mut holder = String::new();
-            let _ = (&mut file).take(32).read_to_string(&mut holder);
-            return Err(anyhow::Error::new(StoreLockHeld {
-                home: home_dir.to_path_buf(),
-                holder_pid: holder.trim().parse::<u32>().ok(),
-            }));
-        }
-        Err(fs::TryLockError::Error(error)) => {
-            return Err(error).with_context(|| format!("locking {}", path.display()))
+    if wait {
+        file.lock()
+            .with_context(|| format!("waiting for store lock {}", path.display()))?;
+    } else {
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                let mut holder = String::new();
+                let _ = (&mut file).take(32).read_to_string(&mut holder);
+                return Err(anyhow::Error::new(StoreLockHeld {
+                    home: home_dir.to_path_buf(),
+                    holder_pid: holder.trim().parse::<u32>().ok(),
+                }));
+            }
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(error).with_context(|| format!("locking {}", path.display()))
+            }
         }
     }
     file.set_len(0)?;
@@ -609,6 +658,57 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn store_release_waiter_blocks_until_the_owner_releases_the_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let held = lock_store(temp.path(), &data).unwrap();
+
+        let mut waiter = tokio::spawn({
+            let home = temp.path().to_path_buf();
+            let data = data.clone();
+            async move { wait_for_store_release(&home, &data).await }
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), &mut waiter)
+                .await
+                .is_err()
+        );
+
+        drop(held);
+        tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("waiter completes after the store lock is released")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_store_release_wait_does_not_keep_the_eventual_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let held = lock_store(temp.path(), &data).unwrap();
+
+        let (mut receive, worker) = start_store_release_waiter(temp.path(), &data).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), &mut receive)
+                .await
+                .is_err()
+        );
+        drop(receive);
+        drop(held);
+
+        tokio::task::spawn_blocking(move || worker.join())
+            .await
+            .expect("joining store release waiter")
+            .expect("store release waiter thread completes");
+        let reservation = lock_store(temp.path(), &data)
+            .expect("cancelled waiter's eventual acquisition is dropped");
+        drop(reservation);
+    }
 
     fn write(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();

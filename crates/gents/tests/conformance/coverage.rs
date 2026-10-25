@@ -1244,6 +1244,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             .is_some_and(|cases| !cases.is_empty()));
     }
     emitted.insert(("client_settings_cases".into(), "ClientSettingsCases".into()));
+    assert!(!snapshot.client_installation_cases.is_empty());
+    emitted.insert((
+        "client_installation_cases".into(),
+        "ClientInstallationCases".into(),
+    ));
+    assert!(!snapshot.client_installation_compatibility_cases.is_empty());
+    emitted.insert((
+        "client_installation_compatibility_cases".into(),
+        "ClientInstallationCompatibilityCases".into(),
+    ));
     assert!(!snapshot.client_observation_scope_cases.is_empty());
     assert!(!snapshot.client_observation_admission_cases.is_empty());
     emitted.insert((
@@ -1264,6 +1274,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_request_patch_publication_cases".into(),
         "ClientRequestPatchPublicationCases".into(),
     ));
+    assert!(!snapshot.storage_failure_cases.is_empty());
+    emitted.insert(("storage_failure_cases".into(), "StorageFailureCases".into()));
     assert!(!snapshot.client_request_closure_cases.is_empty());
     assert!(!snapshot.client_request_cache_identity_cases.is_empty());
     emitted.insert((
@@ -2301,6 +2313,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             && !sessions.retry.is_empty()
             && !sessions.fork.is_empty()
             && !sessions.edit_anchors.is_empty()
+            && !sessions.edit_fork_bindings.is_empty()
     );
     emitted.insert((
         "session_document_cases".into(),

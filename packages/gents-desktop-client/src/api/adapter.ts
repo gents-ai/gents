@@ -101,6 +101,10 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),
+    recoverChatSubmission: (query) =>
+      invokeDesktop("desktop_chat_submission_recover", { query }),
+    acknowledgeChatSubmission: (receipt) =>
+      invokeDesktop("desktop_chat_submission_acknowledge", { receipt }),
     steerPendingMessage: (request) =>
       invokeDesktop("desktop_pending_message_steer", { request }),
     editPendingQueue: (request) =>
@@ -118,6 +122,10 @@ export function createDesktopApiAdapter(
       }),
     forkSessionBeforeMessage: (request) =>
       invokeDesktop("desktop_session_fork_before_message", { request }),
+    setSessionArchived: (request) =>
+      invokeDesktop("desktop_session_archive", { request }),
+    sessionHistory: (request) =>
+      invokeDesktop("desktop_session_history", { request }),
     renameSession: (request) =>
       invokeDesktop("desktop_session_rename", { request }),
     resendRequest: (requestId, nodeDid) =>
