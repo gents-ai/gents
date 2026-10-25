@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ToolOutputError {
+pub enum ToolOutputError {
     #[error("serialize result: {error}")]
     SerializeResult { error: serde_json::Error },
     #[error(transparent)]

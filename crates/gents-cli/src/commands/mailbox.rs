@@ -152,7 +152,7 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
 
 async fn load_item(access: &ConfigAccess, doc_id: &str) -> Result<Option<MailboxItem>> {
     if let Some(node) = access.local_node() {
-        return gents::mailbox::load_mailbox_item(node, doc_id).await;
+        return Ok(gents::mailbox::load_mailbox_item(node, doc_id).await?);
     }
     let response = access
         .execute(&format!(

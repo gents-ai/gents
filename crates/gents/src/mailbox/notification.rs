@@ -24,27 +24,23 @@ impl NotificationIdentity {
         requester: &str,
         behavior: &str,
         event_id: &str,
-    ) -> Result<String> {
-        anyhow::ensure!(
-            !agent.trim().is_empty(),
-            "notification requires node identity"
-        );
-        anyhow::ensure!(
-            !requester.trim().is_empty(),
-            "notification requires requester identity"
-        );
-        anyhow::ensure!(
-            !behavior.trim().is_empty(),
-            "notification requires agent identity"
-        );
+    ) -> Result<String, MailboxError> {
+        if agent.trim().is_empty() {
+            return Err(MailboxError::NotificationNodeIdentityMissing);
+        }
+        if requester.trim().is_empty() {
+            return Err(MailboxError::NotificationRequesterIdentityMissing);
+        }
+        if behavior.trim().is_empty() {
+            return Err(MailboxError::NotificationBehaviorIdentityMissing);
+        }
         let (mode, value) = match self {
             Self::Event => ("event", event_id),
             Self::Condition { key } => ("condition", key.as_str()),
         };
-        anyhow::ensure!(
-            !value.trim().is_empty(),
-            "notification {mode} identity must not be empty"
-        );
+        if value.trim().is_empty() {
+            return Err(MailboxError::NotificationIdentityEmpty { mode });
+        }
         Ok(serde_json::to_string(&(
             mode, agent, requester, behavior, value,
         ))?)
@@ -85,7 +81,7 @@ impl Default for MailboxNotificationPolicy {
 }
 
 impl MailboxNotificationPolicy {
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), MailboxError> {
         self.identity
             .source_id("validation", "validation", "validation", "validation")?;
         match self.action {
@@ -93,13 +89,14 @@ impl MailboxNotificationPolicy {
                 let collection = self
                     .expected_collection
                     .as_deref()
-                    .context("write_document notification requires expected_collection")?;
+                    .ok_or(MailboxError::NotificationCollectionMissing)?;
                 validate_collection_identifier(collection)?;
             }
-            _ => anyhow::ensure!(
-                self.expected_collection.is_none(),
-                "only write_document may set expected_collection"
-            ),
+            _ => {
+                if self.expected_collection.is_some() {
+                    return Err(MailboxError::NotificationCollectionNotAllowed);
+                }
+            }
         }
         Ok(())
     }
@@ -127,29 +124,28 @@ pub(super) async fn request_provenance(
     node: &EmbeddedNode,
     request_id: &str,
     context: &MailboxStampContext,
-) -> Result<gents_protocol::row::AgentRequestRow> {
+) -> Result<gents_protocol::row::AgentRequestRow, MailboxError> {
     let response = graphql_with_transaction_retry(node, &format!(
         "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id node_did requester_did agent_id session_id caused_by_source_doc_id}} }}",
         escape_graphql_string(request_id)), "mailbox request provenance").await?;
     let mut values: Vec<gents_protocol::row::AgentRequestRow> = rows(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        values.len() == 1,
-        "notification requires exactly one current request"
-    );
+    if values.len() != 1 {
+        return Err(MailboxError::NotificationRequestNotSingular);
+    }
     let request = values.remove(0);
-    anyhow::ensure!(
-        request.node_did.as_deref() == Some(context.node_did.as_str())
-            && request.requester_did.as_deref() == Some(context.requester_did.as_str())
-            && request
-                .agent_id
-                .as_deref()
-                .is_none_or(|id| id == context.agent_id)
-            && request
-                .session_id
-                .as_ref()
-                .is_none_or(|id| Some(id) == context.session_id.as_ref()),
-        "notification request provenance does not match its execution context"
-    );
+    if !(request.node_did.as_deref() == Some(context.node_did.as_str())
+        && request.requester_did.as_deref() == Some(context.requester_did.as_str())
+        && request
+            .agent_id
+            .as_deref()
+            .is_none_or(|id| id == context.agent_id)
+        && request
+            .session_id
+            .as_ref()
+            .is_none_or(|id| Some(id) == context.session_id.as_ref()))
+    {
+        return Err(MailboxError::NotificationProvenanceMismatch);
+    }
     Ok(request)
 }
 
@@ -157,21 +153,22 @@ fn validate_existing_notification(
     item: &MailboxItem,
     context: &MailboxStampContext,
     args: &FileMailboxItemArgs,
-) -> Result<()> {
-    anyhow::ensure!(
-        item.requester_did == context.requester_did
-            && item.node_did == context.node_did
-            && item.target_node_did == context.node_did
-            && item.target_agent_id == context.agent_id
-            && item.source_id == args.source_id
-            && item.source_kind == args.source_kind.as_str()
-            && item.kind == args.kind.as_str(),
-        "notification identity mismatch"
-    );
-    anyhow::ensure!(
-        item.action == args.action.as_str() && item.expected_collection == args.expected_collection,
-        "open notification has a different handling policy; resolve it before changing policy"
-    );
+) -> Result<(), MailboxError> {
+    if !(item.requester_did == context.requester_did
+        && item.node_did == context.node_did
+        && item.target_node_did == context.node_did
+        && item.target_agent_id == context.agent_id
+        && item.source_id == args.source_id
+        && item.source_kind == args.source_kind.as_str()
+        && item.kind == args.kind.as_str())
+    {
+        return Err(MailboxError::NotificationIdentityMismatch);
+    }
+    if !(item.action == args.action.as_str()
+        && item.expected_collection == args.expected_collection)
+    {
+        return Err(MailboxError::NotificationHandlingPolicyMismatch);
+    }
     Ok(())
 }
 
@@ -181,7 +178,7 @@ pub(super) async fn reuse_or_update(
     args: &FileMailboxItemArgs,
     identity: &NotificationIdentity,
     existing: &MailboxItem,
-) -> Result<MailboxWriteReceipt> {
+) -> Result<MailboxWriteReceipt, MailboxError> {
     validate_existing_notification(existing, context, args)?;
     if matches!(identity, NotificationIdentity::Event) {
         return Ok(MailboxWriteReceipt {
@@ -193,10 +190,14 @@ pub(super) async fn reuse_or_update(
         Box::pin(async move {
             let response = txn.execute(&format!("{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {MAILBOX_FIELDS} }} }}", escape_graphql_string(&existing.doc_id))).await?;
             let values = gents_protocol::graphql::graphql_rows_from_response(&response, MAILBOX_COLLECTION);
-            anyhow::ensure!(values.len() == 1, "condition notification disappeared");
+            if values.len() != 1 {
+                return Err(MailboxError::ConditionNotificationDisappeared);
+            }
             let item: MailboxItem = serde_json::from_value(values[0].clone())?;
             validate_existing_notification(&item, context, args)?;
-            anyhow::ensure!(item.parsed_status() == Some(MailboxStatus::Open), "condition notification became terminal; retry to create a fresh occurrence");
+            if item.parsed_status() != Some(MailboxStatus::Open) {
+                return Err(MailboxError::ConditionNotificationTerminal);
+            }
             let same = item.title == args.title && item.summary == args.summary && item.payload == args.payload;
             let outcome = identity.write_outcome(true, same);
             if outcome == MailboxWriteOutcome::Reused {
@@ -210,7 +211,9 @@ pub(super) async fn reuse_or_update(
                 escape_graphql_string(&Utc::now().to_rfc3339()),
             )).await?;
             let values = gents_protocol::graphql::graphql_rows_from_response(&response, "update_MailboxItem");
-            anyhow::ensure!(values.len() == 1, "condition notification update did not commit exactly one open row");
+            if values.len() != 1 {
+                return Err(MailboxError::ConditionUpdateNotSingular);
+            }
             Ok(MailboxWriteReceipt { outcome, item: serde_json::from_value(values[0].clone())? })
         })
     }).await

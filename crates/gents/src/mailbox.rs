@@ -3,11 +3,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents_protocol::graphql::GraphqlError;
+use gents_protocol::mailbox_question::MailboxQuestionError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+use crate::config_client::{ConfigClientError, TransactionFailure};
+use crate::graphql::GraphqlResponseError;
 
 use crate::document_config::{WriteToolDecl, WriteToolField};
 use crate::graphql::{
@@ -28,6 +32,153 @@ pub use notification::{
 };
 #[cfg(test)]
 mod notification_tests;
+
+#[derive(Debug, thiserror::Error)]
+pub enum MailboxError {
+    #[error("notification requires node identity")]
+    NotificationNodeIdentityMissing,
+    #[error("notification requires requester identity")]
+    NotificationRequesterIdentityMissing,
+    #[error("notification requires agent identity")]
+    NotificationBehaviorIdentityMissing,
+    #[error("notification {mode} identity must not be empty")]
+    NotificationIdentityEmpty { mode: &'static str },
+    #[error("write_document notification requires expected_collection")]
+    NotificationCollectionMissing,
+    #[error("only write_document may set expected_collection")]
+    NotificationCollectionNotAllowed,
+    #[error("notification requires exactly one current request")]
+    NotificationRequestNotSingular,
+    #[error("notification request provenance does not match its execution context")]
+    NotificationProvenanceMismatch,
+    #[error("notification identity mismatch")]
+    NotificationIdentityMismatch,
+    #[error(
+        "open notification has a different handling policy; resolve it before changing policy"
+    )]
+    NotificationHandlingPolicyMismatch,
+    #[error("condition notification disappeared")]
+    ConditionNotificationDisappeared,
+    #[error("condition notification became terminal; retry to create a fresh occurrence")]
+    ConditionNotificationTerminal,
+    #[error("condition notification update did not commit exactly one open row")]
+    ConditionUpdateNotSingular,
+    #[error("mailbox stamping requires non-empty {name}")]
+    StampRequiresField { name: &'static str },
+    #[error("mailbox list requires requester DID")]
+    ListRequiresRequester,
+    #[error("MailboxItem _docID lookup returned more than one row")]
+    DocIdLookupAmbiguous,
+    #[error("MailboxItem item_key lookup returned more than one row")]
+    ItemKeyLookupAmbiguous,
+    #[error("deadline_at must be RFC3339")]
+    DeadlineNotRfc3339(#[source] chrono::ParseError),
+    #[error("mailbox title and source_id must not be empty")]
+    TitleOrSourceEmpty,
+    #[error("write_document requires expected_collection")]
+    WriteDocumentRequiresCollection,
+    #[error("{action} must not set expected_collection")]
+    ExpectedCollectionNotAllowed { action: String },
+    #[error("a question is the item's payload; omit `payload` when passing `question`")]
+    QuestionWithPayload,
+    #[error("serialize mailbox question")]
+    SerializeQuestion(#[source] serde_json::Error),
+    #[error("digest question")]
+    DigestQuestion(#[source] serde_json::Error),
+    #[error("MailboxItem not found")]
+    ItemNotFound,
+    #[error("only requester_did may dismiss a MailboxItem")]
+    DismissRequiresRequester,
+    #[error("MailboxItem has unknown status {status:?}")]
+    UnknownItemStatus { status: String },
+    #[error("dismissed MailboxItem disappeared")]
+    DismissedItemDisappeared,
+    #[error("mailbox transition target must be terminal")]
+    TransitionTargetNotTerminal,
+    #[error("write_document MailboxItem is missing expected_collection")]
+    WriteDocumentMissingCollection,
+    #[error("more than one {collection} row satisfies mailbox key {item_key}")]
+    AmbiguousCollectionMatch {
+        collection: String,
+        item_key: String,
+    },
+    #[error("mailbox sweep row lacks physical _docID")]
+    SweepRowMissingDocId,
+    #[error("mailbox cursor row omitted ordered {key}")]
+    CursorMissingKey { key: &'static str },
+    #[error("mailbox cursor query omitted data")]
+    CursorQueryMissingData,
+    #[error("mailbox cursor query omitted _cursor")]
+    CursorQueryMissingCursor,
+    #[error("mailbox cursor query omitted collection rows")]
+    CursorQueryMissingRows,
+    #[error("decode MailboxItem cursor rows")]
+    DecodeCursorRows(#[source] serde_json::Error),
+    #[error("mailbox cursor query exceeded requested page size")]
+    CursorPageOverflow,
+    #[error("mailbox cursor query omitted _pageInfo.hasNext")]
+    CursorQueryMissingHasNext,
+    #[error("mailbox cursor query hasNext without returning rows")]
+    CursorHasNextWithoutRows,
+    #[error("mailbox occurrence overflow")]
+    OccurrenceOverflow,
+    #[error("mailbox open-row owner mismatch")]
+    OpenRowOwnerMismatch,
+    #[error("mailbox invariant violation: more than one owner-matching open row")]
+    OpenRowInvariant,
+    #[error("create stamped mailbox item returned no row")]
+    CreatedRowMissing,
+    #[error("decode created MailboxItem")]
+    DecodeCreatedItem(#[source] serde_json::Error),
+    #[error("mailbox unique-key collision did not match an open stamped owner/source tuple")]
+    UniqueKeyCollision,
+    #[error("create stamped mailbox item")]
+    CreateStampedItem(#[source] ConfigClientError),
+    #[error("notification policy is only valid for MailboxItem")]
+    NotificationPolicyOutsideMailbox,
+    #[error("MailboxItem requires an explicit notification policy")]
+    NotificationPolicyMissing,
+    #[error("MailboxItem may only be targeted by the canonical `{FILE_MAILBOX_ITEM_TOOL_NAME}` declaration")]
+    CanonicalDeclarationRequired,
+    #[error("mailbox response collection {collection:?} does not exist")]
+    ResponseCollectionMissing { collection: String },
+    #[error("invalid mailbox response collection {collection:?}")]
+    InvalidResponseCollection {
+        collection: String,
+        #[source]
+        source: domain::ResponseSchemaError,
+    },
+    #[error("file_mailbox_item requires a current AgentRequest context")]
+    ToolRuntimeContextMissing,
+    #[error("missing {field}")]
+    ToolRuntimeFieldMissing { field: &'static str },
+    #[error("serialize notification receipt")]
+    RenderReceipt(#[source] crate::tool_output::ToolOutputError),
+    #[error(transparent)]
+    Node(Box<defra_node::Error>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    Identifier(#[from] GraphqlError),
+    #[error(transparent)]
+    Question(#[from] MailboxQuestionError),
+}
+
+type Result<T, E = MailboxError> = std::result::Result<T, E>;
+
+impl TransactionFailure for MailboxError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) | Self::CreateStampedItem(error) => Some(error),
+            Self::Graphql(error) => TransactionFailure::config_client_error(error),
+            _ => None,
+        }
+    }
+}
 
 pub const MAILBOX_COLLECTION: &str = "MailboxItem";
 pub const FILE_MAILBOX_ITEM_TOOL_NAME: &str = "file_mailbox_item";
@@ -241,14 +392,14 @@ pub struct MailboxStampContext {
 }
 
 impl MailboxStampContext {
-    fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<(), MailboxError> {
         for (name, value) in [
             ("requester_did", self.requester_did.as_str()),
             ("node_did", self.node_did.as_str()),
             ("agent_id", self.agent_id.as_str()),
         ] {
             if value.trim().is_empty() {
-                bail!("mailbox stamping requires non-empty {name}");
+                return Err(MailboxError::StampRequiresField { name });
             }
         }
         Ok(())
@@ -309,24 +460,21 @@ pub fn canonical_mailbox_write_decl() -> WriteToolDecl {
     }
 }
 
-pub fn validate_mailbox_write_decl(decl: &WriteToolDecl) -> Result<()> {
+pub fn validate_mailbox_write_decl(decl: &WriteToolDecl) -> Result<(), MailboxError> {
     if decl.collection != MAILBOX_COLLECTION {
-        anyhow::ensure!(
-            decl.notification.is_none(),
-            "notification policy is only valid for MailboxItem"
-        );
+        if decl.notification.is_some() {
+            return Err(MailboxError::NotificationPolicyOutsideMailbox);
+        }
         return Ok(());
     }
     decl.notification
         .as_ref()
-        .context("MailboxItem requires an explicit notification policy")?
+        .ok_or(MailboxError::NotificationPolicyMissing)?
         .validate()?;
     let mut canonical = canonical_mailbox_write_decl();
     canonical.notification = decl.notification.clone();
     if decl != &canonical {
-        bail!(
-            "MailboxItem may only be targeted by the canonical `{FILE_MAILBOX_ITEM_TOOL_NAME}` declaration"
-        );
+        return Err(MailboxError::CanonicalDeclarationRequired);
     }
     Ok(())
 }
@@ -355,7 +503,7 @@ async fn load_prefix_items(
     source_kind: MailboxSourceKind,
     source_id: &str,
     kind: MailboxKind,
-) -> Result<Vec<MailboxItem>> {
+) -> Result<Vec<MailboxItem>, MailboxError> {
     let query = format!(
         r#"{{
             MailboxItem(filter: {{
@@ -374,7 +522,10 @@ async fn load_prefix_items(
     Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
-pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Option<MailboxItem>> {
+pub async fn load_mailbox_item(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<Option<MailboxItem>, MailboxError> {
     let query = format!(
         r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
         escape_graphql_string(doc_id)
@@ -382,7 +533,7 @@ pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Opti
     let response = graphql_with_transaction_retry(node, &query, "load mailbox item").await?;
     let mut found = rows::<MailboxItem>(&response, MAILBOX_COLLECTION)?;
     if found.len() > 1 {
-        bail!("MailboxItem _docID lookup returned more than one row");
+        return Err(MailboxError::DocIdLookupAmbiguous);
     }
     Ok(found.pop())
 }
@@ -390,7 +541,7 @@ pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Opti
 async fn load_mailbox_item_by_key(
     node: &EmbeddedNode,
     item_key: &str,
-) -> Result<Option<MailboxItem>> {
+) -> Result<Option<MailboxItem>, MailboxError> {
     let query = format!(
         r#"{{ MailboxItem(filter: {{ item_key: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
         escape_graphql_string(item_key)
@@ -398,7 +549,7 @@ async fn load_mailbox_item_by_key(
     let response = graphql_with_transaction_retry(node, &query, "load mailbox item by key").await?;
     let mut found = rows::<MailboxItem>(&response, MAILBOX_COLLECTION)?;
     if found.len() > 1 {
-        bail!("MailboxItem item_key lookup returned more than one row");
+        return Err(MailboxError::ItemKeyLookupAmbiguous);
     }
     Ok(found.pop())
 }
@@ -407,7 +558,7 @@ fn validate_file_args(
     args: &mut FileMailboxItemArgs,
     context: &MailboxStampContext,
     _close_collections: &[MailboxCloseCollection],
-) -> Result<()> {
+) -> Result<(), MailboxError> {
     context.validate()?;
     args.title = args.title.trim().to_string();
     args.source_id = args.source_id.trim().to_string();
@@ -421,22 +572,24 @@ fn validate_file_args(
     args.parent_item_id = nonempty(args.parent_item_id.take());
     args.deadline_at = nonempty(args.deadline_at.take());
     if args.title.is_empty() || args.source_id.is_empty() {
-        bail!("mailbox title and source_id must not be empty");
+        return Err(MailboxError::TitleOrSourceEmpty);
     }
     if let Some(deadline) = args.deadline_at.as_deref() {
-        DateTime::parse_from_rfc3339(deadline).context("deadline_at must be RFC3339")?;
+        DateTime::parse_from_rfc3339(deadline).map_err(MailboxError::DeadlineNotRfc3339)?;
     }
     match args.action {
         MailboxAction::WriteDocument => {
             let expected = args
                 .expected_collection
                 .as_deref()
-                .context("write_document requires expected_collection")?;
+                .ok_or(MailboxError::WriteDocumentRequiresCollection)?;
             validate_collection_identifier(expected)?;
         }
         MailboxAction::Ack | MailboxAction::StartRequest => {
             if args.expected_collection.is_some() {
-                bail!("{} must not set expected_collection", args.action.as_str());
+                return Err(MailboxError::ExpectedCollectionNotAllowed {
+                    action: args.action.as_str().to_owned(),
+                });
             }
         }
     }
@@ -447,7 +600,7 @@ pub async fn stamp_create(
     node: &Arc<EmbeddedNode>,
     context: &MailboxStampContext,
     args: FileMailboxItemArgs,
-) -> Result<MailboxItem> {
+) -> Result<MailboxItem, MailboxError> {
     stamp_create_with_close_collections(node, context, args, MAILBOX_CLOSE_COLLECTIONS).await
 }
 
@@ -456,7 +609,7 @@ pub async fn stamp_create_with_close_collections(
     context: &MailboxStampContext,
     args: FileMailboxItemArgs,
     close_collections: &[MailboxCloseCollection],
-) -> Result<MailboxItem> {
+) -> Result<MailboxItem, MailboxError> {
     Ok(stamp_notification(
         node,
         context,
@@ -474,7 +627,7 @@ async fn stamp_notification(
     mut args: FileMailboxItemArgs,
     identity: &NotificationIdentity,
     close_collections: &[MailboxCloseCollection],
-) -> Result<MailboxWriteReceipt> {
+) -> Result<MailboxWriteReceipt, MailboxError> {
     validate_close_collections(close_collections)?;
     validate_file_args(&mut args, context, close_collections)?;
     if let Some(collection) = args.expected_collection.as_deref() {
@@ -497,8 +650,8 @@ async fn stamp_notification(
         [item] if item.requester_did == context.requester_did => {
             return notification::reuse_or_update(node, context, &args, identity, item).await;
         }
-        [_] => bail!("mailbox open-row owner mismatch"),
-        _ => bail!("mailbox invariant violation: more than one owner-matching open row"),
+        [_] => return Err(MailboxError::OpenRowOwnerMismatch),
+        _ => return Err(MailboxError::OpenRowInvariant),
     }
     let occurrence = existing
         .iter()
@@ -506,7 +659,7 @@ async fn stamp_notification(
         .max()
         .unwrap_or(0)
         .checked_add(1)
-        .context("mailbox occurrence overflow")?;
+        .ok_or(MailboxError::OccurrenceOverflow)?;
     let item_key = format!(
         "{}:{}:{}:{occurrence}",
         args.source_kind.as_str(),
@@ -573,10 +726,11 @@ async fn stamp_notification(
     .await;
     if let Ok(response) = &response {
         let document = single_mutation_document(response, "create_MailboxItem")?
-            .context("create stamped mailbox item returned no row")?;
+            .ok_or(MailboxError::CreatedRowMissing)?;
         return Ok(MailboxWriteReceipt {
             outcome: MailboxWriteOutcome::Created,
-            item: serde_json::from_value(document.clone()).context("decode created MailboxItem")?,
+            item: serde_json::from_value(document.clone())
+                .map_err(MailboxError::DecodeCreatedItem)?,
         });
     }
 
@@ -591,26 +745,27 @@ async fn stamp_notification(
         {
             return notification::reuse_or_update(node, context, &args, identity, &item).await;
         }
-        bail!("mailbox unique-key collision did not match an open stamped owner/source tuple");
+        return Err(MailboxError::UniqueKeyCollision);
     }
-    Err(response.expect_err("successful mailbox write returned above"))
-        .context("create stamped mailbox item")
+    Err(MailboxError::CreateStampedItem(
+        response.expect_err("successful mailbox write returned above"),
+    ))
 }
 
 #[derive(Debug)]
-pub struct MailboxToolError(anyhow::Error);
+pub struct MailboxToolError(MailboxError);
 
 impl std::fmt::Display for MailboxToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", ErrorChain(self.0.as_ref()))
+        write!(f, "{}", ErrorChain(&self.0))
     }
 }
 
 impl std::error::Error for MailboxToolError {}
 
-impl From<anyhow::Error> for MailboxToolError {
-    fn from(value: anyhow::Error) -> Self {
-        Self(value)
+impl From<MailboxError> for MailboxToolError {
+    fn from(error: MailboxError) -> Self {
+        Self(error)
     }
 }
 
@@ -681,12 +836,15 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
 
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-            .context("file_mailbox_item requires a current AgentRequest context")?;
-        let request_id = runtime.request_id.context("missing request_id")?;
+            .ok_or(MailboxError::ToolRuntimeContextMissing)?;
+        let missing = |field| MailboxError::ToolRuntimeFieldMissing { field };
+        let request_id = runtime.request_id.ok_or_else(|| missing("request_id"))?;
         let context = MailboxStampContext {
-            requester_did: runtime.requester_did.context("missing requester_did")?,
-            node_did: runtime.node_did.context("missing node_did")?,
-            agent_id: runtime.agent_id.context("missing agent_id")?,
+            requester_did: runtime
+                .requester_did
+                .ok_or_else(|| missing("requester_did"))?,
+            node_did: runtime.node_did.ok_or_else(|| missing("node_did"))?,
+            agent_id: runtime.agent_id.ok_or_else(|| missing("agent_id"))?,
             session_id: runtime.session_id,
         };
         self.policy.validate()?;
@@ -740,7 +898,7 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
         )
         .await?;
         Ok(crate::tool_output::render(&receipt, &["item", "outcome"])
-            .context("serialize notification receipt")?)
+            .map_err(MailboxError::RenderReceipt)?)
     }
 }
 
@@ -750,19 +908,22 @@ struct QuestionFiling {
 }
 
 impl QuestionFiling {
-    fn from_args(args: &MailboxContentArgs, request_id: &str) -> Result<Option<Self>> {
+    fn from_args(
+        args: &MailboxContentArgs,
+        request_id: &str,
+    ) -> Result<Option<Self>, MailboxError> {
         let Some(question) = &args.question else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            nonempty(args.payload.clone()).is_none(),
-            "a question is the item's payload; omit `payload` when passing `question`"
-        );
+        if nonempty(args.payload.clone()).is_some() {
+            return Err(MailboxError::QuestionWithPayload);
+        }
         question.validate()?;
-        let payload = serde_json::to_string(question).context("serialize mailbox question")?;
+        let payload = serde_json::to_string(question).map_err(MailboxError::SerializeQuestion)?;
         use sha2::Digest;
         let digest = sha2::Sha256::digest(
-            serde_json::to_vec(&(args.title.trim(), &payload)).context("digest question")?,
+            serde_json::to_vec(&(args.title.trim(), &payload))
+                .map_err(MailboxError::DigestQuestion)?,
         );
         let question_key: String = digest[..8]
             .iter()
@@ -793,7 +954,7 @@ fn mailbox_close_collection(
         .find(|entry| entry.collection == name)
 }
 
-pub fn validate_close_collections(entries: &[MailboxCloseCollection]) -> Result<()> {
+pub fn validate_close_collections(entries: &[MailboxCloseCollection]) -> Result<(), MailboxError> {
     for entry in entries {
         validate_collection_identifier(entry.collection)?;
         validate_graphql_name(entry.correlation_field)?;
@@ -805,9 +966,9 @@ pub async fn list_mailbox_items(
     node: &EmbeddedNode,
     requester_did: &str,
     status: Option<MailboxStatus>,
-) -> Result<Vec<MailboxItem>> {
+) -> Result<Vec<MailboxItem>, MailboxError> {
     if requester_did.trim().is_empty() {
-        bail!("mailbox list requires requester DID");
+        return Err(MailboxError::ListRequiresRequester);
     }
     let status_filter = status
         .map(|status| format!(r#", status: {{ _eq: "{}" }}"#, status.as_str()))
@@ -829,23 +990,25 @@ pub async fn dismiss_mailbox_item(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
     principal_did: &str,
-) -> Result<MailboxItem> {
+) -> Result<MailboxItem, MailboxError> {
     let item = load_mailbox_item(node, doc_id)
         .await?
-        .context("MailboxItem not found")?;
+        .ok_or(MailboxError::ItemNotFound)?;
     if item.requester_did != principal_did.trim() {
-        bail!("only requester_did may dismiss a MailboxItem");
+        return Err(MailboxError::DismissRequiresRequester);
     }
     if item.parsed_status().is_some_and(MailboxStatus::is_terminal) {
         return Ok(item);
     }
     if item.parsed_status() != Some(MailboxStatus::Open) {
-        bail!("MailboxItem has unknown status {:?}", item.status);
+        return Err(MailboxError::UnknownItemStatus {
+            status: item.status.clone(),
+        });
     }
     transition_open_item(node, &item, MailboxStatus::Dismissed, None).await?;
     load_mailbox_item(node, doc_id)
         .await?
-        .context("dismissed MailboxItem disappeared")
+        .ok_or(MailboxError::DismissedItemDisappeared)
 }
 
 async fn transition_open_item(
@@ -853,9 +1016,9 @@ async fn transition_open_item(
     item: &MailboxItem,
     target: MailboxStatus,
     resolved_doc_id: Option<&str>,
-) -> Result<bool> {
+) -> Result<bool, MailboxError> {
     if !target.is_terminal() {
-        bail!("mailbox transition target must be terminal");
+        return Err(MailboxError::TransitionTargetNotTerminal);
     }
     let now = Utc::now().to_rfc3339();
     let resolved_doc_id = optional_string_field("resolved_doc_id", resolved_doc_id);
@@ -889,9 +1052,9 @@ async fn domain_document_satisfying_item(
     node: &EmbeddedNode,
     item: &MailboxItem,
     entries: &[MailboxCloseCollection],
-) -> Result<Option<String>> {
+) -> Result<Option<String>, MailboxError> {
     let Some(expected) = item.expected_collection.as_deref() else {
-        bail!("write_document MailboxItem is missing expected_collection");
+        return Err(MailboxError::WriteDocumentMissingCollection);
     };
     let field = domain::response_field(node, expected, entries)?;
     let query = format!(
@@ -903,10 +1066,10 @@ async fn domain_document_satisfying_item(
         graphql_with_transaction_retry(node, &query, "find mailbox-correlated document").await?;
     let found = rows::<Value>(&response, expected)?;
     if found.len() > 1 {
-        bail!(
-            "more than one {expected} row satisfies mailbox key {}",
-            item.item_key
-        );
+        return Err(MailboxError::AmbiguousCollectionMatch {
+            collection: expected.to_owned(),
+            item_key: item.item_key.clone(),
+        });
     }
     Ok(found
         .first()
@@ -936,7 +1099,7 @@ pub(crate) async fn sweep_open_mailbox_items(
     node: &Arc<EmbeddedNode>,
     local_did: &str,
     after_doc_id: Option<&str>,
-) -> Result<MailboxSweepPage> {
+) -> Result<MailboxSweepPage, MailboxError> {
     sweep_open_mailbox_items_with_close_collections(
         node,
         local_did,
@@ -963,32 +1126,32 @@ fn open_mailbox_page_query(local_did: &str, after_cursor: Option<&str>) -> Strin
     )
 }
 
-fn mailbox_item_cursor(raw_item: &Value) -> Result<String> {
+fn mailbox_item_cursor(raw_item: &Value) -> Result<String, MailboxError> {
     let doc_id = raw_item
         .get("_docID")
         .and_then(Value::as_str)
-        .context("mailbox sweep row lacks physical _docID")?;
+        .ok_or(MailboxError::SweepRowMissingDocId)?;
     let keys = BTreeMap::from([
         (
             "item_key".to_owned(),
             raw_item
                 .get("item_key")
                 .cloned()
-                .context("mailbox cursor row omitted ordered item_key")?,
+                .ok_or(MailboxError::CursorMissingKey { key: "item_key" })?,
         ),
         (
             "node_did".to_owned(),
             raw_item
                 .get("node_did")
                 .cloned()
-                .context("mailbox cursor row omitted ordered node_did")?,
+                .ok_or(MailboxError::CursorMissingKey { key: "node_did" })?,
         ),
         (
             "status".to_owned(),
             raw_item
                 .get("status")
                 .cloned()
-                .context("mailbox cursor row omitted ordered status")?,
+                .ok_or(MailboxError::CursorMissingKey { key: "status" })?,
         ),
     ]);
     Ok(cursor::Cursor {
@@ -1004,7 +1167,7 @@ async fn sweep_open_mailbox_items_with_close_collections(
     local_did: &str,
     after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
-) -> Result<MailboxSweepPage> {
+) -> Result<MailboxSweepPage, MailboxError> {
     sweep_open_mailbox_items_with_clock(
         node,
         local_did,
@@ -1021,7 +1184,7 @@ async fn sweep_open_mailbox_items_with_clock(
     after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
     read_clock: impl Fn() -> Instant,
-) -> Result<MailboxSweepPage> {
+) -> Result<MailboxSweepPage, MailboxError> {
     validate_close_collections(close_collections)?;
     let response = graphql_with_transaction_retry(
         node,
@@ -1031,30 +1194,28 @@ async fn sweep_open_mailbox_items_with_clock(
     .await?;
     let cursor_page = response
         .data
-        .context("mailbox cursor query omitted data")?
+        .ok_or(MailboxError::CursorQueryMissingData)?
         .get("_cursor")
-        .context("mailbox cursor query omitted _cursor")?
+        .ok_or(MailboxError::CursorQueryMissingCursor)?
         .clone();
     let raw_items: Vec<Value> = serde_json::from_value(
         cursor_page
             .get(MAILBOX_COLLECTION)
-            .context("mailbox cursor query omitted collection rows")?
+            .ok_or(MailboxError::CursorQueryMissingRows)?
             .clone(),
     )
-    .context("decode MailboxItem cursor rows")?;
-    anyhow::ensure!(
-        raw_items.len() <= MAILBOX_SWEEP_PAGE_SIZE,
-        "mailbox cursor query exceeded requested page size"
-    );
+    .map_err(MailboxError::DecodeCursorRows)?;
+    if raw_items.len() > MAILBOX_SWEEP_PAGE_SIZE {
+        return Err(MailboxError::CursorPageOverflow);
+    }
     let has_more = cursor_page
         .get("_pageInfo")
         .and_then(|page_info| page_info.get("hasNext"))
         .and_then(Value::as_bool)
-        .context("mailbox cursor query omitted _pageInfo.hasNext")?;
-    anyhow::ensure!(
-        !has_more || !raw_items.is_empty(),
-        "mailbox cursor query hasNext without returning rows"
-    );
+        .ok_or(MailboxError::CursorQueryMissingHasNext)?;
+    if has_more && raw_items.is_empty() {
+        return Err(MailboxError::CursorHasNextWithoutRows);
+    }
     let mut report = MailboxSweepReport {
         scanned: 0,
         ..Default::default()
@@ -1074,7 +1235,7 @@ async fn sweep_open_mailbox_items_with_clock(
         let item_id = raw_item
             .get("_docID")
             .and_then(Value::as_str)
-            .context("mailbox sweep row lacks physical _docID")?
+            .ok_or(MailboxError::SweepRowMissingDocId)?
             .to_owned();
         report.scanned += 1;
         last_processed_cursor = Some(item_cursor);

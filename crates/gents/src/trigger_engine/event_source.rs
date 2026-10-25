@@ -57,6 +57,24 @@ pub enum EventSourceError {
     TriggerContextTooLarge { max: usize },
     #[error("group trigger agent is unavailable")]
     GroupTriggerAgentUnavailable,
+    #[error("event source seeding cancelled")]
+    SeedingCancelled,
+    #[error("event source correlation seeding cancelled")]
+    CorrelationSeedingCancelled,
+    #[error(transparent)]
+    GraphPipeline(#[from] crate::graph_pipeline::GraphPipelineError),
+    #[error("arrival query omitted data")]
+    ArrivalDataMissing,
+    #[error("arrival query omitted entries")]
+    ArrivalEntriesMissing,
+    #[error("arrival lacks document ID")]
+    ArrivalDocIdMissing,
+    #[error("arrival lacks cursor")]
+    ArrivalCursorMissing,
+    #[error("arrival query omitted next cursor")]
+    ArrivalNextCursorMissing,
+    #[error("source document {doc_id} could not be rendered into a fire")]
+    SourceDocNotRendered { doc_id: String },
 }
 
 impl crate::config_client::TransactionFailure for EventSourceError {
@@ -67,6 +85,9 @@ impl crate::config_client::TransactionFailure for EventSourceError {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             Self::Delivery(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::GraphPipeline(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             _ => None,
@@ -219,19 +240,56 @@ pub(crate) struct SourceSchemaCache {
     by_collection: tokio::sync::Mutex<RapidHashMap<String, Vec<String>>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum NativeProvenanceError {
+    #[error(transparent)]
+    Source(#[from] TriggerEngineError),
+    #[error(transparent)]
+    Workspace(#[from] crate::workspace::overlay::OverlayError),
+    #[error(transparent)]
+    Callback(#[from] crate::callback::CallbackError),
+    #[error("CallbackResult owner does not match Task agent")]
+    CallbackResultOwnerMismatch,
+    #[error("WorkspaceReceipt has no node-scoped IsolatedWorkspace")]
+    WorkspaceReceiptWithoutWorkspace,
+    #[error("workspace identity changed during lookup")]
+    WorkspaceIdentityChanged,
+    #[error("IsolatedWorkspace owner does not match Task agent")]
+    WorkspaceOwnerMismatch,
+    #[error("WorkspaceReceipt work_unit_id does not match IsolatedWorkspace")]
+    WorkspaceWorkUnitMismatch,
+    #[error("IsolatedWorkspace has no originating CallbackInvocation")]
+    WorkspaceWithoutInvocation,
+    #[error("unsupported native provenance source {collection}")]
+    UnsupportedSource { collection: String },
+    #[error("native source has no node-scoped CallbackInvocation")]
+    InvocationMissing,
+    #[error("CallbackInvocation identity changed during lookup")]
+    InvocationIdentityChanged,
+    #[error("CallbackInvocation input is not an object")]
+    InvocationInputNotObject,
+    #[error("CallbackInvocation work_unit_id does not match native source")]
+    InvocationWorkUnitMismatch,
+    #[error("CallbackInvocation has no authored handoff_id")]
+    InvocationHandoffMissing,
+    #[error("native event source is not an object")]
+    SourceNotObject,
+    #[error("native source {field} conflicts with CallbackInvocation input")]
+    RouteFieldConflict { field: &'static str },
+}
+
 async fn enrich_native_outcome_provenance(
     node: &EmbeddedNode,
     collection: &str,
     source: &mut serde_json::Value,
     owner: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), NativeProvenanceError> {
     let (work_unit_id, invocation_id) = match collection {
         "CallbackResult" => {
             let source_owner = required_source_string(source, "owner_node_did")?;
-            anyhow::ensure!(
-                source_owner == owner,
-                "CallbackResult owner does not match Task agent"
-            );
+            if source_owner != owner {
+                return Err(NativeProvenanceError::CallbackResultOwnerMismatch);
+            }
             (
                 required_source_string(source, "work_unit_id")?,
                 required_source_string(source, "invocation_id")?,
@@ -246,57 +304,55 @@ async fn enrich_native_outcome_provenance(
                 owner,
             )
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("WorkspaceReceipt has no node-scoped IsolatedWorkspace")
-            })?;
-            anyhow::ensure!(
-                workspace.workspace_id == workspace_id,
-                "workspace identity changed during lookup"
-            );
-            anyhow::ensure!(
-                workspace.owner_node_did == owner,
-                "IsolatedWorkspace owner does not match Task agent"
-            );
-            anyhow::ensure!(
-                workspace.work_unit_id.as_deref() == Some(expected_work_unit.as_str()),
-                "WorkspaceReceipt work_unit_id does not match IsolatedWorkspace"
-            );
+            .ok_or(NativeProvenanceError::WorkspaceReceiptWithoutWorkspace)?;
+            if workspace.workspace_id != workspace_id {
+                return Err(NativeProvenanceError::WorkspaceIdentityChanged);
+            }
+            if workspace.owner_node_did != owner {
+                return Err(NativeProvenanceError::WorkspaceOwnerMismatch);
+            }
+            if workspace.work_unit_id.as_deref() != Some(expected_work_unit.as_str()) {
+                return Err(NativeProvenanceError::WorkspaceWorkUnitMismatch);
+            }
             (
                 expected_work_unit,
-                workspace.caused_by_invocation_id.ok_or_else(|| {
-                    anyhow::anyhow!("IsolatedWorkspace has no originating CallbackInvocation")
-                })?,
+                workspace
+                    .caused_by_invocation_id
+                    .ok_or(NativeProvenanceError::WorkspaceWithoutInvocation)?,
             )
         }
-        _ => anyhow::bail!("unsupported native provenance source {collection}"),
+        _ => {
+            return Err(NativeProvenanceError::UnsupportedSource {
+                collection: collection.to_owned(),
+            })
+        }
     };
 
     let invocation = crate::callback::load_invocation(node, &invocation_id, owner)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("native source has no node-scoped CallbackInvocation"))?;
-    anyhow::ensure!(
-        invocation.invocation_id == invocation_id && invocation.owner_node_did == owner,
-        "CallbackInvocation identity changed during lookup"
-    );
+        .ok_or(NativeProvenanceError::InvocationMissing)?;
+    if invocation.invocation_id != invocation_id || invocation.owner_node_did != owner {
+        return Err(NativeProvenanceError::InvocationIdentityChanged);
+    }
     let input = invocation
         .input
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("CallbackInvocation input is not an object"))?;
-    anyhow::ensure!(
-        input
-            .get("work_unit_id")
-            .and_then(serde_json::Value::as_str)
-            == Some(work_unit_id.as_str()),
-        "CallbackInvocation work_unit_id does not match native source"
-    );
+        .ok_or(NativeProvenanceError::InvocationInputNotObject)?;
+    if input
+        .get("work_unit_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(work_unit_id.as_str())
+    {
+        return Err(NativeProvenanceError::InvocationWorkUnitMismatch);
+    }
     let handoff_id = input
         .get("handoff_id")
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("CallbackInvocation has no authored handoff_id"))?;
+        .ok_or(NativeProvenanceError::InvocationHandoffMissing)?;
     let source = source
         .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("native event source is not an object"))?;
+        .ok_or(NativeProvenanceError::SourceNotObject)?;
     let mut route_fields = vec![(
         "handoff_id",
         serde_json::Value::String(handoff_id.to_owned()),
@@ -316,10 +372,9 @@ async fn enrich_native_outcome_provenance(
     }
     for (field, value) in route_fields {
         if let Some(existing) = source.get(field) {
-            anyhow::ensure!(
-                existing == &value,
-                "native source {field} conflicts with CallbackInvocation input"
-            );
+            if existing != &value {
+                return Err(NativeProvenanceError::RouteFieldConflict { field });
+            }
         } else {
             source.insert(field.to_owned(), value);
         }
@@ -649,7 +704,7 @@ impl EventSource {
                 }
                 Err(err) => {
                     self.subscription_seed_failures
-                        .insert(collection.clone(), ErrorChain(err.as_ref()).to_string());
+                        .insert(collection.clone(), ErrorChain(&err).to_string());
                     tracing::warn!(
                         source_collection = %collection,
                         %err,
@@ -718,7 +773,7 @@ impl EventSource {
         &mut self,
         collection: &str,
         snapshot: &ActiveRuntimeSnapshot,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         crate::graphql::validate_collection_identifier(collection)?;
         let trigger_ids = snapshot
             .active_event_triggers()
@@ -751,7 +806,7 @@ impl EventSource {
         }
         let ids = tokio::select! {
             biased;
-            _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
+            _ = self.cancel.cancelled() => return Err(EventSourceError::SeedingCancelled),
             ids = super::event_delivery::source_scan::load_doc_ids(&self.node, collection) => ids?,
         };
         let mut doc_ids: RapidHashSet<String> = ids.into_iter().collect();
@@ -779,7 +834,7 @@ impl EventSource {
             crate::graphql::validate_graphql_filter_fragment(filter)?;
             let rows = tokio::select! {
                 biased;
-                _ = self.cancel.cancelled() => anyhow::bail!("event source correlation seeding cancelled"),
+                _ = self.cancel.cancelled() => return Err(EventSourceError::CorrelationSeedingCancelled),
                 rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection, Some(&field), Some(filter)) => rows?,
             };
             for row in rows {
@@ -839,13 +894,12 @@ impl EventSource {
         &mut self,
         collection: &str,
         snapshot: &ActiveRuntimeSnapshot,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let mut last_error = None;
         for attempt in 1..=SEEN_DOCS_SEED_MAX_ATTEMPTS {
-            anyhow::ensure!(
-                !self.cancel.is_cancelled(),
-                "event source seeding cancelled"
-            );
+            if self.cancel.is_cancelled() {
+                return Err(EventSourceError::SeedingCancelled);
+            }
             match self
                 .seed_seen_docs_for_collection(collection, snapshot)
                 .await
@@ -856,7 +910,7 @@ impl EventSource {
             if attempt < SEEN_DOCS_SEED_MAX_ATTEMPTS {
                 tokio::select! {
                     biased;
-                    _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
+                    _ = self.cancel.cancelled() => return Err(EventSourceError::SeedingCancelled),
                     _ = tokio::time::sleep(SEEN_DOCS_SEED_RETRY_DELAY) => {}
                 }
             }

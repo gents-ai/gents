@@ -10,7 +10,7 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::blocked_turn::last_failed_call_in_txn;
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError};
 use crate::goal::{
     claim_continuation, claim_retry_continuation, gate_claimed_goal_continuation,
     gate_goal_continuation, goal_continuation_materialization_step, goal_failure_cause,
@@ -41,6 +41,32 @@ const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
     "NodeReadiness",
     "NodeRuntime",
 ];
+
+#[derive(Debug, thiserror::Error)]
+enum GoalSourceError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error("decoding Goal rows")]
+    GoalRowsDecode(#[source] serde_json::Error),
+    #[error("query goal session requests for {session_id}")]
+    SessionRequestsQuery {
+        session_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("decoding goal session requests")]
+    SessionRequestsDecode(#[source] serde_json::Error),
+    #[error("goal activity requires the physical request document")]
+    PhysicalRequestMissing,
+    #[error("goal activity query omitted data")]
+    ActivityDataMissing,
+    #[error("goal activity query omitted {collection}")]
+    ActivityCollectionMissing { collection: String },
+    #[error("goal activity query omitted canonical output records")]
+    ActivitySegmentsMissing,
+}
 
 fn continuation_evidence_is_current(observed: &GoalDocument, current: &GoalDocument) -> bool {
     observed.doc_id == current.doc_id
@@ -174,7 +200,11 @@ impl GoalSource {
         }
     }
 
-    async fn load_goals(&self, node_did: &str, status_filter: &str) -> Result<Vec<GoalDocument>> {
+    async fn load_goals(
+        &self,
+        node_did: &str,
+        status_filter: &str,
+    ) -> std::result::Result<Vec<GoalDocument>, GoalSourceError> {
         let node_did = escape_graphql_string(node_did);
         let query = format!(
             r#"{{
@@ -200,7 +230,7 @@ impl GoalSource {
                 .cloned()
                 .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
         )
-        .context("decoding Goal rows")
+        .map_err(GoalSourceError::GoalRowsDecode)
     }
 
     async fn build_intent(&self, mut goal: GoalDocument) -> Result<Option<FireIntent>> {
@@ -674,7 +704,7 @@ impl GoalSource {
     async fn latest_request_when_session_idle(
         &self,
         goal: &GoalDocument,
-    ) -> Result<Option<AgentRequestRow>> {
+    ) -> std::result::Result<Option<AgentRequestRow>, GoalSourceError> {
         let node_did = escape_graphql_string(&goal.node_did);
         let session_id = escape_graphql_string(&goal.session_id);
         let query = format!(
@@ -694,7 +724,10 @@ impl GoalSource {
         let response =
             graphql_with_transaction_retry(&self.node, &query, "query goal session requests")
                 .await
-                .with_context(|| format!("query goal session requests for {}", goal.session_id))?;
+                .map_err(|source| GoalSourceError::SessionRequestsQuery {
+                    session_id: goal.session_id.clone(),
+                    source,
+                })?;
         let rows: Vec<AgentRequestRow> = serde_json::from_value(
             response
                 .data
@@ -703,7 +736,7 @@ impl GoalSource {
                 .cloned()
                 .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
         )
-        .context("decoding goal session requests")?;
+        .map_err(GoalSourceError::SessionRequestsDecode)?;
         if !crate::goal::goal_session_is_idle(&rows) {
             return Ok(None);
         }
@@ -714,7 +747,7 @@ impl GoalSource {
         &self,
         goal: &GoalDocument,
         parent_request_id: &str,
-    ) -> Result<bool> {
+    ) -> std::result::Result<bool, GoalSourceError> {
         let node_did = escape_graphql_string(&goal.node_did);
         let session_id = escape_graphql_string(&goal.session_id);
         let goal_id = escape_graphql_string(&goal.goal_id);
@@ -745,12 +778,15 @@ impl GoalSource {
             .is_some_and(|rows| !rows.is_empty()))
     }
 
-    async fn request_has_activity(&self, request: &AgentRequestRow) -> Result<bool> {
+    async fn request_has_activity(
+        &self,
+        request: &AgentRequestRow,
+    ) -> std::result::Result<bool, GoalSourceError> {
         let physical_id = request
             .doc_id
             .as_deref()
             .filter(|id| !id.is_empty())
-            .context("goal activity requires the physical request document")?;
+            .ok_or(GoalSourceError::PhysicalRequestMissing)?;
         let request_doc_id = escape_graphql_string(physical_id);
         let segment_fields = crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
         let query = format!(
@@ -769,18 +805,20 @@ impl GoalSource {
         let data = response
             .data
             .as_ref()
-            .context("goal activity query omitted data")?;
-        let has_rows = |collection: &str| -> Result<bool> {
+            .ok_or(GoalSourceError::ActivityDataMissing)?;
+        let has_rows = |collection: &str| -> std::result::Result<bool, GoalSourceError> {
             Ok(!data
                 .get(collection)
                 .and_then(|value| value.as_array())
-                .with_context(|| format!("goal activity query omitted {collection}"))?
+                .ok_or_else(|| GoalSourceError::ActivityCollectionMissing {
+                    collection: collection.to_owned(),
+                })?
                 .is_empty())
         };
         let segments = data
             .get("AgentOutputSegment")
             .and_then(|value| value.as_array())
-            .context("goal activity query omitted canonical output records")?
+            .ok_or(GoalSourceError::ActivitySegmentsMissing)?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
             .collect::<Result<Vec<_>, _>>()?;

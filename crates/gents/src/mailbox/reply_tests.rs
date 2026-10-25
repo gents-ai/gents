@@ -66,13 +66,19 @@ async fn persisted_request(
     AgentRequest::try_from(record).unwrap()
 }
 
-async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) -> Result<()> {
+async fn claim(
+    node: &Arc<EmbeddedNode>,
+    request: &AgentRequest,
+    abort: bool,
+) -> anyhow::Result<()> {
     ConfigAccess::transact_local_write(node, None, "test.mailbox_reply", |txn| Box::pin(async move {
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
             escape_graphql_string(&request.doc_id));
         txn.execute_local_response(&mutation).await?;
         claim_reply_in_txn(txn, request, &Utc::now().to_rfc3339()).await?;
-        anyhow::ensure!(!abort, "injected transaction failure");
+        if abort {
+            return Err(anyhow::Error::msg("injected transaction failure"));
+        }
         Ok(())
     })).await
 }

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
 use crate::config_client::ConfigClientError;
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, GraphqlResponseError};
 use crate::lifecycle::queue::drain_automated_wakeups_in_txn;
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +36,50 @@ pub enum InterruptError {
     FetchAmbiguous,
     #[error("interrupt request fetch is ambiguous within node scope")]
     FetchAmbiguousNodeScope,
+    #[error("interrupt request query omitted rows")]
+    RequestQueryOmitted,
+    #[error("interrupt request is missing or ambiguous within selected scope")]
+    RequestMissingOrAmbiguous,
+    #[error("interrupt request missing logical identity")]
+    RequestLogicalIdentityMissing,
+    #[error("interrupt request missing physical identity")]
+    RequestPhysicalIdentityMissing,
+    #[error("interrupt request missing session identity")]
+    RequestSessionIdentityMissing,
+    #[error("interrupt request missing node identity")]
+    RequestNodeIdentityMissing,
+    #[error("interrupt mutation omitted affected rows")]
+    MutationRowsOmitted,
+    #[error("interrupt mutation did not update the selected physical request")]
+    MutationSelectionMismatch,
+    #[error("active session request query omitted rows")]
+    ActiveSessionRowsOmitted,
+    #[error("multiple active requests in exact session scope")]
+    ActiveSessionAmbiguous,
+    #[error("active session request omitted _docID")]
+    ActiveSessionDocIdMissing,
+    #[error("active session request omitted request_id")]
+    ActiveSessionRequestIdMissing,
+    #[error("active request query omitted rows")]
+    ActiveRequestRowsOmitted,
+    #[error("multiple active physical requests in exact session scope")]
+    ActivePhysicalAmbiguous,
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlResponseError),
+}
+
+impl crate::config_client::TransactionFailure for InterruptError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Requests a soft interrupt by latching `interrupt_requested_at` on the
@@ -172,27 +216,25 @@ async fn interrupt_request_matching_in_txn(
     let lookup = txn.execute(&format!(r#"{{AgentRequest(filter: {{{filter}}}, limit: 2) {{_docID request_id session_id node_did requester_did interrupt_requested_at}}}}"#)).await?;
     let rows = lookup["data"]["AgentRequest"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("interrupt request query omitted rows"))?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "interrupt request is missing or ambiguous within selected scope"
-    );
+        .ok_or(InterruptError::RequestQueryOmitted)?;
+    if rows.len() != 1 {
+        return Err(InterruptError::RequestMissingOrAmbiguous.into());
+    }
     let row = rows[0].clone();
-    anyhow::ensure!(
-        row["request_id"].as_str().is_some(),
-        "interrupt request missing logical identity"
-    );
+    if row["request_id"].as_str().is_none() {
+        return Err(InterruptError::RequestLogicalIdentityMissing.into());
+    }
     let physical = row["_docID"]
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("interrupt request missing physical identity"))?;
+        .ok_or(InterruptError::RequestPhysicalIdentityMissing)?;
     let session_id = row["session_id"]
         .as_str()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("interrupt request missing session identity"))?;
+        .ok_or(InterruptError::RequestSessionIdentityMissing)?;
     let node_did = row["node_did"]
         .as_str()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("interrupt request missing node identity"))?;
+        .ok_or(InterruptError::RequestNodeIdentityMissing)?;
     crate::goal::pause_goal_for_interrupt_in_txn(txn, node_did, session_id).await?;
     if row["interrupt_requested_at"]
         .as_str()
@@ -205,11 +247,10 @@ async fn interrupt_request_matching_in_txn(
     let result = txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{physical}", filter: {{_docID: {{_eq: "{physical}"}}}}, input: {{interrupt_requested_at: "{now}"}}) {{_docID}}}}"#)).await?;
     let updated = result["data"]["update_AgentRequest"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("interrupt mutation omitted affected rows"))?;
-    anyhow::ensure!(
-        updated.len() == 1 && updated[0]["_docID"] == row["_docID"],
-        "interrupt mutation did not update the selected physical request"
-    );
+        .ok_or(InterruptError::MutationRowsOmitted)?;
+    if !(updated.len() == 1 && updated[0]["_docID"] == row["_docID"]) {
+        return Err(InterruptError::MutationSelectionMismatch.into());
+    }
     Ok(drain_automated_wakeups_in_txn(
         txn,
         session_id,
@@ -237,20 +278,19 @@ pub(crate) async fn interrupt_active_session_in_txn(
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
-        .context("active session request query omitted rows")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "multiple active requests in exact session scope"
-    );
+        .ok_or(InterruptError::ActiveSessionRowsOmitted)?;
+    if rows.len() > 1 {
+        return Err(InterruptError::ActiveSessionAmbiguous.into());
+    }
     let Some(row) = rows.first() else {
         return Ok(None);
     };
     let doc_id = row["_docID"]
         .as_str()
-        .context("active session request omitted _docID")?;
+        .ok_or(InterruptError::ActiveSessionDocIdMissing)?;
     let request_id = row["request_id"]
         .as_str()
-        .context("active session request omitted request_id")?
+        .ok_or(InterruptError::ActiveSessionRequestIdMissing)?
         .to_owned();
     let filter = exact_request_filter(doc_id, node_did, requester_did)?;
     interrupt_request_matching_in_txn(txn, &filter).await?;
@@ -262,7 +302,7 @@ pub(crate) async fn active_session_request(
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
+) -> Result<Option<gents_protocol::row::AgentRequestRow>, InterruptError> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let response = graphql_with_transaction_retry(
         node,
@@ -270,20 +310,19 @@ pub(crate) async fn active_session_request(
         "active request lookup",
     )
     .await?;
-    anyhow::ensure!(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .is_some(),
-        "active request query omitted rows"
-    );
+    if response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .is_none()
+    {
+        return Err(InterruptError::ActiveRequestRowsOmitted);
+    }
     let mut rows: Vec<gents_protocol::row::AgentRequestRow> =
         crate::graphql::rows(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "multiple active physical requests in exact session scope"
-    );
+    if rows.len() > 1 {
+        return Err(InterruptError::ActivePhysicalAmbiguous);
+    }
     Ok(rows.pop())
 }
 

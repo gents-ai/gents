@@ -2,27 +2,52 @@ use super::*;
 
 const CORRELATION_FIELD: &str = "mailbox_item_key";
 
+#[derive(Debug, thiserror::Error)]
+pub enum ResponseSchemaError {
+    #[error(transparent)]
+    Identifier(#[from] GraphqlError),
+    #[error(transparent)]
+    Sdl(#[from] query::QueryError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("missing mailbox_item_key correlation field")]
+    CorrelationFieldMissing,
+    #[error("missing response contract field")]
+    ContractFieldMissing,
+    #[error("mailbox correlation field must be an immutable String")]
+    CorrelationFieldNotImmutableString,
+    #[error("mailbox correlation field requires its own unique index")]
+    CorrelationFieldNotUniquelyIndexed,
+}
+
 // This validates correlation, not response authority or approval. DefraDB ACP
 // owns document writes; the domain workflow interprets the response contents.
 pub(super) fn response_field(
     node: &EmbeddedNode,
     collection: &str,
     entries: &[MailboxCloseCollection],
-) -> Result<&'static str> {
+) -> Result<&'static str, MailboxError> {
     validate_collection_identifier(collection)?;
     let field = mailbox_close_collection(entries, collection)
         .map_or(CORRELATION_FIELD, |entry| entry.correlation_field);
     let version = node
-        .get_collection(collection)?
+        .get_collection(collection)
+        .map_err(|error| MailboxError::Node(Box::new(error)))?
         .map(serde_json::to_value)
         .transpose()?
-        .with_context(|| format!("mailbox response collection {collection:?} does not exist"))?;
-    validate_response_schema(&version, field)
-        .with_context(|| format!("invalid mailbox response collection {collection:?}"))?;
+        .ok_or_else(|| MailboxError::ResponseCollectionMissing {
+            collection: collection.to_owned(),
+        })?;
+    validate_response_schema(&version, field).map_err(|source| {
+        MailboxError::InvalidResponseCollection {
+            collection: collection.to_owned(),
+            source,
+        }
+    })?;
     Ok(field)
 }
 
-fn validate_response_schema(version: &Value, field: &str) -> Result<()> {
+fn validate_response_schema(version: &Value, field: &str) -> Result<(), ResponseSchemaError> {
     validate_graphql_name(field)?;
     let schema = query::parse_sdl(&format!(
         "type MailboxResponseContract {{ {field}: String @immutable @index(unique: true) }}"
@@ -33,23 +58,21 @@ fn validate_response_schema(version: &Value, field: &str) -> Result<()> {
             .as_array()
             .and_then(|fields| fields.iter().find(|entry| entry["Name"] == field).cloned())
     };
-    let actual = find_field(version).context("missing mailbox_item_key correlation field")?;
-    let expected = find_field(&expected).context("missing response contract field")?;
-    anyhow::ensure!(
-        actual["Kind"] == expected["Kind"] && actual["Immutable"] == true,
-        "mailbox correlation field must be an immutable String"
-    );
-    anyhow::ensure!(
-        version["Indexes"].as_array().is_some_and(|indexes| {
-            indexes.iter().any(|index| {
-                index["Unique"] == true
-                    && index["Fields"]
-                        .as_array()
-                        .is_some_and(|fields| fields.len() == 1 && fields[0]["Name"] == field)
-            })
-        }),
-        "mailbox correlation field requires its own unique index"
-    );
+    let actual = find_field(version).ok_or(ResponseSchemaError::CorrelationFieldMissing)?;
+    let expected = find_field(&expected).ok_or(ResponseSchemaError::ContractFieldMissing)?;
+    if !(actual["Kind"] == expected["Kind"] && actual["Immutable"] == true) {
+        return Err(ResponseSchemaError::CorrelationFieldNotImmutableString);
+    }
+    if !version["Indexes"].as_array().is_some_and(|indexes| {
+        indexes.iter().any(|index| {
+            index["Unique"] == true
+                && index["Fields"]
+                    .as_array()
+                    .is_some_and(|fields| fields.len() == 1 && fields[0]["Name"] == field)
+        })
+    }) {
+        return Err(ResponseSchemaError::CorrelationFieldNotUniquelyIndexed);
+    }
     Ok(())
 }
 

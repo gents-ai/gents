@@ -1,7 +1,6 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
-use anyhow::Context;
 use gents_protocol::event_delivery::EventConsumer;
 
 pub(super) struct PendingCheckpoint {
@@ -326,16 +325,18 @@ impl EventSource {
         let response = crate::graphql::graphql_with_transaction_retry(&self.node, &format!(
             "{{ _documentArrivals(collection: \"{}\", after: \"{}\", limit: 128) {{ head next entries {{ cursor docID }} }} }}",
             escape_graphql_string(&record.cursor.source_collection), escape_graphql_string(&record.cursor.after)), "trigger.read_arrivals").await?;
-        let data = response.data.context("arrival query omitted data")?;
+        let data = response.data.ok_or(EventSourceError::ArrivalDataMissing)?;
         let page = &data["_documentArrivals"];
         let entries = page["entries"]
             .as_array()
-            .context("arrival query omitted entries")?;
+            .ok_or(EventSourceError::ArrivalEntriesMissing)?;
         for entry in entries {
             let doc_id = entry["docID"]
                 .as_str()
-                .context("arrival lacks document ID")?;
-            let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
+                .ok_or(EventSourceError::ArrivalDocIdMissing)?;
+            let position = entry["cursor"]
+                .as_str()
+                .ok_or(EventSourceError::ArrivalCursorMissing)?;
             if !self.probe_filter(doc_id, trigger).await? {
                 self.advance_arrival(&owner, trigger, position).await?;
                 continue;
@@ -353,7 +354,10 @@ impl EventSource {
                 if build.correlation_pending {
                     self.commit_delivery_seen_state(&trigger.source_collection, doc_id, &build);
                 }
-                anyhow::bail!("source document {doc_id} could not be rendered into a fire")
+                return Err(EventSourceError::SourceDocNotRendered {
+                    doc_id: doc_id.to_owned(),
+                }
+                .into());
             };
             let source_document = intent.doc_vars.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -385,7 +389,7 @@ impl EventSource {
         }
         let next = page["next"]
             .as_str()
-            .context("arrival query omitted next cursor")?;
+            .ok_or(EventSourceError::ArrivalNextCursorMissing)?;
         if next != record.cursor.after {
             self.advance_arrival(&owner, trigger, next).await?;
         }

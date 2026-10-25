@@ -1,7 +1,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
@@ -23,6 +23,26 @@ pub(crate) enum MaterializerError {
     ResolveAgent { task_id: String, reason: String },
     #[error("agent {agent_id} has no backend binding; scheduled fires require a backend")]
     AgentBackendMissing { agent_id: String },
+    #[error("Manual trigger materialization must not carry trigger_id")]
+    ManualTriggerCarriesTrigger,
+    #[error("goal token budget requires a goal objective template")]
+    GoalBudgetWithoutObjective,
+    #[error("workspace-binding-pending AgentRequest is missing _docID")]
+    WorkspaceBindingDocIdMissing,
+    #[error("workspace-binding-pending AgentRequest is missing node_did")]
+    WorkspaceBindingNodeDidMissing,
+    #[error("workspace-binding-pending AgentRequest is missing workspace_owner_node_did")]
+    WorkspaceBindingOwnerMissing,
+    #[error("workspace-binding-pending AgentRequest is missing workspace_id")]
+    WorkspaceBindingWorkspaceIdMissing,
+    #[error("workspace-binding-pending AgentRequest is missing workspace_authority")]
+    WorkspaceBindingAuthorityMissing,
+    #[error("deterministic goal Task request id is not unique")]
+    GoalTaskRequestNotUnique,
+    #[error("decoding deterministic goal Task request binding")]
+    GoalTaskBindingDecode(#[source] serde_json::Error),
+    #[error("deterministic goal Task request identity conflicts with another binding")]
+    GoalTaskRequestConflict,
 }
 
 pub(crate) struct ProductionMaterializer {
@@ -113,24 +133,30 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
         let request_doc_id = request
             .doc_id
             .as_deref()
-            .context("workspace-binding-pending AgentRequest is missing _docID")?;
+            .ok_or(MaterializerError::WorkspaceBindingDocIdMissing)?;
         let node_did = request
             .node_did
             .as_deref()
-            .context("workspace-binding-pending AgentRequest is missing node_did")?;
+            .ok_or(MaterializerError::WorkspaceBindingNodeDidMissing)?;
         let lineage = WorkspaceLineage {
-            workspace_owner_node_did: Some(request.workspace_owner_node_did.clone().context(
-                "workspace-binding-pending AgentRequest is missing workspace_owner_node_did",
-            )?),
+            workspace_owner_node_did: Some(
+                request
+                    .workspace_owner_node_did
+                    .clone()
+                    .ok_or(MaterializerError::WorkspaceBindingOwnerMissing)?,
+            ),
             workspace_id: Some(
                 request
                     .workspace_id
                     .clone()
-                    .context("workspace-binding-pending AgentRequest is missing workspace_id")?,
+                    .ok_or(MaterializerError::WorkspaceBindingWorkspaceIdMissing)?,
             ),
-            workspace_authority: Some(request.workspace_authority.clone().context(
-                "workspace-binding-pending AgentRequest is missing workspace_authority",
-            )?),
+            workspace_authority: Some(
+                request
+                    .workspace_authority
+                    .clone()
+                    .ok_or(MaterializerError::WorkspaceBindingAuthorityMissing)?,
+            ),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
         };
         match crate::workspace::materialize_workspace_binding(
@@ -212,8 +238,8 @@ impl MaterializerHandle for ProductionMaterializer {
             && (trigger_id.is_some() || trigger_doc_id.is_some())
         {
             return Box::pin(async {
-                Err(anyhow!(
-                    "Manual trigger materialization must not carry trigger_id"
+                Err(anyhow::Error::from(
+                    MaterializerError::ManualTriggerCarriesTrigger,
                 ))
             });
         }
@@ -379,10 +405,11 @@ impl MaterializerHandle for ProductionMaterializer {
                 .await?;
                 (enqueued, conversation_title)
             } else {
-                anyhow::ensure!(
-                    goal_token_budget.is_none(),
-                    "goal token budget requires a goal objective template"
-                );
+                if goal_token_budget.is_some() {
+                    return Err(anyhow::Error::from(
+                        MaterializerError::GoalBudgetWithoutObjective,
+                    ));
+                }
                 let request_id = prepared_ids
                     .as_ref()
                     .map(|(request, _)| request.clone())
@@ -615,16 +642,17 @@ impl MaterializerHandle for ProductionMaterializer {
                 .and_then(serde_json::Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            anyhow::ensure!(
-                requests.len() <= 1,
-                "deterministic goal Task request id is not unique"
-            );
+            if requests.len() > 1 {
+                return Err(anyhow::Error::from(
+                    MaterializerError::GoalTaskRequestNotUnique,
+                ));
+            }
             let observed = requests
                 .first()
                 .cloned()
                 .map(serde_json::from_value::<crate::goal::TaskGoalRequestBinding>)
                 .transpose()
-                .context("decoding deterministic goal Task request binding")?;
+                .map_err(MaterializerError::GoalTaskBindingDecode)?;
             let decision =
                 crate::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
             match decision.disposition {
@@ -632,11 +660,9 @@ impl MaterializerHandle for ProductionMaterializer {
                 crate::goal::TaskGoalFireRecoveryDisposition::Recovered => {
                     Ok(decision.recovered_request_id)
                 }
-                crate::goal::TaskGoalFireRecoveryDisposition::Conflict => {
-                    anyhow::bail!(
-                        "deterministic goal Task request identity conflicts with another binding"
-                    )
-                }
+                crate::goal::TaskGoalFireRecoveryDisposition::Conflict => Err(anyhow::Error::from(
+                    MaterializerError::GoalTaskRequestConflict,
+                )),
             }
         })
     }

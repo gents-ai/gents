@@ -10,6 +10,8 @@ use crate::ensure_runtime_schemas;
 use crate::tool_surface::ToolCeiling;
 use crate::toolset::ToolSet;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 async fn install_default_behavior_chain(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, did, agent_id).await;
     crate::document_config::ensure_node(node, did)
@@ -236,7 +238,7 @@ async fn write_document<T>(
     node: &Arc<EmbeddedNode>,
     collection: crate::Collection,
     document: &T,
-) -> anyhow::Result<()>
+) -> TestResult
 where
     T: serde::Serialize,
 {
@@ -376,7 +378,7 @@ async fn upsert_tools(node: &Arc<EmbeddedNode>, tools: &Tools) {
         .unwrap();
 }
 
-async fn upsert_agent(node: &Arc<EmbeddedNode>, agent: &Agent) -> anyhow::Result<()> {
+async fn upsert_agent(node: &Arc<EmbeddedNode>, agent: &Agent) -> TestResult {
     write_document(node, crate::Collection::Agent, agent).await
 }
 

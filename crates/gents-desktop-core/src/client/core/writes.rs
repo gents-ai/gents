@@ -416,7 +416,7 @@ impl ClientCore {
                 self.clear_mutation_error();
                 Ok(item)
             }
-            Err(error) => Err(self.record_mutation_error("dismiss mailbox item", error)),
+            Err(error) => Err(self.record_mutation_error("dismiss mailbox item", error.into())),
         }
     }
 

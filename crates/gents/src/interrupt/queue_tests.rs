@@ -49,7 +49,7 @@ async fn insert_request(node: &Arc<EmbeddedNode>, input: Value) -> String {
                     &json!({"input": input}),
                 )
                 .await?;
-            Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")?)
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")?)
         })
     })
     .await
@@ -576,10 +576,9 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
                     let filter = &filter;
                     Box::pin(async move {
                         let drained = interrupt_request_matching_in_txn(txn, filter).await?;
-                        anyhow::ensure!(
-                            drained.len() == expected_drained,
-                            "captured modeled pending wake count"
-                        );
+                        if drained.len() != expected_drained {
+                            return Err(anyhow::Error::msg("captured modeled pending wake count"));
+                        }
                         if !paused.swap(true, Ordering::SeqCst) {
                             reached.notify_one();
                             release.notified().await;

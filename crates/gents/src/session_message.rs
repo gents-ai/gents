@@ -97,6 +97,10 @@ pub enum SessionMessageError {
     CursorOtherSessionScope,
     #[error("session inspection requires a valid caller DID")]
     InvalidCallerDid,
+    #[error("session-message commit outcome is unknown after: {error}")]
+    CommitOutcomeUnknown { error: String },
+    #[error("{0}")]
+    MutationRender(&'static str),
 }
 
 #[cfg(test)]
@@ -661,11 +665,8 @@ pub(crate) async fn commit(
     )
     .await?
     .filter(|_| durable.is_running())
-    .with_context(|| {
-        format!(
-            "session-message commit outcome is unknown after: {}",
-            ErrorChain(error.as_ref())
-        )
+    .ok_or_else(|| SessionMessageError::CommitOutcomeUnknown {
+        error: ErrorChain(error.as_ref()).to_string(),
     })?;
     *lifecycle = durable;
     Ok(receipt)
@@ -734,7 +735,9 @@ pub(crate) async fn stage_planned_write_in_txn(
     match &plan.write {
         PlannedWrite::Request { create, .. } => {
             ensure_planned_hop_current(txn, create).await?;
-            let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+            let mutation = create
+                .graphql_mutation()
+                .map_err(SessionMessageError::MutationRender)?;
             let response = txn.execute(&mutation).await?;
             let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest")?;
             Ok(crate::lifecycle::EnqueuedAgentRequest {

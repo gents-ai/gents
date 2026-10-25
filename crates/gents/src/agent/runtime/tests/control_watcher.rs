@@ -3,7 +3,6 @@ use super::*;
 use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::identity::NodeIdentity;
 use crate::runtime_status::{ReconcilePhase, RECONCILE_PHASE_EVENT_TARGET};
-use anyhow::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex as StdMutex;
 use tracing::field::{Field, Visit};
@@ -95,8 +94,10 @@ const TEST_CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
 
 const PROPOSAL_TIMEOUT: Duration = Duration::from_secs(5);
 
-async fn run_test_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
-    run_control_watcher_with_timing(inputs, TEST_CONTROL_WATCHER_TIMING).await
+async fn run_test_control_watcher(
+    inputs: ControlWatcherInputs,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    Ok(run_control_watcher_with_timing(inputs, TEST_CONTROL_WATCHER_TIMING).await?)
 }
 
 async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, enabled: bool) {

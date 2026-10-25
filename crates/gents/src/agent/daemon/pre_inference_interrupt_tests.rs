@@ -1,6 +1,8 @@
 use gents_protocol::error_chain::ErrorChain;
 use tracing::instrument::WithSubscriber;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[derive(Clone, Default)]
 pub(in crate::agent::daemon) struct InterruptionCapture(Arc<std::sync::Mutex<Vec<String>>>);
 
@@ -108,7 +110,7 @@ async fn seed_titled_session(
     node: &Arc<defra_node::EmbeddedNode>,
     request: &AgentRequest,
     agent_config: &ResolvedAgent,
-) -> anyhow::Result<()> {
+) -> TestResult {
     let title = gents_protocol::session::SessionTitle {
         text: "pre-inference interrupt".into(),
         source: gents_protocol::session::SessionTitleSource::Task,
@@ -135,16 +137,16 @@ async fn seed_titled_session(
         },
     )
     .await?;
-    anyhow::ensure!(created, "seeded session already existed without this title");
+    if !created {
+        return Err("seeded session already existed without this title".into());
+    }
     Ok(())
 }
 
 async fn request_terminal_row(
     node: &defra_node::EmbeddedNode,
     request_doc_id: &str,
-) -> anyhow::Result<serde_json::Value> {
-    use anyhow::Context;
-
+) -> TestResult<serde_json::Value> {
     let doc_id = crate::graphql::escape_graphql_string(request_doc_id);
     let response = crate::graphql::graphql_with_transaction_retry(
         node,
@@ -156,14 +158,15 @@ async fn request_terminal_row(
         "pre_inference_interrupt_request_row",
     )
     .await?;
-    response
+    let row = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .context("AgentRequest read selected no row for the claimed request")
+        .ok_or("AgentRequest read selected no row for the claimed request")?;
+    Ok(row)
 }
 
 #[tokio::test]

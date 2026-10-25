@@ -23,6 +23,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PauseAt {
     Selection,
@@ -175,7 +177,7 @@ impl ObservedDelivery {
     }
 }
 
-async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> Result<String> {
+async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> TestResult<String> {
     let fields = demand
         .reference_fields()
         .into_iter()
@@ -203,7 +205,7 @@ async fn receipt_row(
     node: &Arc<EmbeddedNode>,
     demand: &FileImageDemand,
     status: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let query = format!(
         r#"{{ FileImageHydrationRequest(filter: {{ request_key: {{ _eq: "{}" }} }}) {{
             _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id
@@ -216,8 +218,8 @@ async fn receipt_row(
             let result = ConfigAccess::local(node.clone()).execute(&query).await?;
             let rows = result["data"]["FileImageHydrationRequest"]
                 .as_array()
-                .context("file review demand rows")?;
-            anyhow::ensure!(rows.len() <= 1, "file review demand became ambiguous");
+                .ok_or("file review demand rows")?;
+            assert!(rows.len() <= 1, "file review demand became ambiguous");
             if let Some(row) = rows.first().filter(|row| row["status"] == status) {
                 return Ok(row.clone());
             }
@@ -225,23 +227,23 @@ async fn receipt_row(
         }
     })
     .await
-    .context("file review receipt did not reach its expected state")?
+    .map_err(|error| format!("file review receipt did not reach its expected state: {error}"))?
 }
 
 async fn verified(
     row: &Value,
     demand: &FileImageDemand,
     identity: &dyn NodeIdentity,
-) -> Result<VerifiedFileImageReceipt> {
+) -> TestResult<VerifiedFileImageReceipt> {
     for (name, expected) in demand.reference_fields() {
-        anyhow::ensure!(
+        assert!(
             row[name].as_str() == Some(expected),
             "receipt changed {name}"
         );
     }
     let selection = match row["status"].as_str() {
         Some("rejected") => {
-            anyhow::ensure!(
+            assert!(
                 row["observation_doc_id"].is_null(),
                 "refusal named an image"
             );
@@ -252,17 +254,17 @@ async fn verified(
             Value::String(document) => FileImageSelection::Selected {
                 document: document.clone(),
             },
-            _ => anyhow::bail!("invalid image identity"),
+            _ => return Err("invalid image identity".into()),
         },
-        _ => anyhow::bail!("receipt is not terminal"),
+        _ => return Err("receipt is not terminal".into()),
     };
-    let text = |name: &str| -> Result<String> {
+    let text = |name: &str| -> TestResult<String> {
         Ok(row[name]
             .as_str()
-            .with_context(|| format!("receipt omitted {name}"))?
+            .ok_or_else(|| format!("receipt omitted {name}"))?
             .into())
     };
-    VerifiedFileImageReceipt::verify(
+    Ok(VerifiedFileImageReceipt::verify(
         FileImageHydrationReceipt {
             version: FILE_IMAGE_RECEIPT_VERSION,
             demand: demand.clone(),
@@ -275,10 +277,10 @@ async fn verified(
         demand,
         identity,
     )
-    .await
+    .await?)
 }
 
-async fn wait_admitted(store: &GraphqlHydrationStore, demand: &FileImageDemand) -> Result<()> {
+async fn wait_admitted(store: &GraphqlHydrationStore, demand: &FileImageDemand) -> TestResult<()> {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let facts = store.admission(demand).await?;
@@ -292,10 +294,10 @@ async fn wait_admitted(store: &GraphqlHydrationStore, demand: &FileImageDemand) 
         }
     })
     .await
-    .context("native enrollment and pairing did not admit file review")?
+    .map_err(|error| format!("native enrollment and pairing did not admit file review: {error}"))?
 }
 
-async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
+async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> TestResult<()> {
     let directory = tempfile::tempdir()?;
     let source: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
         directory.path().join("source.key"),
@@ -319,7 +321,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     wait_for_active_peer(&client_admin).await;
     let client_peer = client_node
         .p2p()
-        .context("client P2P")?
+        .ok_or("client P2P")?
         .local_peer_id()
         .await?;
     let enrollment = authorize_enrollment_peer(
@@ -357,7 +359,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         .active
         .iter()
         .find(|entry| entry.request.request_id == enrollment)
-        .context("active enrollment")?;
+        .ok_or("active enrollment")?;
     let session = "recorded-image-fence";
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     ensure_fixture_session(
@@ -391,7 +393,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     let response = ConfigAccess::write_local(
         &source_node,
         "test.file_review.request",
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+        &create.graphql_mutation()?,
     )
     .await?;
     let request_doc = crate::graphql::created_doc_id(&response, "AgentRequest")?;
@@ -405,7 +407,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     )
     .verify_fresh(&request, "general")
     .await
-    .map_err(|error| anyhow::anyhow!("{error}"))?;
+    .map_err(|error| format!("{error}"))?;
     let mut request = RequestLifecycle::new_with_node_did(
         source_node.clone(),
         "general",
@@ -413,7 +415,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         request,
         60,
     );
-    anyhow::ensure!(
+    assert!(
         request.claim().await? == ClaimOutcome::Claimed,
         "request did not claim"
     );
@@ -421,8 +423,8 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         source_node.clone(), &mut request, source.did(), 0, "write_file", "recorded-image-fence-write",
         json!({"path":"recorded.txt","content":"recorded after\n","overwrite":true,"raw_json":true}),
         AwaitMode::Foreground, true,
-    ).await.map_err(anyhow::Error::from_boxed)?;
-    let physical = tool.doc_id().context("accepted physical tool")?.to_owned();
+    ).await?;
+    let physical = tool.doc_id().ok_or("accepted physical tool")?.to_owned();
     let workspace = directory.path().join("workspace");
     std::fs::create_dir(&workspace)?;
     let workspace = std::fs::canonicalize(workspace)?;
@@ -454,7 +456,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     )
     .await?
     else {
-        anyhow::bail!("native mutator did not retain its file images")
+        return Err("native mutator did not retain its file images".into());
     };
     let mut demand = FileImageDemand {
         admission: HydrationRequest {
@@ -487,7 +489,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     let demand_doc = admit_on_client(&client_node, &demand).await?;
     let source_peer = source_node
         .p2p()
-        .context("source P2P")?
+        .ok_or("source P2P")?
         .local_peer_id()
         .await?;
     push_documents_to_peer(
@@ -513,15 +515,15 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     let sweep = reconcile_images(&store, &delivery);
     tokio::pin!(sweep);
     tokio::select! {
-        result = &mut sweep => anyhow::bail!("image sweep returned before the fence: {result:?}"),
+        result = &mut sweep => return Err(format!("image sweep returned before the fence: {result:?}").into()),
         _ = gate.reached.notified() => {},
-        _ = tokio::time::sleep(Duration::from_secs(20)) => anyhow::bail!("image sweep did not reach its fence"),
+        _ = tokio::time::sleep(Duration::from_secs(20)) => return Err("image sweep did not reach its fence".into()),
     }
     enrollment_store.revoke_request(&enrollment).await?;
     gate.resume.notify_one();
     tokio::time::timeout(Duration::from_secs(20), sweep).await??;
     let checks = store.checks.lock().unwrap().clone();
-    anyhow::ensure!(
+    assert!(
         checks.len() == 2,
         "missing native authorization fences: {checks:?}"
     );
@@ -534,10 +536,10 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         HydrationDeliveryResult::Confirmed,
         HydrationTerminalWriteResult::Committed,
     )
-    .context("model did not produce a terminal outcome")?;
+    .ok_or("model did not produce a terminal outcome")?;
     let refused = receipt_row(&source_node, &demand, "rejected").await?;
     let refusal = verified(&refused, &demand, client.as_ref()).await?;
-    anyhow::ensure!(
+    assert!(
         refusal.selection() == &expected && expected == FileImageSelection::Rejected,
         "source receipt disagrees with completion owner"
     );
@@ -551,50 +553,50 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         .await?;
     match at {
         PauseAt::Selection => {
-            anyhow::ensure!(
+            assert!(
                 checks == [false, false],
                 "revocation did not reach final fence"
             );
-            anyhow::ensure!(
+            assert!(
                 delivery.calls.load(Ordering::SeqCst) == 0 && owner.is_none(),
                 "revocation delivered a previously unseen image"
             );
         }
         PauseAt::Acknowledged => {
-            anyhow::ensure!(
+            assert!(
                 checks == [true, false] && delivery.calls.load(Ordering::SeqCst) > 0,
                 "post-acknowledgment revocation was not observed"
             );
             if let Some(owner) = owner {
-                anyhow::ensure!(
+                assert!(
                     owner.to_string() == source.did(),
                     "acknowledged image changed native creator ownership: {owner}"
                 );
             }
         }
         PauseAt::Delivered => {
-            anyhow::ensure!(
+            assert!(
                 checks == [true, false],
                 "post-delivery revocation was not observed"
             );
-            anyhow::ensure!(
+            assert!(
                 delivery.calls.load(Ordering::SeqCst) > 0
                     && owner.as_ref().map(ToString::to_string).as_deref() == Some(source.did()),
                 "delivery did not preserve native creator ownership: {owner:?}"
             );
         }
     }
-    anyhow::ensure!(
+    assert!(
         !refusal.grant_local_read(client_node.clone()).await?,
         "refusal granted local read"
     );
     let visible = ConfigAccess::local(client_node.clone())
         .execute("{ ToolFileChange { _docID } }")
         .await?;
-    anyhow::ensure!(
+    assert!(
         visible["data"]["ToolFileChange"]
             .as_array()
-            .context("image visibility")?
+            .ok_or("image visibility")?
             .is_empty(),
         "client read an image without a served receipt"
     );
@@ -607,14 +609,14 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         &client_addresses[0],
     )
     .await;
-    anyhow::ensure!(
+    assert!(
         restored != enrollment,
         "reenrollment reused the revoked request"
     );
     if reset_refusal {
         wait_admitted(&store.inner, &demand).await?;
         let client_refusal = receipt_row(&client_node, &demand, "rejected").await?;
-        anyhow::ensure!(
+        assert!(
             client_refusal == refused,
             "client did not receive the refusal"
         );
@@ -643,7 +645,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         let deliveries_before_replay = delivery.calls.load(Ordering::SeqCst);
         let checks_before_replay = store.checks.lock().unwrap().len();
         reconcile_images(&store, &delivery).await?;
-        anyhow::ensure!(
+        assert!(
             delivery.calls.load(Ordering::SeqCst) == deliveries_before_replay
                 && store.checks.lock().unwrap().len() == checks_before_replay,
             "replaying a recorded refusal reauthorized or redelivered its attempt"
@@ -657,7 +659,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
                 escape_graphql_string(&demand_doc),
             ))
             .await?;
-        anyhow::ensure!(
+        assert!(
             result["data"]["FileImageHydrationRequest"][0] == refused,
             "resetting a client-owned demand replaced its signed refusal: {}",
             result["data"]["FileImageHydrationRequest"][0],
@@ -680,7 +682,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     reconcile_images(&store, &delivery).await?;
     let served = receipt_row(&client_node, &retry, "served").await?;
     let receipt = verified(&served, &retry, client.as_ref()).await?;
-    anyhow::ensure!(
+    assert!(
         receipt.selection()
             == &FileImageSelection::Selected {
                 document: image.clone()
@@ -690,21 +692,21 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if receipt.grant_local_read(client_node.clone()).await? {
-                return Ok::<_, anyhow::Error>(());
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .context("served retry image did not become readable")??;
+    .map_err(|error| format!("served retry image did not become readable: {error}"))??;
     let retained = ConfigAccess::local(client_node.clone()).execute(&format!(
         r#"{{ ToolFileChange(docID: "{}") {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(&image),
     )).await?;
     let rows = retained["data"]["ToolFileChange"]
         .as_array()
-        .context("retained images")?;
-    anyhow::ensure!(
+        .ok_or("retained images")?;
+    assert!(
         rows.len() == 1
             && rows[0]["_docID"] == image
             && rows[0]["tool_call_doc_id"] == physical
@@ -715,16 +717,16 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
             && rows[0]["file_changes"] == serde_json::to_value(&changes)?,
         "retry changed retained file images or their exact scope"
     );
-    anyhow::ensure!(
+    assert!(
         receipt_row(&source_node, &demand, "rejected").await? == refused,
         "reenrollment replaced the signed refusal"
     );
     let client_refusal = receipt_row(&client_node, &demand, "rejected").await?;
-    anyhow::ensure!(
+    assert!(
         client_refusal == refused && client_refusal["_docID"] == demand_doc,
         "source refusal did not preserve its client-authored demand"
     );
-    anyhow::ensure!(
+    assert!(
         std::fs::read_to_string(workspace.join("recorded.txt"))? == "later edits\n",
         "review changed the working copy"
     );
@@ -737,7 +739,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revocation_after_selection_prevents_unseen_image_delivery() -> Result<()> {
+async fn revocation_after_selection_prevents_unseen_image_delivery() -> TestResult<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
         exercise_revocation(PauseAt::Selection, false),
@@ -746,8 +748,8 @@ async fn revocation_after_selection_prevents_unseen_image_delivery() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revocation_after_delivery_preserves_refusal_until_a_fresh_authorized_retry() -> Result<()>
-{
+async fn revocation_after_delivery_preserves_refusal_until_a_fresh_authorized_retry(
+) -> TestResult<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
         exercise_revocation(PauseAt::Delivered, false),
@@ -756,7 +758,7 @@ async fn revocation_after_delivery_preserves_refusal_until_a_fresh_authorized_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn resetting_a_client_demand_cannot_replace_a_signed_refusal() -> Result<()> {
+async fn resetting_a_client_demand_cannot_replace_a_signed_refusal() -> TestResult<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
         exercise_revocation(PauseAt::Selection, true),
@@ -765,7 +767,7 @@ async fn resetting_a_client_demand_cannot_replace_a_signed_refusal() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revocation_after_acknowledgment_preserves_refusal_until_a_fresh_retry() -> Result<()> {
+async fn revocation_after_acknowledgment_preserves_refusal_until_a_fresh_retry() -> TestResult<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
         exercise_revocation(PauseAt::Acknowledged, false),

@@ -82,6 +82,8 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::watcher::WatcherError>(cause))
         .or_else(|| wrapped::<crate::trigger_engine::event_delivery::EventDeliveryError>(cause))
         .or_else(|| wrapped::<crate::trigger_engine::event_source::EventSourceError>(cause))
+        .or_else(|| wrapped::<crate::interrupt::InterruptError>(cause))
+        .or_else(|| wrapped::<crate::mailbox::MailboxError>(cause))
         .or_else(|| wrapped::<super::desired_state::DesiredStateError>(cause))
         .or_else(|| wrapped::<super::event_source_cursor::EventSourceCursorError>(cause))
         .or_else(|| wrapped::<crate::backend_registry::BackendRegistryError>(cause))
