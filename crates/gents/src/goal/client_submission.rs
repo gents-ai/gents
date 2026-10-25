@@ -7,7 +7,10 @@ use crate::identity::NodeIdentity;
 mod provenance;
 #[cfg(test)]
 mod tests;
-pub use provenance::{load_applied_opening_goal_id, load_applied_opening_goal_ids};
+pub use provenance::{
+    load_applied_opening_goal_id, load_applied_opening_goal_ids,
+    load_applied_opening_goal_provenance, OpeningGoalProvenance,
+};
 
 /// Publishes one author-signed intent. The runtime receipt confirms the
 /// transaction; observing its replicated Goal is a separate read.

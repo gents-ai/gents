@@ -382,6 +382,10 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         goal_provenance::attach(
             access,
             request_projection.unwrap_or(&store.requests),
+            &transcript_store
+                .unwrap_or(store.as_ref())
+                .transcript_messages,
+            canonical_dependencies,
             snapshot,
         )
         .await;

@@ -223,8 +223,14 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
             None,
         )
         .unwrap();
-        super::super::session::goal_provenance::attach(&access, &rows.requests, &mut snapshot)
-            .await;
+        super::super::session::goal_provenance::attach(
+            &access,
+            &rows.requests,
+            &rows.transcript_messages,
+            None,
+            &mut snapshot,
+        )
+        .await;
         let pending = snapshot
             .pending_turn
             .as_ref()
@@ -252,6 +258,10 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
                 Some(identity.did()),
             );
         }
+        if index == 0 {
+            super::super::session::goal_provenance::tests::assert_copied_opening(&access, &rows)
+                .await;
+        }
         observed.push(rows.requests[0].clone());
         for reload in 0..2 {
             if index == 0 && reload == 1 {
@@ -272,8 +282,14 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
                 None,
             )
             .unwrap();
-            super::super::session::goal_provenance::attach(&access, &rows.requests, &mut snapshot)
-                .await;
+            super::super::session::goal_provenance::attach(
+                &access,
+                &rows.requests,
+                &rows.transcript_messages,
+                None,
+                &mut snapshot,
+            )
+            .await;
             let markers = snapshot
                 .timeline_items
                 .iter()
