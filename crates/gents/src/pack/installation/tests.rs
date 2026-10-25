@@ -1922,7 +1922,7 @@ async fn prepare_naming_plugin(
     manifest: &crate::pack::PackManifest,
     plugin_home: Option<&Path>,
 ) -> Result<PreparedDocumentPackInstall> {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::document_config::ensure_node(&node, OWNER)
         .await
