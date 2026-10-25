@@ -154,7 +154,7 @@ source consistency checks, not a separate runtime compatibility version.
   built, for example when its Tools names a plugin that is not installed. That
   agent reports unavailable with `tool_surface_unavailable` and its requests
   fail with that reason, while the other agents start; startup still refuses
-  when no agent is runnable (#2767).
+  when every agent has an invalid tool surface (#2767).
 - `gents pack install` and the self-config install refuse a documents pack
   whose Tools, or a documents dependency's Tools, name a plugin that neither
   the pack nor its dependencies ship and the node has not installed. The error

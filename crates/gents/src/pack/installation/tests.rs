@@ -2015,3 +2015,53 @@ fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
         "{error}"
     );
 }
+
+#[test]
+fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
+    fn names(value: &Value) -> Vec<&str> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().strip_prefix("acme/").unwrap())
+            .collect()
+    }
+    fn config(references: &Value) -> PackConfig {
+        serde_json::from_value(json!({
+            "node": {"node_did": OWNER},
+            "tools": [{"tools_id": "reference-tools", "node_did": OWNER,
+                "integrations": {"plugins": references.as_array().unwrap().iter()
+                    .map(|plugin| json!({"plugin": plugin})).collect::<Vec<_>>()}}],
+        }))
+        .unwrap()
+    }
+    let cases = crate::lean_vocab_test::lean_plugin_reference_cases();
+    assert_eq!(cases.len(), 9);
+    for case in cases {
+        let home = tempfile::tempdir().unwrap();
+        let root = plugin_pack_manifest("workflow", "documents", &names(&case["root_ships"]));
+        let dependency =
+            plugin_pack_manifest("dependency", "documents", &names(&case["dependency_ships"]));
+        let references = case["references"].as_array().unwrap();
+        assert!((1..=2).contains(&references.len()));
+        let root_config = config(&references[0]);
+        let dependency_config = config(references.get(1).unwrap_or(&json!([])));
+        for plugin in names(&case["installed"]) {
+            let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
+                "namespace": "acme", "name": plugin, "version": "1.0.0",
+                "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust",
+                "declaration": plugin_pack_manifest("installed", "plugins", &[plugin]).metadata.plugins[0],
+            })).unwrap();
+            crate::plugin::store::write_record(home.path(), &record).unwrap();
+        }
+        let result = super::documents::ensure_plugin_references_resolve(
+            &[(&root, &root_config), (&dependency, &dependency_config)],
+            Some(home.path()),
+        );
+        assert_eq!(
+            result.is_ok(),
+            case["accepted"].as_bool().unwrap(),
+            "{case}: {result:?}"
+        );
+    }
+}
