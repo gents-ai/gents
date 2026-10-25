@@ -1112,6 +1112,11 @@ def caseCoverage : List CoverageEntry :=
       "client_installation::compatibility_tests::generated_installation_compatibility_matches_lean")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "runtime_service_replacement_cases"
+      "RuntimeServiceReplacementCases"
+      "serve_lifecycle::replacement::tests::generated_replacement_traces_match_authenticated_admission_and_release_guards")
+      "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_observation_scope_cases"
       "ClientObservationScopeCases"
       "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
