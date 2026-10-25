@@ -113,6 +113,7 @@ fn render_timeline_order(
                 }) {
                     timeline.push(RenderedTimelineItem::PendingUserTurn {
                         item_key: format!("pending-{}", pending_turn.request_id),
+                        started_goal_id: pending_turn.started_goal_id.clone(),
                         request_id: pending_turn.request_id.clone(),
                         content: pending_turn.content.clone(),
                         captured_context: pending_turn.captured_context.clone(),

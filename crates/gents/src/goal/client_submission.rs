@@ -4,8 +4,10 @@ use super::*;
 use crate::config_client::ConfigAccess;
 use crate::identity::NodeIdentity;
 
+mod provenance;
 #[cfg(test)]
 mod tests;
+pub use provenance::{load_applied_opening_goal_id, load_applied_opening_goal_ids};
 
 /// Publishes one author-signed intent. The runtime receipt confirms the
 /// transaction; observing its replicated Goal is a separate read.
