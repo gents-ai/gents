@@ -411,6 +411,7 @@ pub(crate) struct LeanPluginJobAdmissionCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobAdmissionExpected {
     pub(crate) admitted: bool,
+    pub(crate) dynamic_code_disabled: bool,
     pub(crate) code: Option<String>,
     pub(crate) job: Option<LeanPluginJobRow>,
     pub(crate) row_state: String,

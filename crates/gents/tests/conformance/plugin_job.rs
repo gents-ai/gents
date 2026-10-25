@@ -454,8 +454,8 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        13,
-        "Lean pins thirteen admission rows in `admission_regressions`"
+        26,
+        "Lean supplies thirteen admission regressions and thirteen source-boundary cases"
     );
     let mut names = BTreeSet::new();
     for case in cases {
@@ -473,6 +473,7 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
         match gents::plugin_job::admit::admit_step(&context, &job, &output(&case.output)) {
             Ok(admitted) => {
                 assert!(expected.admitted, "{}: admitted a refused step", case.name);
+                assert!(!expected.dynamic_code_disabled, "{}", case.name);
                 assert_eq!(expected.code, None, "{}", case.name);
                 assert_eq!(
                     Some(&admitted),
@@ -493,6 +494,12 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                     refusal.code(),
                     expected.code.as_deref(),
                     "{}: refusal code",
+                    case.name
+                );
+                assert_eq!(
+                    refusal.refusal == gents::plugin_job::admit::Refusal::DynamicCodeDisabled,
+                    expected.dynamic_code_disabled,
+                    "{}: dynamic-source refusal detail",
                     case.name
                 );
                 assert!(expected.job.is_none(), "{}", case.name);
