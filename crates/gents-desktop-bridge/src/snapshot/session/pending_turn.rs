@@ -118,6 +118,7 @@ pub(super) fn build_pending_turn(
 
     Some(PendingTurnView {
         request_id: request.request_id.clone(),
+        started_goal_id: None,
         request_doc_id: request.doc_id.clone(),
         content: content.to_string(),
         captured_context: (!request_input.captured_context.is_empty())

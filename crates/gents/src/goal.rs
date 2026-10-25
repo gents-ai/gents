@@ -23,7 +23,10 @@ pub(crate) use claimed_publication::{
     publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
 pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
-pub use client_submission::submit_session_goal_control;
+pub use client_submission::{
+    load_applied_opening_goal_id, load_applied_opening_goal_ids,
+    load_applied_opening_goal_provenance, submit_session_goal_control, OpeningGoalProvenance,
+};
 pub(crate) use edit::{edit_active_goal, GoalEdit};
 pub use first_request_binding::task_assignment_goal_id;
 pub(crate) use first_request_binding::{
