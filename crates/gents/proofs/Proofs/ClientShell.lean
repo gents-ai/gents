@@ -10,5 +10,6 @@ import Proofs.ClientShell.Theorems
 import Proofs.ClientShell.ObservationOrdering
 import Proofs.ClientShell.RequestCacheIdentity
 import Proofs.ClientShell.ObservationScope
+import Proofs.ClientShell.Installation
 import Proofs.ClientShell.Voice
 import Proofs.ClientShell.Settings

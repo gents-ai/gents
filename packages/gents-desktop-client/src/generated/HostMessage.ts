@@ -3,4 +3,4 @@ import type { BridgeError } from "./BridgeError.js";
 import type { ClientUpdateEvent } from "./ClientUpdateEvent.js";
 import type { JsonValue } from "./serde_json/JsonValue.js";
 
-export type HostMessage = { "kind": "hello", version: number, commands: Array<string>, maxFrameBytes: number, } | { "kind": "response", id: number, result: JsonValue | null, error: BridgeError | null, } | { "kind": "updated", sequence: number, payload: ClientUpdateEvent, };
+export type HostMessage = { "kind": "hello", version: number, commands: Array<string>, maxFrameBytes: number, installationBuild: string | null, installationControlVersion: number, } | { "kind": "response", id: number, result: JsonValue | null, error: BridgeError | null, } | { "kind": "updated", sequence: number, payload: ClientUpdateEvent, };

@@ -18,11 +18,13 @@ required-features = ["runtime-e2e"]
 anyhow.workspace = true
 async-trait = "0.1"
 bytes.workspace = true
+blake3 = "1"
 clap.workspace = true
 futures = "0.3"
 gents = { path = "../gents" }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-desktop-core.workspace = true
+gents-protocol.workspace = true
 gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["rt", "codec"] }
@@ -38,7 +40,6 @@ rapidhash.workspace = true
 bs58 = "0.5"
 axum = "0.8"
 futures-util = "0.3"
-gents-protocol.workspace = true
 tempfile = "3"
 
 [target.'cfg(windows)'.dev-dependencies]
