@@ -379,6 +379,12 @@ impl Gents {
         self.background_execution_registry.clone()
     }
 
+    pub fn service_admission(&self) -> crate::runtime_service::RuntimeServiceAdmission {
+        self.background_execution_registry
+            .service_admission()
+            .clone()
+    }
+
     /// Durable records of spawned background processes in `dir`, which must
     /// belong to this runtime's exclusively locked store; call before the
     /// runtime starts.

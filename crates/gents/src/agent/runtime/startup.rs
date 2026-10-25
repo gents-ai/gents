@@ -475,8 +475,8 @@ async fn run_agent_owned(
         .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))? =
         Some(enrollment_handle.clone());
     let lsp_pool = tool_runtime.lsp_pool.clone();
-    let job_driver =
-        crate::plugin_job::driver::JobDriver::new(crate::plugin_job::driver::JobRuntime {
+    let job_driver = crate::plugin_job::driver::JobDriver::with_service_admission(
+        crate::plugin_job::driver::JobRuntime {
             node: agent.node.clone(),
             plugins: agent.plugins().clone(),
             home: agent
@@ -485,7 +485,9 @@ async fn run_agent_owned(
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_default(),
             tool_root: agent.operator_tool_root().map(PathBuf::from),
-        });
+        },
+        agent.service_admission(),
+    );
     let runtime = RuntimeContext {
         node: agent.node.clone(),
         tool_runtime,
@@ -988,10 +990,12 @@ async fn run_agent_owned(
         });
     }
 
+    let service_admission = agent.service_admission();
     let result = tokio::select! {
         biased;
         Some(error) = fatal_error_rx.recv() => Err(error),
         _ = external_shutdown.changed() => Ok(()),
+        _ = service_admission.retirement_requested() => Ok(()),
         Some(joined) = background_tasks.join_next() => match joined {
             Ok(task) => task.into_result(),
             Err(error) => Err(anyhow!("background task join failed: {error}")),

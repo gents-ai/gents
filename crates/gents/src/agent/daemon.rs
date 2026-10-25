@@ -593,6 +593,13 @@ where
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         // Publication and terminal selection belong to this one execution.
+        let Ok(_service_work) = self
+            .background_execution_registry
+            .service_admission()
+            .admit()
+        else {
+            return Ok(());
+        };
         let stream_writer = DefraStreamWriter::new(
             self.node.clone(),
             self.agent_config.node_did(),

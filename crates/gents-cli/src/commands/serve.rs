@@ -451,10 +451,33 @@ fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
 }
 
 pub(crate) async fn serve(args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
+    serve_with_startup(args, runtime, None).await
+}
+
+pub(crate) async fn serve_prepared(
+    args: ServeArgs,
+    runtime: tokio::runtime::Handle,
+    startup: super::prepare_runtime::PreparedStartup,
+) -> Result<()> {
+    serve_with_startup(args, runtime, Some(startup)).await
+}
+
+/// Regolith retains its OS store lock while closed engine handles remain.
+/// The claim therefore outlives every node reference in the foreground scope,
+/// including references that are not carried by ConfigAccess.
+async fn serve_with_startup(
+    args: ServeArgs,
+    runtime: tokio::runtime::Handle,
+    startup: Option<super::prepare_runtime::PreparedStartup>,
+) -> Result<()> {
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
-    serve_foreground(args, runtime).await
+    gents::runtime_service::executable_build_id().await?;
+    let mut store_lifetime = None;
+    let outcome = serve_foreground(args, runtime, startup, &mut store_lifetime).await;
+    drop(store_lifetime);
+    outcome
 }
 
 async fn wait_for_shutdown_signal() {
@@ -557,7 +580,12 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
-async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle) -> Result<()> {
+async fn serve_foreground(
+    mut args: ServeArgs,
+    executor: tokio::runtime::Handle,
+    mut startup: Option<super::prepare_runtime::PreparedStartup>,
+    store_lifetime: &mut Option<gents::config_client::ConfigAccess>,
+) -> Result<()> {
     #[cfg(not(unix))]
     anyhow::ensure!(
         !args.grok_shim,
@@ -771,6 +799,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                 return Err(error);
             }
         };
+    *store_lifetime = Some(store_access.clone());
     let mut runtime =
         ServeRuntime::new(executor).retain_shutdown_owner(node.clone(), store_access.clone());
     #[cfg(unix)]
@@ -1201,7 +1230,21 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                 "grok_shim": grok_shim_output,
                 "apply_root": pack_apply,
             });
-            print_json(&output)?;
+            if let Some(super::prepare_runtime::PreparedStartup { reservation, outcome }) = startup.take() {
+                let report = gents_protocol::serve_lifecycle::preparation::RuntimePreparationResult::Ready {
+                    outcome,
+                    home: home_dir.to_string_lossy().into_owned(),
+                    node_did: identity.did().to_owned(),
+                    graphql: graphql_url.clone(),
+                    build: gents::runtime_service::executable_build_id().await?,
+                };
+                if let Err(error) = super::prepare_runtime::emit(report).await {
+                    tracing::warn!(%error, "runtime preparation channel closed after readiness; native work remains owned");
+                }
+                drop(reservation);
+            } else {
+                print_json(&output)?;
+            }
             if args.p2p_transport == P2pTransportArg::Iroh {
                 if let Some(admission) = output.get("p2p_admission") {
                     tracing::info!(
@@ -1375,6 +1418,7 @@ async fn shutdown_claimed_node(
 ) {
     let shutdown = tokio::spawn(async move {
         node.shutdown().await;
+        drop(node);
         drop(access);
     });
     if let Err(error) = shutdown.await {

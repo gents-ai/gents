@@ -613,7 +613,7 @@ impl ClientCore {
         session_id: &str,
         edit: gents::lifecycle::PendingQueueEdit,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
-        self.apply_pending_queue_edit(node_did, session_id, edit, None)
+        self.apply_pending_queue_edit(node_did, session_id, edit, None, None)
             .await
     }
 
@@ -623,6 +623,7 @@ impl ClientCore {
         session_id: &str,
         expected_request_doc_ids: Vec<String>,
         request_doc_id: &str,
+        request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         let snapshot = self.pending_user_queue(node_did, session_id).await?;
         let edit = gents::lifecycle::pending_steer_edit(
@@ -630,7 +631,7 @@ impl ClientCore {
             expected_request_doc_ids,
             request_doc_id,
         )?;
-        self.apply_pending_queue_edit(node_did, session_id, edit, Some(request_doc_id))
+        self.apply_pending_queue_edit(node_did, session_id, edit, Some(request_doc_id), request_id)
             .await
     }
 
@@ -640,6 +641,7 @@ impl ClientCore {
         session_id: &str,
         edit: gents::lifecycle::PendingQueueEdit,
         steer: Option<&str>,
+        request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
@@ -659,6 +661,7 @@ impl ClientCore {
                     session_id,
                     edit,
                     request_doc_id,
+                    request_id,
                 )
                 .await
             }

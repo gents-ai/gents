@@ -2,6 +2,17 @@ use super::GoalDocument;
 use crate::request_admission::verify_request_receipt_signature;
 use gents_protocol::row::AgentRequestRow;
 
+/// Historical display uses the immutable signed request, independently of the
+/// current Goal and lifecycle. Missing or refused receipts establish no marker.
+pub(super) fn verified_opening_goal_id(entry: &AgentRequestRow) -> Option<&str> {
+    let assignment = entry.input.as_ref()?.goal_assignment.as_ref()?;
+    (assignment.root_request_doc_id.is_none()
+        && entry.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+        && !assignment.goal_id.trim().is_empty()
+        && verify_request_receipt_signature(entry).is_ok())
+    .then_some(assignment.goal_id.as_str())
+}
+
 pub(super) fn request_belongs_to_goal(goal: &GoalDocument, entry: &AgentRequestRow) -> bool {
     verify_request_receipt_signature(entry).is_ok() && verified_entry_belongs_to_goal(goal, entry)
 }

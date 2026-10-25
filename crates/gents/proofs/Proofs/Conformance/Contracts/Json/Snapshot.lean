@@ -6,6 +6,7 @@ import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.ClientInstallation
+import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases
 import Proofs.Conformance.ClientRequestCacheIdentityCases
@@ -334,6 +335,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientInstallation.casesJson ++ ","
     ++ "\"client_installation_compatibility_cases\":"
       ++ Conformance.ClientInstallation.compatibilityCasesJson ++ ","
+    ++ "\"runtime_service_replacement_cases\":"
+      ++ Conformance.RuntimeServiceReplacement.casesJson ++ ","
     ++ "\"client_observation_scope_cases\":"
       ++ Conformance.ClientObservationScope.casesJson ++ ","
     ++ "\"client_settings_cases\":"

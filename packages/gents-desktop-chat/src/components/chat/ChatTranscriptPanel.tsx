@@ -147,7 +147,8 @@ export function ChatTranscriptPanel({
         (item.kind === "pendingUserTurn" &&
           item.requestId === optimisticPendingTurn.requestId) ||
         (item.kind === "userMessage" &&
-          item.requestId === optimisticPendingTurn.requestId),
+          (item.inputRequestId ?? (item.ownsTurn ? item.requestId : null)) ===
+            optimisticPendingTurn.requestId),
     );
     if (hasOwner) {
       return durable;
@@ -158,6 +159,7 @@ export function ChatTranscriptPanel({
         kind: "pendingUserTurn",
         itemKey: `optimistic-${optimisticPendingTurn.requestId}`,
         requestId: optimisticPendingTurn.requestId,
+        startedGoalId: optimisticPendingTurn.startedGoalId,
         content: optimisticPendingTurn.content,
         selectedSkillIds: optimisticPendingTurn.selectedSkillIds,
         capturedContext: optimisticPendingTurn.capturedContext,

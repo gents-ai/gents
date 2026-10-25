@@ -1254,6 +1254,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_installation_compatibility_cases".into(),
         "ClientInstallationCompatibilityCases".into(),
     ));
+    assert!(!snapshot.runtime_service_replacement_cases.is_empty());
+    emitted.insert((
+        "runtime_service_replacement_cases".into(),
+        "RuntimeServiceReplacementCases".into(),
+    ));
     assert!(!snapshot.client_observation_scope_cases.is_empty());
     assert!(!snapshot.client_observation_admission_cases.is_empty());
     emitted.insert((

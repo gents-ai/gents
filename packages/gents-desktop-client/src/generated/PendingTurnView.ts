@@ -3,7 +3,7 @@ import type { AttachmentView } from "./AttachmentView.js";
 import type { CapturedContext } from "./CapturedContext.js";
 import type { RequestOriginView } from "./RequestOriginView.js";
 
-export type PendingTurnView = { requestId: string, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, selectedSkillIds: Array<string>, lifecycleState: string | null,
+export type PendingTurnView = { requestId: string, startedGoalId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, selectedSkillIds: Array<string>, lifecycleState: string | null,
 /**
  * The request whose transcript published this as a folded entry; it is
  * that turn's input, not a turn.

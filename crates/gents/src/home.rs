@@ -40,6 +40,7 @@ pub fn default_home_dir() -> Result<PathBuf> {
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
 pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
 /// Host-local listen addresses for `gents server`; binding precedes opening
 /// the store, so they cannot live in a document.
 pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
@@ -88,6 +89,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
 /// A custom data directory's store lock lives beside that directory instead.
 pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
     "data.lock",
+    RUNTIME_STARTUP_LOCK_FILE_NAME,
     ALLOWED_DIRS_LOCK_FILE_NAME,
     WORKSPACE_APPROVALS_LOCK_FILE_NAME,
     PLUGIN_APPROVALS_LOCK_FILE_NAME,
@@ -221,25 +223,7 @@ fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
 fn lock_path_with_wait(home_dir: &Path, path: PathBuf, wait: bool) -> Result<StoreLock> {
     use std::io::{Read as _, Seek as _, Write as _};
 
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    // Never follow a planted symlink: truncating below would clobber its
-    // target. A planted FIFO must not block the open either.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let mut file = options
-        .open(&path)
-        .with_context(|| format!("opening store lock {}", path.display()))?;
-    if !file
-        .metadata()
-        .with_context(|| format!("inspecting store lock {}", path.display()))?
-        .is_file()
-    {
-        anyhow::bail!("store lock {} is not a regular file", path.display());
-    }
+    let mut file = open_runtime_lock(&path)?;
     if wait {
         file.lock()
             .with_context(|| format!("waiting for store lock {}", path.display()))?;
@@ -266,6 +250,75 @@ fn lock_path_with_wait(home_dir: &Path, path: PathBuf, wait: bool) -> Result<Sto
         _lock: crate::file_lock::FileLock::adopt(file),
         path,
     })
+}
+
+fn open_runtime_lock(path: &Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    // Never follow a planted symlink: truncating below would clobber its
+    // target. A planted FIFO must not block the open either.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(path)
+        .with_context(|| format!("opening runtime lock {}", path.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("inspecting runtime lock {}", path.display()))?
+        .is_file()
+    {
+        anyhow::bail!("runtime lock {} is not a regular file", path.display());
+    }
+    Ok(file)
+}
+
+/// Serializes standalone runtime preparation for one existing home. Keep the
+/// reservation until the new server holds its store claim and has published
+/// readiness; a failed preparation releases it by dropping the guard. This
+/// reservation conveys no runtime identity or operator authority.
+#[derive(Debug)]
+pub struct RuntimeStartupReservation {
+    _lock: crate::file_lock::FileLock,
+}
+
+/// A dedicated OS thread keeps an abandoned OS lock wait out of Tokio's
+/// blocking pool. Only standalone preparation processes may call this, once
+/// per process. Cancellation abandons the receiver; a later acquisition is
+/// immediately dropped, and process exit terminates the pending OS wait.
+pub async fn reserve_runtime_startup(home_dir: &Path) -> Result<RuntimeStartupReservation> {
+    let (receive, worker) = start_runtime_startup_waiter(home_dir)?;
+    drop(worker);
+    receive
+        .await
+        .context("runtime startup waiter stopped before completing")?
+}
+
+fn start_runtime_startup_waiter(
+    home_dir: &Path,
+) -> Result<(
+    tokio::sync::oneshot::Receiver<Result<RuntimeStartupReservation>>,
+    std::thread::JoinHandle<()>,
+)> {
+    let home_dir = home_dir.to_path_buf();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let worker = std::thread::Builder::new()
+        .name("gents-runtime-startup-wait".into())
+        .spawn(move || {
+            let result = (|| {
+                let home = fs::canonicalize(&home_dir)
+                    .with_context(|| format!("resolving runtime home {}", home_dir.display()))?;
+                let file = open_runtime_lock(&home.join(RUNTIME_STARTUP_LOCK_FILE_NAME))?;
+                crate::file_lock::FileLock::exclusive(file)
+                    .map(|lock| RuntimeStartupReservation { _lock: lock })
+                    .context("reserving runtime startup")
+            })();
+            let _ = send.send(result);
+        })
+        .context("starting runtime startup waiter")?;
+    Ok((receive, worker))
 }
 
 pub fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
@@ -708,6 +761,67 @@ mod tests {
         let reservation = lock_store(temp.path(), &data)
             .expect("cancelled waiter's eventual acquisition is dropped");
         drop(reservation);
+    }
+
+    #[tokio::test]
+    async fn runtime_startup_reservation_excludes_a_second_preparer_until_ready() {
+        let home = tempfile::tempdir().unwrap();
+        let first = reserve_runtime_startup(home.path()).await.unwrap();
+        let (mut receive, worker) = start_runtime_startup_waiter(home.path()).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), &mut receive)
+                .await
+                .is_err()
+        );
+        drop(first);
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), receive)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        tokio::task::spawn_blocking(move || worker.join())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            open_runtime_lock(&home.path().join(RUNTIME_STARTUP_LOCK_FILE_NAME))
+                .unwrap()
+                .try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        drop(second);
+        reserve_runtime_startup(home.path()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_runtime_startup_reservation_releases_its_eventual_acquisition() {
+        let home = tempfile::tempdir().unwrap();
+        let first = reserve_runtime_startup(home.path()).await.unwrap();
+        let (mut receive, worker) = start_runtime_startup_waiter(home.path()).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), &mut receive)
+                .await
+                .is_err()
+        );
+        drop(receive);
+        drop(first);
+        tokio::task::spawn_blocking(move || worker.join())
+            .await
+            .unwrap()
+            .unwrap();
+        reserve_runtime_startup(home.path()).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_startup_refuses_a_planted_lock_symlink_without_changing_history() {
+        let home = tempfile::tempdir().unwrap();
+        let history = home.path().join("history");
+        fs::write(&history, "saved history").unwrap();
+        std::os::unix::fs::symlink(&history, home.path().join(RUNTIME_STARTUP_LOCK_FILE_NAME))
+            .unwrap();
+        assert!(reserve_runtime_startup(home.path()).await.is_err());
+        assert_eq!(fs::read_to_string(history).unwrap(), "saved history");
     }
 
     fn write(path: &Path, contents: &str) {
