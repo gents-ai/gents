@@ -9,6 +9,7 @@ use crate::lean_vocab_test::{
     lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
     lean_terminal_diagnostic_presentation_cases, lean_terminal_diagnostic_replay_cases,
 };
+use crate::lean_vocab_test::{lean_plugin_reference_cases, lean_snapshot_demotion_cases};
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
