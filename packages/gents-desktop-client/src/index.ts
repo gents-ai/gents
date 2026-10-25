@@ -1,4 +1,5 @@
 export { createDesktopClient, type DesktopClient } from "./client.js";
+export { decodeRuntimePreparationReport } from "./runtimePreparation.js";
 export {
   createDesktopStore,
   DEFAULT_TIMING,

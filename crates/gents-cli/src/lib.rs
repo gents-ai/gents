@@ -446,6 +446,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Desktop { command } => commands::desktop::run(command).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args, runtime).await,
+        Command::PrepareRuntime(args) => commands::prepare_runtime::prepare(args, runtime).await,
         Command::Service { command } => {
             tokio::task::spawn_blocking(move || service_command(command))
                 .await
