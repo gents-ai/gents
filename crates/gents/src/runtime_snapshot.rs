@@ -320,7 +320,7 @@ impl ResolvedRuntimeSnapshot {
         self.tool_surfaces.remove(agent_id);
         self.unavailable_agents.insert(agent_id.to_string(), reason);
 
-        let active_agent_ids = self.agents.keys().cloned().collect::<HashSet<_>>();
+        let active_agent_ids = self.agents.keys().cloned().collect::<RapidHashSet<_>>();
         for surface in self.tool_surfaces.values_mut() {
             Arc::make_mut(surface).retain_agent_targets(&self.local_did, &active_agent_ids);
         }
