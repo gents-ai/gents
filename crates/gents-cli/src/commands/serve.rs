@@ -454,6 +454,7 @@ pub(crate) async fn serve(args: ServeArgs, runtime: tokio::runtime::Handle) -> R
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
+    gents::runtime_service::executable_build_id().await?;
     serve_foreground(args, runtime).await
 }
 
