@@ -590,7 +590,7 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
-        gents::lifecycle::pending_user_queue_projection(
+        Ok(gents::lifecycle::pending_user_queue_projection(
             &self
                 .operator_observation_graphql(node_did)
                 .map(ConfigAccess::Graphql)
@@ -600,7 +600,7 @@ impl ClientCore {
             &self.requester_did(&record),
             observed_doc_ids,
         )
-        .await
+        .await?)
     }
 
     pub async fn edit_pending_queue(

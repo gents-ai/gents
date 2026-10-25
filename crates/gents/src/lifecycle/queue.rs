@@ -93,6 +93,16 @@ type Result<T, E = QueueError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueueError {
+    #[error(transparent)]
+    Goal(#[from] crate::goal::GoalError),
+    #[error("pending AgentRequest row is missing _docID")]
+    PendingRowMissingDocId,
+    #[error("duplicate wake has no physical identity")]
+    DuplicateWakeWithoutIdentity,
+    #[error("coalescing anchor has no physical identity")]
+    CoalescingAnchorWithoutIdentity,
+    #[error("pending wake has no physical identity")]
+    PendingWakeWithoutIdentity,
     #[error("goal continuation sequence must be positive")]
     NonPositiveGoalContinuationSequence,
     #[error(transparent)]
@@ -226,6 +236,9 @@ impl crate::config_client::TransactionFailure for QueueError {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             Self::Watcher(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Goal(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
             _ => None,

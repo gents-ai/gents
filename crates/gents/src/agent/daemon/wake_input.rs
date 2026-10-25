@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
@@ -33,7 +32,30 @@ pub(super) enum WakeInputError {
     SequenceOrderAmbiguous,
     #[error("wake notification is not user input")]
     NotUserInput,
+    #[error(transparent)]
+    Goal(#[from] crate::goal::GoalError),
+    #[error(transparent)]
+    RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
 }
+
+impl crate::config_client::TransactionFailure for WakeInputError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Goal(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = WakeInputError> = std::result::Result<T, E>;
 
 fn current_keys(claimed: &[String], acknowledged: &[String]) -> Vec<String> {
     let acknowledged = acknowledged.iter().collect::<BTreeSet<_>>();
@@ -102,7 +124,7 @@ pub(super) async fn load(
             let validate_wake = |doc: &str| -> Result<()> {
                 let row = assignments.request(doc)?;
                 if !row.input.as_ref().is_some_and(crate::lifecycle::is_background_completion_request) {
-                    return Err(WakeInputError::NotBackgroundWake.into());
+                    return Err(WakeInputError::NotBackgroundWake);
                 }
                 crate::request_admission::verify_runtime_local_control_receipt(row, &request.node_did,
                     row.caused_by_parent_request_id.as_deref().ok_or(WakeInputError::MissingSignedParent)?,
@@ -136,11 +158,11 @@ pub(super) async fn load(
                 headers.extend(rows(&response, "AgentMessage")?.iter().map(crate::session::canonical_rows::decode_transcript_message_row).collect::<Result<Vec<_>, _>>()?);
             }
             if !(headers.len() == keys.len() && headers.iter().map(|row| &row.message.message_key).collect::<BTreeSet<_>>().len() == keys.len()) {
-                return Err(WakeInputError::NotificationsAmbiguous.into());
+                return Err(WakeInputError::NotificationsAmbiguous);
             }
             headers.sort_by_key(|row| row.message.sequence);
             if !headers.windows(2).all(|pair| pair[0].message.sequence < pair[1].message.sequence) {
-                return Err(WakeInputError::SequenceOrderAmbiguous.into());
+                return Err(WakeInputError::SequenceOrderAmbiguous);
             }
             let settled = headers.iter().filter(|header| acknowledged.get(&header.message.message_key)
                 .is_some_and(|cutoff| u64::from(header.message.sequence) <= *cutoff))
@@ -153,7 +175,7 @@ pub(super) async fn load(
             for header in headers {
                 let (_, message) = reader.load_message(&header.doc_id).await?;
                 if !matches!(message, crate::llm::message::Message::User { .. }) {
-                    return Err(WakeInputError::NotUserInput.into());
+                    return Err(WakeInputError::NotUserInput);
                 }
                 let mut row = TaggedMessage::unassociated(message);
                 row.physical_header = Some(header.doc_id);

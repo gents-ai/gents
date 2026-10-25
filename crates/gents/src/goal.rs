@@ -72,6 +72,142 @@ pub enum GoalError {
     BudgetNotPositive,
     #[error("provide objective or token_budget to edit the goal")]
     EditFieldRequired,
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    History(#[from] GoalHistoryError),
+    #[error(transparent)]
+    RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
+    #[error(transparent)]
+    Queue(Box<crate::lifecycle::queue::QueueError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("transactional Goal query omitted rows")]
+    TransactionalGoalRowsOmitted,
+    #[error("decoding transactional Goal rows")]
+    DecodeTransactionalGoalRows(#[source] serde_json::Error),
+    #[error("enrollment authorization sequence exceeds storage range")]
+    EnrollmentSequenceRange(#[source] std::num::TryFromIntError),
+    #[error("Goal continuation conflicts with its physical assignment binding")]
+    ContinuationAssignmentConflict,
+    #[error(transparent)]
+    Watcher(Box<crate::watcher::WatcherError>),
+    #[error(transparent)]
+    Durable(Box<crate::trigger_engine::durable::DurableTriggerError>),
+    #[error("continuation predecessor is outside the goal owner/session")]
+    ContinuationPredecessorIsOutsideTheGoalOwner,
+    #[error("continuation predecessor has no document ID")]
+    ContinuationPredecessorHasNoDocumentID,
+    #[error("continuation receipt has a different physical goal edge")]
+    ContinuationReceiptHasADifferentPhysicalGoal,
+    #[error("continuation receipt lacks its original issuance facts")]
+    ContinuationReceiptLacksItsOriginalIssuanceFacts,
+    #[error("continuation receipt changed its signed goal assignment")]
+    ContinuationReceiptChangedItsSignedGoalAssignment,
+    #[error("continuation receipt has a different deterministic identity")]
+    ContinuationReceiptHasADifferentDeterministicIdentity,
+    #[error("continuation receipt lacks content")]
+    ContinuationReceiptLacksContent,
+    #[error("continuation receipt lacks creation time")]
+    ContinuationReceiptLacksCreationTime,
+    #[error("continuation receipt lacks its hop")]
+    ContinuationReceiptLacksItsHop,
+    #[error("continuation receipt conflicts with the goal and physical predecessor binding")]
+    ContinuationReceiptConflictsWithTheGoalAnd,
+    #[error("current request is absent from its owner/session observation")]
+    CurrentRequestIsAbsentFromItsOwner,
+    #[error("entry has no document ID")]
+    EntryHasNoDocumentID,
+    #[error("authenticated Goal member has no physical parent")]
+    AuthenticatedGoalMemberHasNoPhysicalParent,
+    #[error("duplicate physical request document in ancestry observation")]
+    DuplicatePhysicalRequestDocumentInAncestryObservation,
+    #[error("request has no document ID")]
+    RequestHasNoDocumentID,
+    #[error("cyclic Goal request ancestry")]
+    CyclicGoalRequestAncestry,
+    #[error("request ancestry is outside its owner/session")]
+    RequestAncestryIsOutsideItsOwnerSession,
+    #[error("Goal continuation opening belongs to another assignment")]
+    GoalContinuationOpeningBelongsToAnotherAssignment,
+    #[error("background wake has no physical parent")]
+    BackgroundWakeHasNoPhysicalParent,
+    #[error("background wake parent is absent from its owner/session observation")]
+    BackgroundWakeParentIsAbsentFromIts,
+    #[error("background wake changed its signed assignment or physical owner/session")]
+    BackgroundWakeChangedItsSignedAssignmentOr,
+    #[error("Goal continuation has no original Goal ID")]
+    GoalContinuationHasNoOriginalGoalID,
+    #[error("Goal continuation belongs to another assignment")]
+    GoalContinuationBelongsToAnotherAssignment,
+    #[error("Goal continuation has no physical parent")]
+    GoalContinuationHasNoPhysicalParent,
+    #[error("Goal continuation parent is absent from its owner/session observation")]
+    GoalContinuationParentIsAbsentFromIts,
+    #[error("Goal assignment opening is absent from its owner/session")]
+    GoalAssignmentOpeningIsAbsentFromIts,
+    #[error("Goal assignment has no authenticated physical opening")]
+    GoalAssignmentHasNoAuthenticatedPhysicalOpening,
+    #[error("Goal continuation has no document ID")]
+    GoalContinuationHasNoDocumentID,
+    #[error("Goal assignment has no unique request in its owner/session")]
+    GoalAssignmentHasNoUniqueRequestIn,
+    #[error("request query omitted rows")]
+    RequestQueryOmittedRows,
+    #[error("assignment entry has no document ID")]
+    AssignmentEntryHasNoDocumentID,
+    #[error("observed Goal assignment has no physical opening")]
+    ObservedGoalAssignmentHasNoPhysicalOpening,
+    #[error("assignment request has no owner")]
+    AssignmentRequestHasNoOwner,
+    #[error("assignment request has no session")]
+    AssignmentRequestHasNoSession,
+    #[error("request is absent from its owner/session observation")]
+    RequestIsAbsentFromItsOwnerSession,
+    #[error("assignment request is auxiliary")]
+    AssignmentRequestIsAuxiliary,
+    #[error("assignment request is absent from its owner/session")]
+    AssignmentRequestIsAbsentFromItsOwner,
+    #[error("assignment request has no physical identity")]
+    AssignmentRequestHasNoPhysicalIdentity,
+    #[error("assignment request differs from its physical owner/session observation")]
+    AssignmentRequestDiffersFromItsPhysicalOwner,
+    #[error("assignment request logical identity differs from its physical observation")]
+    AssignmentRequestLogicalIdentityDiffersFromIts,
+}
+
+impl From<crate::watcher::WatcherError> for GoalError {
+    fn from(error: crate::watcher::WatcherError) -> Self {
+        Self::Watcher(Box::new(error))
+    }
+}
+
+impl From<crate::trigger_engine::durable::DurableTriggerError> for GoalError {
+    fn from(error: crate::trigger_engine::durable::DurableTriggerError) -> Self {
+        Self::Durable(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::queue::QueueError> for GoalError {
+    fn from(error: crate::lifecycle::queue::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for GoalError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Watcher(error) => error.config_client_error(),
+            Self::Durable(error) => error.config_client_error(),
+            Self::Graphql(error) => error.config_client_error(),
+            Self::History(error) => error.config_client_error(),
+            Self::Queue(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 /// Resume only a paused Goal; an interrupted/claimed execution must settle
@@ -1464,7 +1600,7 @@ pub(crate) struct GoalBackedRequestFingerprint {
 impl GoalBackedRequestFingerprint {
     pub(crate) fn from_create(
         request: &gents_protocol::request_admission::AgentRequestCreate,
-    ) -> Result<Self> {
+    ) -> Result<Self, GoalError> {
         // Compile-time fence: adding a new request field requires an explicit
         // decision about whether it belongs in the immutable retry contract.
         let gents_protocol::request_admission::AgentRequestCreate {
@@ -1545,7 +1681,7 @@ impl GoalBackedRequestFingerprint {
                 .enrollment_authorization_sequence
                 .map(i64::try_from)
                 .transpose()
-                .context("enrollment authorization sequence exceeds storage range")?,
+                .map_err(GoalError::EnrollmentSequenceRange)?,
             enrollment_authorization_expires_at: request
                 .admission
                 .enrollment_authorization_expires_at
@@ -2252,7 +2388,7 @@ pub async fn load_canonical_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<Option<GoalDocument>> {
+) -> Result<Option<GoalDocument>, GoalError> {
     let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let response = txn
@@ -2266,9 +2402,9 @@ pub async fn load_canonical_goal_in_txn(
         response
             .pointer("/data/Goal")
             .cloned()
-            .context("transactional Goal query omitted rows")?,
+            .ok_or(GoalError::TransactionalGoalRowsOmitted)?,
     )
-    .context("decoding transactional Goal rows")?;
+    .map_err(GoalError::DecodeTransactionalGoalRows)?;
     sort_goals_canonical(&mut goals);
     Ok(goals.into_iter().next())
 }
@@ -2948,7 +3084,7 @@ pub(crate) async fn fence_goal_continuation_claim_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &crate::watcher::AgentRequest,
     now: &str,
-) -> Result<bool> {
+) -> Result<bool, GoalError> {
     if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
         return Ok(true);
     }

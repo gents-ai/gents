@@ -1,7 +1,9 @@
 use super::history::GoalHistoryError;
-use super::GoalDocument;
+use super::{GoalDocument, GoalError};
 use crate::request_admission::verify_request_receipt_signature;
 use gents_protocol::row::AgentRequestRow;
+
+type Result<T, E = GoalError> = std::result::Result<T, E>;
 
 pub(super) fn request_belongs_to_goal(goal: &GoalDocument, entry: &AgentRequestRow) -> bool {
     verify_request_receipt_signature(entry).is_ok() && verified_entry_belongs_to_goal(goal, entry)
@@ -81,14 +83,13 @@ pub(crate) enum RequestAssignmentScope {
 fn request_assignment_scope(
     entry: &AgentRequestRow,
     observation: &RequestAssignmentObservation,
-) -> anyhow::Result<RequestAssignmentScope> {
-    use anyhow::Context;
+) -> Result<RequestAssignmentScope> {
     use gents_protocol::request_input::GoalAssignmentInput;
     verify_request_receipt_signature(entry)?;
     let entry_doc_id = entry
         .doc_id
         .as_deref()
-        .context("assignment entry has no document ID")?;
+        .ok_or(GoalError::AssignmentEntryHasNoDocumentID)?;
     if let Some(reference) = entry
         .input
         .as_ref()
@@ -109,7 +110,7 @@ fn request_assignment_scope(
                 root_request_doc_id: Some(
                     goal.assignment_root_request_doc_id
                         .clone()
-                        .context("observed Goal assignment has no physical opening")?,
+                        .ok_or(GoalError::ObservedGoalAssignmentHasNoPhysicalOpening)?,
                 ),
             })
         }
@@ -207,7 +208,7 @@ pub(crate) fn latest_assignment_goals(
 pub(crate) async fn load_request_assignment(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request: &AgentRequestRow,
-) -> anyhow::Result<RequestAssignmentObservation> {
+) -> Result<RequestAssignmentObservation> {
     crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -220,7 +221,7 @@ pub(crate) async fn load_request_assignment(
 pub(crate) async fn load_request_assignment_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
-) -> anyhow::Result<RequestAssignmentObservation> {
+) -> Result<RequestAssignmentObservation> {
     let snapshot = assignment_snapshot_for_request(txn, request).await?;
     Ok(snapshot.observation(request)?.1)
 }
@@ -228,18 +229,17 @@ pub(crate) async fn load_request_assignment_in_txn(
 async fn assignment_snapshot_for_request(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
-) -> anyhow::Result<RequestAssignments> {
-    use anyhow::Context;
+) -> Result<RequestAssignments> {
     load_request_assignments_in_txn(
         txn,
         request
             .node_did
             .as_deref()
-            .context("assignment request has no owner")?,
+            .ok_or(GoalError::AssignmentRequestHasNoOwner)?,
         request
             .session_id
             .as_deref()
-            .context("assignment request has no session")?,
+            .ok_or(GoalError::AssignmentRequestHasNoSession)?,
     )
     .await
 }
@@ -254,27 +254,24 @@ pub(crate) struct RequestAssignments {
 }
 
 impl RequestAssignments {
-    pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
-        use anyhow::Context;
+    pub(crate) fn request(&self, doc: &str) -> Result<&AgentRequestRow> {
         let row = &self.rows[*self
             .index
             .get(doc)
-            .context("request is absent from its owner/session observation")?];
-        anyhow::ensure!(
-            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            "assignment request is auxiliary"
-        );
+            .ok_or(GoalError::RequestIsAbsentFromItsOwnerSession)?];
+        if !(row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)) {
+            return Err(GoalError::AssignmentRequestIsAuxiliary);
+        }
         verify_request_receipt_signature(row)?;
         Ok(row)
     }
 
-    fn entry(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
-        use anyhow::Context;
+    fn entry(&self, doc: &str) -> Result<&AgentRequestRow> {
         let by_doc =
             super::request_head::request_rows_by_doc(&self.owner, &self.session, &self.rows)?;
         let current = by_doc
             .get(doc)
-            .context("assignment request is absent from its owner/session")?;
+            .ok_or(GoalError::AssignmentRequestIsAbsentFromItsOwner)?;
         let openings = super::request_head::assignment_openings(&self.goals);
         super::request_head::authenticated_assignment_entry(
             &self.owner,
@@ -289,25 +286,23 @@ impl RequestAssignments {
     fn observation(
         &self,
         request: &AgentRequestRow,
-    ) -> anyhow::Result<(&AgentRequestRow, RequestAssignmentObservation)> {
-        use anyhow::Context;
+    ) -> Result<(&AgentRequestRow, RequestAssignmentObservation)> {
         let doc = request
             .doc_id
             .as_deref()
-            .context("assignment request has no physical identity")?;
+            .ok_or(GoalError::AssignmentRequestHasNoPhysicalIdentity)?;
         let current = self
             .rows
             .iter()
             .find(|row| row.doc_id.as_deref() == Some(doc))
-            .context("assignment request is absent from its owner/session")?;
-        anyhow::ensure!(
-            current.request_id == request.request_id
-                && current.purpose
-                    == Some(gents_protocol::request_admission::RequestPurpose::Normal)
-                && request.node_did.as_deref() == Some(self.owner.as_str())
-                && request.session_id.as_deref() == Some(self.session.as_str()),
-            "assignment request differs from its physical owner/session observation"
-        );
+            .ok_or(GoalError::AssignmentRequestIsAbsentFromItsOwner)?;
+        if !(current.request_id == request.request_id
+            && current.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+            && request.node_did.as_deref() == Some(self.owner.as_str())
+            && request.session_id.as_deref() == Some(self.session.as_str()))
+        {
+            return Err(GoalError::AssignmentRequestDiffersFromItsPhysicalOwner);
+        }
         let entry = self.entry(doc)?;
         Ok((entry, observe_request_assignment(&self.goals, entry)))
     }
@@ -316,15 +311,14 @@ impl RequestAssignments {
         &self,
         doc: &str,
         request_id: &str,
-    ) -> anyhow::Result<RequestAssignmentScope> {
-        anyhow::ensure!(
-            self.request(doc)?.request_id == request_id,
-            "assignment request logical identity differs from its physical observation"
-        );
+    ) -> Result<RequestAssignmentScope> {
+        if !(self.request(doc)?.request_id == request_id) {
+            return Err(GoalError::AssignmentRequestLogicalIdentityDiffersFromIts);
+        }
         self.scope(doc)
     }
 
-    pub(crate) fn scope(&self, request_doc_id: &str) -> anyhow::Result<RequestAssignmentScope> {
+    pub(crate) fn scope(&self, request_doc_id: &str) -> Result<RequestAssignmentScope> {
         use std::sync::PoisonError;
         if let Some(scope) = self
             .scopes
@@ -349,7 +343,7 @@ pub(crate) async fn load_request_assignments_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     session: &str,
-) -> anyhow::Result<RequestAssignments> {
+) -> Result<RequestAssignments> {
     let rows = super::request_head::load_session_requests(txn, owner, session).await?;
     let versions = super::load_goal_versions_for_session(txn, owner, session).await?;
     let by_doc = super::request_head::request_rows_by_doc(owner, session, &rows)?;

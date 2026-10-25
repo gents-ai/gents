@@ -62,7 +62,7 @@ pub async fn pending_user_queue_projection(
     session_id: &str,
     requester_did: &str,
     observed_doc_ids: &[String],
-) -> anyhow::Result<PendingQueueProjection> {
+) -> Result<PendingQueueProjection> {
     access
         .transact_readonly("queue.pending_user_snapshot", |txn| {
             Box::pin(async move {

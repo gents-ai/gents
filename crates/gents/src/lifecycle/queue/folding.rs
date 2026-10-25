@@ -359,7 +359,7 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
 pub(crate) async fn load_consumed_folded_inputs(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
-) -> anyhow::Result<Vec<FoldedInput>> {
+) -> Result<Vec<FoldedInput>> {
     if !heads_user_turn(head) {
         return Ok(Vec::new());
     }
@@ -421,7 +421,7 @@ pub(crate) async fn load_consumed_folded_inputs(
                 }
                 order
                     .into_iter()
-                    .map(|doc| -> anyhow::Result<FoldedInput> {
+                    .map(|doc| -> Result<FoldedInput> {
                         let row = by_doc
                             .remove(&doc)
                             .ok_or(QueueError::FoldedArrivalAmbiguous)?;

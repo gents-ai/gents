@@ -27,7 +27,7 @@ pub(crate) async fn pending_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> anyhow::Result<Vec<AgentRequestRow>> {
+) -> Result<Vec<AgentRequestRow>> {
     let rows = pending_rows_in_txn(txn, node_did, session_id).await?;
     let ids = rows
         .iter()
@@ -39,20 +39,20 @@ pub(crate) async fn pending_in_txn(
         .collect::<Result<Vec<_>>>()?;
     let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
     if order.len() != ids.len() {
-        return Err(QueueError::PendingQueueArrivalIncomplete.into());
+        return Err(QueueError::PendingQueueArrivalIncomplete);
     }
     let mut by_id = rows
         .into_iter()
         .map(|row| (row.doc_id.clone().unwrap(), row))
         .collect::<rapidhash::RapidHashMap<_, _>>();
-    Ok(order
+    order
         .into_iter()
         .map(|id| {
             by_id
                 .remove(&id)
                 .ok_or(QueueError::PendingQueueArrivalChanged)
         })
-        .collect::<Result<Vec<_>>>()?)
+        .collect::<Result<Vec<_>>>()
 }
 
 pub(crate) async fn steering_snapshot(

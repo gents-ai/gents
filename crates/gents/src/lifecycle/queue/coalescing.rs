@@ -31,7 +31,7 @@ pub async fn reconcile_coalesced_pending_request(
     node_did: &str,
     source: QueueSource,
     key: &str,
-) -> anyhow::Result<Option<EnqueuedAgentRequest>> {
+) -> Result<Option<EnqueuedAgentRequest>> {
     reconcile_coalesced_pending_request_for(node, session_id, node_did, source, key, None).await
 }
 
@@ -42,7 +42,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
     source: QueueSource,
     key: &str,
     anchor_doc: Option<&str>,
-) -> anyhow::Result<Option<EnqueuedAgentRequest>> {
+) -> Result<Option<EnqueuedAgentRequest>> {
     let matching =
         matching_coalesced_pending_requests(node, session_id, node_did, source, key, anchor_doc)
             .await?;
@@ -56,7 +56,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
             duplicate
                 .doc_id
                 .as_deref()
-                .context("pending AgentRequest row is missing _docID")?,
+                .ok_or(QueueError::PendingRowMissingDocId)?,
             node_did,
             &survivor.request_id,
             &survivor.doc_id,
@@ -79,10 +79,10 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
                                 duplicate
                                     .doc_id
                                     .as_deref()
-                                    .context("duplicate wake has no physical identity")?,
+                                    .ok_or(QueueError::DuplicateWakeWithoutIdentity)?,
                             )?
                         {
-                            return Ok::<_, anyhow::Error>(());
+                            return Ok::<_, QueueError>(());
                         }
                     }
                     let response = txn.execute_local_response(mutation).await?;
@@ -155,7 +155,7 @@ async fn matching_coalesced_pending_requests(
     source: QueueSource,
     key: &str,
     anchor_doc: Option<&str>,
-) -> anyhow::Result<Vec<AgentRequestRow>> {
+) -> Result<Vec<AgentRequestRow>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
@@ -196,14 +196,14 @@ async fn matching_coalesced_pending_requests(
                     anchor
                         .doc_id
                         .as_deref()
-                        .context("coalescing anchor has no physical identity")?,
+                        .ok_or(QueueError::CoalescingAnchorWithoutIdentity)?,
                 )?;
                 let mut matching = Vec::new();
                 for row in rows {
                     if assignments.scope(
                         row.doc_id
                             .as_deref()
-                            .context("pending wake has no physical identity")?,
+                            .ok_or(QueueError::PendingWakeWithoutIdentity)?,
                     )? == selected_scope
                     {
                         matching.push(row);

@@ -9,7 +9,7 @@ use crate::graphql::escape_graphql_string;
 type Result<T, E = GoalHistoryError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum GoalHistoryError {
+pub enum GoalHistoryError {
     #[error("Goal history has an invalid native revision or status")]
     InvalidRevision,
     #[error("Goal history contains a duplicate native revision")]

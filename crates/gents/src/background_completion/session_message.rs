@@ -209,7 +209,7 @@ pub(crate) async fn turn_assignment_handoff(
                     Err(error) => {
                         tracing::warn!(
                             caused_request_id = %caused.request_id,
-                            error = %ErrorChain(error.as_ref()),
+                            error = %ErrorChain(&error),
                             "assignment state is unreadable; the handoff cannot claim assignment success"
                         );
                         AssignmentObservation::Unknown

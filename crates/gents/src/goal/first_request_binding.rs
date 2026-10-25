@@ -77,7 +77,7 @@ pub(super) fn continuation_assignment(
     goal: &GoalDocument,
     parent: &crate::watcher::AgentRequest,
     receipt_doc: Option<&str>,
-) -> Result<GoalAssignmentInput> {
+) -> Result<GoalAssignmentInput, GoalError> {
     continuation_reference(
         &goal.goal_id,
         goal.assignment_root_request_doc_id.as_deref(),
@@ -85,7 +85,7 @@ pub(super) fn continuation_assignment(
         parent.input.goal_assignment.as_ref(),
         receipt_doc,
     )
-    .context("Goal continuation conflicts with its physical assignment binding")
+    .ok_or(GoalError::ContinuationAssignmentConflict)
 }
 
 /// Reading the canonical row here puts its binding in the storage transaction's
