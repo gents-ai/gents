@@ -41,6 +41,9 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+chrono.workspace = true
+reqwest.workspace = true
+uuid.workspace = true
 rapidhash.workspace = true
 bs58 = "0.5"
 axum = "0.8"

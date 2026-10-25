@@ -4821,6 +4821,7 @@ dependencies = [
  "blake3",
  "bs58",
  "bytes",
+ "chrono",
  "clap",
  "futures",
  "futures-util",
@@ -4832,12 +4833,14 @@ dependencies = [
  "libc",
  "portable-pty",
  "rapidhash",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
  "windows-sys 0.61.2",
 ]
 
