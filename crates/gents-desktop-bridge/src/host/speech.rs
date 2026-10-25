@@ -222,7 +222,7 @@ async fn services(
     let access = core.operator_graphql(node_did).map(gents::ConfigAccess::Graphql).context(
         "Speech configuration cannot be read for this runtime. Use Gents: Connect Local Runtime on this machine, or choose another service runtime."
     )?;
-    gents::registry::configured_mcp_services_on(&access, node_did).await
+    Ok(gents::registry::configured_mcp_services_on(&access, node_did).await?)
 }
 
 async fn route(

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -34,6 +33,59 @@ impl Drop for Service {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ServiceError {
+    #[error(transparent)]
+    Store(#[from] crate::pack_store::PackStoreError),
+    #[error(transparent)]
+    Materialize(#[from] crate::pack::materialize::MaterializeError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("managed service requires an object input")]
+    ObjectInput,
+    #[error("plugin service is not authorized; reinstall with --grant-authority")]
+    NotAuthorized,
+    #[error("managed service requires an installed owner pack; install the .pack")]
+    OwnerDigest,
+    #[error("managed service requires an owner pack coordinate")]
+    OwnerCoordinate,
+    #[error("plugin service exited; inspect {} and restart the runtime. Previous actions may have executed; do not replay writes blindly", log_path.display())]
+    Exited { log_path: PathBuf },
+    #[error("installed service declaration does not match its owner pack; reinstall the pack")]
+    DeclarationMismatch,
+    #[error("runtime managed-plugin service limit reached (8); restart the runtime to release cached services")]
+    LimitReached,
+    #[error("starting plugin service {key}; state retained at {}. The tool request was not sent to the service", state.display())]
+    Start {
+        key: String,
+        state: PathBuf,
+        #[source]
+        source: Box<ServiceError>,
+    },
+    #[error("{spawn}")]
+    Spawn { spawn: String },
+    #[error("service stdout unavailable")]
+    StdoutUnavailable,
+    #[error("service stderr unavailable")]
+    StderrUnavailable,
+    #[error("service must emit one bounded JSON readiness line on stdout")]
+    ReadinessLine,
+    #[error("invalid service readiness JSON")]
+    ReadinessJson(#[source] serde_json::Error),
+    #[error("service readiness must be a JSON object")]
+    ReadinessNotObject,
+    #[error("service exited during startup")]
+    ExitedDuringStartup,
+    #[error("service readiness timed out")]
+    ReadinessTimeout(#[source] tokio::time::error::Elapsed),
+    #[error("{error}; service stderr: {stderr}")]
+    ReadinessFailed { error: String, stderr: String },
+}
+
+type Result<T, E = ServiceError> = std::result::Result<T, E>;
+
 impl Services {
     pub(super) async fn prepare(
         &self,
@@ -44,9 +96,7 @@ impl Services {
         let Some(declaration) = &record.declaration.service else {
             return Ok(());
         };
-        let input = input
-            .as_object_mut()
-            .context("managed service requires an object input")?;
+        let input = input.as_object_mut().ok_or(ServiceError::ObjectInput)?;
         input.remove("service");
         if (!declaration.skip_when.is_empty()
             && declaration
@@ -61,18 +111,17 @@ impl Services {
         {
             return Ok(());
         }
-        anyhow::ensure!(
-            record.ceiling().child_process,
-            "plugin service is not authorized; reinstall with --grant-authority"
-        );
+        if !record.ceiling().child_process {
+            return Err(ServiceError::NotAuthorized);
+        }
         let digest = record
             .owner_pack_digest
             .as_deref()
-            .context("managed service requires an installed owner pack; install the .pack")?;
+            .ok_or(ServiceError::OwnerDigest)?;
         let owner = record
             .owner_pack_coordinate
             .as_deref()
-            .context("managed service requires an owner pack coordinate")?;
+            .ok_or(ServiceError::OwnerCoordinate)?;
         let specification = super::store::content_digest_hex(&serde_json::to_vec(declaration)?);
         let key = format!("{owner}/{specification}");
         let mut services = self.0.lock().await;
@@ -96,28 +145,27 @@ impl Services {
                 .unwrap_or(true)
             {
                 service.terminate().await;
-                let error = anyhow::anyhow!("plugin service exited; inspect {} and restart the runtime. Previous actions may have executed; do not replay writes blindly", service.log_path.display());
+                let error = ServiceError::Exited {
+                    log_path: service.log_path.clone(),
+                };
                 return optional_start(Err(error), declaration.optional, input).map(|_| ());
             }
             input.insert("service".into(), service.data.clone());
             return Ok(());
         }
         let archive = crate::pack_store::PackStore::new(home).open(digest)?;
-        anyhow::ensure!(
-            archive
-                .manifest()
-                .metadata
-                .plugins
-                .iter()
-                .any(|plugin| plugin == &record.declaration),
-            "installed service declaration does not match its owner pack; reinstall the pack"
-        );
+        if !archive
+            .manifest()
+            .metadata
+            .plugins
+            .iter()
+            .any(|plugin| plugin == &record.declaration)
+        {
+            return Err(ServiceError::DeclarationMismatch);
+        }
         if services.len() >= 8 {
-            return optional_start(
-                Err(anyhow::anyhow!("runtime managed-plugin service limit reached (8); restart the runtime to release cached services")),
-                declaration.optional,
-                input,
-            ).map(|_| ());
+            return optional_start(Err(ServiceError::LimitReached), declaration.optional, input)
+                .map(|_| ());
         }
         let root = home.join(crate::home::PLUGIN_SERVICES_DIR_NAME);
         std::fs::create_dir_all(&root)?;
@@ -135,8 +183,13 @@ impl Services {
                     .replace("{state}", &state.to_string_lossy())
             })
             .collect();
-        let started = Service::start(argv, &state, &key, digest, declaration.startup_timeout_secs).await
-            .with_context(|| format!("starting plugin service {key}; state retained at {}. The tool request was not sent to the service", state.display()));
+        let started = Service::start(argv, &state, &key, digest, declaration.startup_timeout_secs)
+            .await
+            .map_err(|source| ServiceError::Start {
+                key: key.clone(),
+                state: state.clone(),
+                source: Box::new(source),
+            });
         let Some(service) = optional_start(started, declaration.optional, input)? else {
             return Ok(());
         };
@@ -157,7 +210,7 @@ fn optional_start(
             input.insert(
                 "service".into(),
                 serde_json::json!({
-                    "status":"unavailable", "error":format!("{}", ErrorChain(error.as_ref())), "code_executed":false
+                    "status":"unavailable", "error":format!("{}", ErrorChain(&error)), "code_executed":false
                 }),
             );
             Ok(None)
@@ -188,15 +241,15 @@ impl Service {
             kind: ManagedExecKind::PersistentService,
         })
         .await
-        .map_err(anyhow::Error::msg)?;
+        .map_err(|spawn| ServiceError::Spawn { spawn })?;
         let stdout = process
             .stdout
             .take()
-            .context("service stdout unavailable")?;
+            .ok_or(ServiceError::StdoutUnavailable)?;
         let mut stderr = process
             .stderr
             .take()
-            .context("service stderr unavailable")?;
+            .ok_or(ServiceError::StderrUnavailable)?;
         let tail = Arc::new(StdMutex::new(Vec::new()));
         let captured = tail.clone();
         let log_path = state.join("service.stderr.log");
@@ -225,34 +278,39 @@ impl Service {
             drains: vec![stderr_task],
         };
         let mut reader = BufReader::new(stdout);
-        let ready = tokio::time::timeout(Duration::from_secs(u64::from(timeout)), async {
+        let ready = match tokio::time::timeout(Duration::from_secs(u64::from(timeout)), async {
             let mut line = Vec::new();
             (&mut reader)
                 .take(65537)
                 .read_until(b'\n', &mut line)
                 .await?;
-            anyhow::ensure!(
-                line.len() <= 65536 && line.last() == Some(&b'\n'),
-                "service must emit one bounded JSON readiness line on stdout"
-            );
+            if line.len() > 65536 || line.last() != Some(&b'\n') {
+                return Err(ServiceError::ReadinessLine);
+            }
             let value: Value =
-                serde_json::from_slice(&line).context("invalid service readiness JSON")?;
-            anyhow::ensure!(value.is_object(), "service readiness must be a JSON object");
-            anyhow::ensure!(
-                !service.process.as_mut().unwrap().has_exited()?,
-                "service exited during startup"
-            );
-            Ok::<_, anyhow::Error>(value)
+                serde_json::from_slice(&line).map_err(ServiceError::ReadinessJson)?;
+            if !value.is_object() {
+                return Err(ServiceError::ReadinessNotObject);
+            }
+            if service.process.as_mut().unwrap().has_exited()? {
+                return Err(ServiceError::ExitedDuringStartup);
+            }
+            Ok::<_, ServiceError>(value)
         })
         .await
-        .context("service readiness timed out")
-        .and_then(|result| result);
+        {
+            Ok(result) => result,
+            Err(elapsed) => Err(ServiceError::ReadinessTimeout(elapsed)),
+        };
         match ready {
             Ok(value) => service.data = value,
             Err(error) => {
                 service.terminate().await;
                 let detail = String::from_utf8_lossy(&tail.lock().unwrap()).into_owned();
-                anyhow::bail!("{}; service stderr: {detail}", ErrorChain(error.as_ref()));
+                return Err(ServiceError::ReadinessFailed {
+                    error: ErrorChain(&error).to_string(),
+                    stderr: detail,
+                });
             }
         }
         service.drains.push(tokio::spawn(async move {

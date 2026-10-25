@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, thiserror::Error)]
+pub enum P2pSyncObservationError {
+    #[error("embedded node has no P2P transport")]
+    NoTransport,
+    #[error("native P2P sync observation timed out")]
+    Timeout(#[source] tokio::time::error::Elapsed),
+    #[error(transparent)]
+    Status(defra_p2p_adapter::P2PError),
+    #[error(transparent)]
+    Decode(#[from] serde_json::Error),
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct P2pSyncStatusSnapshot {
@@ -173,12 +185,12 @@ impl P2pSyncStatusAdapter for JsonP2pSyncStatusAdapter {
 
 pub async fn observe_embedded_sync_status(
     node: &crate::defra_node::EmbeddedNode,
-) -> anyhow::Result<P2pSyncStatusSnapshot> {
-    use anyhow::Context;
-    let p2p = crate::identity::node_p2p(node).context("embedded node has no P2P transport")?;
+) -> Result<P2pSyncStatusSnapshot, P2pSyncObservationError> {
+    let p2p = crate::identity::node_p2p(node).ok_or(P2pSyncObservationError::NoTransport)?;
     let upstream = tokio::time::timeout(std::time::Duration::from_secs(5), p2p.sync_status())
         .await
-        .context("native P2P sync observation timed out")??;
+        .map_err(P2pSyncObservationError::Timeout)?
+        .map_err(P2pSyncObservationError::Status)?;
     Ok(JsonP2pSyncStatusAdapter.adapt(&upstream)?)
 }
 

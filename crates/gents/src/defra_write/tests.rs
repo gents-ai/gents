@@ -512,10 +512,10 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
         );
         let error = tool.ensure_well_formed().unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref()))
+            format!("{}", ErrorChain(&error))
                 .contains("unsupported bounded write field type `Object`"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -523,10 +523,10 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     assert!(!absent.is_well_formed());
     let error = absent.ensure_well_formed().unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref()))
+        format!("{}", ErrorChain(&error))
             .contains("field `missing_total` is absent from `CountOwner`"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 

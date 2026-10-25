@@ -261,7 +261,7 @@ impl ClientHost {
                     &request.label,
                 )
                 .await
-                .map_err(backend_error)?;
+                .map_err(|error| backend_error(error.into()))?;
                 if self.core.refresh_store().await.is_err() {
                     tracing::warn!("Account renamed; its client observation is unavailable");
                 }

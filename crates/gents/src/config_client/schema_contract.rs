@@ -5,7 +5,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SchemaContractError {
+pub enum SchemaContractError {
     #[error("collection schema field is missing Name")]
     FieldNameMissing,
     #[error("collection index field is missing Name")]

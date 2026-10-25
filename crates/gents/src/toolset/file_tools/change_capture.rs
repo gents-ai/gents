@@ -26,6 +26,24 @@ impl Serialize for FileChanges {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ChangeCaptureError {
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("invalid retained file change binding")]
+    InvalidBinding,
+    #[error("ambiguous retained file path")]
+    AmbiguousPath,
+    #[error(transparent)]
+    Path(#[from] crate::workspace::PathCapabilityError),
+    #[error("invalid retained file image")]
+    InvalidImage,
+    #[error(transparent)]
+    ImageEncoding(#[from] base64::DecodeError),
+    #[error("retained file image does not match its content hash")]
+    ImageHashMismatch,
+}
+
 impl FileChanges {
     pub(crate) fn belongs_to(&self, tool_call_doc_id: &str) -> bool {
         self.0.tool_call_doc_id == tool_call_doc_id
@@ -34,21 +52,20 @@ impl FileChanges {
     pub(crate) fn decode(
         tool_call_doc_id: &str,
         value: serde_json::Value,
-    ) -> anyhow::Result<ChangeBatch> {
+    ) -> Result<ChangeBatch, ChangeCaptureError> {
         let changes: ChangeBatch = serde_json::from_value(value)?;
-        anyhow::ensure!(
-            changes.version == FILE_CHANGES_VERSION
-                && !tool_call_doc_id.is_empty()
-                && changes.tool_call_doc_id == tool_call_doc_id
-                && !changes.changes.is_empty(),
-            "invalid retained file change binding"
-        );
+        if !(changes.version == FILE_CHANGES_VERSION
+            && !tool_call_doc_id.is_empty()
+            && changes.tool_call_doc_id == tool_call_doc_id
+            && !changes.changes.is_empty())
+        {
+            return Err(ChangeCaptureError::InvalidBinding);
+        }
         let mut paths = RapidHashSet::new();
         for change in &changes.changes {
-            anyhow::ensure!(
-                !change.root.is_empty() && paths.insert((&change.root, &change.path)),
-                "ambiguous retained file path"
-            );
+            if change.root.is_empty() || !paths.insert((&change.root, &change.path)) {
+                return Err(ChangeCaptureError::AmbiguousPath);
+            }
             crate::workspace::WorkspacePathCapability::exact_paths(vec![change.path.clone()])?;
             for image in [&change.before, &change.after] {
                 if let FileImage::File {
@@ -58,17 +75,17 @@ impl FileChanges {
                     links,
                 } = image
                 {
-                    anyhow::ensure!(
-                        data.len() as u64 <= MAX_IMAGE_BYTES.div_ceil(3) * 4
-                            && permissions.unix_mode.is_none_or(|mode| mode <= 0o7777)
-                            && links.is_none_or(|count| count > 0),
-                        "invalid retained file image"
-                    );
+                    if !(data.len() as u64 <= MAX_IMAGE_BYTES.div_ceil(3) * 4
+                        && permissions.unix_mode.is_none_or(|mode| mode <= 0o7777)
+                        && links.is_none_or(|count| count > 0))
+                    {
+                        return Err(ChangeCaptureError::InvalidImage);
+                    }
                     let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-                    anyhow::ensure!(
-                        bytes.len() as u64 <= MAX_IMAGE_BYTES && content_hash(&bytes) == *expected,
-                        "retained file image does not match its content hash"
-                    );
+                    if !(bytes.len() as u64 <= MAX_IMAGE_BYTES && content_hash(&bytes) == *expected)
+                    {
+                        return Err(ChangeCaptureError::ImageHashMismatch);
+                    }
                 }
             }
         }

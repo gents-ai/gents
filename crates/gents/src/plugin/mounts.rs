@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::Result;
 use gents_protocol::job::{AssetMount, JobPolicy, PROJECT_MOUNT_CLASS};
 
 use super::store::InstalledPlugin;
@@ -14,6 +13,8 @@ use crate::plugin_job::origin::trusted_hint;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MountsError {
+    #[error(transparent)]
+    Home(#[from] crate::pack::home_install::HomeInstallError),
     #[error("dependency {coordinate:?} of {record_coordinate:?} records assets dir {assets:?}, whose name is not a 64-hex digest")]
     DependencyDigest {
         coordinate: String,
@@ -21,6 +22,8 @@ pub enum MountsError {
         assets: String,
     },
 }
+
+type Result<T, E = MountsError> = std::result::Result<T, E>;
 
 /// Project directories under `cwd` that join the manifold, in order.
 const PROJECT_DIRS: [&str; 2] = [".gents/workflows", ".grok/workflows"];

@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
-use anyhow::anyhow;
 use defra_node::EmbeddedNode;
-use serde_json::json;
+use serde_json::{json, Value};
 
 pub(crate) const MAX_FIELD_STRING_BYTES: usize = 2_000;
 
@@ -76,30 +75,17 @@ pub use schema::{
 
 pub const DEFRA_QUERY_TOOL_NAME: &str = "query";
 
-#[derive(Debug)]
-pub struct DefraQueryError(anyhow::Error);
-
-impl std::fmt::Display for DefraQueryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", ErrorChain(self.0.as_ref()))
-    }
-}
-
-impl std::error::Error for DefraQueryError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
-    }
-}
-
-impl From<anyhow::Error> for DefraQueryError {
-    fn from(error: anyhow::Error) -> Self {
-        Self(error)
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum DefraQueryError {
+    #[error("{}", ErrorChain(.0))]
+    Failure(DefraQueryFailure),
+    #[error("{}", json!({"error": error, "recovery": recovery}))]
+    Rejected { error: String, recovery: Value },
 }
 
 impl From<DefraQueryFailure> for DefraQueryError {
     fn from(error: DefraQueryFailure) -> Self {
-        Self(error.into())
+        Self::Failure(error)
     }
 }
 
@@ -151,8 +137,17 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
-            Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
-            Err(error) => Err(anyhow!("{}", json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
+            Err(error) => {
+                let recovery = if matches!(error, command::CommandError::CollectionDiscovery(_)) {
+                    json!({"tool":"schema","args":{"argv":["collection","list"]}})
+                } else {
+                    json!({"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}})
+                };
+                Err(DefraQueryError::Rejected {
+                    error: format!("{}", ErrorChain(&error)),
+                    recovery,
+                })
+            }
         }
     }
 }

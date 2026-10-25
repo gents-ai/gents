@@ -46,7 +46,7 @@ pub use journal::{
     action_journal_prefix_legal, recover_running, retry_allowed, ActionJournalEntry,
     ActionJournalState,
 };
-pub use path_capability::WorkspacePathCapability;
+pub use path_capability::{PathCapabilityError, WorkspacePathCapability};
 pub use quickstart::provision_read_only_workspace;
 pub use runtime::cleanup_workspace;
 pub(crate) use runtime::{

@@ -202,7 +202,7 @@ fn require_artifact(artifact: &[u8]) -> Result<(), String> {
     crate::plugin::executor::PluginExecutor::validate_sealed_artifact(artifact).map_err(|error| {
         format!(
             "callback requires a bounded Afterburner .afb artifact: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         )
     })
 }

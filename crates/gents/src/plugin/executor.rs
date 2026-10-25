@@ -289,7 +289,7 @@ impl PluginExecutor {
         Ok(Self::sealed_artifact_runner(artifact)?.call(input, &budget)?)
     }
 
-    pub(crate) fn validate_sealed_artifact(artifact: &[u8]) -> anyhow::Result<()> {
+    pub(crate) fn validate_sealed_artifact(artifact: &[u8]) -> Result<(), PluginRunError> {
         Self::sealed_artifact_runner(artifact)?;
         Ok(())
     }

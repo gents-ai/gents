@@ -1,4 +1,4 @@
-use anyhow::Result;
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
 
 use super::error::DocumentConfigError;
 use serde::{Deserialize, Serialize};
@@ -52,7 +52,7 @@ pub async fn list_datastore_tool_surfaces(
     node_did: &str,
 ) -> Result<Vec<DatastoreToolSurfaceDocument>> {
     if node_did.trim().is_empty() {
-        return Err(DocumentConfigError::SurfaceOwnerRequired.into());
+        return Err(DocumentConfigError::SurfaceOwnerRequired);
     }
     let (fields, _) =
         crate::config_client::config_projection(crate::Collection::DatastoreToolSurface, None)?;
@@ -72,10 +72,10 @@ pub async fn list_datastore_tool_surfaces(
         .map(|row| {
             let surface: DatastoreToolSurfaceDocument = serde_json::from_value(row.clone())?;
             if surface.node_did != node_did {
-                return Err(DocumentConfigError::SurfaceOwnerMismatch.into());
+                return Err(DocumentConfigError::SurfaceOwnerMismatch);
             }
             if !ids.insert(surface.surface_id.clone()) {
-                return Err(DocumentConfigError::SurfaceDuplicateIdentity.into());
+                return Err(DocumentConfigError::SurfaceDuplicateIdentity);
             }
             Ok(surface)
         })

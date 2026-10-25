@@ -1,20 +1,97 @@
-use anyhow::{ensure, Context, Result};
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
+use gents_protocol::graphql::GraphqlError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::error::DefraQueryFailure;
+use super::native_filter::NativeFilterError;
 use super::{
     build_query, discovery_payload, introspection_query, parse_collection_schema, CollectionScope,
     DefraQueryParams,
 };
-use crate::config_client::ConfigRead;
+use crate::config_client::{ConfigClientError, ConfigRead, TransactionFailure};
 
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub(super) struct CollectionDiscoveryError(String);
+pub enum CollectionDiscoveryError {
+    #[error("collection is required; {COLLECTION_GUIDANCE}")]
+    Required,
+    #[error("{error}; {COLLECTION_GUIDANCE}")]
+    InvalidName { error: GraphqlError },
+    #[error("{message}")]
+    Unknown { message: String },
+}
 
 pub(super) const COLLECTION_GUIDANCE: &str = "collection names a GraphQL type, not a datastore surface or tool. Discover names with schema collection list; inspect a surface with config datastore get SURFACE_ID";
+
+#[derive(Debug, thiserror::Error)]
+pub enum CommandError {
+    #[error(transparent)]
+    Failure(#[from] DefraQueryFailure),
+    #[error(transparent)]
+    CollectionDiscovery(#[from] CollectionDiscoveryError),
+    #[error(transparent)]
+    Filter(#[from] NativeFilterError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("help accepts argv only")]
+    HelpWithOptions,
+    #[error("help accepts one command")]
+    HelpTooManyCommands,
+    #[error(
+        "use argv:[fields|find|count|search|explain]; call query with {{\"argv\":[\"help\"]}}"
+    )]
+    CommandShape,
+    #[error("unknown option {key:?}; accepted options: {allowed:?}")]
+    UnknownOption {
+        key: String,
+        allowed: &'static [&'static str],
+    },
+    #[error("options.fields is required; call query with argv:[fields] to discover names")]
+    FieldsRequired,
+    #[error("options.fields must be an array of field names")]
+    FieldsInvalid(#[source] serde_json::Error),
+    #[error("limit must be an unsigned integer")]
+    LimitInvalid(#[source] serde_json::Error),
+    #[error("invalid field_page")]
+    FieldPageInvalid(#[source] serde_json::Error),
+    #[error("field_page cannot combine with row offset/order")]
+    FieldPageCombined,
+    #[error("offset must be an unsigned integer")]
+    OffsetInvalid(#[source] serde_json::Error),
+    #[error("mode must be simple or execute")]
+    ModeNotString,
+    #[error("mode must be simple or execute; call query with argv:[help,explain]")]
+    ModeInvalid,
+    #[error("DefraDB returned no explain plan; call query with argv:[help,explain]")]
+    NoExplainPlan,
+    #[error("native plan exceeds 65536 bytes; narrow the fields/filter and repeat query explain")]
+    PlanTooLarge,
+    #[error("DefraDB returned no collection result")]
+    NoCollectionResult,
+    #[error(
+        "field_page document is unavailable under the resolved query filters and authorization"
+    )]
+    FieldPageUnavailable,
+    #[error("{message}")]
+    QueryRejected {
+        message: String,
+        #[source]
+        source: ConfigClientError,
+    },
+}
+
+impl TransactionFailure for CommandError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) | Self::QueryRejected { source: error, .. } => Some(error),
+            Self::Filter(error) => error.config_client_error(),
+            Self::Failure(error) => find_source::<ConfigClientError>(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -122,31 +199,32 @@ pub async fn execute_command(
     access: &dyn ConfigRead,
     args: &QueryParams,
     scope: &CollectionScope,
-) -> Result<Value> {
+) -> Result<Value, CommandError> {
     let mut argv = args.argv.iter().map(String::as_str).collect::<Vec<_>>();
     if argv.last() == Some(&"--help") {
         argv.pop();
         argv.insert(0, "help");
     }
     if argv.first() == Some(&"help") {
-        ensure!(
-            args.collection.is_none() && args.options.is_empty(),
-            "help accepts argv only"
-        );
-        ensure!(argv.len() <= 2, "help accepts one command");
+        if !(args.collection.is_none() && args.options.is_empty()) {
+            return Err(CommandError::HelpWithOptions);
+        }
+        if argv.len() > 2 {
+            return Err(CommandError::HelpTooManyCommands);
+        }
         return Ok(json!({"help":query_help(argv.get(1).copied())?}));
     }
-    ensure!(
-        argv.len() == 1,
-        "use argv:[fields|find|count|search|explain]; call query with {{\"argv\":[\"help\"]}}"
-    );
+    if argv.len() != 1 {
+        return Err(CommandError::CommandShape);
+    }
     let command = argv[0];
     query_help(Some(command))?;
-    let collection = args.collection.as_deref().ok_or_else(|| {
-        CollectionDiscoveryError(format!("collection is required; {COLLECTION_GUIDANCE}"))
-    })?;
+    let collection = args
+        .collection
+        .as_deref()
+        .ok_or(CollectionDiscoveryError::Required)?;
     super::render::validate_identifier(collection)
-        .map_err(|error| CollectionDiscoveryError(format!("{error}; {COLLECTION_GUIDANCE}")))?;
+        .map_err(|error| CollectionDiscoveryError::InvalidName { error })?;
     scope.ensure_allowed(collection)?;
     let allowed: &[&str] = match command {
         "fields" => &[],
@@ -164,33 +242,41 @@ pub async fn execute_command(
         _ => unreachable!(),
     };
     for key in args.options.keys() {
-        ensure!(
-            allowed.contains(&key.as_str()),
-            "unknown option {key:?}; accepted options: {allowed:?}"
-        );
+        if !allowed.contains(&key.as_str()) {
+            return Err(CommandError::UnknownOption {
+                key: key.clone(),
+                allowed,
+            });
+        }
     }
     let schema_response = access
         .execute_read(&introspection_query(collection)?)
         .await?;
-    let schema = parse_collection_schema(schema_response.get("data"))
-        .ok_or_else(|| CollectionDiscoveryError(super::unknown_collection_message(collection)))?;
+    let schema = parse_collection_schema(schema_response.get("data")).ok_or_else(|| {
+        CollectionDiscoveryError::Unknown {
+            message: super::unknown_collection_message(collection),
+        }
+    })?;
     if command == "fields" {
         return Ok(discovery_payload(collection, &schema));
     }
     let fields = if command == "count" {
         vec!["_docID".into()]
     } else {
-        serde_json::from_value(args.options.get("fields").cloned().context(
-            "options.fields is required; call query with argv:[fields] to discover names",
-        )?)
-        .context("options.fields must be an array of field names")?
+        serde_json::from_value(
+            args.options
+                .get("fields")
+                .cloned()
+                .ok_or(CommandError::FieldsRequired)?,
+        )
+        .map_err(CommandError::FieldsInvalid)?
     };
     let limit = args
         .options
         .get("limit")
         .map(|v| serde_json::from_value(v.clone()))
         .transpose()
-        .context("limit must be an unsigned integer")?;
+        .map_err(CommandError::LimitInvalid)?;
     let mut params = DefraQueryParams {
         collection: collection.into(),
         fields,
@@ -206,14 +292,13 @@ pub async fn execute_command(
         .get("field_page")
         .map(|value| serde_json::from_value(value.clone()))
         .transpose()
-        .context("invalid field_page")?;
+        .map_err(CommandError::FieldPageInvalid)?;
     let selected_fields = params.fields.clone();
     if let Some(page) = &field_page {
         page.validate(&selected_fields)?;
-        ensure!(
-            !args.options.contains_key("offset") && !args.options.contains_key("order"),
-            "field_page cannot combine with row offset/order"
-        );
+        if args.options.contains_key("offset") || args.options.contains_key("order") {
+            return Err(CommandError::FieldPageCombined);
+        }
         let exact = json!({"_docID":{"_eq":page.doc_id}});
         params.filter = Some(match params.filter.take().filter(|v| !v.is_null()) {
             Some(filter) => json!({"_and":[filter, exact]}),
@@ -242,7 +327,7 @@ pub async fn execute_command(
             .get("offset")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
-            .context("offset must be an unsigned integer")?
+            .map_err(CommandError::OffsetInvalid)?
             .unwrap_or(0);
         build_paged_query(&params, scope, args.options.get("order"), offset)?
     };
@@ -250,13 +335,12 @@ pub async fn execute_command(
         let mode = args
             .options
             .get("mode")
-            .map(|v| v.as_str().context("mode must be simple or execute"))
+            .map(|v| v.as_str().ok_or(CommandError::ModeNotString))
             .transpose()?
             .unwrap_or("simple");
-        ensure!(
-            matches!(mode, "simple" | "execute"),
-            "mode must be simple or execute; call query with argv:[help,explain]"
-        );
+        if !matches!(mode, "simple" | "execute") {
+            return Err(CommandError::ModeInvalid);
+        }
         Some(mode)
     } else {
         None
@@ -272,21 +356,22 @@ pub async fn execute_command(
             Some(&schema),
             &format!("{}", ErrorChain(&error)),
         );
-        anyhow::Error::from(error).context(format!(
-            "{diagnostic}; recovery: {}",
-            json!({"tool":"query","args":{"argv":["help",command]}})
-        ))
+        CommandError::QueryRejected {
+            message: format!(
+                "{diagnostic}; recovery: {}",
+                json!({"tool":"query","args":{"argv":["help",command]}})
+            ),
+            source: error,
+        }
     })?;
     if let Some(mode) = mode {
         let plan = response["data"]["explain"].clone();
-        ensure!(
-            plan.is_object(),
-            "DefraDB returned no explain plan; call query with argv:[help,explain]"
-        );
-        ensure!(
-            serde_json::to_vec(&plan)?.len() <= 65536,
-            "native plan exceeds 65536 bytes; narrow the fields/filter and repeat query explain"
-        );
+        if !plan.is_object() {
+            return Err(CommandError::NoExplainPlan);
+        }
+        if serde_json::to_vec(&plan)?.len() > 65536 {
+            return Err(CommandError::PlanTooLarge);
+        }
         let mut observations = Vec::new();
         collect_plan_observations(&plan, &mut observations);
         let findings = if observations.is_empty() {
@@ -309,13 +394,14 @@ pub async fn execute_command(
         return Ok(json!({"total_count":response["data"]["COUNT"],"collection":collection}));
     }
     let mut rows = response["data"][collection].clone();
-    ensure!(rows.is_array(), "DefraDB returned no collection result");
+    if !rows.is_array() {
+        return Err(CommandError::NoCollectionResult);
+    }
     if let Some(page) = field_page {
         let rows = rows.as_array().unwrap();
-        ensure!(
-            rows.len() == 1,
-            "field_page document is unavailable under the resolved query filters and authorization"
-        );
+        if rows.len() != 1 {
+            return Err(CommandError::FieldPageUnavailable);
+        }
         return Ok(
             json!({"collection":collection,"field_page":page.read(&rows[0], &selected_fields)?}),
         );

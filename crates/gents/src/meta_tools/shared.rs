@@ -1,12 +1,12 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use defra_node::EmbeddedNode;
 use serde::Serialize;
 
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
 use crate::mcp_pool::{McpPool, McpPoolError};
+use crate::registry::RegistryError;
 use crate::tool_call_lifecycle::FailureClass;
 
 #[derive(Clone)]
@@ -104,8 +104,7 @@ pub struct MetaToolError(MetaToolErrorKind);
 
 #[derive(Debug)]
 enum MetaToolErrorKind {
-    Other(anyhow::Error),
-    Structured(StructuredToolError),
+    Structured(Box<StructuredToolError>),
     Failed(MetaToolFailure),
 }
 
@@ -119,6 +118,16 @@ pub(super) enum MetaToolFailure {
     ListTools(#[from] ListToolsError),
     #[error("call_tool")]
     CallToolHealth(#[source] HealthGateError),
+    #[error("call_tool")]
+    CallToolLookup(#[source] ServiceLookupError),
+    #[error(transparent)]
+    ServiceHealth(HealthGateError),
+    #[error(transparent)]
+    ServiceLookup(#[from] ServiceLookupError),
+    #[error(transparent)]
+    Registry(#[from] RegistryError),
+    #[error("duplicate flat MCP tool {name}")]
+    DuplicateFlatTool { name: String },
     #[error("service '{service_id}' timed out after {seconds}s")]
     CallTimedOut { service_id: String, seconds: u64 },
     #[error("MCP call_tool")]
@@ -133,7 +142,7 @@ pub(super) enum MetaToolFailure {
 
 impl MetaToolError {
     pub(super) fn structured(error: StructuredToolError) -> Self {
-        Self(MetaToolErrorKind::Structured(error))
+        Self(MetaToolErrorKind::Structured(Box::new(error)))
     }
 
     pub(super) fn into_dispatch_error(self) -> crate::llm::tool::ToolError {
@@ -150,7 +159,6 @@ impl MetaToolError {
 impl std::fmt::Display for MetaToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            MetaToolErrorKind::Other(error) => write!(f, "{}", ErrorChain(error.as_ref())),
             MetaToolErrorKind::Structured(error) => f.write_str(&error.to_result_text()),
             MetaToolErrorKind::Failed(error) => write!(f, "{}", ErrorChain(error)),
         }
@@ -160,7 +168,6 @@ impl std::fmt::Display for MetaToolError {
 impl std::error::Error for MetaToolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.0 {
-            MetaToolErrorKind::Other(error) => Some(error.root_cause()),
             MetaToolErrorKind::Structured(_) => None,
             MetaToolErrorKind::Failed(error) => {
                 let mut root: &(dyn std::error::Error + 'static) = error;
@@ -173,9 +180,9 @@ impl std::error::Error for MetaToolError {
     }
 }
 
-impl From<anyhow::Error> for MetaToolError {
-    fn from(error: anyhow::Error) -> Self {
-        Self(MetaToolErrorKind::Other(error))
+impl From<RegistryError> for MetaToolError {
+    fn from(error: RegistryError) -> Self {
+        MetaToolFailure::from(error).into()
     }
 }
 
@@ -385,16 +392,24 @@ impl ResolvedMcpService {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ServiceLookupError {
+    #[error("service '{service_id}' is not configured or enabled for this node")]
+    NotConfigured { service_id: String },
+    #[error(transparent)]
+    Registry(#[from] RegistryError),
+}
+
 pub(super) async fn lookup_service(
     ctx: &MetaToolContext,
     service_id: &str,
-) -> anyhow::Result<ResolvedMcpService> {
+) -> Result<ResolvedMcpService, ServiceLookupError> {
     let entry = crate::registry::configured_mcp_services(&ctx.node, &ctx.node_did)
         .await?
         .into_iter()
         .find(|service| service.service_id == service_id && service.enabled)
-        .ok_or_else(|| {
-            anyhow!("service '{service_id}' is not configured or enabled for this node")
+        .ok_or_else(|| ServiceLookupError::NotConfigured {
+            service_id: service_id.to_owned(),
         })?;
     Ok(resolve_service(
         &entry,

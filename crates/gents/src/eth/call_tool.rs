@@ -636,6 +636,14 @@ enum SigningKeyError {
     #[error("write tool has no chain key binding")]
     NoBinding,
     #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Eth(#[from] EthError),
+    #[error(transparent)]
+    DesiredState(#[from] crate::config_client::DesiredStateError),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error(transparent)]
     ToolDocument(serde_json::Error),
     #[error(transparent)]
     BindingDocument(serde_json::Error),
@@ -670,7 +678,7 @@ enum SigningKeyError {
 async fn load_signing_key(
     node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
-) -> anyhow::Result<[u8; 32]> {
+) -> Result<[u8; 32], SigningKeyError> {
     load_signing_key_with_store(node, resolved, &KeyringChainKeyStore).await
 }
 
@@ -678,7 +686,7 @@ async fn load_signing_key_with_store(
     node: &std::sync::Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     store: &dyn ChainKeyMaterialStore,
-) -> anyhow::Result<[u8; 32]> {
+) -> Result<[u8; 32], SigningKeyError> {
     let binding_id = resolved
         .binding_id
         .as_deref()
@@ -721,33 +729,28 @@ async fn load_signing_key_with_store(
     if !tool.enabled {
         return Err(SigningKeyError::ToolDisabled {
             tool_id: resolved.eth_tool_id.clone(),
-        }
-        .into());
+        });
     }
     if tool.node_did != resolved.principal_did {
         return Err(SigningKeyError::ToolOtherNode {
             tool_id: resolved.eth_tool_id.clone(),
-        }
-        .into());
+        });
     }
     if tool.chain_id != i64::try_from(resolved.chain_id).ok() {
         return Err(SigningKeyError::ToolChainChanged {
             tool_id: resolved.eth_tool_id.clone(),
-        }
-        .into());
+        });
     }
     if tool.key_binding_id.as_deref() != Some(binding_id) {
         return Err(SigningKeyError::ToolBindingChanged {
             tool_id: resolved.eth_tool_id.clone(),
             binding_id: binding_id.to_owned(),
-        }
-        .into());
+        });
     }
     if binding.node_did != resolved.principal_did {
         return Err(SigningKeyError::BindingOtherNode {
             binding_id: binding_id.to_owned(),
-        }
-        .into());
+        });
     }
     if binding
         .revoked_at
@@ -756,14 +759,12 @@ async fn load_signing_key_with_store(
     {
         return Err(SigningKeyError::BindingRevoked {
             binding_id: binding_id.to_owned(),
-        }
-        .into());
+        });
     }
     if binding.key_backend.as_deref() != Some(KEY_BACKEND_KEYRING) {
         return Err(SigningKeyError::BindingBackend {
             binding_id: binding_id.to_owned(),
-        }
-        .into());
+        });
     }
     let created_at = binding
         .created_at
@@ -787,16 +788,14 @@ async fn load_signing_key_with_store(
     if !crate::identity::verify_did_signature(&binding.node_did, &payload, &attestation)? {
         return Err(SigningKeyError::BindingAttestationInvalid {
             binding_id: binding_id.to_owned(),
-        }
-        .into());
+        });
     }
     let secret = Zeroizing::new(store.load(&binding_storage_key(&binding.node_did, binding_id))?);
     let address = address_from_secret(&secret)?;
     if !address.eq_ignore_ascii_case(&binding.address) {
         return Err(SigningKeyError::KeyMaterialMismatch {
             binding_id: binding_id.to_owned(),
-        }
-        .into());
+        });
     }
     Ok(*secret)
 }

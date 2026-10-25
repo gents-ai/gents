@@ -31,6 +31,8 @@ pub enum UsageObservationError {
     #[error(transparent)]
     Config(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
+    Backend(Box<crate::config_client::InferenceBackendError>),
+    #[error(transparent)]
     Http(#[from] reqwest::Error),
     #[error(transparent)]
     ChatGptCodexHeaders(#[from] crate::chatgpt_codex::ChatGptCodexHeaderError),
@@ -57,8 +59,17 @@ impl crate::config_client::TransactionFailure for UsageObservationError {
             Self::OAuthCredential(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::Backend(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error.as_ref())
+            }
             _ => None,
         }
+    }
+}
+
+impl From<crate::config_client::InferenceBackendError> for UsageObservationError {
+    fn from(error: crate::config_client::InferenceBackendError) -> Self {
+        Self::Backend(Box::new(error))
     }
 }
 
@@ -683,7 +694,7 @@ pub async fn read_node_usage(
     provider: Option<&str>,
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
-) -> anyhow::Result<Vec<AccountUsageRead>> {
+) -> Result<Vec<AccountUsageRead>> {
     let access = ConfigAccess::local(node.clone());
     let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
     let backends = access

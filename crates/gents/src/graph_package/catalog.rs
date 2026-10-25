@@ -244,12 +244,8 @@ fn load_package_from_assets(
         .iter()
         .map(|path| Ok((path.clone(), asset(path)?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let resolved_digest = crate::pack::digest_declared_assets(&manifest, |path| {
-        assets
-            .get(path)
-            .map(Vec::as_slice)
-            .with_context(|| format!("resolved graph package is missing asset {path:?}"))
-    })?;
+    let resolved_digest =
+        crate::pack::digest_declared_assets(&manifest, |path| assets.get(path).map(Vec::as_slice))?;
     anyhow::ensure!(
         resolved_digest == package_digest,
         "graph distribution digest changed after resolution"

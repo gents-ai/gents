@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+type Result<T, E = PackFormatError> = std::result::Result<T, E>;
 use flate2::bufread::GzDecoder;
 use flate2::{Compression, GzBuilder};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,10 @@ const MAX_HEADER_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackFormatError {
+    #[error(transparent)]
+    Manifest(#[from] crate::pack::PackError),
+    #[error(transparent)]
+    Asset(#[from] crate::pack::PackAssetError),
     #[error("{digest:?} is not a pack digest; expected sha256:<64 hex>")]
     DigestPrefix { digest: String },
     #[error("{digest:?} is not a pack digest; expected sha256:<64 lowercase hex>")]
@@ -235,14 +239,12 @@ pub fn read_pack(
         if count > bounds.entries {
             return Err(PackFormatError::TooManyEntries {
                 limit: bounds.entries,
-            }
-            .into());
+            });
         }
         if !entry.header().entry_type().is_file() {
             return Err(PackFormatError::MemberNotRegular {
                 path: entry.path().ok().map(|path| path.display().to_string()),
-            }
-            .into());
+            });
         }
         let path = entry
             .path()
@@ -253,21 +255,20 @@ pub fn read_pack(
 
         if header.is_none() {
             if path != HEADER_ENTRY {
-                return Err(PackFormatError::NotPackFile.into());
+                return Err(PackFormatError::NotPackFile);
             }
             header = Some(read_header(&mut entry)?);
             continue;
         }
         if path == HEADER_ENTRY || !is_distributable_asset_path(&path) {
-            return Err(PackFormatError::MemberNotDistributable { path }.into());
+            return Err(PackFormatError::MemberNotDistributable { path });
         }
         if let Some(previous) = paths.last() {
             if path.as_str() <= previous.as_str() {
                 return Err(PackFormatError::MemberOutOfOrder {
                     path,
                     previous: previous.clone(),
-                }
-                .into());
+                });
             }
         }
         let len = entry.header().size().map_err(PackFormatError::MemberSize)?;
@@ -304,7 +305,7 @@ pub fn read_pack(
         .map_err(PackFormatError::ReadEnd)?
         .is_empty()
     {
-        return Err(PackFormatError::TrailingData.into());
+        return Err(PackFormatError::TrailingData);
     }
 
     let header = header.ok_or(PackFormatError::EmptyPack)?;
@@ -316,12 +317,12 @@ pub fn read_pack(
     let declared = declared_paths(&manifest);
     for path in &declared {
         if paths.binary_search(path).is_err() {
-            return Err(PackFormatError::DeclaredMissing { path: path.clone() }.into());
+            return Err(PackFormatError::DeclaredMissing { path: path.clone() });
         }
     }
     for path in &paths {
         if declared.binary_search(path).is_err() {
-            return Err(PackFormatError::UndeclaredMember { path: path.clone() }.into());
+            return Err(PackFormatError::UndeclaredMember { path: path.clone() });
         }
     }
 
@@ -330,16 +331,14 @@ pub fn read_pack(
         return Err(PackFormatError::DigestMismatch {
             claimed: header.digest.clone(),
             computed,
-        }
-        .into());
+        });
     }
     let described = PackHeader::describe(&manifest, computed);
     if described != header {
         return Err(PackFormatError::HeaderMismatch {
             header: Box::new(header),
             described: Box::new(described),
-        }
-        .into());
+        });
     }
     Ok(VerifiedPack {
         header,
@@ -416,8 +415,7 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
         return Err(PackFormatError::TooManyDeclared {
             count: paths.len(),
             limit: bounds.entries,
-        }
-        .into());
+        });
     }
 
     let mut total = 0u64;
@@ -428,8 +426,7 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
         if total > bounds.decompressed {
             return Err(PackFormatError::TooLarge {
                 limit: bounds.decompressed,
-            }
-            .into());
+            });
         }
         digest.begin_entry(path, len);
         copy_exact(&mut file, len, &mut DigestWriter(&mut digest), path)?;
@@ -464,8 +461,7 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
     if again.finish() != header.digest {
         return Err(PackFormatError::SourceChanged {
             dir: dir.to_path_buf(),
-        }
-        .into());
+        });
     }
     let counted = builder
         .into_inner()
@@ -476,8 +472,7 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
         return Err(PackFormatError::TooCompressed {
             written: counted.written,
             limit: bounds.compressed,
-        }
-        .into());
+        });
     }
     Ok(header)
 }

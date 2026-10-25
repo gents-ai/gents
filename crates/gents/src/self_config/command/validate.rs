@@ -71,14 +71,16 @@ impl ConfigCommandTool {
                 let (tool_name, collection, result) = match entry {
                     SurfaceToolDecl::Create(decl) => {
                         let result = if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
-                            crate::mailbox::validate_mailbox_write_decl(&decl).map_err(Into::into)
+                            crate::mailbox::validate_mailbox_write_decl(&decl)
+                                .map_err(crate::defra_write::BoundedWriteError::from)
                         } else {
                             crate::defra_write::BoundedWriteTool::new(
                                 crate::config_client::ConfigAccess::local(self.node.clone()),
                                 decl.clone(),
                             )
                             .ensure_well_formed()
-                        };
+                        }
+                        .map_err(|error| ErrorChain(&error).to_string());
                         (decl.tool_name, decl.collection, result)
                     }
                     SurfaceToolDecl::Query(decl) => {
@@ -87,7 +89,8 @@ impl ConfigCommandTool {
                             decl.clone(),
                         )
                         .validate_schema()
-                        .await;
+                        .await
+                        .map_err(|error| ErrorChain(&error).to_string());
                         (decl.tool_name, decl.collection, result)
                     }
                 };
@@ -95,7 +98,7 @@ impl ConfigCommandTool {
                     errors.push(json!({
                         "collection":"DatastoreToolSurface", "id":surface.surface_id,
                         "tool_name":tool_name, "schema_collection":collection,
-                        "error":ErrorChain(error.as_ref()).to_string(),
+                        "error":error,
                         "inspect_with":{"argv":["datastore","get"],"target_id":surface.surface_id},
                         "inspect_schema_with":{"tool":"schema","args":{"argv":["collection","get"],"target_id":collection}},
                         "next":"Use datastore update to correct this entry or schema collection update to correct the existing collection. Preserve unrelated fields and entries, then run config validate again."

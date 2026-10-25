@@ -211,13 +211,34 @@ fn find_insecure_key<'a>(
         })
 }
 
-pub fn classify_store_error(error: anyhow::Error, data_path: &Path) -> anyhow::Error {
-    if find_incompatible(error.as_ref()).is_some() {
-        return error;
+#[derive(Debug, thiserror::Error)]
+pub enum ClassifiedStoreError<E>
+where
+    E: std::error::Error + 'static,
+{
+    #[error("{store}")]
+    Refused {
+        store: IncompatibleStore,
+        #[source]
+        source: E,
+    },
+    #[error(transparent)]
+    Unclassified(E),
+}
+
+pub fn classify_store_error<E>(error: E, data_path: &Path) -> ClassifiedStoreError<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    if find_incompatible(&error).is_some() {
+        return ClassifiedStoreError::Unclassified(error);
     }
-    match incompatible_store(error.as_ref(), data_path) {
-        Some(store) => error.context(store),
-        None => error,
+    match incompatible_store(&error, data_path) {
+        Some(store) => ClassifiedStoreError::Refused {
+            store,
+            source: error,
+        },
+        None => ClassifiedStoreError::Unclassified(error),
     }
 }
 
@@ -385,9 +406,8 @@ mod tests {
 
         let error = crate::identity::KeyIdentity::load_existing(&key, None)
             .map(|_| ())
-            .map_err(|error| anyhow::Error::new(error).context("loading node identity key"))
             .unwrap_err();
-        let store = incompatible_store(error.as_ref(), &temp.path().join("data")).expect("typed");
+        let store = incompatible_store(&error, &temp.path().join("data")).expect("typed");
         assert_eq!(store.kind, IncompatibleStoreKind::InsecureKey);
         assert_eq!(store.data_path, key);
         assert!(store.kind.is_older());
@@ -400,20 +420,20 @@ mod tests {
     }
 
     #[test]
-    fn classifies_lineage_refusals_by_type_through_context() {
+    fn classifies_lineage_refusals_by_type() {
         let path = Path::new("/tmp/gents-home/data");
-        let refused = anyhow::Error::new(gents_migration::Error::UnknownLineage {
+        let refused = gents_migration::Error::UnknownLineage {
             collection: "AgentRequest".into(),
             versions: "bafy-old".into(),
-        })
-        .context("ensure_migrations");
+        };
         let classified = classify_store_error(refused, path);
-        let store = incompatible_store(classified.as_ref(), path).expect("typed refusal");
+        let store = incompatible_store(&classified, path).expect("typed refusal");
         assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
         assert_eq!(store.data_path, path);
-        assert!(classified
-            .downcast_ref::<IncompatibleStore>()
-            .is_some_and(|store| store.to_string().contains("older Gents version")));
+        assert!(matches!(
+            &classified,
+            ClassifiedStoreError::Refused { store, .. } if store.to_string().contains("older Gents version")
+        ));
 
         let foreign = gents_migration::Error::ForeignVersion {
             collection: "AgentRequest".into(),
@@ -429,7 +449,10 @@ mod tests {
             collection: "AgentRequest".into(),
         };
         assert!(incompatible_store(&unrelated, path).is_none());
-        let unrelated = classify_store_error(anyhow::Error::new(unrelated), path);
-        assert!(unrelated.downcast_ref::<gents_migration::Error>().is_some());
+        let unrelated = classify_store_error(unrelated, path);
+        assert!(matches!(
+            unrelated,
+            ClassifiedStoreError::Unclassified(gents_migration::Error::CollectionMissing { .. })
+        ));
     }
 }

@@ -78,9 +78,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     check_ux_plugins(dir, &manifest, &mut report.problems);
     if !unbuilt.is_empty() {
         if let Err(error) = crate::pack::validate_manifest(&manifest.name, &manifest) {
-            report
-                .problems
-                .push(format!("{}", ErrorChain(error.as_ref())));
+            report.problems.push(format!("{}", ErrorChain(&error)));
         }
         if manifest.metadata.kind != PackKind::Plugins {
             report.problems.push(format!(
@@ -92,12 +90,13 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         return report;
     }
 
-    let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
+    let archive = match pack_dir(dir)
+        .map_err(crate::pack_archive::PackArchiveError::from)
+        .and_then(|(bytes, _)| PackArchive::from_bytes(&bytes))
+    {
         Ok(archive) => archive,
         Err(error) => {
-            report
-                .problems
-                .push(format!("{}", ErrorChain(error.as_ref())));
+            report.problems.push(format!("{}", ErrorChain(&error)));
             return report;
         }
     };

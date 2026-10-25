@@ -74,10 +74,11 @@ pub(crate) use desired_state::{
 pub(crate) use inference_backend::write_inference_backend_in_txn;
 pub use inference_backend::{
     list_inference_backends_in_txn, load_inference_backend_in_txn, serving_accounts,
-    write_inference_backend_document,
+    write_inference_backend_document, InferenceBackendError,
 };
 pub use inference_profile::{
     agent_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
+    InferenceProfileError,
 };
 pub use profile_switch::{
     switch_candidates, switch_profile_account, SwitchCandidate, SwitchPlan, SwitchReceipt,
@@ -85,10 +86,9 @@ pub use profile_switch::{
 };
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::SchemaFieldDelta;
-pub(crate) use schema_install::SchemaInstallMismatch;
 pub use schema_install::{
     apply_additive_schema_install, apply_schema_install, preview_additive_schema_install,
-    preview_schema_install, SchemaInstallPlan,
+    preview_schema_install, SchemaInstallError, SchemaInstallMismatch, SchemaInstallPlan,
 };
 pub use tools::write_tools_document;
 pub(crate) use txn::TransactionOutcome;

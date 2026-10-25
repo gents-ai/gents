@@ -92,7 +92,7 @@ pub(crate) async fn upsert_node(
     default_agent_id: Option<&str>,
     enabled: bool,
     max_request_hop: Option<u32>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     use super::serde_helpers::{default_display_name_for_did, normalize_optional_string};
     let escaped_node_did = escape_graphql_string(node_did);
     let fallback_display_name = default_display_name_for_did(node_did);

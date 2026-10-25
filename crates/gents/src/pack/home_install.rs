@@ -1,7 +1,67 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+#[derive(Debug, thiserror::Error)]
+pub enum HomeInstallError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Materialize(#[from] super::materialize::MaterializeError),
+    #[error("invalid pack coordinate {coordinate:?}")]
+    InvalidCoordinate { coordinate: String },
+    #[error("pack install record has no parent")]
+    NoParent,
+    #[error("creating {}", path.display())]
+    Create {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("encoding the pack install record")]
+    Encode(#[source] serde_json::Error),
+    #[error("staging a pack install record in {}", path.display())]
+    Stage {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing the staged record")]
+    WriteStaged(#[source] std::io::Error),
+    #[error("syncing the staged record")]
+    SyncStaged(#[source] std::io::Error),
+    #[error("writing {}", path.display())]
+    Persist {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("syncing {}", path.display())]
+    SyncDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing {}", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("reading {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("removing {}", path.display())]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+type Result<T, E = HomeInstallError> = std::result::Result<T, E>;
 use serde::{Deserialize, Serialize};
 
 use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
@@ -122,10 +182,11 @@ pub fn materialize_asset_pack(
 
 fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
     let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
-    anyhow::ensure!(
-        is_valid_pack_name(namespace) && is_valid_pack_name(name),
-        "invalid pack coordinate {coordinate:?}"
-    );
+    if !(is_valid_pack_name(namespace) && is_valid_pack_name(name)) {
+        return Err(HomeInstallError::InvalidCoordinate {
+            coordinate: coordinate.to_owned(),
+        });
+    }
     Ok((namespace, name))
 }
 
@@ -139,35 +200,62 @@ fn record_path(home: &Path, coordinate: &str) -> Result<PathBuf> {
 
 pub fn write_home_install(home: &Path, record: &HomePackInstall) -> Result<()> {
     let path = record_path(home, &record.coordinate)?;
-    let parent = path.parent().context("pack install record has no parent")?;
-    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    let bytes = serde_json::to_vec_pretty(record).context("encoding the pack install record")?;
-    let mut staged = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("staging a pack install record in {}", parent.display()))?;
-    std::io::Write::write_all(&mut staged, &bytes).context("writing the staged record")?;
+    let parent = path.parent().ok_or(HomeInstallError::NoParent)?;
+    std::fs::create_dir_all(parent).map_err(|source| HomeInstallError::Create {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    let bytes = serde_json::to_vec_pretty(record).map_err(HomeInstallError::Encode)?;
+    let mut staged =
+        tempfile::NamedTempFile::new_in(parent).map_err(|source| HomeInstallError::Stage {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    std::io::Write::write_all(&mut staged, &bytes).map_err(HomeInstallError::WriteStaged)?;
     staged
         .as_file()
         .sync_all()
-        .context("syncing the staged record")?;
+        .map_err(HomeInstallError::SyncStaged)?;
     staged
         .persist(&path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("writing {}", path.display()))?;
+        .map_err(|error| HomeInstallError::Persist {
+            path: path.clone(),
+            source: error.error,
+        })?;
     #[cfg(unix)]
     std::fs::File::open(parent)
         .and_then(|dir| dir.sync_all())
-        .with_context(|| format!("syncing {}", parent.display()))?;
+        .map_err(|source| HomeInstallError::SyncDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     Ok(())
+}
+
+fn read_record(path: &Path) -> Result<HomePackInstall> {
+    let bytes = std::fs::read(path).map_err(|source| HomeInstallError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| HomeInstallError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 pub fn read_home_install(home: &Path, coordinate: &str) -> Result<Option<HomePackInstall>> {
     let path = record_path(home, coordinate)?;
     match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("parsing {}", path.display()))
-            .map(Some),
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|source| HomeInstallError::Parse {
+                    path: path.clone(),
+                    source,
+                })
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+        Err(source) => Err(HomeInstallError::Read { path, source }),
     }
 }
 
@@ -176,8 +264,15 @@ pub fn forget_home_install(home: &Path, coordinate: &str) -> Result<()> {
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("removing {}", path.display())),
+        Err(source) => Err(HomeInstallError::Remove { path, source }),
     }
+}
+
+fn read_dir(path: &Path) -> Result<std::fs::ReadDir> {
+    std::fs::read_dir(path).map_err(|source| HomeInstallError::Read {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Every readable record under `home`, sorted by coordinate; a record that
@@ -189,30 +284,20 @@ pub fn list_readable_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> 
         return Ok(Vec::new());
     }
     let mut records = Vec::new();
-    for namespace_entry in
-        std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))?
-    {
+    for namespace_entry in read_dir(&root)? {
         let namespace_path = namespace_entry?.path();
         if !namespace_path.is_dir() {
             continue;
         }
-        for record_entry in std::fs::read_dir(&namespace_path)
-            .with_context(|| format!("reading {}", namespace_path.display()))?
-        {
+        for record_entry in read_dir(&namespace_path)? {
             let path = record_entry?.path();
             if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
                 continue;
             }
-            let parsed = std::fs::read(&path)
-                .with_context(|| format!("reading {}", path.display()))
-                .and_then(|bytes| {
-                    serde_json::from_slice::<HomePackInstall>(&bytes)
-                        .with_context(|| format!("parsing {}", path.display()))
-                });
-            match parsed {
+            match read_record(&path) {
                 Ok(record) => records.push(record),
                 Err(error) => {
-                    tracing::warn!(path = %path.display(), error = %ErrorChain(error.as_ref()), "unreadable pack install record; skipped")
+                    tracing::warn!(path = %path.display(), error = %ErrorChain(&error), "unreadable pack install record; skipped")
                 }
             }
         }
@@ -227,26 +312,17 @@ pub fn list_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
         return Ok(Vec::new());
     }
     let mut records = Vec::new();
-    for namespace_entry in
-        std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))?
-    {
+    for namespace_entry in read_dir(&root)? {
         let namespace_path = namespace_entry?.path();
         if !namespace_path.is_dir() {
             continue;
         }
-        for record_entry in std::fs::read_dir(&namespace_path)
-            .with_context(|| format!("reading {}", namespace_path.display()))?
-        {
+        for record_entry in read_dir(&namespace_path)? {
             let path = record_entry?.path();
             if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
                 continue;
             }
-            let bytes =
-                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-            records.push(
-                serde_json::from_slice::<HomePackInstall>(&bytes)
-                    .with_context(|| format!("parsing {}", path.display()))?,
-            );
+            records.push(read_record(&path)?);
         }
     }
     records.sort_by(|a, b| a.coordinate.cmp(&b.coordinate));
@@ -307,9 +383,9 @@ mod tests {
         );
         let strict = list_home_installs(home.path()).unwrap_err();
         assert!(
-            format!("{}", ErrorChain(strict.as_ref())).contains("future.json"),
+            format!("{}", ErrorChain(&strict)).contains("future.json"),
             "{}",
-            ErrorChain(strict.as_ref())
+            ErrorChain(&strict)
         );
     }
 

@@ -574,7 +574,7 @@ pub(super) fn record_home_install(
     installed_via: InstalledVia,
     explicit: bool,
 ) -> Result<()> {
-    super::super::record_after_install(
+    Ok(super::super::record_after_install(
         home,
         HomePackInstall {
             coordinate: identity.coordinate.clone(),
@@ -590,7 +590,7 @@ pub(super) fn record_home_install(
         },
         installed_via,
         explicit,
-    )
+    )?)
 }
 
 fn install_plugins<'a>(

@@ -715,7 +715,7 @@ impl ToolCallLifecycle {
                         tracing::warn!(
                             request_doc_id = %doc_id,
                             tool_call_id = %self.tool_call_id,
-                            error = %ErrorChain(error.as_ref()),
+                            error = %ErrorChain(&error),
                             "output budget uses the default: owning request did not load"
                         );
                         None

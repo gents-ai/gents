@@ -27,6 +27,10 @@ pub(crate) enum SchemaToolError {
     ArgumentCorrection { message: String },
     #[error("preview is a command word, not an option; use RESOURCE preview VERB, then apply the returned next_call")]
     PreviewOption,
+    #[error("version not found; use version list and copy its VersionID")]
+    VersionNotFound,
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
     Identifier(#[from] gents_protocol::graphql::GraphqlError),
     #[error("{name} is a Gents-managed schema; its evolution belongs to the product migration registry. Use config for its documents")]
@@ -350,13 +354,13 @@ impl SchemaTool {
     }
 }
 
-async fn find_version(access: &ConfigAccess, id: &str) -> anyhow::Result<Value> {
+async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
     access
         .collection_versions()
         .await?
         .into_iter()
         .find(|v| v["VersionID"].as_str() == Some(id))
-        .context("version not found; use version list and copy its VersionID")
+        .ok_or(SchemaToolError::VersionNotFound)
 }
 
 fn ensure_application_collection(name: &str) -> Result<()> {
@@ -541,8 +545,8 @@ impl SchemaTool {
             Err(error) => {
                 let recovery = if error.is::<SchemaDigestMismatch>() {
                     json!({"tool":"schema","args":preview_call(args)})
-                } else if let Some(mismatch) =
-                    error.downcast_ref::<crate::config_client::SchemaInstallMismatch>()
+                } else if let Some(crate::config_client::SchemaInstallError::Mismatch(mismatch)) =
+                    error.downcast_ref::<crate::config_client::SchemaInstallError>()
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
                 } else if error.is::<SchemaSdlFailure>() {

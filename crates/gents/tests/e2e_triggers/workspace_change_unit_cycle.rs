@@ -1036,13 +1036,8 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
         ),
     ]);
     let bound = bind_pack_install_config(&manifest, &config, &bindings).unwrap();
-    let digest = digest_declared_assets(&manifest, |path| {
-        assets
-            .get(path)
-            .map(Vec::as_slice)
-            .ok_or_else(|| anyhow::anyhow!("missing fixture asset {path}"))
-    })
-    .unwrap();
+    let digest =
+        digest_declared_assets(&manifest, |path| assets.get(path).map(Vec::as_slice)).unwrap();
     let identity = PackIdentity::new(&manifest, digest, Vec::new());
     install_pack_documents(access, owner, &identity, &bound, DriftPolicy::Refuse)
         .await

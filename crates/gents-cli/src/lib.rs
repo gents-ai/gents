@@ -729,7 +729,7 @@ pub(crate) async fn resolve_config_access(
     let access = ConfigAccess::claimed_local(node, claim)?;
     gents::migration::ensure_all_runtime_migrations(migration_node)
         .await
-        .map_err(|error| gents::storage_backend::classify_store_error(error.into(), &data_dir))?;
+        .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
     gents::store_key::upgrade::finish(&data_dir)?;
     Ok((access, home_dir))
 }

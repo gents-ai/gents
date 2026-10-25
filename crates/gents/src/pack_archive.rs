@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-
 use crate::pack::{is_distributable_asset_path, PackManifest, PackPlugin};
 
 pub mod format;
@@ -16,6 +14,8 @@ pub const DEFAULT_NAMESPACE: &str = "gents";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackArchiveError {
+    #[error(transparent)]
+    Format(#[from] format::PackFormatError),
     #[error("refusing to read pack asset {path:?}")]
     UnpackedRefused { path: String },
     #[error("the unpacked pack is missing {path}")]
@@ -92,11 +92,11 @@ impl std::fmt::Debug for PackArchive {
 }
 
 impl PackArchive {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, PackArchiveError> {
         Self::from_reader(bytes, Bounds::default())
     }
 
-    pub fn from_reader(input: impl Read, bounds: Bounds) -> Result<Self> {
+    pub fn from_reader(input: impl Read, bounds: Bounds) -> Result<Self, PackArchiveError> {
         let mut assets = BTreeMap::new();
         let verified = read_pack(input, bounds, |path, content| {
             let mut data = Vec::new();

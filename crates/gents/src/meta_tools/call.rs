@@ -1,6 +1,5 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::Context as _;
 use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -111,7 +110,7 @@ impl Tool for CallToolTool {
 
         let service = lookup_service(&self.ctx, &args.service_id)
             .await
-            .context("call_tool")?;
+            .map_err(MetaToolFailure::CallToolLookup)?;
         let outbound_node_did = service.outbound_node_did(&self.ctx);
 
         let selection = self

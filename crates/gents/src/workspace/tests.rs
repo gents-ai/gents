@@ -1017,7 +1017,7 @@ async fn seal_drift_fails_closed() {
     assert!(
         error.to_string().contains("live tree hash"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     workspace.seal_hash = Some(hash.clone());
     placed.observed_tree_hash = Some("stale".into());
@@ -1041,7 +1041,7 @@ async fn seal_drift_fails_closed() {
             .to_string()
             .contains("observed_tree_hash stale does not match"),
         "{}",
-        ErrorChain(stored.as_ref())
+        ErrorChain(&stored)
     );
 }
 

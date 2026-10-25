@@ -1405,7 +1405,7 @@ impl PackInstaller {
                         "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
                         "artifact_digest": preferred.digest,
                         "installable": false,
-                        "error": format!("the stored archive could not be opened: {}", ErrorChain(error.as_ref())),
+                        "error": format!("the stored archive could not be opened: {}", ErrorChain(&error)),
                     }));
                     continue;
                 }

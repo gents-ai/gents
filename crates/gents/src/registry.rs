@@ -19,6 +19,16 @@ pub enum RegistryError {
     NoValidMcpPort { service_id: String },
     #[error("service '{service_id}' has no MCP address")]
     NoMcpAddress { service_id: String },
+    #[error(transparent)]
+    Projection(Box<crate::config_client::DesiredStateError>),
+    #[error(transparent)]
+    Query(#[from] crate::config_client::ConfigClientError),
+}
+
+impl From<crate::config_client::DesiredStateError> for RegistryError {
+    fn from(error: crate::config_client::DesiredStateError) -> Self {
+        Self::Projection(Box::new(error))
+    }
 }
 
 type Result<T, E = RegistryError> = std::result::Result<T, E>;
@@ -41,25 +51,25 @@ where
 pub(crate) async fn configured_mcp_services(
     node: &defra_node::EmbeddedNode,
     node_did: &str,
-) -> anyhow::Result<Vec<crate::document_config::ToolServiceRegistry>> {
+) -> Result<Vec<crate::document_config::ToolServiceRegistry>> {
     let query = services_query(node_did)?;
     let response =
         crate::graphql::graphql_with_transaction_retry(node, &query, "configured_mcp_services")
             .await?;
-    Ok(parse_services(response.data.as_ref(), node_did)?)
+    parse_services(response.data.as_ref(), node_did)
 }
 
 pub async fn configured_mcp_services_on(
     access: &crate::ConfigAccess,
     node_did: &str,
-) -> anyhow::Result<Vec<crate::document_config::ToolServiceRegistry>> {
+) -> Result<Vec<crate::document_config::ToolServiceRegistry>> {
     let response = access.execute(&services_query(node_did)?).await?;
-    Ok(parse_services(response.get("data"), node_did)?)
+    parse_services(response.get("data"), node_did)
 }
 
-fn services_query(node_did: &str) -> anyhow::Result<String> {
+fn services_query(node_did: &str) -> Result<String> {
     if node_did.trim().is_empty() {
-        return Err(RegistryError::OwnerRequired.into());
+        return Err(RegistryError::OwnerRequired);
     }
     let (fields, _) =
         crate::config_client::config_projection(crate::Collection::ToolServiceRegistry, None)?;

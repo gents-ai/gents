@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use serde_json::Value;
 
 use crate::pack::PackManifest;
@@ -30,6 +29,43 @@ pub enum RegistryError {
 pub enum PackRegistryError {
     #[error(transparent)]
     Registry(#[from] RegistryError),
+    #[error(transparent)]
+    Store(#[from] crate::pack_store::PackStoreError),
+    #[error("the registry advertised a malformed digest")]
+    MalformedAdvertisedDigest(#[source] crate::pack_archive::format::PackFormatError),
+    #[error("reading {}", path.display())]
+    ReadIndex {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("staging a download in {}", dir.display())]
+    StagingDownload {
+        dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("saving the download")]
+    FlushDownload(#[source] std::io::Error),
+    #[error("installing {label} from the registry")]
+    InstallFromRegistry {
+        label: String,
+        #[source]
+        source: Box<crate::pack_store::PackFileImportError<PackRegistryError>>,
+    },
+    #[error("download index has no parent")]
+    IndexNoParent,
+    #[error("removing the stale download index at {}: {error}", path.display())]
+    RemoveStaleIndex {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    #[error("{label} from the registry is not a readable pack")]
+    UnreadablePack {
+        label: String,
+        #[source]
+        source: Box<crate::pack_archive::PackArchiveError>,
+    },
     #[error("{url} is not a valid registry URL: {error}")]
     InvalidUrl { url: String, error: String },
     #[error("{url} cannot be a base for a registry URL")]
@@ -566,7 +602,7 @@ pub async fn fetch_pack(
     namespace: &str,
     name: &str,
     version: Option<&str>,
-) -> anyhow::Result<RegistryPack> {
+) -> Result<RegistryPack> {
     let coordinate = resolve_pack_coordinate(client, namespace, name, version).await?;
     let coordinate_label = format!(
         "{}/{}@{}",
@@ -574,9 +610,9 @@ pub async fn fetch_pack(
     );
     let advertised = format!("sha256:{}", coordinate.artifact_digest);
     let index = cache_home
-        .map(|home| -> anyhow::Result<PathBuf> {
+        .map(|home| -> Result<PathBuf> {
             let hex = crate::pack_archive::digest_hex(&advertised)
-                .context("the registry advertised a malformed digest")?;
+                .map_err(PackRegistryError::MalformedAdvertisedDigest)?;
             Ok(home
                 .join(crate::home::PACKS_DIR_NAME)
                 .join("store")
@@ -587,8 +623,11 @@ pub async fn fetch_pack(
     let store = cache_home.map(PackStore::new);
     let cached = match (&store, &index) {
         (Some(store), Some(index)) if index.is_file() => {
-            let digest = std::fs::read_to_string(index)
-                .with_context(|| format!("reading {}", index.display()))?;
+            let digest =
+                std::fs::read_to_string(index).map_err(|source| PackRegistryError::ReadIndex {
+                    path: index.clone(),
+                    source,
+                })?;
             let digest = digest.trim();
             if store.contains(digest)? {
                 let archive = store.open(digest)?;
@@ -604,10 +643,18 @@ pub async fn fetch_pack(
         (Some(archive), _, _, _) => archive,
         (None, Some(store), Some(index), Some(home)) => {
             let staging_dir = home.join(crate::home::PACKS_DIR_NAME);
-            std::fs::create_dir_all(&staging_dir)
-                .with_context(|| format!("creating {}", staging_dir.display()))?;
-            let mut staged = tempfile::NamedTempFile::new_in(&staging_dir)
-                .with_context(|| format!("staging a download in {}", staging_dir.display()))?;
+            std::fs::create_dir_all(&staging_dir).map_err(|source| {
+                PackRegistryError::CreateDir {
+                    path: staging_dir.clone(),
+                    source,
+                }
+            })?;
+            let mut staged = tempfile::NamedTempFile::new_in(&staging_dir).map_err(|source| {
+                PackRegistryError::StagingDownload {
+                    dir: staging_dir.clone(),
+                    source,
+                }
+            })?;
             let computed = {
                 let mut writer = std::io::BufWriter::new(staged.as_file_mut());
                 let computed = client
@@ -618,41 +665,51 @@ pub async fn fetch_pack(
                         &mut writer,
                     )
                     .await?;
-                std::io::Write::flush(&mut writer).context("saving the download")?;
+                std::io::Write::flush(&mut writer).map_err(PackRegistryError::FlushDownload)?;
                 computed
             };
-            anyhow::ensure!(
-                computed == coordinate.artifact_digest,
-                "the registry advertised digest {} for {coordinate_label} but the bytes hash to {computed}; refusing to install a pack that does not match what the registry described",
-                coordinate.artifact_digest
-            );
+            if computed != coordinate.artifact_digest {
+                return Err(PackRegistryError::DigestMismatch {
+                    advertised: coordinate.artifact_digest.clone(),
+                    coordinate: coordinate_label,
+                    computed,
+                });
+            }
             let stored = store
                 .import_file_accepting(staged.path(), None, |verified| {
-                    Ok(verify_pack_coordinate(
+                    verify_pack_coordinate(
                         &verified.manifest,
                         &coordinate.namespace,
                         &coordinate.name,
                         &coordinate.version,
-                    )?)
+                    )
                 })
-                .with_context(|| format!("installing {coordinate_label} from the registry"))?;
+                .map_err(|source| PackRegistryError::InstallFromRegistry {
+                    label: coordinate_label.clone(),
+                    source: Box::new(source),
+                })?;
             let archive = store.open(&stored.header.digest)?;
-            let dir = index.parent().context("download index has no parent")?;
-            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+            let dir = index.parent().ok_or(PackRegistryError::IndexNoParent)?;
+            std::fs::create_dir_all(dir).map_err(|source| PackRegistryError::CreateDir {
+                path: dir.to_path_buf(),
+                source,
+            })?;
             if let Err(error) = std::fs::remove_file(index) {
-                anyhow::ensure!(
-                    error.kind() == std::io::ErrorKind::NotFound,
-                    "removing the stale download index at {}: {error}",
-                    index.display()
-                );
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(PackRegistryError::RemoveStaleIndex {
+                        path: index.clone(),
+                        error,
+                    });
+                }
             }
             stage_and_persist(dir, index, stored.header.digest.as_bytes())?;
             archive
         }
         _ => {
             let bytes = download_verified_pack(client, &coordinate).await?;
-            PackArchive::from_bytes(&bytes).with_context(|| {
-                format!("{coordinate_label} from the registry is not a readable pack")
+            PackArchive::from_bytes(&bytes).map_err(|source| PackRegistryError::UnreadablePack {
+                label: coordinate_label,
+                source: Box::new(source),
             })?
         }
     };

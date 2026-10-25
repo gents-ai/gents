@@ -1,9 +1,7 @@
-use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
-use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -54,23 +52,43 @@ struct MemoryOutput {
     updated_at: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryError {
+    #[error("memory tool requires a running node DID")]
+    MissingNodeDid,
+    #[error("memory key must be non-empty")]
+    KeyEmpty,
+    #[error("memory key exceeds {MAX_KEY_CHARS} characters")]
+    KeyTooLong,
+    #[error("memory key must not contain control characters")]
+    KeyControlCharacter,
+    #[error("memory value exceeds {MAX_VALUE_CHARS} characters")]
+    ValueTooLong,
+    #[error("memory write requires `value`")]
+    WriteValueMissing,
+    #[error("failed to serialize memory output: {error}")]
+    Serialize {
+        error: crate::tool_output::ToolOutputError,
+    },
+    #[error(transparent)]
+    Query(#[from] crate::config_client::ConfigClientError),
+}
+
+type Result<T, E = MemoryError> = std::result::Result<T, E>;
+
 #[derive(Debug)]
-pub struct MemoryToolError(anyhow::Error);
+pub struct MemoryToolError(MemoryError);
 
 impl std::fmt::Display for MemoryToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", ErrorChain(self.0.as_ref()))
+        write!(f, "{}", gents_protocol::error_chain::ErrorChain(&self.0))
     }
 }
 
-impl std::error::Error for MemoryToolError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
-    }
-}
+impl std::error::Error for MemoryToolError {}
 
-impl From<anyhow::Error> for MemoryToolError {
-    fn from(error: anyhow::Error) -> Self {
+impl From<MemoryError> for MemoryToolError {
+    fn from(error: MemoryError) -> Self {
         Self(error)
     }
 }
@@ -136,14 +154,14 @@ impl Tool for MemoryTool {
                 let value = normalize_value(
                     args.value
                         .as_deref()
-                        .context("memory write requires `value`")?,
+                        .ok_or(MemoryError::WriteValueMissing)?,
                 )?;
                 write_memory(&self.node, &node_did, &key, &value).await?
             }
         };
 
         crate::tool_output::render(&output, &["value", "found", "key", "action"])
-            .map_err(|error| MemoryToolError(anyhow!("failed to serialize memory output: {error}")))
+            .map_err(|error| MemoryError::Serialize { error }.into())
     }
 }
 
@@ -154,7 +172,7 @@ pub fn build_memory_tool(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -
 fn normalize_node_did(node_did: &str) -> Result<String> {
     let node_did = node_did.trim();
     if node_did.is_empty() {
-        bail!("memory tool requires a running node DID");
+        return Err(MemoryError::MissingNodeDid);
     }
     Ok(node_did.to_string())
 }
@@ -162,20 +180,20 @@ fn normalize_node_did(node_did: &str) -> Result<String> {
 fn normalize_key(key: &str) -> Result<String> {
     let key = key.trim();
     if key.is_empty() {
-        bail!("memory key must be non-empty");
+        return Err(MemoryError::KeyEmpty);
     }
     if key.chars().count() > MAX_KEY_CHARS {
-        bail!("memory key exceeds {MAX_KEY_CHARS} characters");
+        return Err(MemoryError::KeyTooLong);
     }
     if key.chars().any(char::is_control) {
-        bail!("memory key must not contain control characters");
+        return Err(MemoryError::KeyControlCharacter);
     }
     Ok(key.to_string())
 }
 
 fn normalize_value(value: &str) -> Result<String> {
     if value.chars().count() > MAX_VALUE_CHARS {
-        bail!("memory value exceeds {MAX_VALUE_CHARS} characters");
+        return Err(MemoryError::ValueTooLong);
     }
     Ok(value.to_string())
 }

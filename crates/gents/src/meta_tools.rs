@@ -35,7 +35,7 @@ pub async fn build_meta_tools(
     node_did: String,
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: crate::document_config::RemoteTools,
-) -> anyhow::Result<Vec<Box<dyn crate::llm::tool::ToolDyn>>> {
+) -> Result<Vec<Box<dyn crate::llm::tool::ToolDyn>>, MetaToolError> {
     let ctx = MetaToolContext {
         node,
         mcp_pool: mcp_pool.for_agent(&node_did),
@@ -59,9 +59,13 @@ pub async fn build_meta_tools(
             continue;
         }
         let catalog = async {
-            shared::enforce_health_gate(&ctx.health, &selection.mcp_service_id).await?;
+            shared::enforce_health_gate(&ctx.health, &selection.mcp_service_id)
+                .await
+                .map_err(shared::MetaToolFailure::ServiceHealth)?;
             let service = shared::lookup_service(&ctx, &selection.mcp_service_id).await?;
-            Ok::<_, anyhow::Error>(ctx.list_tools(&selection.mcp_service_id, &service).await?)
+            Ok::<_, shared::MetaToolFailure>(
+                ctx.list_tools(&selection.mcp_service_id, &service).await?,
+            )
         }
         .await;
         let catalog = match catalog {
@@ -70,17 +74,16 @@ pub async fn build_meta_tools(
                 tracing::warn!(service_id = %selection.mcp_service_id, error = %error, "optional flat MCP catalog unavailable");
                 continue;
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         };
         for tool in catalog.tools {
             if !ctx.is_tool_allowed(&selection.mcp_service_id, tool.name.as_ref()) {
                 continue;
             }
             let name = flat_tool_name(&selection.mcp_service_id, tool.name.as_ref());
-            anyhow::ensure!(
-                !tools.iter().any(|tool| tool.name() == name),
-                "duplicate flat MCP tool {name}"
-            );
+            if tools.iter().any(|tool| tool.name() == name) {
+                return Err(shared::MetaToolFailure::DuplicateFlatTool { name }.into());
+            }
             tools.push(Box::new(flat::FlatRemoteTool {
                 definition: crate::llm::tool::ToolDefinition {
                     name,

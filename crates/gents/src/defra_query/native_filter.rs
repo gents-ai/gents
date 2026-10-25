@@ -309,7 +309,7 @@ mod tests {
         let error = super::super::execute_command(&access, &args, &scope)
             .await
             .unwrap_err();
-        assert!(format!("{}", ErrorChain(error.as_ref())).contains("unknown filter field/operator"));
+        assert!(format!("{}", ErrorChain(&error)).contains("unknown filter field/operator"));
         let mut corrected = args;
         corrected.options.insert(
             "filter".into(),

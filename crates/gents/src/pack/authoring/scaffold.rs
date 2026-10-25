@@ -597,7 +597,7 @@ mod tests {
                 serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap())
                     .unwrap_or_else(|error| panic!("{template:?}: {}", ErrorChain(&error)));
             crate::pack::validate_manifest("review_toolkit", &manifest)
-                .unwrap_or_else(|error| panic!("{template:?}: {}", ErrorChain(error.as_ref())));
+                .unwrap_or_else(|error| panic!("{template:?}: {}", ErrorChain(&error)));
             if template == Template::Graph {
                 assert_eq!(
                     manifest.compiler_version.as_deref(),

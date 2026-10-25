@@ -31,7 +31,7 @@ pub enum PluginStoreError {
     #[error(transparent)]
     Authority(#[from] crate::plugin::authority::AuthorityError),
     #[error(transparent)]
-    Stage(#[from] crate::pack_registry::PackRegistryError),
+    Stage(Box<crate::pack_registry::PackRegistryError>),
     #[error("reading the installed plugin bytes at {}", path.display())]
     ReadBytes {
         path: PathBuf,
@@ -73,6 +73,12 @@ pub enum PluginStoreError {
         #[source]
         source: serde_json::Error,
     },
+}
+
+impl From<crate::pack_registry::PackRegistryError> for PluginStoreError {
+    fn from(error: crate::pack_registry::PackRegistryError) -> Self {
+        Self::Stage(Box::new(error))
+    }
 }
 
 type Result<T, E = PluginStoreError> = std::result::Result<T, E>;

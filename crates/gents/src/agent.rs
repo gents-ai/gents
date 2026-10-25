@@ -402,7 +402,7 @@ impl Gents {
         trigger: crate::usage_observation::UsageTrigger,
         provider: Option<&str>,
     ) -> anyhow::Result<Vec<crate::usage_observation::AccountUsageRead>> {
-        crate::usage_observation::read_node_usage(
+        Ok(crate::usage_observation::read_node_usage(
             self.node.clone(),
             self.node_did(),
             trigger,
@@ -410,7 +410,7 @@ impl Gents {
             &Default::default(),
             chrono::Utc::now(),
         )
-        .await
+        .await?)
     }
 
     pub fn default_agent_id(&self) -> &str {

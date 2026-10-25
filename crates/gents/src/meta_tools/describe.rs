@@ -110,7 +110,7 @@ impl Tool for DescribeToolTool {
                         format!(
                             "service '{}' is not available for describe_tool: {}",
                             args.service_id,
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         ),
                         false,
                     ),

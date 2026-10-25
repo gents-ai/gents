@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-
-use anyhow::{ensure, Context};
 
 use crate::pack::is_valid_pack_name;
 use crate::pack_archive::format::PackFormatError;
 use crate::pack_archive::{
-    digest_hex, peek_header, read_pack, Bounds, PackArchive, PackHeader, EXTENSION,
+    digest_hex, peek_header, read_pack, Bounds, PackArchive, PackHeader, VerifiedPack, EXTENSION,
 };
 
 type Result<T, E = PackStoreError> = std::result::Result<T, E>;
@@ -20,6 +19,93 @@ const UNPACKED_HEADER: &str = ".pack-header.json";
 pub enum PackStoreError {
     #[error(transparent)]
     Format(#[from] PackFormatError),
+    #[error(transparent)]
+    Pack(#[from] crate::pack::PackError),
+    #[error(transparent)]
+    Archive(#[from] crate::pack_archive::PackArchiveError),
+    #[error("creating the pack store {}", path.display())]
+    StoreDir {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("staging a pack in {}", path.display())]
+    StagePack {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("writing the staged pack")]
+    WriteStaged(#[source] io::Error),
+    #[error("syncing the staged pack")]
+    SyncStaged(#[source] io::Error),
+    #[error("asked for pack {expected} but received {received}; nothing was stored")]
+    DigestMismatch { expected: String, received: String },
+    #[error("storing the pack at {}", path.display())]
+    StorePack {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("the unpacked pack's header is not valid")]
+    UnpackedHeader(#[source] serde_json::Error),
+    #[error("reading manifest.json")]
+    UnpackedManifestRead(#[source] io::Error),
+    #[error("the unpacked manifest is not valid")]
+    UnpackedManifest(#[source] serde_json::Error),
+    #[error("the unpacked pack at {} holds {held}, not {digest}", path.display())]
+    UnpackedDigest {
+        path: PathBuf,
+        held: String,
+        digest: String,
+    },
+    #[error("the unpacked pack at {} does not match {digest} even after unpacking the stored archive again", path.display())]
+    UnpackedRecomputeMismatch { path: PathBuf, digest: String },
+    #[error("unpacked path has no parent")]
+    UnpackedPathNoParent,
+    #[error("creating {}", path.display())]
+    CreateUnpackedDir {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("staging an unpacked pack in {}", path.display())]
+    StageUnpacked {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("pack {digest} is not in the store at {}", root.display())]
+    PackNotInStore {
+        digest: String,
+        root: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("the stored pack {} is damaged", path.display())]
+    StoredPackDamaged {
+        path: PathBuf,
+        #[source]
+        source: Box<PackFormatError>,
+    },
+    #[error("the stored pack {} holds {held}, not {digest}", path.display())]
+    StoredDigest {
+        path: PathBuf,
+        held: String,
+        digest: String,
+    },
+    #[error("writing the unpacked manifest")]
+    WriteUnpackedManifest(#[source] io::Error),
+    #[error(transparent)]
+    Json(serde_json::Error),
+    #[error("writing the unpacked header")]
+    WriteUnpackedHeader(#[source] io::Error),
+    #[error("unpacking into {}", path.display())]
+    RenameUnpacked {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("a name index entry has no directory")]
     IndexEntryNoDirectory,
     #[error("creating the pack name index at {}", path.display())]
@@ -69,6 +155,32 @@ pub enum PackStoreError {
         path: String,
         #[source]
         source: Box<PackStoreError>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackImportError<E>
+where
+    E: std::error::Error + 'static,
+{
+    #[error(transparent)]
+    Store(#[from] PackStoreError),
+    #[error(transparent)]
+    Accept(E),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackFileImportError<E>
+where
+    E: std::error::Error + 'static,
+{
+    #[error(transparent)]
+    Store(#[from] PackStoreError),
+    #[error("{} is not a valid pack", path.display())]
+    NotAValidPack {
+        path: PathBuf,
+        #[source]
+        source: Box<PackImportError<E>>,
     },
 }
 
@@ -170,53 +282,153 @@ impl PackStore {
         Ok(self.path(digest)?.is_file())
     }
 
-    pub fn import(&self, input: impl Read, expected: Option<&str>) -> anyhow::Result<StoredPack> {
-        self.import_accepting(input, expected, |_| Ok(()))
+    pub fn import(&self, input: impl Read, expected: Option<&str>) -> Result<StoredPack> {
+        let (staged, verified) = self.stage(input, expected)?;
+        self.commit(staged, verified, expected)
     }
 
-    pub fn import_accepting(
+    pub fn import_accepting<E>(
         &self,
         input: impl Read,
         expected: Option<&str>,
-        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> anyhow::Result<()>,
-    ) -> anyhow::Result<StoredPack> {
+        accept: impl FnOnce(&VerifiedPack) -> std::result::Result<(), E>,
+    ) -> std::result::Result<StoredPack, PackImportError<E>>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let (staged, verified) = self.stage(input, expected)?;
+        accept(&verified).map_err(PackImportError::Accept)?;
+        Ok(self.commit(staged, verified, expected)?)
+    }
+
+    pub fn import_file(
+        &self,
+        file: &Path,
+        expected: Option<&str>,
+    ) -> std::result::Result<StoredPack, PackFileImportError<Infallible>> {
+        self.import_file_accepting(file, expected, |_| Ok::<(), Infallible>(()))
+    }
+
+    pub fn import_file_no_follow(
+        &self,
+        file: &Path,
+        expected: Option<&str>,
+    ) -> std::result::Result<StoredPack, PackFileImportError<Infallible>> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let input = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(file)
+                .map_err(|source| PackStoreError::OpenPath {
+                    path: file.to_path_buf(),
+                    source,
+                })?;
+            self.import_accepting(io::BufReader::new(input), expected, |_| {
+                Ok::<(), Infallible>(())
+            })
+            .map_err(|source| PackFileImportError::NotAValidPack {
+                path: file.to_path_buf(),
+                source: Box::new(source),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let metadata =
+                std::fs::symlink_metadata(file).map_err(|source| PackStoreError::OpenPath {
+                    path: file.to_path_buf(),
+                    source,
+                })?;
+            if !metadata.file_type().is_file() {
+                return Err(PackStoreError::NotRegularFile {
+                    path: file.to_path_buf(),
+                }
+                .into());
+            }
+            self.import_file(file, expected)
+        }
+    }
+
+    pub fn import_file_accepting<E>(
+        &self,
+        file: &Path,
+        expected: Option<&str>,
+        accept: impl FnOnce(&VerifiedPack) -> std::result::Result<(), E>,
+    ) -> std::result::Result<StoredPack, PackFileImportError<E>>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let input = std::fs::File::open(file).map_err(|source| PackStoreError::OpenPath {
+            path: file.to_path_buf(),
+            source,
+        })?;
+        self.import_accepting(io::BufReader::new(input), expected, accept)
+            .map_err(|source| PackFileImportError::NotAValidPack {
+                path: file.to_path_buf(),
+                source: Box::new(source),
+            })
+    }
+
+    fn stage(
+        &self,
+        input: impl Read,
+        expected: Option<&str>,
+    ) -> Result<(tempfile::NamedTempFile, VerifiedPack)> {
         if let Some(expected) = expected {
             digest_hex(expected)?;
         }
-        std::fs::create_dir_all(&self.root)
-            .with_context(|| format!("creating the pack store {}", self.root.display()))?;
+        std::fs::create_dir_all(&self.root).map_err(|source| PackStoreError::StoreDir {
+            path: self.root.clone(),
+            source,
+        })?;
         let mut staged = tempfile::Builder::new()
             .prefix(".staging-")
             .tempfile_in(&self.root)
-            .with_context(|| format!("staging a pack in {}", self.root.display()))?;
+            .map_err(|source| PackStoreError::StagePack {
+                path: self.root.clone(),
+                source,
+            })?;
         let verified = {
             let mut tee = TeeReader {
                 inner: input,
                 copy: io::BufWriter::new(staged.as_file_mut()),
             };
             let verified = read_pack(&mut tee, Bounds::default(), |_, _| Ok(()))?;
-            tee.copy.flush().context("writing the staged pack")?;
+            tee.copy.flush().map_err(PackStoreError::WriteStaged)?;
             verified
         };
-        accept(&verified)?;
+        Ok((staged, verified))
+    }
+
+    fn commit(
+        &self,
+        staged: tempfile::NamedTempFile,
+        verified: VerifiedPack,
+        expected: Option<&str>,
+    ) -> Result<StoredPack> {
         let digest = &verified.header.digest;
         if let Some(expected) = expected {
-            ensure!(
-                digest == expected,
-                "asked for pack {expected} but received {digest}; nothing was stored"
-            );
+            if digest != expected {
+                return Err(PackStoreError::DigestMismatch {
+                    expected: expected.to_owned(),
+                    received: digest.clone(),
+                });
+            }
         }
         staged
             .as_file()
             .sync_all()
-            .context("syncing the staged pack")?;
+            .map_err(PackStoreError::SyncStaged)?;
         let path = self.path(digest)?;
         match staged.persist_noclobber(&path) {
             Ok(_) => {}
             Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => {
-                return Err(error.error)
-                    .with_context(|| format!("storing the pack at {}", path.display()))
+                return Err(PackStoreError::StorePack {
+                    path,
+                    source: error.error,
+                })
             }
         }
         self.index(&verified.header)?;
@@ -226,75 +438,35 @@ impl PackStore {
         })
     }
 
-    pub fn import_file(&self, file: &Path, expected: Option<&str>) -> anyhow::Result<StoredPack> {
-        self.import_file_accepting(file, expected, |_| Ok(()))
-    }
-
-    pub fn import_file_no_follow(
-        &self,
-        file: &Path,
-        expected: Option<&str>,
-    ) -> anyhow::Result<StoredPack> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let input = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(file)
-                .with_context(|| format!("opening {}", file.display()))?;
-            self.import_accepting(io::BufReader::new(input), expected, |_| Ok(()))
-                .with_context(|| format!("{} is not a valid pack", file.display()))
-        }
-        #[cfg(not(unix))]
-        {
-            let metadata = std::fs::symlink_metadata(file)
-                .with_context(|| format!("opening {}", file.display()))?;
-            anyhow::ensure!(
-                metadata.file_type().is_file(),
-                "{} is not a regular file",
-                file.display()
-            );
-            self.import_file(file, expected)
-        }
-    }
-
-    pub fn import_file_accepting(
-        &self,
-        file: &Path,
-        expected: Option<&str>,
-        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> anyhow::Result<()>,
-    ) -> anyhow::Result<StoredPack> {
-        let input =
-            std::fs::File::open(file).with_context(|| format!("opening {}", file.display()))?;
-        self.import_accepting(io::BufReader::new(input), expected, accept)
-            .with_context(|| format!("{} is not a valid pack", file.display()))
-    }
-
-    pub fn open(&self, digest: &str) -> anyhow::Result<PackArchive> {
+    pub fn open(&self, digest: &str) -> Result<PackArchive> {
         let hex = digest_hex(digest)?;
         let unpacked = self.unpacked_root().join(hex);
         if !unpacked.is_dir() {
             self.unpack(digest, &unpacked)?;
         }
-        let header: PackHeader = serde_json::from_slice(
-            &std::fs::read(unpacked.join(UNPACKED_HEADER))
-                .with_context(|| format!("reading {}", unpacked.display()))?,
-        )
-        .context("the unpacked pack's header is not valid")?;
-        ensure!(
-            header.digest == digest,
-            "the unpacked pack at {} holds {}, not {digest}",
-            unpacked.display(),
-            header.digest
-        );
+        let header: PackHeader =
+            serde_json::from_slice(&std::fs::read(unpacked.join(UNPACKED_HEADER)).map_err(
+                |source| PackStoreError::ReadPath {
+                    path: unpacked.clone(),
+                    source,
+                },
+            )?)
+            .map_err(PackStoreError::UnpackedHeader)?;
+        if header.digest != digest {
+            return Err(PackStoreError::UnpackedDigest {
+                path: unpacked,
+                held: header.digest.clone(),
+                digest: digest.to_owned(),
+            });
+        }
         let manifest: crate::pack::PackManifest = serde_json::from_slice(
-            &std::fs::read(unpacked.join("manifest.json")).context("reading manifest.json")?,
+            &std::fs::read(unpacked.join("manifest.json"))
+                .map_err(PackStoreError::UnpackedManifestRead)?,
         )
-        .context("the unpacked manifest is not valid")?;
+        .map_err(PackStoreError::UnpackedManifest)?;
         let contents = Self::declared_file_contents(&unpacked, &manifest)?;
         let computed =
-            crate::pack::digest_declared_assets(&manifest, |path| Ok(contents[path].as_slice()))?;
+            crate::pack::digest_declared_assets(&manifest, |path| Some(contents[path].as_slice()))?;
         if computed != digest {
             tracing::warn!(
                 digest,
@@ -303,17 +475,20 @@ impl PackStore {
             );
             self.unpack(digest, &unpacked)?;
             let reread: crate::pack::PackManifest = serde_json::from_slice(
-                &std::fs::read(unpacked.join("manifest.json")).context("reading manifest.json")?,
+                &std::fs::read(unpacked.join("manifest.json"))
+                    .map_err(PackStoreError::UnpackedManifestRead)?,
             )
-            .context("the unpacked manifest is not valid")?;
+            .map_err(PackStoreError::UnpackedManifest)?;
             let contents = Self::declared_file_contents(&unpacked, &reread)?;
-            let recomputed =
-                crate::pack::digest_declared_assets(&reread, |path| Ok(contents[path].as_slice()))?;
-            ensure!(
-                recomputed == digest,
-                "the unpacked pack at {} does not match {digest} even after unpacking the stored archive again",
-                unpacked.display()
-            );
+            let recomputed = crate::pack::digest_declared_assets(&reread, |path| {
+                Some(contents[path].as_slice())
+            })?;
+            if recomputed != digest {
+                return Err(PackStoreError::UnpackedRecomputeMismatch {
+                    path: unpacked,
+                    digest: digest.to_owned(),
+                });
+            }
         }
         Ok(PackArchive::from_unpacked(&unpacked, header, manifest)?)
     }
@@ -648,21 +823,27 @@ impl PackStore {
         Ok(())
     }
 
-    fn unpack(&self, digest: &str, target: &Path) -> anyhow::Result<()> {
+    fn unpack(&self, digest: &str, target: &Path) -> Result<()> {
         let path = self.path(digest)?;
-        let file = std::fs::File::open(&path).with_context(|| {
-            format!(
-                "pack {digest} is not in the store at {}",
-                self.root.display()
-            )
+        let file = std::fs::File::open(&path).map_err(|source| PackStoreError::PackNotInStore {
+            digest: digest.to_owned(),
+            root: self.root.clone(),
+            source,
         })?;
-        let parent = target.parent().context("unpacked path has no parent")?;
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        let parent = target
+            .parent()
+            .ok_or(PackStoreError::UnpackedPathNoParent)?;
+        std::fs::create_dir_all(parent).map_err(|source| PackStoreError::CreateUnpackedDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
         let staging = tempfile::Builder::new()
             .prefix(".unpacking-")
             .tempdir_in(parent)
-            .with_context(|| format!("staging an unpacked pack in {}", parent.display()))?;
+            .map_err(|source| PackStoreError::StageUnpacked {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         let verified = read_pack(
             io::BufReader::new(file),
             Bounds::default(),
@@ -678,32 +859,37 @@ impl PackStore {
                 Ok(())
             },
         )
-        .with_context(|| format!("the stored pack {} is damaged", path.display()))?;
-        ensure!(
-            verified.header.digest == digest,
-            "the stored pack {} holds {}, not {digest}",
-            path.display(),
-            verified.header.digest
-        );
+        .map_err(|source| PackStoreError::StoredPackDamaged {
+            path: path.clone(),
+            source: Box::new(source),
+        })?;
+        if verified.header.digest != digest {
+            return Err(PackStoreError::StoredDigest {
+                path,
+                held: verified.header.digest.clone(),
+                digest: digest.to_owned(),
+            });
+        }
         std::fs::write(
             staging.path().join("manifest.json"),
             &verified.manifest_bytes,
         )
-        .context("writing the unpacked manifest")?;
+        .map_err(PackStoreError::WriteUnpackedManifest)?;
         std::fs::write(
             staging.path().join(UNPACKED_HEADER),
-            serde_json::to_vec(&verified.header)?,
+            serde_json::to_vec(&verified.header).map_err(PackStoreError::Json)?,
         )
-        .context("writing the unpacked header")?;
+        .map_err(PackStoreError::WriteUnpackedHeader)?;
         match std::fs::rename(staging.path(), target) {
             Ok(()) => {
                 let _ = staging.keep();
                 Ok(())
             }
             Err(_) if target.is_dir() => Ok(()),
-            Err(error) => {
-                Err(error).with_context(|| format!("unpacking into {}", target.display()))
-            }
+            Err(source) => Err(PackStoreError::RenameUnpacked {
+                path: target.to_path_buf(),
+                source,
+            }),
         }
     }
 
@@ -753,22 +939,25 @@ impl PackStore {
         Ok(released)
     }
 
-    pub fn verify(&self, digest: &str) -> anyhow::Result<PackHeader> {
+    pub fn verify(&self, digest: &str) -> Result<PackHeader> {
         let path = self.path(digest)?;
-        let file = std::fs::File::open(&path).with_context(|| {
-            format!(
-                "pack {digest} is not in the store at {}",
-                self.root.display()
-            )
+        let file = std::fs::File::open(&path).map_err(|source| PackStoreError::PackNotInStore {
+            digest: digest.to_owned(),
+            root: self.root.clone(),
+            source,
         })?;
         let verified = read_pack(io::BufReader::new(file), Bounds::default(), |_, _| Ok(()))
-            .with_context(|| format!("the stored pack {} is damaged", path.display()))?;
-        ensure!(
-            verified.header.digest == digest,
-            "the stored pack {} holds {}, not {digest}",
-            path.display(),
-            verified.header.digest
-        );
+            .map_err(|source| PackStoreError::StoredPackDamaged {
+                path: path.clone(),
+                source: Box::new(source),
+            })?;
+        if verified.header.digest != digest {
+            return Err(PackStoreError::StoredDigest {
+                path,
+                held: verified.header.digest.clone(),
+                digest: digest.to_owned(),
+            });
+        }
         Ok(verified.header)
     }
 }

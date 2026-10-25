@@ -64,10 +64,13 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             return report;
         }
     };
-    let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
+    let archive = match pack_dir(dir)
+        .map_err(gents::pack_archive::PackArchiveError::from)
+        .and_then(|(bytes, _)| PackArchive::from_bytes(&bytes))
+    {
         Ok(archive) => archive,
         Err(error) => {
-            report.problems.push(ErrorChain(error.as_ref()).to_string());
+            report.problems.push(ErrorChain(&error).to_string());
             return report;
         }
     };

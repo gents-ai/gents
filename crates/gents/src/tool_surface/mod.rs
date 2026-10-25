@@ -581,7 +581,7 @@ impl ToolSurface {
                     ToolSurfaceError::WriteToolNotWellFormed {
                         tool_name: decl.tool_name.clone(),
                         collection: decl.collection.clone(),
-                        error: ErrorChain(error.as_ref()).to_string(),
+                        error: ErrorChain(&error).to_string(),
                         surface: self
                             .surface_of_tool
                             .get(&decl.tool_name)

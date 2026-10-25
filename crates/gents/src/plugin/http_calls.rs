@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use afterburner_core::manifold::{Manifold, NetAccess};
-use anyhow::Result;
 use base64::Engine;
 use futures::future::BoxFuture;
 use futures::StreamExt;

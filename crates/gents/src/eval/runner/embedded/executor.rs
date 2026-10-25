@@ -449,12 +449,7 @@ fn infrastructure(trial_id: &str, locator: TrialLocator, error: &anyhow::Error) 
 
 async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Result<()> {
     let (manifest, assets) = read_pack(&spec.pack_dir)?;
-    let digest = digest_declared_assets(&manifest, |path| {
-        assets
-            .get(path)
-            .map(Vec::as_slice)
-            .with_context(|| format!("pack has no asset {path:?}"))
-    })?;
+    let digest = digest_declared_assets(&manifest, |path| assets.get(path).map(Vec::as_slice))?;
     anyhow::ensure!(
         digest == spec.pack_digest,
         "pack digest mismatch: {} materialized as {digest}, but the run froze {}",
@@ -2693,10 +2688,7 @@ mod tests {
 
     fn materialized_digest(pack_dir: &Path) -> String {
         let (manifest, assets) = read_pack(pack_dir).unwrap();
-        digest_declared_assets(&manifest, |path| {
-            assets.get(path).map(Vec::as_slice).context("missing asset")
-        })
-        .unwrap()
+        digest_declared_assets(&manifest, |path| assets.get(path).map(Vec::as_slice)).unwrap()
     }
 
     fn frozen_binding(profile_id: Value) -> InferenceBinding {
@@ -2932,10 +2924,8 @@ mod tests {
         };
 
         let (manifest, assets) = read_pack(&spec.pack_dir).unwrap();
-        let materialized = digest_declared_assets(&manifest, |path| {
-            assets.get(path).map(Vec::as_slice).context("missing asset")
-        })
-        .unwrap();
+        let materialized =
+            digest_declared_assets(&manifest, |path| assets.get(path).map(Vec::as_slice)).unwrap();
         assert!(materialized.starts_with("sha256:"));
         assert_ne!(materialized, spec.pack_digest);
 

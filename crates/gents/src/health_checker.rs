@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -15,7 +14,15 @@ use gents_protocol::tool_service_health::ToolServiceHealthProjection;
 pub enum HealthCheckerError {
     #[error("registry health checks require a node scope")]
     NoNodeScope,
+    #[error(transparent)]
+    Registry(#[from] crate::registry::RegistryError),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
 }
+
+type Result<T, E = HealthCheckerError> = std::result::Result<T, E>;
 
 use crate::graphql::escape_graphql_string;
 use crate::mcp_pool::{resolve_mcp_url, McpPool};

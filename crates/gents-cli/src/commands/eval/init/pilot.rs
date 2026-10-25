@@ -160,12 +160,8 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
         },
         &|_name| None,
     )?;
-    let digest = gents::pack::digest_declared_assets(&manifest, |path| {
-        assets
-            .get(path)
-            .map(Vec::as_slice)
-            .with_context(|| format!("pack has no asset {path:?}"))
-    })?;
+    let digest =
+        gents::pack::digest_declared_assets(&manifest, |path| assets.get(path).map(Vec::as_slice))?;
     let identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
     let expected = config
         .eval_definitions

@@ -1,15 +1,22 @@
-use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use crate::pack::{is_valid_pack_name, InstalledPack};
 use crate::pack_archive::{PackArchive, DEFAULT_NAMESPACE};
 use crate::pack_registry::{fetch_pack, PackRegistryError, RegistryClient, RegistryError};
-use crate::pack_store::{is_valid_index_version, PackStore};
+use crate::pack_store::{is_valid_index_version, PackStore, PackStoreError};
 
 type Result<T, E = PackResolveError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackResolveError {
+    #[error(transparent)]
+    Store(#[from] PackStoreError),
+    #[error("resolving {coordinate} from the registry")]
+    Fetch {
+        coordinate: String,
+        #[source]
+        source: PackRegistryError,
+    },
     #[error("{spec:?} names no version after @")]
     NoVersion { spec: String },
     #[error(
@@ -100,10 +107,7 @@ pub struct ResolveOptions<'a> {
     pub installed: &'a [InstalledPack],
 }
 
-pub async fn resolve_named(
-    spec: &str,
-    options: &ResolveOptions<'_>,
-) -> anyhow::Result<ResolvedNamedPack> {
+pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<ResolvedNamedPack> {
     let parsed = parse_pack_spec(spec)?;
     let coordinate = format!("{}/{}", parsed.namespace, parsed.name);
 
@@ -157,52 +161,46 @@ pub async fn resolve_named(
     })
 }
 
-/// The registry cause sits at the first `RegistryError` inside a `PackRegistryError` on the source
-/// chain; a boxed `#[source]` link is a `Box<PackRegistryError>`, not the enum itself.
-fn registry_cause<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a RegistryError> {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        let pack_error = error.downcast_ref::<PackRegistryError>().or_else(|| {
-            error
-                .downcast_ref::<Box<PackRegistryError>>()
-                .map(Box::as_ref)
-        });
-        if let Some(PackRegistryError::Registry(registry)) = pack_error {
-            return Some(registry);
-        }
-        current = error.source();
-    }
-    None
-}
-
 fn offline_pack_error(
     coordinate: &str,
     version: Option<&str>,
     registry_url: &str,
     home: Option<&Path>,
-    error: anyhow::Error,
-) -> anyhow::Error {
+    error: PackRegistryError,
+) -> PackResolveError {
     let Some(home) = home else {
-        return error.context(format!("resolving {coordinate} from the registry"));
+        return PackResolveError::Fetch {
+            coordinate: coordinate.to_owned(),
+            source: error,
+        };
     };
     let pinned = match version {
         Some(version) => format!("{coordinate}@{version}"),
         None => coordinate.to_owned(),
     };
-    match registry_cause(error.as_ref()) {
+    match registry_cause(&error) {
         Some(RegistryError::Unreachable { .. }) => PackResolveError::OfflineUnreachable {
             pinned,
             home: home.to_path_buf(),
             registry_url: registry_url.to_owned(),
-        }
-        .into(),
+        },
         Some(RegistryError::NotFound { .. }) => PackResolveError::OfflineNotFound {
             pinned,
             home: home.to_path_buf(),
             registry_url: registry_url.to_owned(),
-        }
-        .into(),
-        None => error.context(format!("resolving {coordinate} from the registry")),
+        },
+        _ => PackResolveError::Fetch {
+            coordinate: coordinate.to_owned(),
+            source: error,
+        },
+    }
+}
+
+fn registry_cause(error: &PackRegistryError) -> Option<&RegistryError> {
+    match error {
+        PackRegistryError::Registry(registry) => Some(registry),
+        PackRegistryError::LookupPack { source, .. } => registry_cause(source),
+        _ => None,
     }
 }
 
@@ -214,7 +212,7 @@ mod tests {
 
     const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:1";
 
-    fn expect_err(result: anyhow::Result<ResolvedNamedPack>) -> anyhow::Error {
+    fn expect_err(result: Result<ResolvedNamedPack>) -> PackResolveError {
         match result {
             Ok(_) => panic!("expected an error"),
             Err(error) => error,
@@ -353,7 +351,7 @@ mod tests {
             installed: &[],
         };
         let error = expect_err(resolve_named("gents/nowhere", &options).await);
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(
             message.contains("is not in the pack store of")
                 && message.contains("could not be reached"),
@@ -374,7 +372,7 @@ mod tests {
             installed: &[],
         };
         let error = expect_err(resolve_named("gents/nowhere@9.9.9", &options).await);
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains("gents/nowhere@9.9.9"), "{message}");
         assert!(
             message.contains("gents pack fetch gents/nowhere@9.9.9 --store"),
@@ -397,7 +395,7 @@ mod tests {
             installed: &[],
         };
         let error = expect_err(resolve_named("gents/nowhere", &options).await);
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(
             message.contains("is not in the pack store of") && message.contains("has no such pack"),
             "{message}"

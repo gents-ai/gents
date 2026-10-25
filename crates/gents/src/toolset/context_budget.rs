@@ -1,10 +1,8 @@
-use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
-use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -61,6 +59,40 @@ pub struct LastRequestContextSnapshot {
 /// belong to this node, this agent and this session; a node-wide scan would
 /// attribute other agents' (and other sessions') provider dispatches to the
 /// caller.
+#[derive(Debug, thiserror::Error)]
+pub enum ContextBudgetError {
+    #[error("failed to serialize context budget output: {error}")]
+    Serialize {
+        error: crate::tool_output::ToolOutputError,
+    },
+    #[error("context_budget tool requires the calling agent identity")]
+    MissingAgentIdentity,
+    #[error("context_budget tool requires the calling session identity")]
+    MissingSessionIdentity,
+    #[error("context_budget tool requires a running node DID")]
+    MissingNodeDid,
+    #[error("context_budget tool requires the calling agent and session identity")]
+    MissingScopeIdentity,
+    #[error("{label} query response missing object data")]
+    MissingObjectData { label: String },
+    #[error("decoding {label} query response")]
+    Decode {
+        label: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("decoding context accounting for InferenceCall {call_id}")]
+    AccountingDecode {
+        call_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    Query(#[from] crate::config_client::ConfigClientError),
+}
+
+type Result<T, E = ContextBudgetError> = std::result::Result<T, E>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextBudgetScope {
     pub node_did: String,
@@ -77,12 +109,12 @@ impl ContextBudgetScope {
             .as_ref()
             .and_then(|runtime| runtime.agent_id.clone())
             .filter(|value| !value.trim().is_empty())
-            .context("context_budget tool requires the calling agent identity")?;
+            .ok_or(ContextBudgetError::MissingAgentIdentity)?;
         let session_id = runtime
             .as_ref()
             .and_then(|runtime| runtime.session_id.clone())
             .filter(|value| !value.trim().is_empty())
-            .context("context_budget tool requires the calling session identity")?;
+            .ok_or(ContextBudgetError::MissingSessionIdentity)?;
         let node_did = runtime
             .as_ref()
             .and_then(|runtime| runtime.node_did.clone())
@@ -187,22 +219,18 @@ struct InferenceCallRow {
 }
 
 #[derive(Debug)]
-pub struct ContextBudgetToolError(anyhow::Error);
+pub struct ContextBudgetToolError(ContextBudgetError);
 
 impl std::fmt::Display for ContextBudgetToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", ErrorChain(self.0.as_ref()))
+        write!(f, "{}", gents_protocol::error_chain::ErrorChain(&self.0))
     }
 }
 
-impl std::error::Error for ContextBudgetToolError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
-    }
-}
+impl std::error::Error for ContextBudgetToolError {}
 
-impl From<anyhow::Error> for ContextBudgetToolError {
-    fn from(error: anyhow::Error) -> Self {
+impl From<ContextBudgetError> for ContextBudgetToolError {
+    fn from(error: ContextBudgetError) -> Self {
         Self(error)
     }
 }
@@ -264,11 +292,7 @@ impl Tool for ContextBudgetTool {
                 "recent_request_reductions",
             ],
         )
-        .map_err(|error| {
-            ContextBudgetToolError(anyhow!(
-                "failed to serialize context budget output: {error}"
-            ))
-        })
+        .map_err(|error| ContextBudgetError::Serialize { error }.into())
     }
 }
 
@@ -285,12 +309,12 @@ pub async fn load_context_budget_snapshot(
 ) -> Result<ContextBudgetSnapshot> {
     let node_did = scope.node_did.trim();
     if node_did.is_empty() {
-        bail!("context_budget tool requires a running node DID");
+        return Err(ContextBudgetError::MissingNodeDid);
     }
     let agent_id = scope.agent_id.trim();
     let session_id = scope.session_id.trim();
     if agent_id.is_empty() || session_id.is_empty() {
-        bail!("context_budget tool requires the calling agent and session identity");
+        return Err(ContextBudgetError::MissingScopeIdentity);
     }
 
     let resp = graphql_with_transaction_retry(
@@ -433,8 +457,13 @@ where
     let data = data
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("{label} query response missing object data"))?;
-    serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
+        .ok_or_else(|| ContextBudgetError::MissingObjectData {
+            label: label.to_owned(),
+        })?;
+    serde_json::from_value(data).map_err(|source| ContextBudgetError::Decode {
+        label: label.to_owned(),
+        source,
+    })
 }
 
 fn max_context_window(agents: &[AgentRow], profiles: &[ProfileRow]) -> Option<i64> {
@@ -557,12 +586,11 @@ fn latest_request_context(rows: &[InferenceCallRow]) -> Result<Option<LastReques
     let Some((row, encoded)) = candidates.pop() else {
         return Ok(None);
     };
-    let accounting = serde_json::from_str(encoded).with_context(|| {
-        format!(
-            "decoding context accounting for InferenceCall {}",
-            row.call_id
-        )
-    })?;
+    let accounting =
+        serde_json::from_str(encoded).map_err(|source| ContextBudgetError::AccountingDecode {
+            call_id: row.call_id.clone(),
+            source,
+        })?;
     Ok(Some(LastRequestContextSnapshot {
         request_id: row.request_id.clone(),
         call_id: row.call_id.clone(),

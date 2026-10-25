@@ -21,12 +21,12 @@ pub(crate) async fn run_defra_query(
     params: &DefraQueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
-    gents::defra_query::execute_command(
+    Ok(gents::defra_query::execute_command(
         &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
         &params.clone().into(),
         scope,
     )
-    .await
+    .await?)
 }
 
 pub(crate) fn params_from_args(

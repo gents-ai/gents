@@ -1,8 +1,8 @@
-use anyhow::{anyhow, bail, ensure, Result};
-use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Map, Value};
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError};
+use crate::defra_write::DefraWriteFailure;
+use crate::document_config::DocumentConfigError;
 use crate::document_config::QueryToolDecl;
 use crate::llm::tool::{Tool, ToolDefinition};
 
@@ -13,23 +13,89 @@ pub const MAX_OFFSET: u32 = 100_000;
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_query_bound";
 
+#[derive(Debug, thiserror::Error)]
+pub enum BoundedQueryError {
+    #[error(transparent)]
+    Command(#[from] super::command::CommandError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Document(Box<DocumentConfigError>),
+    #[error(transparent)]
+    Write(#[from] DefraWriteFailure),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("collection `{collection}` is not available")]
+    CollectionUnavailable { collection: String },
+    #[error("field `{field}` is absent from `{collection}`")]
+    FieldAbsent { field: String, collection: String },
+    #[error("query tool `{tool_name}` reached execution with an invalid declaration")]
+    InvalidDeclaration { tool_name: String },
+    #[error("filter field collides with a reserved query argument")]
+    ReservedFilterField,
+    #[error("tool `{tool_name}` fields must be a list of field names")]
+    FieldsNotList { tool_name: String },
+    #[error("field `{field}` is not in the projection allowlist for tool `{tool_name}`")]
+    FieldNotAllowed { field: String, tool_name: String },
+    #[error("field `{field}` on {collection:?} is restricted and cannot be queried")]
+    FieldRestricted { field: String, collection: String },
+    #[error("tool `{tool_name}` fields must list at least one allowed field")]
+    FieldsEmpty { tool_name: String },
+    #[error("tool `{tool_name}` limit must be a positive integer")]
+    LimitInvalid { tool_name: String },
+    #[error("tool `{tool_name}` offset must be a non-negative integer")]
+    OffsetNotNonNegative { tool_name: String },
+    #[error("tool `{tool_name}` offset exceeds {MAX_OFFSET}; narrow the filter")]
+    OffsetTooLarge { tool_name: String },
+    #[error("tool `{tool_name}` order must be an object or array of single-field objects")]
+    OrderShape { tool_name: String },
+    #[error("tool `{tool_name}` order entries name one field each, ASC or DESC")]
+    OrderEntry { tool_name: String },
+    #[error("tool `{tool_name}` cannot order by `{field}`; allowed: {allowed}")]
+    OrderFieldNotAllowed {
+        tool_name: String,
+        field: String,
+        allowed: String,
+    },
+    #[error("{refusal}")]
+    RuntimeFilled { refusal: String },
+    #[error("{refusal}")]
+    UndeclaredField { refusal: String },
+    #[error("required filter `{field}` missing for tool `{tool_name}`")]
+    RequiredFilterMissing { field: String, tool_name: String },
+    #[error("filter `{field}` on {collection:?} is restricted and cannot be queried")]
+    FilterRestricted { field: String, collection: String },
+    #[error(
+        "query tool `{tool_name}` is actor-scoped, which needs the embedded node; a GraphQL endpoint reads as its own principal"
+    )]
+    ActorScopedOverHttp { tool_name: String },
+    #[error("failed to serialize query results: {error}")]
+    Serialize {
+        error: crate::tool_output::ToolOutputError,
+    },
+}
+
+impl From<DocumentConfigError> for BoundedQueryError {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::Document(Box::new(error))
+    }
+}
+
+type Result<T, E = BoundedQueryError> = std::result::Result<T, E>;
+
 #[derive(Debug)]
-pub struct DefraBoundQueryError(anyhow::Error);
+pub struct DefraBoundQueryError(BoundedQueryError);
 
 impl std::fmt::Display for DefraBoundQueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", ErrorChain(self.0.as_ref()))
+        write!(f, "{}", gents_protocol::error_chain::ErrorChain(&self.0))
     }
 }
 
-impl std::error::Error for DefraBoundQueryError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
-    }
-}
+impl std::error::Error for DefraBoundQueryError {}
 
-impl From<anyhow::Error> for DefraBoundQueryError {
-    fn from(error: anyhow::Error) -> Self {
+impl From<BoundedQueryError> for DefraBoundQueryError {
+    fn from(error: BoundedQueryError) -> Self {
         Self(error)
     }
 }
@@ -82,7 +148,9 @@ impl BoundedQueryTool {
             .access
             .collection_fields(&self.decl.collection)
             .await?
-            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+            .ok_or_else(|| BoundedQueryError::CollectionUnavailable {
+                collection: self.decl.collection.clone(),
+            })?;
         for field in self.decl.fields.iter().map(String::as_str).chain(
             self.decl
                 .filter_fields
@@ -90,7 +158,10 @@ impl BoundedQueryTool {
                 .map(|field| field.name.as_str()),
         ) {
             if !fields.contains(field) {
-                bail!("field `{field}` is absent from `{}`", self.decl.collection);
+                return Err(BoundedQueryError::FieldAbsent {
+                    field: field.to_owned(),
+                    collection: self.decl.collection.clone(),
+                });
             }
         }
         Ok(())
@@ -98,18 +169,18 @@ impl BoundedQueryTool {
 
     fn ensure_well_formed(&self) -> Result<()> {
         if !self.decl.is_well_formed() {
-            bail!(
-                "query tool `{}` reached execution with an invalid declaration",
-                self.decl.tool_name
-            );
+            return Err(BoundedQueryError::InvalidDeclaration {
+                tool_name: self.decl.tool_name.clone(),
+            });
         }
-        anyhow::ensure!(
-            !self.decl.filter_fields.iter().any(|field| matches!(
+        if self.decl.filter_fields.iter().any(|field| {
+            matches!(
                 field.name.trim(),
                 "fields" | "limit" | "offset" | "order" | "field_page"
-            )),
-            "filter field collides with a reserved query argument"
-        );
+            )
+        }) {
+            return Err(BoundedQueryError::ReservedFilterField);
+        }
         Ok(crate::document_config::reject_protected_collection_name(
             &self.decl.collection,
         )?)
@@ -120,20 +191,19 @@ impl BoundedQueryTool {
             .access
             .collection_version(&self.decl.collection)
             .await?
-            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+            .ok_or_else(|| BoundedQueryError::CollectionUnavailable {
+                collection: self.decl.collection.clone(),
+            })?;
         let schema: ::schema::CollectionVersion = serde_json::from_value(version)?;
         self.model_filter_fields()
-            .map(|field| {
+            .map(|field| -> Result<(String, Value)> {
                 let native = schema
                     .fields
                     .iter()
                     .find(|native| native.name == field.name)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "field `{}` is absent from `{}`",
-                            field.name,
-                            self.decl.collection
-                        )
+                    .ok_or_else(|| BoundedQueryError::FieldAbsent {
+                        field: field.name.clone(),
+                        collection: self.decl.collection.clone(),
                     })?;
                 let parameter_type = format!(
                     "{}{}",
@@ -171,39 +241,36 @@ impl BoundedQueryTool {
                 for item in items {
                     let Some(name) = item.as_str().map(str::trim).filter(|name| !name.is_empty())
                     else {
-                        bail!(
-                            "tool `{}` fields must be a list of field names",
-                            self.decl.tool_name
-                        );
+                        return Err(BoundedQueryError::FieldsNotList {
+                            tool_name: self.decl.tool_name.clone(),
+                        });
                     };
                     if !self.decl.fields.iter().any(|allowed| allowed == name) {
-                        bail!(
-                            "field `{name}` is not in the projection allowlist for tool `{}`",
-                            self.decl.tool_name
-                        );
+                        return Err(BoundedQueryError::FieldNotAllowed {
+                            field: name.to_owned(),
+                            tool_name: self.decl.tool_name.clone(),
+                        });
                     }
                     if query::is_restricted_field(&self.decl.collection, name) {
-                        bail!(
-                            "field `{name}` on {:?} is restricted and cannot be queried",
-                            self.decl.collection
-                        );
+                        return Err(BoundedQueryError::FieldRestricted {
+                            field: name.to_owned(),
+                            collection: self.decl.collection.clone(),
+                        });
                     }
                     if !fields.iter().any(|existing| existing == name) {
                         fields.push(name.to_string());
                     }
                 }
                 if fields.is_empty() {
-                    bail!(
-                        "tool `{}` fields must list at least one allowed field",
-                        self.decl.tool_name
-                    );
+                    return Err(BoundedQueryError::FieldsEmpty {
+                        tool_name: self.decl.tool_name.clone(),
+                    });
                 }
                 Ok(fields)
             }
-            Some(_) => bail!(
-                "tool `{}` fields must be a list of field names",
-                self.decl.tool_name
-            ),
+            Some(_) => Err(BoundedQueryError::FieldsNotList {
+                tool_name: self.decl.tool_name.clone(),
+            }),
         }
     }
 
@@ -213,23 +280,20 @@ impl BoundedQueryTool {
             Some(Value::Number(number)) => {
                 let Some(limit) = number.as_u64().and_then(|value| u32::try_from(value).ok())
                 else {
-                    bail!(
-                        "tool `{}` limit must be a positive integer",
-                        self.decl.tool_name
-                    );
+                    return Err(self.limit_invalid());
                 };
                 if limit == 0 {
-                    bail!(
-                        "tool `{}` limit must be a positive integer",
-                        self.decl.tool_name
-                    );
+                    return Err(self.limit_invalid());
                 }
                 Ok(limit.min(MAX_LIMIT))
             }
-            Some(_) => bail!(
-                "tool `{}` limit must be a positive integer",
-                self.decl.tool_name
-            ),
+            Some(_) => Err(self.limit_invalid()),
+        }
+    }
+
+    fn limit_invalid(&self) -> BoundedQueryError {
+        BoundedQueryError::LimitInvalid {
+            tool_name: self.decl.tool_name.clone(),
         }
     }
 
@@ -239,22 +303,22 @@ impl BoundedQueryTool {
             Some(Value::Number(number)) => {
                 let Some(offset) = number.as_u64().and_then(|value| u32::try_from(value).ok())
                 else {
-                    bail!(
-                        "tool `{}` offset must be a non-negative integer",
-                        self.decl.tool_name
-                    );
+                    return Err(self.offset_not_non_negative());
                 };
-                ensure!(
-                    offset <= MAX_OFFSET,
-                    "tool `{}` offset exceeds {MAX_OFFSET}; narrow the filter",
-                    self.decl.tool_name
-                );
+                if offset > MAX_OFFSET {
+                    return Err(BoundedQueryError::OffsetTooLarge {
+                        tool_name: self.decl.tool_name.clone(),
+                    });
+                }
                 Ok(offset)
             }
-            Some(_) => bail!(
-                "tool `{}` offset must be a non-negative integer",
-                self.decl.tool_name
-            ),
+            Some(_) => Err(self.offset_not_non_negative()),
+        }
+    }
+
+    fn offset_not_non_negative(&self) -> BoundedQueryError {
+        BoundedQueryError::OffsetNotNonNegative {
+            tool_name: self.decl.tool_name.clone(),
         }
     }
 
@@ -267,10 +331,11 @@ impl BoundedQueryTool {
         let entries: Vec<&Value> = match order {
             Value::Object(_) => vec![order],
             Value::Array(entries) => entries.iter().collect(),
-            _ => bail!(
-                "tool `{}` order must be an object or array of single-field objects",
-                self.decl.tool_name
-            ),
+            _ => {
+                return Err(BoundedQueryError::OrderShape {
+                    tool_name: self.decl.tool_name.clone(),
+                })
+            }
         };
         for entry in &entries {
             let Some((field, _)) = entry
@@ -278,17 +343,17 @@ impl BoundedQueryTool {
                 .filter(|v| v.len() == 1)
                 .and_then(|v| v.iter().next())
             else {
-                bail!(
-                    "tool `{}` order entries name one field each, ASC or DESC",
-                    self.decl.tool_name
-                );
+                return Err(BoundedQueryError::OrderEntry {
+                    tool_name: self.decl.tool_name.clone(),
+                });
             };
-            ensure!(
-                field == "_docID" || self.decl.fields.iter().any(|allowed| allowed == field),
-                "tool `{}` cannot order by `{field}`; allowed: {}",
-                self.decl.tool_name,
-                self.decl.fields.join(", ")
-            );
+            if !(field == "_docID" || self.decl.fields.iter().any(|allowed| allowed == field)) {
+                return Err(BoundedQueryError::OrderFieldNotAllowed {
+                    tool_name: self.decl.tool_name.clone(),
+                    field: field.clone(),
+                    allowed: self.decl.fields.join(", "),
+                });
+            }
         }
         Ok(Some(order.clone()))
     }
@@ -306,21 +371,19 @@ impl BoundedQueryTool {
                 .find(|field| field.name == *key)
                 .and_then(|field| field.fill.as_ref())
             {
-                bail!(
-                    "{}",
-                    crate::document_config::runtime_filled_refusal(
+                return Err(BoundedQueryError::RuntimeFilled {
+                    refusal: crate::document_config::runtime_filled_refusal(
                         "filter",
                         key,
                         &self.decl.tool_name,
                         self.surface_id.as_deref(),
                         fill,
-                    )
-                );
+                    ),
+                });
             }
             if !self.model_filter_fields().any(|field| field.name == *key) {
-                bail!(
-                    "{}",
-                    crate::document_config::undeclared_field_refusal(
+                return Err(BoundedQueryError::UndeclaredField {
+                    refusal: crate::document_config::undeclared_field_refusal(
                         "filter",
                         key,
                         &self.decl.tool_name,
@@ -329,8 +392,8 @@ impl BoundedQueryTool {
                             .model_filter_fields()
                             .map(|field| field.name.as_str())
                             .collect::<Vec<_>>(),
-                    )
-                );
+                    ),
+                });
             }
         }
 
@@ -344,29 +407,26 @@ impl BoundedQueryTool {
             match value {
                 Some(Value::Null) | None => {
                     if field.required {
-                        bail!(
-                            "required filter `{}` missing for tool `{}`",
-                            field.name,
-                            self.decl.tool_name
-                        );
+                        return Err(BoundedQueryError::RequiredFilterMissing {
+                            field: field.name.clone(),
+                            tool_name: self.decl.tool_name.clone(),
+                        });
                     }
                 }
                 Some(Value::String(text)) if text.trim().is_empty() => {
                     if field.required {
-                        bail!(
-                            "required filter `{}` missing for tool `{}`",
-                            field.name,
-                            self.decl.tool_name
-                        );
+                        return Err(BoundedQueryError::RequiredFilterMissing {
+                            field: field.name.clone(),
+                            tool_name: self.decl.tool_name.clone(),
+                        });
                     }
                 }
                 Some(value) => {
                     if query::is_restricted_field(&self.decl.collection, &field.name) {
-                        bail!(
-                            "filter `{}` on {:?} is restricted and cannot be queried",
-                            field.name,
-                            self.decl.collection
-                        );
+                        return Err(BoundedQueryError::FilterRestricted {
+                            field: field.name.clone(),
+                            collection: self.decl.collection.clone(),
+                        });
                     }
                     filter.insert(field.name.clone(), json!({ "_eq": value }));
                 }
@@ -470,6 +530,12 @@ impl Tool for BoundedQueryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Ok(self.query(&args).await?)
+    }
+}
+
+impl BoundedQueryTool {
+    async fn query(&self, args: &BoundedQueryParams) -> Result<String> {
         self.ensure_well_formed()?;
         let fields = self.resolve_projection(&args.0)?;
         let filter = self.resolve_filter(&args.0)?;
@@ -505,12 +571,9 @@ impl Tool for BoundedQueryTool {
                 .await?
             }
             (ConfigAccess::Graphql(_), Some(_)) => {
-                return Err(anyhow!(
-                    "query tool `{}` is actor-scoped, which needs the embedded node; a GraphQL \
-                     endpoint reads as its own principal",
-                    self.decl.tool_name
-                )
-                .into())
+                return Err(BoundedQueryError::ActorScopedOverHttp {
+                    tool_name: self.decl.tool_name.clone(),
+                })
             }
             // One request, no snapshot: a field page whose value changed
             // since the previous page is caught by its `expected_hash`.
@@ -541,7 +604,7 @@ impl Tool for BoundedQueryTool {
                 "limit_note",
             ],
         )
-        .map_err(|e| DefraBoundQueryError(anyhow!("failed to serialize query results: {e}")))
+        .map_err(|error| BoundedQueryError::Serialize { error })
     }
 }
 
@@ -553,6 +616,7 @@ mod tests {
     use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use crate::llm::tool::Tool;
     use defra_node::EmbeddedNode;
+    use gents_protocol::error_chain::ErrorChain;
 
     #[tokio::test]
     async fn native_scalar_filters_match_lean_admission() {
@@ -905,10 +969,13 @@ mod tests {
         }
     }
 
-    async fn call_unscoped(tool: &BoundedQueryTool, args: Value) -> Result<Value> {
+    async fn call_unscoped(
+        tool: &BoundedQueryTool,
+        args: Value,
+    ) -> std::result::Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let text = Tool::call(tool, BoundedQueryParams(args.as_object().unwrap().clone()))
             .await
-            .map_err(|error| anyhow!("{error}"))?;
+            .map_err(|error| error.to_string())?;
         Ok(serde_json::from_str(&text)?)
     }
 

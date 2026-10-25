@@ -258,46 +258,41 @@ impl DefraSessionHook {
                 );
             }
         }
-        let receipt = match crate::session_message::commit(
-            &self.node,
-            &cause,
-            &mut lifecycle,
-            plan,
-            !create,
-        )
-        .await
-        {
-            Ok(receipt) => crate::tool_output::render(
-                &receipt,
-                &["status", "session_id", "request_id", "tool_call_id"],
-            )?,
-            Err(error) => {
-                let capacity = error
+        let receipt =
+            match crate::session_message::commit(&self.node, &cause, &mut lifecycle, plan, !create)
+                .await
+            {
+                Ok(receipt) => crate::tool_output::render(
+                    &receipt,
+                    &["status", "session_id", "request_id", "tool_call_id"],
+                )?,
+                Err(error) => {
+                    let capacity = error
                     .downcast_ref::<crate::tool_call_lifecycle::delivery::DeliveryError>()
                     .and_then(
                         crate::tool_call_lifecycle::delivery::DeliveryError::background_capacity,
                     )
                     .map(|capacity| capacity.0);
-                if let Some(capacity) = capacity {
+                    if let Some(capacity) = capacity {
+                        refuse!(
+                            FailureClass::ServiceUnavailable,
+                            background_budget_exceeded_payload(tool_name, capacity)
+                        );
+                    }
                     refuse!(
                         FailureClass::ServiceUnavailable,
-                        background_budget_exceeded_payload(tool_name, capacity)
+                        service_unavailable_payload(
+                            tool_name,
+                            "/",
+                            format!(
+                                "the message could not be delivered: {}",
+                                ErrorChain(error.as_ref())
+                            ),
+                            true,
+                        )
                     );
                 }
-                refuse!(
-                    FailureClass::ServiceUnavailable,
-                    service_unavailable_payload(
-                        tool_name,
-                        "/",
-                        format!(
-                            "the message could not be delivered: {}",
-                            ErrorChain(error.as_ref())
-                        ),
-                        true,
-                    )
-                );
-            }
-        };
+            };
         // Stop the target's turn only once the message is durably delivered,
         // so a failed commit never interrupts without delivering. The new
         // request waits behind the interrupted one.

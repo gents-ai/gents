@@ -25,34 +25,6 @@ pub enum PrincipalIdentityError {
     IdentityKey(#[from] IdentityError),
     #[error(transparent)]
     Did(#[from] identity::Error),
-    #[error("loading node identity for {did}")]
-    LoadSigner {
-        did: String,
-        #[source]
-        source: identity::Error,
-    },
-    #[error("signing payload as {did}")]
-    SignPayload {
-        did: String,
-        #[source]
-        source: crypto::Error,
-    },
-    #[error("parsing did:key public key from DID {did}")]
-    ParseDidKey {
-        did: String,
-        #[source]
-        source: crypto::Error,
-    },
-    #[error("no public key registered for DID {did}")]
-    UnregisteredDid { did: String },
-    #[error(transparent)]
-    PublicKey(crypto::Error),
-    #[error("verifying payload for {did}")]
-    VerifyPayload {
-        did: String,
-        #[source]
-        source: crypto::Error,
-    },
     #[error("parsing node identity metadata {}", path.display())]
     ParseMetadata {
         path: PathBuf,
@@ -173,42 +145,47 @@ impl PrincipalIdentity {
         &self.private_key_bytes
     }
 
-    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
         let identity = RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
-            .map_err(|source| PrincipalIdentityError::LoadSigner {
+            .map_err(|source| IdentityError::LoadNodeIdentity {
             did: self.did.clone(),
             source,
         })?;
         identity
             .sign(payload)
-            .map_err(|source| PrincipalIdentityError::SignPayload {
+            .map_err(|source| IdentityError::SignPayloadAs {
                 did: self.did.clone(),
                 source,
             })
     }
 
-    fn verify_signature(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+    fn verify_signature(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, IdentityError> {
         let (key_type, public_key_bytes) = if did == self.did {
             (crypto::KeyType::Ed25519, self.public_key_bytes.clone())
         } else if did.starts_with("did:key:") {
-            crypto::parse_did_key(did).map_err(|source| PrincipalIdentityError::ParseDidKey {
+            crypto::parse_did_key(did).map_err(|source| IdentityError::ParseDidKey {
                 did: did.to_owned(),
                 source,
             })?
         } else {
-            return Err(PrincipalIdentityError::UnregisteredDid {
+            return Err(IdentityError::NoPublicKey {
                 did: did.to_owned(),
             });
         };
 
         let public_key = crypto::public_key_from_bytes(key_type, &public_key_bytes)
-            .map_err(PrincipalIdentityError::PublicKey)?;
-        public_key.verify(payload, signature).map_err(|source| {
-            PrincipalIdentityError::VerifyPayload {
+            .map_err(IdentityError::Crypto)?;
+        public_key
+            .verify(payload, signature)
+            .map_err(|source| IdentityError::VerifyPayload {
                 did: did.to_owned(),
                 source,
-            }
-        })
+            })
     }
 }
 
@@ -218,12 +195,17 @@ impl NodeIdentity for PrincipalIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
-        Ok(PrincipalIdentity::sign(self, payload)?)
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
+        PrincipalIdentity::sign(self, payload)
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool> {
-        Ok(self.verify_signature(did, payload, signature)?)
+    async fn verify(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, IdentityError> {
+        self.verify_signature(did, payload, signature)
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {

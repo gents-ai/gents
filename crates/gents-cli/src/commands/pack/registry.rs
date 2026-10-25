@@ -507,7 +507,7 @@ pub(crate) mod tests {
         let error = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect_err("mismatched digest must be refused");
-        let message = ErrorChain(error.as_ref()).to_string();
+        let message = ErrorChain(&error).to_string();
         assert!(message.contains(&wrong_digest), "{message}");
         assert!(message.contains("refusing to install"), "{message}");
         assert_eq!(stored_packs(home.path()), 0);
@@ -530,11 +530,11 @@ pub(crate) mod tests {
         .await
         .expect_err("a manifest from another namespace must be refused");
         assert!(
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
                 .to_string()
                 .contains("different identity"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert_eq!(stored_packs(home.path()), 0);
     }
@@ -550,11 +550,9 @@ pub(crate) mod tests {
             .await
             .expect_err("unknown pack must be refused, not silently substituted");
         assert!(
-            ErrorChain(error.as_ref())
-                .to_string()
-                .contains("nothing at"),
+            ErrorChain(&error).to_string().contains("nothing at"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 

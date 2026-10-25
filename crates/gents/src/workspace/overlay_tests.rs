@@ -105,7 +105,7 @@ fn read_write_fails_closed_without_workspace_write_sandbox() {
             .to_string()
             .contains("enforceable WorkspaceWrite sandbox"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -127,7 +127,7 @@ fn read_write_rejects_sealed_workspace() {
     assert!(
         error.to_string().contains("not bindable for authority"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -170,7 +170,7 @@ fn integrate_only_binds_sealed_with_matching_hash() {
     assert!(
         error.to_string().contains("not bindable"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     let mut workspace = ready_workspace();
@@ -212,7 +212,7 @@ fn sealed_mismatch_and_missing_hash_fail_closed() {
             .to_string()
             .contains("does not match workspace seal_hash"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     let mut drifted = placement(&placement_path);
@@ -231,7 +231,7 @@ fn sealed_mismatch_and_missing_hash_fail_closed() {
             .to_string()
             .contains("observed_tree_hash drifted does not match"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -256,7 +256,7 @@ fn sealed_requires_live_tree_hash() {
     assert!(
         error.to_string().contains("requires live tree hash"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -295,7 +295,7 @@ fn live_tree_hash_drift_fails_closed() {
             .to_string()
             .contains("live tree hash drifted does not match"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -407,7 +407,7 @@ fn sealed_missing_observed_tree_hash_fails_closed() {
             .to_string()
             .contains("missing placement observed_tree_hash"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -425,7 +425,7 @@ fn placement_outside_operator_root_fails_closed() {
     assert!(
         error.to_string().contains("escapes operator tool root"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -471,7 +471,7 @@ fn persisted_cwd_must_stay_under_placement() {
     assert!(
         error.to_string().contains("not under workspace root"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 

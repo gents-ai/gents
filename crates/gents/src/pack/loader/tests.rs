@@ -216,7 +216,7 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap())
                 .unwrap_or_else(|error| panic!("{name} manifest: {error}"));
         crate::pack::validate_manifest(&manifest.name, &manifest)
-            .unwrap_or_else(|error| panic!("{name} manifest: {}", ErrorChain(error.as_ref())));
+            .unwrap_or_else(|error| panic!("{name} manifest: {}", ErrorChain(&error)));
         if manifest.config.is_none() {
             continue;
         }

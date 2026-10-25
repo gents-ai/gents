@@ -90,7 +90,7 @@ fn every_fixture_pack_keeps_its_digest_through_a_pack_file() {
             );
         }
         let expected = crate::pack::digest_declared_assets(&manifest, |path| {
-            Ok(assets.get(path).map(Vec::as_slice).expect("declared asset"))
+            Some(assets.get(path).map(Vec::as_slice).expect("declared asset"))
         })
         .expect("digest");
         let (bytes, header) = pack_dir(&root).expect("packing");
@@ -138,9 +138,9 @@ fn pack_writer_refuses_a_declared_asset_symlink_outside_the_pack() {
 
     let error = pack_dir(&root).expect_err("must not follow an external asset symlink");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("outside"),
+        format!("{}", ErrorChain(&error)).contains("outside"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -173,9 +173,9 @@ fn a_file_without_the_header_first_is_not_a_pack() {
     let error = PackArchive::from_bytes(&raw_pack(&[("README.md", b"# not a pack")]))
         .expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("does not start with pack.json"),
+        format!("{}", ErrorChain(&error)).contains("does not start with pack.json"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -192,9 +192,9 @@ fn a_changed_asset_fails_the_digest_the_header_claims() {
     asset.1.push(b'!');
     let error = PackArchive::from_bytes(&rebuild(&entries)).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("but the contents hash to"),
+        format!("{}", ErrorChain(&error)).contains("but the contents hash to"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -210,9 +210,9 @@ fn a_header_that_misnames_the_pack_is_refused() {
     entries[0].1 = serde_json::to_vec(&lie).unwrap();
     let error = PackArchive::from_bytes(&rebuild(&entries)).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("but the manifest is"),
+        format!("{}", ErrorChain(&error)).contains("but the manifest is"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -226,9 +226,9 @@ fn a_newer_format_version_is_named_not_misread() {
     entries[0].1 = serde_json::to_vec(&header).unwrap();
     let error = PackArchive::from_bytes(&rebuild(&entries)).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("format version 2"),
+        format!("{}", ErrorChain(&error)).contains("format version 2"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -241,9 +241,9 @@ fn entries_out_of_digest_order_are_refused() {
     entries.swap(n - 1, n - 2);
     let error = PackArchive::from_bytes(&rebuild(&entries)).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("out of order"),
+        format!("{}", ErrorChain(&error)).contains("out of order"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -264,9 +264,9 @@ fn a_member_the_manifest_does_not_declare_is_refused() {
     entries.push(("zzz_stowaway.md".to_owned(), b"not declared".to_vec()));
     let error = PackArchive::from_bytes(&rebuild(&entries)).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("does not declare"),
+        format!("{}", ErrorChain(&error)).contains("does not declare"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -280,9 +280,9 @@ fn a_missing_declared_asset_is_refused_when_the_pack_is_built() {
     std::fs::remove_file(root.join(&dropped)).expect("remove");
     let error = pack_dir(&root).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains(&dropped),
+        format!("{}", ErrorChain(&error)).contains(&dropped),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -318,9 +318,9 @@ fn a_path_that_escapes_the_pack_is_refused() {
 
     let error = PackArchive::from_bytes(&bytes).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("is not a path a pack may carry"),
+        format!("{}", ErrorChain(&error)).contains("is not a path a pack may carry"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -354,9 +354,9 @@ fn every_bound_is_enforced_on_read_and_write() {
     ] {
         let error = PackArchive::from_reader(bytes.as_slice(), tight).expect_err("read bound");
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains(expected),
+            format!("{}", ErrorChain(&error)).contains(expected),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
     for (tight, expected) in [
@@ -384,9 +384,9 @@ fn every_bound_is_enforced_on_read_and_write() {
     ] {
         let error = write_pack_with(&root, tight).expect_err("write bound");
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains(expected),
+            format!("{}", ErrorChain(&error)).contains(expected),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 }
@@ -493,9 +493,9 @@ fn a_plugin_whose_artifact_is_not_a_declared_asset_is_refused() {
     .expect("a manifest");
     let error = validate_manifest("shipping_plugins", &manifest).expect_err("must be refused");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("not its artifact"),
+        format!("{}", ErrorChain(&error)).contains("not its artifact"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     manifest

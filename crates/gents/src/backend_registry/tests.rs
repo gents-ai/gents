@@ -3,7 +3,7 @@ use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::lean_vocab_test::lean_backend_health_admission_cases;
 use crate::OpenAiWireApi;
-use anyhow::Result;
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 use gents_protocol::error_chain::ErrorChain;
 
 fn base_backend() -> InferenceBackend {
@@ -368,7 +368,7 @@ fn admission_rejects_unrelated_observation_and_defaults_capacity() {
 }
 
 #[tokio::test]
-async fn scoped_backend_replacement_preserves_observations_and_resets_defaults() -> Result<()> {
+async fn scoped_backend_replacement_preserves_observations_and_resets_defaults() -> TestResult {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
@@ -449,7 +449,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
 }
 
 #[tokio::test]
-async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Result<()> {
+async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> TestResult {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
@@ -488,7 +488,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
 }
 
 #[tokio::test]
-async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> Result<()> {
+async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> TestResult {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let owner = base_backend().node_did;
@@ -536,7 +536,7 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
 }
 
 #[tokio::test]
-async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> Result<()> {
+async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> TestResult {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
@@ -593,7 +593,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
 }
 
 #[tokio::test]
-async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Result<()> {
+async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> TestResult {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
@@ -631,13 +631,13 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         models: Vec::new(),
         ..catalog.clone()
     };
-    let failed: Result<()> = access
+    let failed: TestResult = access
         .transact_write("test.catalog.rollback", |txn| {
             let empty = empty.clone();
             let backend = &backend;
             Box::pin(async move {
                 record_model_catalog_in_txn(txn, backend, empty).await?;
-                anyhow::bail!("force rollback")
+                Err(crate::config_client::ConfigClientError::InjectedRollbackFailure.into())
             })
         })
         .await;
@@ -696,7 +696,7 @@ async fn spawn_echoing_models_server(secret: &'static str) -> String {
 }
 
 #[tokio::test]
-async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result<()> {
+async fn operator_discovery_publishes_scoped_credential_free_catalog() -> TestResult {
     const SECRET: &str = "subscription-access-token-never-stored";
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;

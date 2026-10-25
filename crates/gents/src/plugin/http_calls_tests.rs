@@ -227,10 +227,9 @@ fn a_pack_cannot_declare_a_network_grant_the_host_cannot_serve() {
         );
         let error = plugin.validate().unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref()))
-                .contains("network grant the host cannot serve"),
+            format!("{}", ErrorChain(&error)).contains("network grant the host cannot serve"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
     plugin.manifold = Some(
@@ -666,7 +665,7 @@ impl crate::plugin::model_calls::ModelResolver for Endpoint {
     fn resolve<'a>(
         &'a self,
         _: &'a crate::plugin::model_calls::ModelBinding,
-    ) -> BoxFuture<'a, Result<crate::plugin::model_calls::ModelEndpoint>> {
+    ) -> BoxFuture<'a, anyhow::Result<crate::plugin::model_calls::ModelEndpoint>> {
         Box::pin(async {
             Ok(crate::plugin::model_calls::ModelEndpoint {
                 url: "http://127.0.0.1:9/v1/chat/completions".into(),

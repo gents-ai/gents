@@ -1,4 +1,72 @@
-use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, thiserror::Error)]
+pub enum MaterializeError {
+    #[error(transparent)]
+    Archive(#[from] crate::pack_archive::PackArchiveError),
+    #[error(transparent)]
+    Digest(#[from] crate::pack_archive::format::PackFormatError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("asset parent")]
+    AssetParent,
+    #[error("asset path escapes the pack cache root {}", root.display())]
+    EscapesRoot {
+        root: PathBuf,
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+    #[error("installed asset was modified: {}", path.display())]
+    AssetModified { path: PathBuf },
+    #[error("pack cache component {} is a symlink", path.display())]
+    ComponentSymlink { path: PathBuf },
+    #[error("creating pack cache dir {}", path.display())]
+    CreateCacheDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting pack cache root {}", path.display())]
+    InspectRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("pack cache root {} is a symlink; remove it or choose a different cache root", path.display())]
+    RootSymlink { path: PathBuf },
+    #[error("pack cache root {} exists and is not a directory; remove it or choose a different cache root", path.display())]
+    RootNotDirectory { path: PathBuf },
+    #[error("creating pack cache root {}", path.display())]
+    CreateRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("opening {}", path.display())]
+    Open {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("installed asset {} is not a regular file", path.display())]
+    NotRegularFile { path: PathBuf },
+    #[error("invalid pack coordinate {namespace}/{name}")]
+    InvalidCoordinate { namespace: String, name: String },
+    #[error("pack cache parent")]
+    CacheParent,
+    #[error("pack cache is in use; stop active pack operations and retry")]
+    CacheInUse,
+    #[error("locking pack cache")]
+    LockCache(#[source] std::io::Error),
+    #[error("removing {}", path.display())]
+    RemoveCacheRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+type Result<T, E = MaterializeError> = std::result::Result<T, E>;
 
 /// Writes each declared file of `pack` into `root`.
 ///
@@ -15,18 +83,21 @@ use anyhow::{Context, Result};
 ///
 /// The caller holds `FileLock::shared(cache_lock(root.parent()))` so prune and
 /// remove cannot delete `root` mid-write.
-pub fn materialize(pack: &crate::pack_archive::PackArchive, root: &std::path::Path) -> Result<()> {
+pub fn materialize(pack: &crate::pack_archive::PackArchive, root: &Path) -> Result<()> {
     use std::io::Write;
     for path in std::iter::once("manifest.json")
         .chain(pack.manifest().metadata.assets.iter().map(String::as_str))
     {
         let destination = root.join(path);
-        confined_create_dir_all(root, destination.parent().context("asset parent")?)?;
+        confined_create_dir_all(
+            root,
+            destination.parent().ok_or(MaterializeError::AssetParent)?,
+        )?;
         let bytes = pack.asset(path)?;
         // Stage beside the destination and publish without replacing it. Readers
         // never see a partial body, and an interrupted staging write cannot
         // poison the digest-addressed destination or overwrite operator edits.
-        let parent = destination.parent().context("asset parent")?;
+        let parent = destination.parent().ok_or(MaterializeError::AssetParent)?;
         let mut staged = tempfile::Builder::new()
             .prefix(".staging-")
             .tempfile_in(parent)?;
@@ -45,11 +116,9 @@ pub fn materialize(pack: &crate::pack_archive::PackArchive, root: &std::path::Pa
                 let file = no_follow_open(&destination)?;
                 let mut mapped = Vec::new();
                 std::io::Read::read_to_end(&mut &file, &mut mapped)?;
-                anyhow::ensure!(
-                    mapped == bytes,
-                    "installed asset was modified: {}",
-                    destination.display()
-                );
+                if mapped != bytes {
+                    return Err(MaterializeError::AssetModified { path: destination });
+                }
                 set_distribution_permissions(&file)?;
             }
             Err(error) => return Err(error.error.into()),
@@ -65,10 +134,13 @@ pub fn materialize(pack: &crate::pack_archive::PackArchive, root: &std::path::Pa
 /// premise (see `materialize`), and a component accepted here can still be
 /// swapped before a later use, so this is creation-time symlink refusal, not
 /// TOCTOU closure.
-fn confined_create_dir_all(root: &std::path::Path, dir: &std::path::Path) -> Result<()> {
+fn confined_create_dir_all(root: &Path, dir: &Path) -> Result<()> {
     let relative = dir
         .strip_prefix(root)
-        .with_context(|| format!("asset path escapes the pack cache root {}", root.display()))?;
+        .map_err(|source| MaterializeError::EscapesRoot {
+            root: root.to_path_buf(),
+            source,
+        })?;
     ensure_root_dir(root)?;
     let mut current = root.to_path_buf();
     for component in relative.components() {
@@ -76,17 +148,18 @@ fn confined_create_dir_all(root: &std::path::Path, dir: &std::path::Path) -> Res
         match std::fs::create_dir(&current) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                anyhow::ensure!(
-                    !std::fs::symlink_metadata(&current)?
-                        .file_type()
-                        .is_symlink(),
-                    "pack cache component {} is a symlink",
-                    current.display()
-                );
+                if std::fs::symlink_metadata(&current)?
+                    .file_type()
+                    .is_symlink()
+                {
+                    return Err(MaterializeError::ComponentSymlink { path: current });
+                }
             }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("creating pack cache dir {}", current.display()))
+            Err(source) => {
+                return Err(MaterializeError::CreateCacheDir {
+                    path: current,
+                    source,
+                })
             }
         }
     }
@@ -100,32 +173,37 @@ fn confined_create_dir_all(root: &std::path::Path, dir: &std::path::Path) -> Res
 /// which are trusted by premise (see `materialize`). No directory mode is
 /// guaranteed here — the umask decides. `root`'s parent is pre-created by
 /// `cached`.
-fn ensure_root_dir(root: &std::path::Path) -> Result<()> {
+fn ensure_root_dir(root: &Path) -> Result<()> {
     match std::fs::create_dir(root) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata = std::fs::symlink_metadata(root)
-                .with_context(|| format!("inspecting pack cache root {}", root.display()))?;
-            anyhow::ensure!(
-                !metadata.file_type().is_symlink(),
-                "pack cache root {} is a symlink; remove it or choose a different cache root",
-                root.display()
-            );
-            anyhow::ensure!(
-                metadata.is_dir(),
-                "pack cache root {} exists and is not a directory; remove it or choose a different cache root",
-                root.display()
-            );
+            let metadata = std::fs::symlink_metadata(root).map_err(|source| {
+                MaterializeError::InspectRoot {
+                    path: root.to_path_buf(),
+                    source,
+                }
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(MaterializeError::RootSymlink {
+                    path: root.to_path_buf(),
+                });
+            }
+            if !metadata.is_dir() {
+                return Err(MaterializeError::RootNotDirectory {
+                    path: root.to_path_buf(),
+                });
+            }
             Ok(())
         }
-        Err(error) => {
-            Err(error).with_context(|| format!("creating pack cache root {}", root.display()))
-        }
+        Err(source) => Err(MaterializeError::CreateRoot {
+            path: root.to_path_buf(),
+            source,
+        }),
     }
 }
 
 /// Opens `path` without following a final symlink (O_NOFOLLOW on unix).
-fn no_follow_open(path: &std::path::Path) -> Result<std::fs::File> {
+fn no_follow_open(path: &Path) -> Result<std::fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -133,18 +211,27 @@ fn no_follow_open(path: &std::path::Path) -> Result<std::fs::File> {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)
-            .with_context(|| format!("opening {}", path.display()))
+            .map_err(|source| MaterializeError::Open {
+                path: path.to_path_buf(),
+                source,
+            })
     }
     #[cfg(not(unix))]
     {
-        let metadata = std::fs::symlink_metadata(path)
-            .with_context(|| format!("opening {}", path.display()))?;
-        anyhow::ensure!(
-            metadata.file_type().is_file(),
-            "installed asset {} is not a regular file",
-            path.display()
-        );
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))
+        let metadata =
+            std::fs::symlink_metadata(path).map_err(|source| MaterializeError::Open {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if !metadata.file_type().is_file() {
+            return Err(MaterializeError::NotRegularFile {
+                path: path.to_path_buf(),
+            });
+        }
+        std::fs::File::open(path).map_err(|source| MaterializeError::Open {
+            path: path.to_path_buf(),
+            source,
+        })
     }
 }
 
@@ -160,16 +247,13 @@ pub fn set_distribution_permissions(
     Ok(())
 }
 
-pub fn cache_root(
-    home: &std::path::Path,
-    namespace: &str,
-    name: &str,
-    digest: &str,
-) -> Result<std::path::PathBuf> {
-    anyhow::ensure!(
-        super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name),
-        "invalid pack coordinate {namespace}/{name}"
-    );
+pub fn cache_root(home: &Path, namespace: &str, name: &str, digest: &str) -> Result<PathBuf> {
+    if !(super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name)) {
+        return Err(MaterializeError::InvalidCoordinate {
+            namespace: namespace.to_owned(),
+            name: name.to_owned(),
+        });
+    }
     Ok(home
         .join(crate::home::PACKS_DIR_NAME)
         .join(".materialized")
@@ -179,16 +263,16 @@ pub fn cache_root(
 }
 
 pub fn cached(
-    home: &std::path::Path,
+    home: &Path,
     pack: &crate::pack_archive::PackArchive,
-) -> Result<(std::path::PathBuf, crate::file_lock::FileLock)> {
+) -> Result<(PathBuf, crate::file_lock::FileLock)> {
     let root = cache_root(
         home,
         &pack.manifest().metadata.namespace,
         &pack.manifest().name,
         pack.digest(),
     )?;
-    let parent = root.parent().context("pack cache parent")?;
+    let parent = root.parent().ok_or(MaterializeError::CacheParent)?;
     std::fs::create_dir_all(parent)?;
     let lock = crate::file_lock::FileLock::shared(
         std::fs::OpenOptions::new()
@@ -214,7 +298,7 @@ const CACHE_MARKER: &str = ".gents-pack-cache-v1";
 const CACHE_LOCK: &str = ".cache.lock";
 
 /// The caller holds `FileLock::shared(cache_lock(root.parent()))`.
-pub fn write_cache_marker(root: &std::path::Path) -> Result<()> {
+pub fn write_cache_marker(root: &Path) -> Result<()> {
     let marker = root.join(CACHE_MARKER);
     if marker.exists() {
         return Ok(());
@@ -228,7 +312,7 @@ pub fn write_cache_marker(root: &std::path::Path) -> Result<()> {
     }
 }
 
-pub fn cache_lock(parent: &std::path::Path) -> Result<std::fs::File> {
+pub fn cache_lock(parent: &Path) -> Result<std::fs::File> {
     std::fs::create_dir_all(parent)?;
     Ok(std::fs::OpenOptions::new()
         .read(true)
@@ -240,10 +324,7 @@ pub fn cache_lock(parent: &std::path::Path) -> Result<std::fs::File> {
 
 /// The caller holds [`lock_exclusive`] on `parent`, so no scenario can acquire
 /// or use a sibling cache root while the probe and removal occur.
-pub fn prune_stale_asset_cache(
-    parent: &std::path::Path,
-    current: &std::path::Path,
-) -> Result<Vec<String>> {
+pub fn prune_stale_asset_cache(parent: &Path, current: &Path) -> anyhow::Result<Vec<String>> {
     let mut removed = Vec::new();
     for entry in std::fs::read_dir(parent)? {
         let entry = entry?;
@@ -265,13 +346,11 @@ pub fn prune_stale_asset_cache(
     Ok(removed)
 }
 
-pub fn lock_exclusive(parent: &std::path::Path) -> Result<crate::file_lock::FileLock> {
+pub fn lock_exclusive(parent: &Path) -> Result<crate::file_lock::FileLock> {
     match crate::file_lock::FileLock::try_exclusive(cache_lock(parent)?) {
         Ok(lock) => Ok(lock),
-        Err(std::fs::TryLockError::WouldBlock) => {
-            anyhow::bail!("pack cache is in use; stop active pack operations and retry")
-        }
-        Err(std::fs::TryLockError::Error(error)) => Err(error).context("locking pack cache"),
+        Err(std::fs::TryLockError::WouldBlock) => Err(MaterializeError::CacheInUse),
+        Err(std::fs::TryLockError::Error(error)) => Err(MaterializeError::LockCache(error)),
     }
 }
 
@@ -282,13 +361,15 @@ pub enum CacheRelease {
 
 /// The caller holds [`lock_exclusive`] on `root.parent()`.
 fn release_cache_root(
-    root: &std::path::Path,
-    check_owner: impl FnOnce() -> Result<()>,
-) -> Result<CacheRelease> {
+    root: &Path,
+    check_owner: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<CacheRelease> {
     match cache_root_disposition(root, check_owner)? {
         CacheRelease::Removed => {
-            std::fs::remove_dir_all(root)
-                .with_context(|| format!("removing {}", root.display()))?;
+            std::fs::remove_dir_all(root).map_err(|source| MaterializeError::RemoveCacheRoot {
+                path: root.to_path_buf(),
+                source,
+            })?;
             Ok(CacheRelease::Removed)
         }
         retained => Ok(retained),
@@ -296,9 +377,9 @@ fn release_cache_root(
 }
 
 pub fn cache_root_disposition(
-    root: &std::path::Path,
-    check_owner: impl FnOnce() -> Result<()>,
-) -> Result<CacheRelease> {
+    root: &Path,
+    check_owner: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<CacheRelease> {
     if !root.is_dir() {
         return Ok(CacheRelease::Retained("already absent"));
     }

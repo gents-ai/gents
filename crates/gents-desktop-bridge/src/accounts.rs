@@ -318,7 +318,7 @@ pub(crate) async fn upsert_through(
                 target: LOG_TARGET,
                 node_did = %stored.node_did,
                 provider = %stored.provider,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "labelling the added account failed; it keeps its default label"
             ),
         }

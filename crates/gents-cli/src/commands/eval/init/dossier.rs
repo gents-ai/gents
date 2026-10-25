@@ -59,7 +59,8 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
             .get(path)
             .with_context(|| format!("pack has no asset {path:?}"))
     };
-    let pack_digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
+    let pack_digest =
+        digest_declared_assets(&manifest, |path| asset(path).ok().map(Vec::as_slice))?;
     let config_path = manifest.config.clone().unwrap_or_default();
 
     let read = RefCell::new(BTreeSet::new());

@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_admission::RequestAdmissionError;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -135,6 +134,51 @@ pub enum OverlayError {
     Binding(#[from] BindingError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    ToolPolicy(#[from] gents_loop::tool_policy::ToolPolicyError),
+    #[error(transparent)]
+    RootAdmission(#[from] crate::tool_surface::RootAdmissionError),
+    #[error(transparent)]
+    Adapter(#[from] super::adapter::AdapterError),
+    #[error(transparent)]
+    Artifact(#[from] super::artifact::ArtifactError),
+    #[error(transparent)]
+    Runtime(Box<super::runtime::WorkspaceRuntimeError>),
+    #[error("artifact workspace requires a seal")]
+    ArtifactRequiresSeal,
+    #[error("sealed writer lacks workspace")]
+    SealedWriterLacksWorkspace,
+    #[error("sealed writer workspace placement missing")]
+    SealedWriterPlacementMissing,
+    #[error("artifact_write requires an enforceable artifact sandbox on this host")]
+    ArtifactSandboxRequired,
+    #[error("artifact_write requires a sealed ReadOnly workspace binding")]
+    ArtifactRequiresSealedReadOnly,
+    #[error("resolve invocation cwd")]
+    ResolveInvocationCwd {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invocation cwd is not a directory")]
+    InvocationCwdNotDirectory,
+    #[error("workspace-bound request {workspace_id} is missing workspace_authority")]
+    MissingWorkspaceAuthority { workspace_id: String },
+    #[error("isolated workspace {workspace_id} not found")]
+    IsolatedWorkspaceNotFound { workspace_id: String },
+    #[error("workspace placement for {workspace_id} not found on this node")]
+    PlacementNotFound { workspace_id: String },
+    #[error("canonicalizing request cwd {}", path.display())]
+    CanonicalizeRequestCwd {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("request cwd {} is not a directory", path.display())]
+    RequestCwdNotDirectory { path: PathBuf },
+    #[error("request cwd {} is not under workspace root {}", cwd.display(), root.display())]
+    RequestCwdOutsideRoot { cwd: PathBuf, root: PathBuf },
+    #[error("workspace placement {} escapes operator tool root {}", path.display(), ceiling.display())]
+    PlacementEscapesToolRoot { path: PathBuf, ceiling: PathBuf },
 }
 
 type Result<T, E = OverlayError> = std::result::Result<T, E>;
@@ -250,7 +294,7 @@ pub(crate) async fn resolve_request_workspace_overlay(
     execution_generation: &str,
     artifact_requested: bool,
     operator_tool_root: Option<&Path>,
-) -> anyhow::Result<Option<WorkspaceOverlay>> {
+) -> Result<Option<WorkspaceOverlay>> {
     resolve_request_workspace_overlay_on_host(
         node,
         request,
@@ -269,7 +313,7 @@ async fn resolve_request_workspace_overlay_on_host(
     artifact_requested: bool,
     operator_tool_root: Option<&Path>,
     sandbox_enforced: bool,
-) -> anyhow::Result<Option<WorkspaceOverlay>> {
+) -> Result<Option<WorkspaceOverlay>> {
     let Some((workspace, mut overlay)) = load_request_workspace_overlay(
         node,
         request,
@@ -300,7 +344,7 @@ async fn resolve_request_workspace_overlay_on_host(
                 workspace
                     .seal_hash
                     .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("artifact workspace requires a seal"))?,
+                    .ok_or(OverlayError::ArtifactRequiresSeal)?,
             )
             .await?,
         );
@@ -312,17 +356,20 @@ pub(crate) async fn validate_request_workspace_input(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
     artifact_requested: bool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let operator_root = process_operator_tool_root();
-    if super::runtime::writer_request_already_sealed(node, request).await? {
+    if super::runtime::writer_request_already_sealed(node, request)
+        .await
+        .map_err(|error| OverlayError::Runtime(Box::new(error)))?
+    {
         let workspace_id = request
             .workspace_id
             .as_deref()
-            .context("sealed writer lacks workspace")?;
+            .ok_or(OverlayError::SealedWriterLacksWorkspace)?;
         let placement =
             load_workspace_placement(node, workspace_id, request_workspace_owner(request)?)
                 .await?
-                .context("sealed writer workspace placement missing")?;
+                .ok_or(OverlayError::SealedWriterPlacementMissing)?;
         let root = canonicalize_placement_path(&placement.host_path)?;
         require_under_ceiling(&root, operator_root.as_deref())?;
         resolve_bound_cwd(&root, request_workspace_cwd(request).as_deref())?;
@@ -345,36 +392,45 @@ async fn load_request_workspace_overlay(
     artifact_requested: bool,
     operator_tool_root: Option<&Path>,
     sandbox_enforced: bool,
-) -> anyhow::Result<Option<(IsolatedWorkspaceRecord, WorkspaceOverlay)>> {
+) -> Result<Option<(IsolatedWorkspaceRecord, WorkspaceOverlay)>> {
     if artifact_requested && !sandbox_enforced {
-        anyhow::bail!("artifact_write requires an enforceable artifact sandbox on this host");
+        return Err(OverlayError::ArtifactSandboxRequired);
     }
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
         if artifact_requested {
-            anyhow::bail!("artifact_write requires a sealed ReadOnly workspace binding");
+            return Err(OverlayError::ArtifactRequiresSealedReadOnly);
         }
         if let Some(cwd) = request_workspace_cwd(request) {
-            let cwd = std::fs::canonicalize(&cwd).context("resolve invocation cwd")?;
-            anyhow::ensure!(cwd.is_dir(), "invocation cwd is not a directory");
+            let cwd = std::fs::canonicalize(&cwd)
+                .map_err(|source| OverlayError::ResolveInvocationCwd { source })?;
+            if !cwd.is_dir() {
+                return Err(OverlayError::InvocationCwdNotDirectory);
+            }
             require_under_ceiling(&cwd, operator_tool_root)?;
         }
         return Ok(None);
     };
     let authority = match request.workspace_authority.as_deref().map(str::trim) {
         Some(value) if !value.is_empty() => WorkspaceAuthority::parse(value)?,
-        _ => anyhow::bail!("workspace-bound request {workspace_id} is missing workspace_authority"),
+        _ => {
+            return Err(OverlayError::MissingWorkspaceAuthority {
+                workspace_id: workspace_id.to_owned(),
+            })
+        }
     };
 
     let workspace =
         load_isolated_workspace_record(node, workspace_id, request_workspace_owner(request)?)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+            .ok_or_else(|| OverlayError::IsolatedWorkspaceNotFound {
+                workspace_id: workspace_id.to_owned(),
+            })?;
     require_workspace_principal(&workspace, &request.node_did, authority)?;
     let node_did = request_workspace_owner(request)?;
     let placement = load_workspace_placement(node, workspace_id, node_did)
         .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!("workspace placement for {workspace_id} not found on this node")
+        .ok_or_else(|| OverlayError::PlacementNotFound {
+            workspace_id: workspace_id.to_owned(),
         })?;
     let request_cwd = request_workspace_cwd(request);
     let sealed = crate::toolset::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
@@ -382,7 +438,7 @@ async fn load_request_workspace_overlay(
     // Reject before binding or provider dispatch: a missing grant must never
     // let an artifact-selected request fall through legacy CLI/LSP paths.
     if artifact_requested && (!sealed || authority != WorkspaceAuthority::ReadOnly) {
-        anyhow::bail!("artifact_write requires a sealed ReadOnly workspace binding");
+        return Err(OverlayError::ArtifactRequiresSealedReadOnly);
     }
     let live_tree_hash = if sealed {
         Some(super::adapter::working_tree_hash(Path::new(&placement.host_path)).await?)
@@ -494,7 +550,7 @@ pub(crate) fn bind_workspace_overlay(
     workspace: &IsolatedWorkspaceRecord,
     placement: &WorkspacePlacementRecord,
     input: WorkspaceBindInput<'_>,
-) -> anyhow::Result<WorkspaceOverlay> {
+) -> Result<WorkspaceOverlay> {
     validate_bound_workspace(workspace, placement, &input)?;
 
     let root = canonicalize_placement_path(&placement.host_path)?;
@@ -511,24 +567,27 @@ pub(crate) fn bind_workspace_overlay(
     })
 }
 
-fn resolve_bound_cwd(root: &Path, cwd: Option<&Path>) -> anyhow::Result<PathBuf> {
+fn resolve_bound_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf> {
     let Some(cwd) = cwd else {
         return Ok(root.to_path_buf());
     };
-    let canonical = std::fs::canonicalize(cwd)
-        .with_context(|| format!("canonicalizing request cwd {}", cwd.display()))?;
-    anyhow::ensure!(
-        canonical.is_dir(),
-        "request cwd {} is not a directory",
-        canonical.display()
-    );
+    let canonical =
+        std::fs::canonicalize(cwd).map_err(|source| OverlayError::CanonicalizeRequestCwd {
+            path: cwd.to_path_buf(),
+            source,
+        })?;
+    if !canonical.is_dir() {
+        return Err(OverlayError::RequestCwdNotDirectory {
+            path: canonical.clone(),
+        });
+    }
     let admission = crate::tool_surface::resolve_admitted_tool_root(&canonical, [root])?;
-    anyhow::ensure!(
-        admission.admitted().is_some(),
-        "request cwd {} is not under workspace root {}",
-        canonical.display(),
-        root.display()
-    );
+    if admission.admitted().is_none() {
+        return Err(OverlayError::RequestCwdOutsideRoot {
+            cwd: canonical.clone(),
+            root: root.to_path_buf(),
+        });
+    }
     Ok(canonical)
 }
 
@@ -550,21 +609,17 @@ fn canonicalize_placement_path(host_path: &str) -> Result<PathBuf> {
     })
 }
 
-pub(crate) fn require_under_ceiling(
-    path: &Path,
-    operator_tool_root: Option<&Path>,
-) -> anyhow::Result<()> {
+pub(crate) fn require_under_ceiling(path: &Path, operator_tool_root: Option<&Path>) -> Result<()> {
     let operator = operator_tool_root
         .map(resolve_configured_tool_root)
         .transpose()?;
     if let Some(ceiling) = operator.as_deref() {
         let admission = crate::tool_surface::resolve_admitted_tool_root(path, [ceiling])?;
         if admission.admitted().is_none() {
-            anyhow::bail!(
-                "workspace placement {} escapes operator tool root {}",
-                path.display(),
-                ceiling.display()
-            );
+            return Err(OverlayError::PlacementEscapesToolRoot {
+                path: path.to_path_buf(),
+                ceiling: ceiling.to_path_buf(),
+            });
         }
     }
     Ok(())

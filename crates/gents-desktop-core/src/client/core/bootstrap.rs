@@ -105,10 +105,7 @@ impl ClientCore {
             gents::migration::ensure_all_runtime_migrations(node.clone())
                 .await
                 .map_err(|error| {
-                    gents::storage_backend::classify_store_error(
-                        error.into(),
-                        paths.node_data_dir(),
-                    )
+                    gents::storage_backend::classify_store_error(error, paths.node_data_dir())
                 })?;
             checkpoint("runtime_schemas");
 

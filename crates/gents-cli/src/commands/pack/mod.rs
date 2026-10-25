@@ -205,10 +205,8 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn local_pack_source(dir: &Path, home: &Path) -> super::PackSource {
-        let archive =
-            super::local::open(&super::local::LocalName::Path(dir), home).unwrap_or_else(|error| {
-                panic!("opening {}: {}", dir.display(), ErrorChain(error.as_ref()))
-            });
+        let archive = super::local::open(&super::local::LocalName::Path(dir), home)
+            .unwrap_or_else(|error| panic!("opening {}: {}", dir.display(), ErrorChain(&error)));
         super::PackSource {
             archive,
             from: super::Source::Local,
@@ -322,7 +320,7 @@ fn materialize_cached_pack(
     home: &std::path::Path,
     pack: &PackSource,
 ) -> Result<(std::path::PathBuf, gents::file_lock::FileLock)> {
-    gents::pack::materialize::cached(home, &pack.archive)
+    Ok(gents::pack::materialize::cached(home, &pack.archive)?)
 }
 
 pub(crate) struct SubjectPack {
@@ -418,12 +416,12 @@ fn names_a_directory(spec: &str) -> bool {
 }
 
 fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::path::PathBuf> {
-    gents::pack::materialize::cache_root(
+    Ok(gents::pack::materialize::cache_root(
         home,
         &pack.manifest().metadata.namespace,
         &pack.manifest().name,
         pack.digest(),
-    )
+    )?)
 }
 
 /// An uninitialized home has no node, so no runtime to wake: the next start

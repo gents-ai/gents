@@ -295,15 +295,12 @@ pub(crate) mod test_support {
         tempfile::TempDir,
         std::sync::Arc<crate::plugin::executor::PluginExecutor>,
     ) {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap_or_else(|error| {
-            panic!("packing {}: {}", dir.display(), ErrorChain(error.as_ref()))
-        });
+        let (bytes, _) = crate::pack_archive::pack_dir(dir)
+            .unwrap_or_else(|error| panic!("packing {}: {}", dir.display(), ErrorChain(&error)));
         let home = tempfile::tempdir().expect("home");
         crate::pack_store::PackStore::new(home.path())
             .import(&bytes[..], None)
-            .unwrap_or_else(|error| {
-                panic!("storing {}: {}", dir.display(), ErrorChain(error.as_ref()))
-            });
+            .unwrap_or_else(|error| panic!("storing {}: {}", dir.display(), ErrorChain(&error)));
         let plugins = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
             home.path().to_path_buf(),
         )));
@@ -326,9 +323,8 @@ pub(crate) mod test_support {
             node_did: options.node_did.clone(),
         };
         let (_guard, dir) = fixture_pack_copy(name, plugin_output);
-        let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap_or_else(|error| {
-            panic!("packing fixture {name:?}: {}", ErrorChain(error.as_ref()))
-        });
+        let (bytes, _) = crate::pack_archive::pack_dir(&dir)
+            .unwrap_or_else(|error| panic!("packing fixture {name:?}: {}", ErrorChain(&error)));
         let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
         crate::graph_package::load_archive_graph_package_with_environment(
             &archive,

@@ -129,6 +129,18 @@ pub enum IdentityError {
     },
     #[error("no DefraDB signing identity registered for DID {did}")]
     NoDefraSigningIdentity { did: String },
+    #[error("loading node identity for {did}")]
+    LoadNodeIdentity {
+        did: String,
+        #[source]
+        source: identity::Error,
+    },
+    #[error("signing payload as {did}")]
+    SignPayloadAs {
+        did: String,
+        #[source]
+        source: crypto::Error,
+    },
     #[error("macos-secure-enclave identity backend is only available on macOS")]
     SecureEnclaveUnavailable,
     #[error("macos-keychain identity backend is only available on macOS")]
@@ -282,9 +294,9 @@ impl std::fmt::Debug for RuntimeNode {
 pub trait NodeIdentity: Send + Sync {
     fn did(&self) -> &str;
 
-    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>>;
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>>;
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool>;
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool>;
 
     fn service_account(&self) -> Option<&ServiceAccount>;
 }
@@ -445,7 +457,7 @@ impl NodeIdentity for KeyIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
         Ok(self
             .identity
             .sign(payload)
@@ -455,7 +467,7 @@ impl NodeIdentity for KeyIdentity {
             })?)
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool> {
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
         let public_key = if did == self.did {
             KnownPublicKey {
                 key_type: self.identity.key_type(),
@@ -549,7 +561,7 @@ impl NodeIdentity for RegisteredIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
         if let Some(signer) = self.config.remote_signer.clone() {
             let payload = payload.to_vec();
             let authorization = self.config.signing_authorization.clone();
@@ -574,7 +586,7 @@ impl NodeIdentity for RegisteredIdentity {
             })?)
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool> {
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
         let public_key = if did == self.did {
             KnownPublicKey {
                 key_type: signing_key_type_to_crypto_key_type(self.config.key_type)?,

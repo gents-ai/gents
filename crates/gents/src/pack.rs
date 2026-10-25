@@ -538,190 +538,188 @@ pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
 ];
 
 impl PackPlugin {
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> Result<(), PackError> {
         if let Some(service) = &self.service {
-            anyhow::ensure!(
-                crate::plugin::authority::declared_manifold(self)?.child_process,
-                "plugin service requires child_process authority"
-            );
-            anyhow::ensure!(
-                !service.argv.is_empty()
-                    && service.argv.iter().all(|arg| !arg.contains('\0'))
-                    && !service.argv[0].is_empty(),
-                "plugin service needs a nonempty argv without NUL bytes"
-            );
-            anyhow::ensure!(
-                (1..=300).contains(&service.startup_timeout_secs),
-                "service startup_timeout_secs must be 1..300"
-            );
-            anyhow::ensure!(
-                self.input_schema["properties"].get("service").is_none(),
-                "service is a reserved host-filled plugin input"
-            );
+            if !crate::plugin::authority::declared_manifold(self)?.child_process {
+                return Err(PackError::ServiceChildProcess);
+            }
+            if service.argv.is_empty()
+                || service.argv.iter().any(|arg| arg.contains('\0'))
+                || service.argv[0].is_empty()
+            {
+                return Err(PackError::ServiceArgv);
+            }
+            if !(1..=300).contains(&service.startup_timeout_secs) {
+                return Err(PackError::ServiceStartupTimeout);
+            }
+            if self.input_schema["properties"].get("service").is_some() {
+                return Err(PackError::ServiceReservedInput);
+            }
         }
-        anyhow::ensure!(
-            is_valid_pack_name(&self.name),
-            "plugin name must be snake_case: {:?}",
-            self.name
-        );
-        anyhow::ensure!(
-            !self.description.trim().is_empty(),
-            "plugin {:?} needs a description; it is what the model is shown",
-            self.name
-        );
-        anyhow::ensure!(
-            self.artifact.ends_with(".afb"),
-            "plugin {:?} artifact must be a compiled .afb path, got {:?}",
-            self.name,
-            self.artifact
-        );
-        anyhow::ensure!(
-            is_distributable_asset_path(&self.artifact),
-            "unsafe plugin artifact path: {:?}",
-            self.artifact
-        );
-        anyhow::ensure!(
-            self.artifact.starts_with(PLUGIN_ARTIFACT_PREFIX),
-            "plugin {:?} artifact must live under {PLUGIN_ARTIFACT_PREFIX}, got {:?}",
-            self.name,
-            self.artifact
-        );
+        if !is_valid_pack_name(&self.name) {
+            return Err(PackError::PluginName {
+                name: self.name.clone(),
+            });
+        }
+        if self.description.trim().is_empty() {
+            return Err(PackError::PluginDescription {
+                name: self.name.clone(),
+            });
+        }
+        if !self.artifact.ends_with(".afb") {
+            return Err(PackError::PluginArtifactExtension {
+                name: self.name.clone(),
+                artifact: self.artifact.clone(),
+            });
+        }
+        if !is_distributable_asset_path(&self.artifact) {
+            return Err(PackError::PluginArtifactPath {
+                artifact: self.artifact.clone(),
+            });
+        }
+        if !self.artifact.starts_with(PLUGIN_ARTIFACT_PREFIX) {
+            return Err(PackError::PluginArtifactPrefix {
+                name: self.name.clone(),
+                artifact: self.artifact.clone(),
+            });
+        }
         let language = self.language.trim().to_ascii_lowercase();
-        anyhow::ensure!(
-            SUPPORTED_PLUGIN_LANGUAGES.contains(&language.as_str()),
-            "plugin {:?} declares language {:?}, which is not one gents pack build knows how to \
-             compile; supported languages: {}",
-            self.name,
-            self.language,
-            SUPPORTED_PLUGIN_LANGUAGES.join(", ")
-        );
+        if !SUPPORTED_PLUGIN_LANGUAGES.contains(&language.as_str()) {
+            return Err(PackError::PluginLanguage {
+                name: self.name.clone(),
+                language: self.language.clone(),
+            });
+        }
         if let Some(source) = &self.source {
-            anyhow::ensure!(
-                is_distributable_asset_path(source),
-                "unsafe plugin source path: {source:?}"
-            );
+            if !is_distributable_asset_path(source) {
+                return Err(PackError::PluginSourcePath {
+                    path: source.clone(),
+                });
+            }
         }
         if let Some(instructions) = &self.instructions {
-            anyhow::ensure!(
-                *instructions == format!("{PLUGIN_ARTIFACT_PREFIX}{}/TOOL.md", self.name),
-                "plugin {:?} instructions must be plugins/{}/TOOL.md, got {instructions:?}",
-                self.name,
-                self.name
-            );
+            if *instructions != format!("{PLUGIN_ARTIFACT_PREFIX}{}/TOOL.md", self.name) {
+                return Err(PackError::PluginInstructions {
+                    name: self.name.clone(),
+                    instructions: instructions.clone(),
+                });
+            }
         }
-        anyhow::ensure!(
-            self.input_schema.is_object(),
-            "plugin {:?} needs an object input_schema",
-            self.name
-        );
+        if !self.input_schema.is_object() {
+            return Err(PackError::PluginInputSchema {
+                name: self.name.clone(),
+            });
+        }
         if let Some(manifold) = &self.manifold {
             let listen = manifold.get("listen");
-            anyhow::ensure!(
-                listen.is_none_or(|value| value == "None" || value == &serde_json::json!("None")),
-                "plugin {:?} asks to listen on a port; a pack's plugins are called, not served",
-                self.name
-            );
+            if !listen.is_none_or(|value| value == "None" || value == &serde_json::json!("None")) {
+                return Err(PackError::PluginListen {
+                    name: self.name.clone(),
+                });
+            }
             crate::plugin::http_calls::validate_declared(
                 &crate::plugin::authority::declared_manifold(self)?,
             )
-            .map_err(|why| {
-                anyhow::anyhow!(
-                    "plugin {:?} declares a network grant the host cannot serve: {why}",
-                    self.name
-                )
+            .map_err(|why| PackError::PluginNetworkUnservable {
+                name: self.name.clone(),
+                why,
             })?;
         }
         if let Some(bind_dir) = &self.bind_dir {
-            anyhow::ensure!(
-                !bind_dir.input_field.trim().is_empty(),
-                "plugin {:?} bind_dir.input_field must not be blank",
-                self.name
-            );
-            anyhow::ensure!(
-                !bind_dir.description.trim().is_empty(),
-                "plugin {:?} bind_dir needs a description; it is what an operator is shown",
-                self.name
-            );
-            anyhow::ensure!(
-                schema_declares_string_property(&self.input_schema, &bind_dir.input_field),
-                "plugin {:?} bind_dir.input_field {:?} must be a string property of \
-                 input_schema, or of at least one oneOf branch, since call_bound always \
-                 injects a string",
-                self.name,
-                bind_dir.input_field
-            );
-            if let Some(original) = &bind_dir.original_field {
-                anyhow::ensure!(
-                    original != &bind_dir.input_field
-                        && schema_declares_string_property(&self.input_schema, original),
-                    "plugin {:?} bind_dir.original_field {:?} must be a string property of \
-                     input_schema other than input_field",
-                    self.name,
-                    original
-                );
+            if bind_dir.input_field.trim().is_empty() {
+                return Err(PackError::BindDirInputFieldBlank {
+                    name: self.name.clone(),
+                });
             }
-            anyhow::ensure!(
-                bind_dir.write_fields.is_empty() || bind_dir.access == BindAccess::ReadWrite,
-                "plugin {:?} declares bind_dir.write_fields but bind_dir.access is read; a \
-                 call that sets one would write, so declare access read_write",
-                self.name
-            );
+            if bind_dir.description.trim().is_empty() {
+                return Err(PackError::BindDirDescription {
+                    name: self.name.clone(),
+                });
+            }
+            if !schema_declares_string_property(&self.input_schema, &bind_dir.input_field) {
+                return Err(PackError::BindDirInputFieldType {
+                    name: self.name.clone(),
+                    input_field: bind_dir.input_field.clone(),
+                });
+            }
+            if let Some(original) = &bind_dir.original_field {
+                if original == &bind_dir.input_field
+                    || !schema_declares_string_property(&self.input_schema, original)
+                {
+                    return Err(PackError::BindDirOriginalField {
+                        name: self.name.clone(),
+                        original: original.clone(),
+                    });
+                }
+            }
+            if !(bind_dir.write_fields.is_empty() || bind_dir.access == BindAccess::ReadWrite) {
+                return Err(PackError::BindDirWriteFieldsReadOnly {
+                    name: self.name.clone(),
+                });
+            }
             for field in &bind_dir.write_fields {
-                anyhow::ensure!(
-                    field != &bind_dir.input_field
-                        && Some(field) != bind_dir.original_field.as_ref()
-                        && schema_declares_property(&self.input_schema, field, |_| true),
-                    "plugin {:?} bind_dir.write_fields names {field:?}, which must be a property \
-                     of input_schema other than the bound path fields",
-                    self.name
-                );
+                if !(field != &bind_dir.input_field
+                    && Some(field) != bind_dir.original_field.as_ref()
+                    && schema_declares_property(&self.input_schema, field, |_| true))
+                {
+                    return Err(PackError::BindDirWriteField {
+                        name: self.name.clone(),
+                        field: field.clone(),
+                    });
+                }
             }
             let declares_fs = !matches!(
                 crate::plugin::authority::declared_manifold(self)?.fs,
                 afterburner_core::manifold::FsAccess::None
             );
-            anyhow::ensure!(
-                !declares_fs,
-                "plugin {:?} declares both bind_dir and a manifold fs grant; a directory bound \
-                 per call and a standing filesystem grant cannot be expressed together",
-                self.name
-            );
+            if declares_fs {
+                return Err(PackError::BindDirWithFsGrant {
+                    name: self.name.clone(),
+                });
+            }
         }
         if let Some(limits) = &self.limits {
             if let Some(memory_mib) = limits.memory_mib {
-                anyhow::ensure!(
-                    (1..=crate::plugin::MAX_DECLARED_MEMORY_MIB).contains(&memory_mib),
-                    "plugin {:?} declares memory_mib {memory_mib}, but it {}",
-                    self.name,
-                    limit_range_reason(memory_mib, crate::plugin::MAX_DECLARED_MEMORY_MIB, "MiB")
-                );
+                if !(1..=crate::plugin::MAX_DECLARED_MEMORY_MIB).contains(&memory_mib) {
+                    return Err(PackError::MemoryMib {
+                        name: self.name.clone(),
+                        value: memory_mib,
+                        reason: limit_range_reason(
+                            memory_mib,
+                            crate::plugin::MAX_DECLARED_MEMORY_MIB,
+                            "MiB",
+                        ),
+                    });
+                }
             }
             if let Some(wall_clock_secs) = limits.wall_clock_secs {
-                anyhow::ensure!(
-                    (1..=crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS).contains(&wall_clock_secs),
-                    "plugin {:?} declares wall_clock_secs {wall_clock_secs}, but it {}",
-                    self.name,
-                    limit_range_reason(
-                        wall_clock_secs,
-                        crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS,
-                        "s"
-                    )
-                );
+                if !(1..=crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS).contains(&wall_clock_secs) {
+                    return Err(PackError::WallClockSecs {
+                        name: self.name.clone(),
+                        value: wall_clock_secs,
+                        reason: limit_range_reason(
+                            wall_clock_secs,
+                            crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS,
+                            "s",
+                        ),
+                    });
+                }
             }
             if let Some(max_output_mib) = limits.max_output_mib {
-                anyhow::ensure!(
-                    (1..=crate::plugin::MAX_DECLARED_OUTPUT_MIB).contains(&max_output_mib),
-                    "plugin {:?} declares max_output_mib {max_output_mib}, but it {}",
-                    self.name,
-                    limit_range_reason(
-                        max_output_mib,
-                        crate::plugin::MAX_DECLARED_OUTPUT_MIB,
-                        "MiB"
-                    )
-                );
+                if !(1..=crate::plugin::MAX_DECLARED_OUTPUT_MIB).contains(&max_output_mib) {
+                    return Err(PackError::MaxOutputMib {
+                        name: self.name.clone(),
+                        value: max_output_mib,
+                        reason: limit_range_reason(
+                            max_output_mib,
+                            crate::plugin::MAX_DECLARED_OUTPUT_MIB,
+                            "MiB",
+                        ),
+                    });
+                }
             }
         }
-        Ok(self.validate_job_manifest_fields()?)
+        self.validate_job_manifest_fields()
     }
 
     /// The static rules for the `data`, `asset_mounts` and `catalog` fields;
@@ -754,7 +752,7 @@ impl PackPlugin {
                     PackError::DataStampedFieldName {
                         name: name.clone(),
                         field: field.clone(),
-                        source,
+                        source: Box::new(source),
                     }
                 })?;
                 if crate::toolset::is_secret_env_name(field) {
@@ -881,119 +879,118 @@ pub(crate) fn open_pack_asset(
     asset_path::open_pack_asset(root, path)
 }
 
-pub fn validate_manifest(name: &str, manifest: &PackManifest) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        manifest.manifest_version == 1 && manifest.name == name,
-        "invalid pack identity/version"
-    );
+pub fn validate_manifest(name: &str, manifest: &PackManifest) -> Result<(), PackError> {
+    if manifest.manifest_version != 1 || manifest.name != name {
+        return Err(PackError::ManifestIdentity);
+    }
     validate_pack_manifest(manifest)
 }
 
-pub fn validate_pack_manifest(manifest: &PackManifest) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        manifest.manifest_version == 1,
-        "unsupported pack manifest version"
-    );
-    anyhow::ensure!(
-        manifest.metadata.kind == PackKind::Documents || manifest.metadata.dependencies.is_empty(),
-        "only document packs support package dependencies; nested dependencies are unsupported"
-    );
+pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<(), PackError> {
+    if manifest.manifest_version != 1 {
+        return Err(PackError::UnsupportedManifestVersion);
+    }
+    if manifest.metadata.kind != PackKind::Documents && !manifest.metadata.dependencies.is_empty() {
+        return Err(PackError::DependenciesKind);
+    }
     for dependency in &manifest.metadata.dependencies {
-        anyhow::ensure!(
-            !dependency.contains('@'),
-            "dependency {dependency:?} must be a coordinate (name or ns/name), not a pinned version"
-        );
+        if dependency.contains('@') {
+            return Err(PackError::DependencyPinned {
+                dependency: dependency.clone(),
+            });
+        }
         let (namespace, name) = dependency
             .split_once('/')
             .unwrap_or((crate::pack_archive::DEFAULT_NAMESPACE, dependency.as_str()));
-        anyhow::ensure!(
-            is_valid_pack_name(namespace) && is_valid_pack_name(name),
-            "dependency {dependency:?} is not a valid pack coordinate"
-        );
+        if !(is_valid_pack_name(namespace) && is_valid_pack_name(name)) {
+            return Err(PackError::DependencyCoordinate {
+                dependency: dependency.clone(),
+            });
+        }
     }
-    anyhow::ensure!(
-        !manifest.description.trim().is_empty() && !manifest.metadata.authors.is_empty(),
-        "pack needs description and authors"
-    );
-    anyhow::ensure!(
-        is_valid_pack_name(&manifest.name),
-        "pack name must be snake_case"
-    );
-    anyhow::ensure!(
-        is_valid_pack_name(&manifest.metadata.namespace),
-        "pack namespace must be snake_case: {:?}",
-        manifest.metadata.namespace
-    );
+    if manifest.description.trim().is_empty() || manifest.metadata.authors.is_empty() {
+        return Err(PackError::PackDescriptionAuthors);
+    }
+    if !is_valid_pack_name(&manifest.name) {
+        return Err(PackError::PackName);
+    }
+    if !is_valid_pack_name(&manifest.metadata.namespace) {
+        return Err(PackError::PackNamespace {
+            namespace: manifest.metadata.namespace.clone(),
+        });
+    }
     let mut unique = BTreeSet::new();
     for path in &manifest.metadata.assets {
-        anyhow::ensure!(
-            asset_path::is_distributable_asset(path),
-            "unsafe/private pack asset: {path}"
-        );
-        anyhow::ensure!(
-            asset_path::has_canonical_asset_spelling(path),
-            "non-canonical pack asset spelling: {path}"
-        );
-        anyhow::ensure!(unique.insert(path), "duplicate asset {path}");
+        if !asset_path::is_distributable_asset(path) {
+            return Err(PackError::AssetUnsafe { path: path.clone() });
+        }
+        if !asset_path::has_canonical_asset_spelling(path) {
+            return Err(PackError::AssetNonCanonical { path: path.clone() });
+        }
+        if !unique.insert(path) {
+            return Err(PackError::AssetDuplicate { path: path.clone() });
+        }
     }
-    anyhow::ensure!(
-        unique.contains(&"README.md".to_owned()),
-        "pack must declare README.md"
-    );
+    if !unique.contains(&"README.md".to_owned()) {
+        return Err(PackError::ReadmeMissing);
+    }
 
     let mut plugin_names = BTreeSet::new();
     for plugin in &manifest.metadata.plugins {
         plugin.validate()?;
-        anyhow::ensure!(
-            plugin_names.insert(plugin.name.as_str()),
-            "pack declares the plugin {:?} twice",
-            plugin.name
-        );
-        anyhow::ensure!(
-            unique.contains(&plugin.artifact),
-            "pack declares the plugin {:?} but not its artifact {:?} as an asset",
-            plugin.name,
-            plugin.artifact
-        );
+        if !plugin_names.insert(plugin.name.as_str()) {
+            return Err(PackError::PluginDuplicate {
+                name: plugin.name.clone(),
+            });
+        }
+        if !unique.contains(&plugin.artifact) {
+            return Err(PackError::PluginArtifactUndeclared {
+                name: plugin.name.clone(),
+                artifact: plugin.artifact.clone(),
+            });
+        }
         if let Some(instructions) = &plugin.instructions {
-            anyhow::ensure!(
-                unique.contains(instructions),
-                "pack declares the plugin {:?} but not its instructions {instructions:?} as an asset",
-                plugin.name
-            );
+            if !unique.contains(instructions) {
+                return Err(PackError::PluginInstructionsUndeclared {
+                    name: plugin.name.clone(),
+                    instructions: instructions.clone(),
+                });
+            }
         }
     }
-    anyhow::ensure!(
-        manifest.metadata.kind != PackKind::Plugins || !manifest.metadata.plugins.is_empty(),
-        "a plugins pack must declare at least one plugin"
-    );
+    if manifest.metadata.kind == PackKind::Plugins && manifest.metadata.plugins.is_empty() {
+        return Err(PackError::PluginsPackEmpty);
+    }
 
     // Only a pack that installs as a home file record (assets, plugins) is
     // scanned for UX plugins; a documents or graph pack installs into a
     // node, where its ux[] would never be listed.
-    anyhow::ensure!(
-        manifest.metadata.ux.is_empty()
-            || matches!(manifest.metadata.kind, PackKind::Assets | PackKind::Plugins),
-        "ux plugins ship in an assets or plugins pack; a {:?} pack is never listed for them",
-        manifest.metadata.kind
-    );
+    if !(manifest.metadata.ux.is_empty()
+        || matches!(manifest.metadata.kind, PackKind::Assets | PackKind::Plugins))
+    {
+        return Err(PackError::UxKindNotListed {
+            kind: manifest.metadata.kind.clone(),
+        });
+    }
     let mut ux_names = BTreeSet::new();
     for ux in &manifest.metadata.ux {
         ux.validate(&plugin_names)?;
-        anyhow::ensure!(
-            ux_names.insert(ux.name.as_str()),
-            "pack declares the ux plugin {:?} twice",
-            ux.name
-        );
+        if !ux_names.insert(ux.name.as_str()) {
+            return Err(PackError::UxDuplicate {
+                name: ux.name.clone(),
+            });
+        }
         // A UX plugin's files travel as declared assets like a plugin's
         // artifact, so the pack digest covers the code the webview runs.
         for (what, path) in [("entry", &ux.entry), ("css", &ux.css)] {
             if let Some(path) = path {
-                anyhow::ensure!(
-                    unique.contains(path),
-                    "pack declares the ux plugin {:?} but not its {what} {path:?} as an asset",
-                    ux.name
-                );
+                if !unique.contains(path) {
+                    return Err(PackError::UxAssetUndeclared {
+                        name: ux.name.clone(),
+                        what,
+                        path: path.clone(),
+                    });
+                }
             }
         }
     }
@@ -1001,65 +998,67 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> anyhow::Result<()> {
     let mut slot_names = BTreeSet::new();
     let mut slot_agents = BTreeSet::new();
     for slot in &manifest.metadata.inference_slots {
-        anyhow::ensure!(
-            is_valid_pack_name(&slot.name),
-            "inference slot name must be snake_case: {:?}",
-            slot.name
-        );
-        anyhow::ensure!(
-            slot_names.insert(slot.name.as_str()),
-            "pack declares inference slot {:?} twice",
-            slot.name
-        );
-        anyhow::ensure!(
-            !slot.description.trim().is_empty(),
-            "inference slot {:?} needs a description",
-            slot.name
-        );
-        anyhow::ensure!(
-            slot.optional == slot.agents.is_empty(),
-            "inference slot {:?} must name at least one agent, unless it is optional, and \
-             an optional slot names none",
-            slot.name
-        );
+        if !is_valid_pack_name(&slot.name) {
+            return Err(PackError::SlotName {
+                name: slot.name.clone(),
+            });
+        }
+        if !slot_names.insert(slot.name.as_str()) {
+            return Err(PackError::SlotDuplicate {
+                name: slot.name.clone(),
+            });
+        }
+        if slot.description.trim().is_empty() {
+            return Err(PackError::SlotDescription {
+                name: slot.name.clone(),
+            });
+        }
+        if slot.optional != slot.agents.is_empty() {
+            return Err(PackError::SlotAgentsMismatch {
+                name: slot.name.clone(),
+            });
+        }
         let mut local = BTreeSet::new();
         for agent in &slot.agents {
-            anyhow::ensure!(
-                !agent.trim().is_empty() && local.insert(agent.as_str()),
-                "inference slot {:?} repeats or has a blank agent",
-                slot.name
-            );
-            anyhow::ensure!(
-                slot_agents.insert(agent.as_str()),
-                "agent {agent:?} belongs to more than one inference slot"
-            );
+            if !(!agent.trim().is_empty() && local.insert(agent.as_str())) {
+                return Err(PackError::SlotAgentRepeated {
+                    name: slot.name.clone(),
+                });
+            }
+            if !slot_agents.insert(agent.as_str()) {
+                return Err(PackError::AgentInMultipleSlots {
+                    agent: agent.clone(),
+                });
+            }
         }
     }
-    anyhow::ensure!(
-        manifest.metadata.kind == PackKind::Documents
-            || manifest.metadata.kind == PackKind::Graph
-            || manifest
-                .metadata
-                .inference_slots
-                .iter()
-                .all(|slot| slot.optional),
-        "asset and plugins packs can declare only optional inference slots"
-    );
+    if !(manifest.metadata.kind == PackKind::Documents
+        || manifest.metadata.kind == PackKind::Graph
+        || manifest
+            .metadata
+            .inference_slots
+            .iter()
+            .all(|slot| slot.optional))
+    {
+        return Err(PackError::SlotsNotOptional);
+    }
     let mut plugin_slots = BTreeSet::new();
     for plugin in &manifest.metadata.plugins {
         if let Some(slot) = &plugin.model_slot {
-            anyhow::ensure!(
-                slot_names.contains(slot.as_str()),
-                "plugin {:?} names the model slot {slot:?}, which the pack does not declare",
-                plugin.name
-            );
-            anyhow::ensure!(
-                manifest.metadata.inference_slots.iter().any(|declared| {
-                    declared.name == *slot && declared.optional && declared.agents.is_empty()
-                }),
-                "plugin {:?} model slot {slot:?} must be optional and have no agents",
-                plugin.name
-            );
+            if !slot_names.contains(slot.as_str()) {
+                return Err(PackError::PluginModelSlotUndeclared {
+                    name: plugin.name.clone(),
+                    slot: slot.clone(),
+                });
+            }
+            if !manifest.metadata.inference_slots.iter().any(|declared| {
+                declared.name == *slot && declared.optional && declared.agents.is_empty()
+            }) {
+                return Err(PackError::PluginModelSlotNotOptional {
+                    name: plugin.name.clone(),
+                    slot: slot.clone(),
+                });
+            }
             plugin_slots.insert(slot.as_str());
         }
     }
@@ -1069,11 +1068,11 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> anyhow::Result<()> {
         .iter()
         .filter(|slot| slot.optional)
     {
-        anyhow::ensure!(
-            plugin_slots.contains(slot.name.as_str()),
-            "optional inference slot {:?} is used by no plugin",
-            slot.name
-        );
+        if !plugin_slots.contains(slot.name.as_str()) {
+            return Err(PackError::OptionalSlotUnused {
+                name: slot.name.clone(),
+            });
+        }
     }
 
     match manifest.metadata.kind {
@@ -1081,41 +1080,39 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> anyhow::Result<()> {
             let config = manifest
                 .config
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("document/graph pack requires a config asset"))?;
-            anyhow::ensure!(
-                manifest.metadata.assets.iter().any(|asset| asset == config),
-                "config asset must be declared"
-            );
+                .ok_or(PackError::ConfigAssetRequired)?;
+            if !manifest.metadata.assets.iter().any(|asset| asset == config) {
+                return Err(PackError::ConfigAssetUndeclared);
+            }
         }
         PackKind::Assets | PackKind::Plugins => {
-            anyhow::ensure!(
-                manifest.config.is_none(),
-                "asset-only pack cannot declare configuration"
-            );
-            anyhow::ensure!(
-                manifest.schemas.is_empty(),
-                "asset-only pack cannot declare installed schemas"
-            );
+            if manifest.config.is_some() {
+                return Err(PackError::AssetPackConfig);
+            }
+            if !manifest.schemas.is_empty() {
+                return Err(PackError::AssetPackSchemas);
+            }
         }
     }
     let mut schemas = BTreeSet::new();
     for schema in &manifest.schemas {
-        anyhow::ensure!(
-            manifest.metadata.assets.contains(schema),
-            "schema asset must be declared: {schema}"
-        );
-        anyhow::ensure!(schemas.insert(schema), "duplicate schema asset: {schema}");
+        if !manifest.metadata.assets.contains(schema) {
+            return Err(PackError::SchemaUndeclared {
+                schema: schema.clone(),
+            });
+        }
+        if !schemas.insert(schema) {
+            return Err(PackError::SchemaDuplicate {
+                schema: schema.clone(),
+            });
+        }
     }
     if manifest.metadata.kind == PackKind::Graph {
-        anyhow::ensure!(
-            manifest.compiler_version.as_deref() == Some(crate::graph_pipeline::COMPILER_VERSION),
-            "graph pack compiler version does not match runtime"
-        );
-    } else {
-        anyhow::ensure!(
-            manifest.compiler_version.is_none(),
-            "non-graph pack cannot select a graph compiler"
-        );
+        if manifest.compiler_version.as_deref() != Some(crate::graph_pipeline::COMPILER_VERSION) {
+            return Err(PackError::GraphCompilerVersion);
+        }
+    } else if manifest.compiler_version.is_some() {
+        return Err(PackError::NonGraphCompiler);
     }
     Ok(())
 }
@@ -1130,13 +1127,11 @@ pub fn declared_paths(manifest: &PackManifest) -> Vec<String> {
 
 pub fn digest_declared_assets<'a>(
     manifest: &PackManifest,
-    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
-) -> anyhow::Result<String> {
+    asset: impl Fn(&str) -> Option<&'a [u8]>,
+) -> Result<String, PackError> {
     let mut digest = PackDigester::default();
     for path in declared_paths(manifest) {
-        let bytes = anyhow::Context::with_context(asset(&path), || {
-            format!("pack references missing asset {path:?}")
-        })?;
+        let bytes = asset(&path).ok_or_else(|| PackError::MissingAsset { path: path.clone() })?;
         digest.begin_entry(&path, bytes.len() as u64);
         digest.update(bytes);
     }
@@ -1249,7 +1244,7 @@ mod tests {
     fn refusal(plugin: &PackPlugin) -> String {
         format!(
             "{}",
-            ErrorChain(plugin.validate().expect_err("must be refused").as_ref())
+            ErrorChain(&plugin.validate().expect_err("must be refused"))
         )
     }
 
@@ -1727,9 +1722,9 @@ mod tests {
         ))
         .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("not its entry"),
+            format!("{}", ErrorChain(&error)).contains("not its entry"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
 
         let error = validate_pack_manifest(&ux_pack(
@@ -1742,9 +1737,9 @@ mod tests {
         ))
         .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("twice"),
+            format!("{}", ErrorChain(&error)).contains("twice"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -1759,9 +1754,9 @@ mod tests {
             .push("ux/board/plugin.js".to_owned());
         let error = validate_pack_manifest(&manifest).unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("assets or plugins pack"),
+            format!("{}", ErrorChain(&error)).contains("assets or plugins pack"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         manifest.metadata.ux.clear();
         validate_pack_manifest(&manifest).expect("a documents pack without ux is unchanged");

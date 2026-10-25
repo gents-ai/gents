@@ -477,7 +477,7 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
             .get(path)
             .with_context(|| format!("pack has no asset {path:?}"))
     };
-    let digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
+    let digest = digest_declared_assets(&manifest, |path| present.get(path).map(Vec::as_slice))?;
     let config = crate::pack::load_pack_config(
         &manifest,
         &options,

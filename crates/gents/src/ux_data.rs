@@ -31,6 +31,25 @@ use crate::ux_plugin::UxListing;
 pub enum UxDataError {
     #[error("args must be a JSON object of the tool's arguments, got {kind}")]
     ArgsNotObject { kind: &'static str },
+    #[error(transparent)]
+    Surfaces(Box<crate::document_config::DocumentConfigError>),
+    #[error("surface {surface:?} is not installed on node {node_did}")]
+    SurfaceNotInstalled { surface: String, node_did: String },
+    #[error("surface {surface:?} is disabled")]
+    SurfaceDisabled { surface: String },
+    #[error("surface {surface:?} has a malformed entry: {error}")]
+    MalformedEntry {
+        surface: String,
+        error: Box<crate::document_config::DocumentConfigError>,
+    },
+    #[error("surface {surface:?} declares tool {tool:?} twice")]
+    DuplicateTool { surface: String, tool: String },
+}
+
+impl From<crate::document_config::DocumentConfigError> for UxDataError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::Surfaces(Box::new(error))
+    }
 }
 
 /// One call from a page, as `desktop_ux_data_call` receives it.
@@ -70,23 +89,34 @@ async fn installed_surface(
     access: &ConfigAccess,
     node_did: &str,
     surface: &str,
-) -> Result<DatastoreToolSurfaceDocument> {
+) -> std::result::Result<DatastoreToolSurfaceDocument, UxDataError> {
     let document = list_datastore_tool_surfaces(access, node_did)
         .await?
         .into_iter()
         .find(|document| document.surface_id == surface)
-        .ok_or_else(|| anyhow!("surface {surface:?} is not installed on node {node_did}"))?;
-    anyhow::ensure!(document.enabled, "surface {surface:?} is disabled");
+        .ok_or_else(|| UxDataError::SurfaceNotInstalled {
+            surface: surface.to_owned(),
+            node_did: node_did.to_owned(),
+        })?;
+    if !document.enabled {
+        return Err(UxDataError::SurfaceDisabled {
+            surface: surface.to_owned(),
+        });
+    }
     let mut names = rapidhash::RapidHashSet::default();
     for entry in document.entries.as_deref().unwrap_or(&[]) {
         entry
             .validate()
-            .map_err(|error| anyhow!("surface {surface:?} has a malformed entry: {error}"))?;
-        anyhow::ensure!(
-            names.insert(entry.tool_name().to_owned()),
-            "surface {surface:?} declares tool {:?} twice",
-            entry.tool_name()
-        );
+            .map_err(|error| UxDataError::MalformedEntry {
+                surface: surface.to_owned(),
+                error: Box::new(error),
+            })?;
+        if !names.insert(entry.tool_name().to_owned()) {
+            return Err(UxDataError::DuplicateTool {
+                surface: surface.to_owned(),
+                tool: entry.tool_name().to_owned(),
+            });
+        }
     }
     Ok(document)
 }

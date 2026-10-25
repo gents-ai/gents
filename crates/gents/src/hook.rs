@@ -963,7 +963,7 @@ impl DefraSessionHook {
     }
 
     async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
-        crate::request_binding::resolve_request_doc_id(self.node.as_ref(), request_id).await
+        Ok(crate::request_binding::resolve_request_doc_id(self.node.as_ref(), request_id).await?)
     }
 
     pub(crate) async fn register_stream_tool_call_identity(

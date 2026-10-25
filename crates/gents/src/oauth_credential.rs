@@ -2,7 +2,6 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::OAuthCredentialRow;
@@ -47,6 +46,15 @@ pub enum OAuthCredentialError {
     Setup(#[from] crate::inference_setup::InferenceSetupError),
     #[error(transparent)]
     Usage(Box<crate::usage_observation::UsageObservationError>),
+    #[error("the account's backend could not be stored, so the sign-in was not saved; fix the node's configuration and sign in again")]
+    AccountBackendNotStored {
+        #[source]
+        source: Box<crate::config_client::InferenceBackendError>,
+    },
+    #[error(transparent)]
+    Backend(Box<crate::config_client::InferenceBackendError>),
+    #[error(transparent)]
+    Profile(Box<crate::config_client::InferenceProfileError>),
 }
 
 impl crate::config_client::TransactionFailure for OAuthCredentialError {
@@ -54,8 +62,24 @@ impl crate::config_client::TransactionFailure for OAuthCredentialError {
         match self {
             Self::Config(error) => Some(error),
             Self::Usage(error) => error.config_client_error(),
+            Self::AccountBackendNotStored { source } | Self::Backend(source) => {
+                source.config_client_error()
+            }
+            Self::Profile(error) => error.config_client_error(),
             _ => None,
         }
+    }
+}
+
+impl From<crate::config_client::InferenceBackendError> for OAuthCredentialError {
+    fn from(error: crate::config_client::InferenceBackendError) -> Self {
+        Self::Backend(Box::new(error))
+    }
+}
+
+impl From<crate::config_client::InferenceProfileError> for OAuthCredentialError {
+    fn from(error: crate::config_client::InferenceProfileError) -> Self {
+        Self::Profile(Box::new(error))
     }
 }
 
@@ -706,20 +730,19 @@ pub(crate) fn preset_account_backend(
 async fn write_account_backend(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     backend: &crate::InferenceBackend,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     crate::config_client::write_inference_backend_in_txn(txn, backend)
         .await
-        .context(
-            "the account's backend could not be stored, so the sign-in was not saved; \
-             fix the node's configuration and sign in again",
-        )
+        .map_err(|source| OAuthCredentialError::AccountBackendNotStored {
+            source: Box::new(source),
+        })
 }
 
 async fn sync_account_backend(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
     old_label: Option<&str>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let Some(account_ref) = credential.account_ref.as_deref() else {
         return Ok(());
     };
@@ -791,13 +814,12 @@ pub async fn store_sign_in(
     access: &crate::config_client::ConfigAccess,
     credential: OAuthCredential,
     label: Option<&str>,
-) -> anyhow::Result<SignIn> {
+) -> Result<SignIn> {
     let label = label.map(validate_account_label).transpose()?;
     if sign_in_product(&credential.provider).is_none() {
         return Err(OAuthCredentialError::NoSignInProvider {
             provider: credential.provider.clone(),
-        }
-        .into());
+        });
     }
     access
         .transact_write("oauth_credential.sign_in", |txn| {
@@ -854,7 +876,7 @@ async fn store_sign_in_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     mut credential: OAuthCredential,
     label: Option<String>,
-) -> anyhow::Result<SignIn> {
+) -> Result<SignIn> {
     let rows = provider_rows_in_txn(txn, &credential.node_did, &credential.provider).await?;
     let sign_in_keys = identity_keys(&credential);
     let matched = rows
@@ -962,7 +984,7 @@ async fn store_sign_in_in_txn(
 async fn original_account_profiles(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
-) -> anyhow::Result<Vec<String>> {
+) -> Result<Vec<String>> {
     use crate::backend_provider::BackendProviderOauthExt;
     let backends: Vec<_> =
         crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
@@ -1183,7 +1205,7 @@ pub async fn set_account_label(
     node_did: &str,
     credential_id: &str,
     label: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let label = validate_account_label(label)?;
     access
         .transact_write("oauth_credential.label", |txn| {
@@ -3635,7 +3657,7 @@ mod lifecycle_tests {
         )
         .await
         .expect_err("an invalid config fails the add");
-        let text = format!("{}", ErrorChain(error.as_ref()));
+        let text = format!("{}", ErrorChain(&error));
         assert!(text.contains("missing-backend"), "{text}");
         assert!(text.contains("sign in again"), "{text}");
         assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);
@@ -3737,9 +3759,8 @@ mod lifecycle_tests {
                 .unwrap_err(),
             set_account_enabled(&access, did, id, false)
                 .await
-                .unwrap_err()
-                .into(),
-            remove(&access, did, id).await.unwrap_err().into(),
+                .unwrap_err(),
+            remove(&access, did, id).await.unwrap_err(),
         ] {
             assert!(error.to_string().contains("not found"), "{error}");
         }
@@ -3890,9 +3911,8 @@ mod lifecycle_tests {
                 .unwrap_err(),
             set_account_enabled(&access, mine, id, false)
                 .await
-                .unwrap_err()
-                .into(),
-            remove(&access, mine, id).await.unwrap_err().into(),
+                .unwrap_err(),
+            remove(&access, mine, id).await.unwrap_err(),
         ] {
             assert!(error.to_string().contains("not found"), "{error}");
         }

@@ -1,6 +1,4 @@
 use crate::llm::tool::ToolDefinition;
-use anyhow::{anyhow, bail, Context, Result};
-use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::graphql::GraphqlError;
 use serde_json::{json, Map, Value};
 
@@ -76,30 +74,50 @@ impl From<DocumentConfigError> for DefraWriteFailure {
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
+#[derive(Debug, thiserror::Error)]
+pub enum BoundedWriteError {
+    #[error(transparent)]
+    Failure(#[from] DefraWriteFailure),
+    #[error(transparent)]
+    Node(#[from] defra_node::Error),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Render(#[from] crate::tool_output::ToolOutputError),
+    #[error(transparent)]
+    Mailbox(#[from] crate::mailbox::MailboxError),
+    #[error("collection `{collection}` is not available")]
+    CollectionUnavailable { collection: String },
+    #[error("collection `{collection}` is read over HTTP at the call")]
+    ReadOverHttp { collection: String },
+    #[error("decoding the `{collection}` schema")]
+    DecodeSchema {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("write returned no canonical document")]
+    NoCanonicalDocument,
+    #[error("write to {collection:?} returned no _docID")]
+    NoDocId { collection: String },
+}
+
+type Result<T, E = BoundedWriteError> = std::result::Result<T, E>;
+
 #[derive(Debug)]
-pub struct DefraWriteError(anyhow::Error);
+pub struct DefraWriteError(BoundedWriteError);
 
 impl std::fmt::Display for DefraWriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", ErrorChain(self.0.as_ref()))
+        write!(f, "{}", gents_protocol::error_chain::ErrorChain(&self.0))
     }
 }
 
-impl std::error::Error for DefraWriteError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
-    }
-}
+impl std::error::Error for DefraWriteError {}
 
-impl From<anyhow::Error> for DefraWriteError {
-    fn from(error: anyhow::Error) -> Self {
+impl From<BoundedWriteError> for DefraWriteError {
+    fn from(error: BoundedWriteError) -> Self {
         Self(error)
-    }
-}
-
-impl From<DefraWriteFailure> for DefraWriteError {
-    fn from(error: DefraWriteFailure) -> Self {
-        Self(error.into())
     }
 }
 
@@ -160,15 +178,16 @@ impl BoundedWriteTool {
     /// The field types read from the embedded node, without I/O.
     fn field_types(&self) -> Result<std::collections::BTreeMap<String, String>> {
         let ConfigAccess::Local(local) = &self.access else {
-            bail!(
-                "collection `{}` is read over HTTP at the call",
-                self.decl.collection
-            );
+            return Err(BoundedWriteError::ReadOverHttp {
+                collection: self.decl.collection.clone(),
+            });
         };
         let collection = local
             .node()
             .get_collection(&self.decl.collection)?
-            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+            .ok_or_else(|| BoundedWriteError::CollectionUnavailable {
+                collection: self.decl.collection.clone(),
+            })?;
         Ok(self.field_types_of(&collection)?)
     }
 
@@ -181,9 +200,14 @@ impl BoundedWriteTool {
             .access
             .collection_version(&self.decl.collection)
             .await?
-            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
-        let collection: ::schema::CollectionVersion = serde_json::from_value(version)
-            .with_context(|| format!("decoding the `{}` schema", self.decl.collection))?;
+            .ok_or_else(|| BoundedWriteError::CollectionUnavailable {
+                collection: self.decl.collection.clone(),
+            })?;
+        let collection: ::schema::CollectionVersion =
+            serde_json::from_value(version).map_err(|source| BoundedWriteError::DecodeSchema {
+                collection: self.decl.collection.clone(),
+                source,
+            })?;
         Ok(self.field_types_of(&collection)?)
     }
 
@@ -357,32 +381,35 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Ok(self.write(&args).await?)
+    }
+}
+
+impl BoundedWriteTool {
+    async fn write(&self, args: &BoundedWriteParams) -> Result<String> {
         self.ensure_declaration()?;
         let types = self.resolved_field_types().await?;
         let mutation = self.build_mutation(&args.0, &types)?;
 
-        let resp = self
-            .access
-            .write("tool.defra_write", &mutation)
-            .await
-            .map_err(anyhow::Error::from)?;
+        let resp = self.access.write("tool.defra_write", &mutation).await?;
 
         let document = resp
             .get("data")
             .and_then(|data| data.get(format!("add_{}", self.decl.collection)))
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
-            .ok_or_else(|| anyhow!("write returned no canonical document"))?;
+            .ok_or(BoundedWriteError::NoCanonicalDocument)?;
         let doc_id = document
             .get("_docID")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;
+            .ok_or_else(|| BoundedWriteError::NoDocId {
+                collection: self.decl.collection.clone(),
+            })?;
         Ok(crate::tool_output::render(
             &json!({"collection":self.decl.collection, "document_id":doc_id,
                 "document":document}),
             &["document", "document_id", "collection"],
-        )
-        .map_err(anyhow::Error::from)?)
+        )?)
     }
 }
 

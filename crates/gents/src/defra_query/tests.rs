@@ -765,7 +765,7 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     let error = execute_command(&access, &bad_field, &scope)
         .await
         .unwrap_err();
-    assert!(format!("{}", ErrorChain(error.as_ref())).contains("reference"));
+    assert!(format!("{}", ErrorChain(&error)).contains("reference"));
     let mut execute = args.clone();
     execute.options.insert("mode".into(), json!("execute"));
     let executed = execute_command(&access, &execute, &scope).await.unwrap();

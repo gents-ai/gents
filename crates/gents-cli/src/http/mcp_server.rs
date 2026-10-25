@@ -141,7 +141,7 @@ impl DefraQueryMcp {
         };
         let access = gents::config_client::ConfigAccess::graphql(self.graphql.clone());
         let value=gents::defra_query::execute_command(&access,&params,&self.options.scope).await
-            .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{}", ErrorChain(error.as_ref())),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
+            .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{}", ErrorChain(&error)),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
         gents::defra_query::render_result(value)
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }

@@ -95,7 +95,7 @@ fn plugin_pack(
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest).context("encoding the plugin pack manifest")?,
     )?;
-    gents::pack_archive::pack_dir(dir)
+    Ok(gents::pack_archive::pack_dir(dir)?)
 }
 
 fn list(args: PluginListArgs) -> Result<()> {

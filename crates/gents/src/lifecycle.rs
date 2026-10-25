@@ -812,11 +812,16 @@ mod tests {
             "did:test:test"
         }
 
-        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, crate::identity::IdentityError> {
             Ok(Sha512::digest(payload).to_vec())
         }
 
-        async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+        async fn verify(
+            &self,
+            did: &str,
+            payload: &[u8],
+            signature: &[u8],
+        ) -> Result<bool, crate::identity::IdentityError> {
             Ok(did == self.did() && signature == Sha512::digest(payload).as_slice())
         }
 
