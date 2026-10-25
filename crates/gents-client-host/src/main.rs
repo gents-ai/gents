@@ -69,6 +69,7 @@ async fn client_main(args: Args) -> Result<()> {
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
                 "localRuntimeCli": true,
+                "runtimePreparationVersion": gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION,
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
             }),
         )?;
