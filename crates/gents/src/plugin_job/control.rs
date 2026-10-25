@@ -262,7 +262,7 @@ pub async fn kill(
         })
         .await?;
     if let Some(terminal) = terminal {
-        lifecycle.finish_plugin_job_row(terminal).await?;
+        crate::plugin_job::driver::finish_plugin_job_row(lifecycle, terminal).await?;
     }
     Ok(outcome)
 }
@@ -404,8 +404,7 @@ pub async fn control(
         .await
         .map_err(unavailable)?;
     if let Some(terminal) = terminal {
-        lifecycle
-            .finish_plugin_job_row(terminal)
+        crate::plugin_job::driver::finish_plugin_job_row(&mut lifecycle, terminal)
             .await
             .map_err(unavailable)?;
     }

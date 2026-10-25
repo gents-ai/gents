@@ -822,7 +822,7 @@ pub async fn adopt_step0(
             payload,
         } => {
             *lifecycle = flipped;
-            lifecycle.finish_plugin_job_row(terminal).await?;
+            crate::plugin_job::driver::finish_plugin_job_row(lifecycle, terminal).await?;
             Ok(payload)
         }
         Adopted::Done {

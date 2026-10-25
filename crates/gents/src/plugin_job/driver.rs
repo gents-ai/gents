@@ -199,7 +199,7 @@ pub async fn settle_plugin_job(
     let Some((terminal, output)) = terminal_text(lifecycle, settlement) else {
         return Ok(());
     };
-    lifecycle
+    let terminal = lifecycle
         .settle_plugin_job_row(
             terminal.state,
             &output,
@@ -207,12 +207,49 @@ pub async fn settle_plugin_job(
             terminal.progress,
         )
         .await?;
+    finish_plugin_job_row(lifecycle, terminal).await?;
     Ok(())
+}
+
+/// After the caller's transaction committed: records the terminal in memory
+/// and appends the Continuation completion it owes. Returns whether this
+/// caller won the running compare.
+pub(crate) async fn finish_plugin_job_row(
+    lifecycle: &mut ToolCallLifecycle,
+    terminal: crate::tool_call_lifecycle::PluginJobTerminal,
+) -> Result<bool> {
+    use crate::tool_call_lifecycle::PluginJobFinish;
+    let (tool_call_doc_id, status, output, reason) =
+        match lifecycle.record_plugin_job_terminal(terminal).await? {
+            PluginJobFinish::Lost => return Ok(false),
+            PluginJobFinish::Settled => return Ok(true),
+            PluginJobFinish::Continuation {
+                tool_call_doc_id,
+                status,
+                output,
+                reason,
+            } => (tool_call_doc_id, status, output, reason),
+        };
+    let calling_request_id =
+        crate::session_message::calling_request_id(lifecycle.node().as_ref(), lifecycle).await?;
+    crate::background_completion::append_background_tool_completion(
+        lifecycle.node(),
+        lifecycle.session_id(),
+        &calling_request_id,
+        &tool_call_doc_id,
+        lifecycle.tool_name(),
+        status,
+        &output,
+        reason.as_deref(),
+        crate::lifecycle::RequestHopCause::Continuation,
+    )
+    .await?;
+    Ok(true)
 }
 
 /// [`settle_plugin_job`] inside `txn`: the settlement table and the terminal
 /// write, `None` for `Refused(Terminal)`. Apply the result with
-/// [`ToolCallLifecycle::finish_plugin_job_row`] after `txn` commits.
+/// [`finish_plugin_job_row`] after `txn` commits.
 pub(crate) async fn settle_plugin_job_in_txn(
     txn: &ConfigApplyTxn<'_>,
     lifecycle: &ToolCallLifecycle,
@@ -483,7 +520,7 @@ async fn step_on(
             Ok(StepOutcome::Settled)
         }
         Stepped::Committed(Some(terminal)) => {
-            lifecycle.finish_plugin_job_row(terminal).await?;
+            crate::plugin_job::driver::finish_plugin_job_row(lifecycle, terminal).await?;
             Ok(StepOutcome::Settled)
         }
         Stepped::Committed(None) => Ok(StepOutcome::Committed),

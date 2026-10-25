@@ -185,8 +185,8 @@ pub use recovery::{
 };
 pub use transition::CausedRequestTerminal;
 pub use transition::IllegalToolCallTransition;
-pub(crate) use transition::PluginJobTerminal;
 pub use transition::TransitionError;
+pub(crate) use transition::{PluginJobFinish, PluginJobTerminal};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolCallLifecycleError {

@@ -3,7 +3,6 @@ mod recovery;
 mod retained_tests;
 use crate::config_client::{ConfigApplyTxn, ConfigClientError, TransactionFailure};
 use crate::graphql::escape_graphql_string;
-use anyhow::{ensure, Context};
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 pub(crate) use recovery::recover_outcomes;
 #[cfg(test)]
@@ -15,6 +14,12 @@ type Result<T, E = DurableTriggerError> = std::result::Result<T, E>;
 pub enum DurableTriggerError {
     #[error(transparent)]
     Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Goal(#[from] crate::goal::GoalError),
+    #[error(transparent)]
+    GoalHistory(#[from] crate::goal::GoalHistoryError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("a Task sourced from FireOutcome cannot emit another FireOutcome")]
@@ -45,6 +50,20 @@ pub enum DurableTriggerError {
     ArrivalHeadMissing,
     #[error("arrival cursor did not advance")]
     ArrivalCursorStalled,
+    #[error("Task fire has no unique admitted request during outcome recovery")]
+    TaskFireHasNoUniqueAdmittedRequest,
+    #[error("Task request is missing lifecycle state")]
+    TaskRequestIsMissingLifecycleState,
+    #[error("Task assignment request query omitted rows")]
+    TaskAssignmentRequestQueryOmittedRows,
+    #[error("Task assignment has no unique physical request in its owner/session")]
+    TaskAssignmentHasNoUniquePhysicalRequest,
+    #[error("Task assignment request has no physical identity")]
+    TaskAssignmentRequestHasNoPhysicalIdentity,
+    #[error("Task assignment has ambiguous physical Goal history")]
+    TaskAssignmentHasAmbiguousPhysicalGoalHistory,
+    #[error("Task assignment root is reused by a different Goal identity")]
+    TaskAssignmentRootIsReusedByA,
 }
 
 impl TransactionFailure for DurableTriggerError {
@@ -52,6 +71,9 @@ impl TransactionFailure for DurableTriggerError {
         match self {
             Self::Config(error) => Some(error),
             Self::Queue(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::GoalHistory(error) => error.config_client_error(),
+            Self::Graphql(error) => error.config_client_error(),
             _ => None,
         }
     }
@@ -121,7 +143,7 @@ fn goal_outcome_terminal(status: &str) -> bool {
 async fn observe_goal_outcome_binding(
     txn: &ConfigApplyTxn<'_>,
     fire: &TriggerFire,
-) -> anyhow::Result<Option<GoalOutcomeBinding>> {
+) -> Result<Option<GoalOutcomeBinding>> {
     let Some(expected_goal_id) = &fire.goal_id else {
         return Ok(None);
     };
@@ -156,14 +178,13 @@ async fn observe_goal_outcome_binding(
     )).await?;
     let requests = response["data"]["AgentRequest"]
         .as_array()
-        .context("Task assignment request query omitted rows")?;
-    ensure!(
-        requests.len() == 1,
-        "Task assignment has no unique physical request in its owner/session"
-    );
+        .ok_or(DurableTriggerError::TaskAssignmentRequestQueryOmittedRows)?;
+    if !(requests.len() == 1) {
+        return Err(DurableTriggerError::TaskAssignmentHasNoUniquePhysicalRequest);
+    }
     let root = requests[0]["_docID"]
         .as_str()
-        .context("Task assignment request has no physical identity")?;
+        .ok_or(DurableTriggerError::TaskAssignmentRequestHasNoPhysicalIdentity)?;
     let versions = crate::goal::load_goal_versions_for_session(
         txn,
         &fire.identity.owner_did,
@@ -178,22 +199,21 @@ async fn observe_goal_outcome_binding(
                 && goal.assignment_root_request_doc_id.as_deref() == Some(root)
         })
         .collect::<Vec<_>>();
-    ensure!(
-        retained.len() <= 1,
-        "Task assignment has ambiguous physical Goal history"
-    );
+    if !(retained.len() <= 1) {
+        return Err(DurableTriggerError::TaskAssignmentHasAmbiguousPhysicalGoalHistory);
+    }
     let retained_binding = retained.first().map(|goal| GoalOutcomeBinding {
         owner_did: goal.node_did.clone(),
         session_id: goal.session_id.clone(),
         assignment_request_id: fire.request_id.clone(),
         status: goal.status.clone(),
     });
-    ensure!(
-        current_binding
-            .as_ref()
-            .is_none_or(|binding| binding.assignment_request_id != fire.request_id),
-        "Task assignment root is reused by a different Goal identity"
-    );
+    if !(current_binding
+        .as_ref()
+        .is_none_or(|binding| binding.assignment_request_id != fire.request_id))
+    {
+        return Err(DurableTriggerError::TaskAssignmentRootIsReusedByA);
+    }
     Ok(select_goal_outcome_binding(
         fire,
         retained_binding.as_ref(),
@@ -395,7 +415,7 @@ pub(crate) async fn publish_goal_outcomes(
     goal_id: &str,
     reason: &str,
     now: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, goal_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(goal_id))).await?;
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {

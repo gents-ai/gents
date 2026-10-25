@@ -6,7 +6,8 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRe
 use crate::plugin_job::records::{read_progress, read_step_state, HostProgressFacts};
 
 /// A plugin job terminal written in a caller's transaction, applied to the
-/// lifecycle in memory by `finish_plugin_job_row` once that transaction commits.
+/// lifecycle in memory by `record_plugin_job_terminal` once that transaction
+/// commits.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PluginJobTerminal {
     won: bool,
@@ -14,6 +15,20 @@ pub(crate) struct PluginJobTerminal {
     output: String,
     reason: Option<String>,
     continuation: bool,
+}
+
+/// What a committed plugin job terminal leaves to its caller.
+pub(crate) enum PluginJobFinish {
+    /// Another writer won the running compare.
+    Lost,
+    Settled,
+    /// The winner owes one Continuation completion for this background row.
+    Continuation {
+        tool_call_doc_id: String,
+        status: &'static str,
+        output: String,
+        reason: Option<String>,
+    },
 }
 
 impl PluginJobTerminal {
@@ -50,8 +65,8 @@ impl ToolCallLifecycle {
         output: &str,
         reason: Option<&str>,
         progress: Option<(JobState, Option<JobPauseReason>)>,
-    ) -> anyhow::Result<bool> {
-        let terminal = ConfigAccess::transact_local_idempotent(
+    ) -> Result<PluginJobTerminal> {
+        ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
             IdempotentTransactionRetry::Standard,
@@ -62,8 +77,7 @@ impl ToolCallLifecycle {
                 )
             },
         )
-        .await?;
-        self.finish_plugin_job_row(terminal).await
+        .await
     }
 
     /// Running -> terminal for a plugin job row inside `txn`. `inline`
@@ -142,46 +156,40 @@ impl ToolCallLifecycle {
     }
 
     /// After the caller's transaction committed: records the terminal in
-    /// memory and appends the Continuation completion it owes. Returns
-    /// whether this caller won the running compare.
-    pub(crate) async fn finish_plugin_job_row(
+    /// memory and says whether this caller won the running compare and owes
+    /// the Continuation completion.
+    pub(crate) async fn record_plugin_job_terminal(
         &mut self,
         terminal: PluginJobTerminal,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<PluginJobFinish> {
         if !terminal.won {
             self.sync_after_lost_running_compare("settle_plugin_job")
                 .await?;
-            return Ok(false);
+            return Ok(PluginJobFinish::Lost);
         }
         let fields = terminal_fields(terminal.state, terminal.reason.as_deref());
         self.state = fields.state;
         self.failure_class = fields.failure;
         self.cancel_cause = fields.cancel;
-        if terminal.continuation {
-            let doc_id = self
+        if !terminal.continuation {
+            return Ok(PluginJobFinish::Settled);
+        }
+        Ok(PluginJobFinish::Continuation {
+            tool_call_doc_id: self
                 .doc_id
                 .clone()
-                .ok_or(TransitionError::PluginJobLacksPhysicalIdentity)?;
-            let calling_request_id =
-                crate::session_message::calling_request_id(self.node.as_ref(), self).await?;
-            let status = match terminal.state {
+                .ok_or(TransitionError::PluginJobLacksPhysicalIdentity)?,
+            status: match terminal.state {
                 ToolCallState::Completed => "completed",
                 ToolCallState::Cancelled => "cancelled",
                 _ => "failed",
-            };
-            crate::background_completion::append_background_tool_completion(
-                &self.node,
-                &self.session_id,
-                &calling_request_id,
-                &doc_id,
-                &self.tool_name,
-                status,
-                &terminal.output,
-                terminal.reason.as_deref(),
-                crate::lifecycle::RequestHopCause::Continuation,
-            )
-            .await?;
-        }
-        Ok(true)
+            },
+            output: terminal.output,
+            reason: terminal.reason,
+        })
+    }
+
+    pub(crate) fn node(&self) -> &std::sync::Arc<defra_node::EmbeddedNode> {
+        &self.node
     }
 }

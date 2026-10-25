@@ -282,7 +282,7 @@ pub use session_message::CausedRequestTerminal;
 mod mode_policy;
 mod native;
 mod plugin_job;
-pub(crate) use plugin_job::PluginJobTerminal;
+pub(crate) use plugin_job::{PluginJobFinish, PluginJobTerminal};
 
 #[cfg(test)]
 mod tests;

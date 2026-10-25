@@ -2,9 +2,12 @@ use super::{
     assignment_replaced, observe_goal_outcome_binding, outcome_published, stage_outcome,
     OutcomeStage, FIRE_FIELDS,
 };
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::trigger_delivery::TriggerFire;
+
+use super::DurableTriggerError;
+
+type Result<T, E = DurableTriggerError> = std::result::Result<T, E>;
 
 pub(crate) async fn recover_outcomes(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -45,14 +48,13 @@ pub(crate) async fn recover_outcomes_in_txn(
             .await?;
         let requests: Vec<gents_protocol::row::AgentRequestRow> =
             crate::graphql::rows(&response, "AgentRequest")?;
-        anyhow::ensure!(
-            requests.len() == 1,
-            "Task fire has no unique admitted request during outcome recovery"
-        );
+        if !(requests.len() == 1) {
+            return Err(DurableTriggerError::TaskFireHasNoUniqueAdmittedRequest);
+        }
         let request = &requests[0];
         let status = request
             .lifecycle_state
-            .context("Task request is missing lifecycle state")?;
+            .ok_or(DurableTriggerError::TaskRequestIsMissingLifecycleState)?;
         let binding = if fire.goal_assignment_applied {
             observe_goal_outcome_binding(txn, &fire).await?
         } else {
