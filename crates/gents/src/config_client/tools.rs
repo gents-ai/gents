@@ -12,13 +12,19 @@ pub enum ToolsWriteError {
     #[error("replaced Tools document missing")]
     Missing,
     #[error(transparent)]
-    Invalid(#[from] DocumentConfigError),
+    Invalid(Box<DocumentConfigError>),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     DesiredState(#[from] DesiredStateError),
     #[error(transparent)]
     Access(#[from] ConfigClientError),
+}
+
+impl From<DocumentConfigError> for ToolsWriteError {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::Invalid(Box::new(error))
+    }
 }
 
 impl TransactionFailure for ToolsWriteError {

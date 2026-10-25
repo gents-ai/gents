@@ -15,7 +15,7 @@ pub enum InferenceBackendError {
     #[error("replaced InferenceBackend missing")]
     Missing,
     #[error(transparent)]
-    Invalid(#[from] DocumentConfigError),
+    Invalid(Box<DocumentConfigError>),
     #[error(transparent)]
     BackendRegistry(#[from] crate::backend_registry::BackendRegistryError),
     #[error(transparent)]
@@ -26,6 +26,12 @@ pub enum InferenceBackendError {
     OAuthCredential(#[from] OAuthCredentialError),
     #[error(transparent)]
     Access(#[from] ConfigClientError),
+}
+
+impl From<DocumentConfigError> for InferenceBackendError {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::Invalid(Box::new(error))
+    }
 }
 
 impl TransactionFailure for InferenceBackendError {

@@ -24,7 +24,7 @@ pub enum InferenceProfileError {
     #[error("agent {agent_id:?} not found")]
     AgentNotFound { agent_id: String },
     #[error(transparent)]
-    Invalid(#[from] DocumentConfigError),
+    Invalid(Box<DocumentConfigError>),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -33,6 +33,12 @@ pub enum InferenceProfileError {
     Backend(#[from] InferenceBackendError),
     #[error(transparent)]
     Access(#[from] ConfigClientError),
+}
+
+impl From<DocumentConfigError> for InferenceProfileError {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::Invalid(Box::new(error))
+    }
 }
 
 impl TransactionFailure for InferenceProfileError {

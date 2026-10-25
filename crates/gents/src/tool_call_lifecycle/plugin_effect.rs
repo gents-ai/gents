@@ -348,7 +348,7 @@ pub(super) async fn arguments_in_txn(
     let rows = response["data"]["AgentOutputSegment"]
         .as_array()
         .ok_or(ToolCallLifecycleError::PluginArgumentsLookupOmittedSegments)?;
-    Ok(arguments_from_rows(
+    arguments_from_rows(
         rows,
         &binding.node_did,
         &binding.session_id,
@@ -358,7 +358,7 @@ pub(super) async fn arguments_in_txn(
         generation,
         internal_id,
         name,
-    )?)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

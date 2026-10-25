@@ -173,10 +173,10 @@ pub async fn list_inference_profile_records(
                 .ok_or(DocumentConfigError::ConfigurationRowMissingPhysicalId)?;
             let document: InferenceProfile = serde_json::from_value(row)?;
             if document.node_did != node_did {
-                return Err(DocumentConfigError::ForeignInferenceProfileRow.into());
+                return Err(DocumentConfigError::ForeignInferenceProfileRow);
             }
             if !seen.insert(document.profile_id.clone()) {
-                return Err(DocumentConfigError::DuplicateScopedInferenceProfile.into());
+                return Err(DocumentConfigError::DuplicateScopedInferenceProfile);
             }
             Ok((doc_id, document))
         })

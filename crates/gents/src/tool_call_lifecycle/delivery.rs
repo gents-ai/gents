@@ -1262,12 +1262,8 @@ impl ToolCallLifecycle {
             .accepted_header_doc_id
             .as_deref()
             .ok_or(DeliveryError::CanonicalToolTerminalizationRequiresAcceptedHeaderBinding)?;
-        if !self.is_spawned_background() {
-            if !(self.arguments.is_some()) {
-                return Err(
-                    DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgument,
-                );
-            }
+        if !self.is_spawned_background() && !(self.arguments.is_some()) {
+            return Err(DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgument);
         }
         let output_budget = if fields.state == ToolCallState::Completed {
             None
@@ -1417,10 +1413,10 @@ impl ToolCallLifecycle {
             operation,
             fixture_now,
         } = options;
-        if self.file_changes.is_some() {
-            if !(self.node.node_identity_did() == Some(self.node_did.as_str())) {
-                return Err(DeliveryError::RetainingFileImagesRequiresTheConfiguredNode);
-            }
+        if self.file_changes.is_some()
+            && !(self.node.node_identity_did() == Some(self.node_did.as_str()))
+        {
+            return Err(DeliveryError::RetainingFileImagesRequiresTheConfiguredNode);
         }
         let doc_id = self
             .doc_id
@@ -1442,12 +1438,8 @@ impl ToolCallLifecycle {
         let call_id = self.call_id.clone();
         let message_sequence = self.message_sequence;
         let arguments = self.arguments.clone();
-        if !self.is_spawned_background() {
-            if !(arguments.is_some()) {
-                return Err(
-                    DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgument,
-                );
-            }
+        if !self.is_spawned_background() && !(arguments.is_some()) {
+            return Err(DeliveryError::CanonicalDirectToolTerminalizationRequiresAcceptedArgument);
         }
         let tool_name = self.tool_name.clone();
         let deadline_at = self.deadline_at;
@@ -1924,10 +1916,10 @@ async fn terminalize_transaction(
                 }
                 return Ok(false);
             }
-            if durable_state == fields.state.as_str() {
-                if !(terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status)) {
-                    return Err(DeliveryError::CanonicalToolDeliveryReplayConflictsWithTerminal);
-                }
+            if durable_state == fields.state.as_str()
+                && !(terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status))
+            {
+                return Err(DeliveryError::CanonicalToolDeliveryReplayConflictsWithTerminal);
             }
 
             let result_payload = match existing.message.blocks.as_slice() {

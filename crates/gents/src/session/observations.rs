@@ -129,7 +129,7 @@ async fn load_request_facts_in_txn(
         requester_scope,
     ));
     let response = txn.execute(&query).await?;
-    Ok(decode_request_facts(&response)?)
+    decode_request_facts(&response)
 }
 
 fn request_fact_query(filter: &str) -> String {
@@ -248,7 +248,7 @@ pub async fn load_latest_request_in_txn(
     requester_scope: Option<Option<&str>>,
 ) -> Result<Option<SessionRequestFact>> {
     let rows = load_request_facts_in_txn(txn, node_did, session_id, requester_scope).await?;
-    Ok(latest_request_fact(rows)?)
+    latest_request_fact(rows)
 }
 
 pub(crate) async fn load_latest_requests_in_txn(

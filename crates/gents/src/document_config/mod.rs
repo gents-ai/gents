@@ -137,7 +137,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     if node_did.trim().is_empty() {
-        return Err(DocumentConfigError::NodeDidBlank.into());
+        return Err(DocumentConfigError::NodeDidBlank);
     }
     let owner = node_did.to_owned();
     let existing: Option<Node> =

@@ -401,8 +401,7 @@ pub(crate) async fn load_consumed_folded_inputs(
                     if row.requester_did != head.requester_did {
                         return Err(QueueError::FoldedRequesterMismatch {
                             request_id: row.request_id.clone(),
-                        }
-                        .into());
+                        });
                     }
                     let doc = row
                         .doc_id
@@ -416,8 +415,7 @@ pub(crate) async fn load_consumed_folded_inputs(
                 if order.len() != docs.len() {
                     return Err(QueueError::FoldedRequestsWithoutArrival {
                         request_id: head.request_id.clone(),
-                    }
-                    .into());
+                    });
                 }
                 order
                     .into_iter()

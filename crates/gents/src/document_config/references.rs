@@ -224,7 +224,7 @@ impl ConfigReferences {
             .remove(&(collection, id.to_owned()))
             .is_none()
         {
-            return Err(DocumentConfigError::RemovalTargetMissing.into());
+            return Err(DocumentConfigError::RemovalTargetMissing);
         }
         for ((kind, _), document) in &self.documents {
             candidate.validate_document(*kind, document)?;
@@ -234,7 +234,7 @@ impl ConfigReferences {
 
     pub(crate) fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
         if value["node_did"].as_str() != Some(&self.node_did) {
-            return Err(DocumentConfigError::ConfigOwnerMismatch { collection }.into());
+            return Err(DocumentConfigError::ConfigOwnerMismatch { collection });
         }
         let id = value[collection.unique_field()]
             .as_str()
@@ -288,8 +288,7 @@ impl ConfigReferences {
                         return Err(DocumentConfigError::DefaultAgentDisabled {
                             agent_id: default.to_owned(),
                             node_did: self.node_did.clone(),
-                        }
-                        .into());
+                        });
                     }
                 }
             }
@@ -415,9 +414,7 @@ impl ConfigReferences {
             Collection::AgentTarget => {
                 let doc: AgentTargetDocument = decode(value)?;
                 if doc.target_node_did.trim().is_empty() || doc.agent_id.trim().is_empty() {
-                    return Err(
-                        DocumentConfigError::AgentTargetRequiresIds { id: id.to_owned() }.into(),
-                    );
+                    return Err(DocumentConfigError::AgentTargetRequiresIds { id: id.to_owned() });
                 }
                 // Same-owner targets close legal agent/context/tools cycles;
                 // foreign targets are checked by delegation admission under ACP.
@@ -517,8 +514,7 @@ impl ConfigReferences {
                             return Err(DocumentConfigError::TriggerFireOutcomeSource {
                                 trigger_id: doc.trigger_id.clone(),
                                 task_id: task.task_id.clone(),
-                            }
-                            .into());
+                            });
                         }
                         if source.group.is_some() {
                             &["args"]
@@ -550,8 +546,7 @@ impl ConfigReferences {
                                 task_id: task.task_id.clone(),
                                 field,
                                 scope: reference.path.join("."),
-                            }
-                            .into());
+                            });
                         }
                     }
                 }

@@ -187,7 +187,7 @@ pub(crate) async fn update_trigger_runtime_fields(
 ) -> Result<()> {
     let escaped_owner = escape_graphql_string(node_did);
     if node_did.is_empty() {
-        return Err(DocumentConfigError::TriggerObservationOwnerRequired.into());
+        return Err(DocumentConfigError::TriggerObservationOwnerRequired);
     }
     if updates.next_run_at.is_none()
         && updates.last_attempt_at.is_none()

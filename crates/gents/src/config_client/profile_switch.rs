@@ -48,14 +48,14 @@ pub enum ProfileSwitchError {
         label: String,
         model_name: String,
         #[source]
-        source: ConfigError,
+        source: Box<ConfigError>,
     },
     #[error("no profile {profile_id:?}; `gents config profile list` shows them")]
     NoProfile { profile_id: String },
     #[error(transparent)]
     Config(#[from] ConfigError),
     #[error(transparent)]
-    DocumentConfig(#[from] DocumentConfigError),
+    DocumentConfig(Box<DocumentConfigError>),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -70,6 +70,12 @@ pub enum ProfileSwitchError {
     UsageObservation(#[from] UsageObservationError),
     #[error(transparent)]
     Access(#[from] ConfigClientError),
+}
+
+impl From<DocumentConfigError> for ProfileSwitchError {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
 }
 
 impl TransactionFailure for ProfileSwitchError {
@@ -255,7 +261,7 @@ pub async fn switch_profile_account(
                     .map_err(|source| ProfileSwitchError::ModelNotOffered {
                         label: serving.label.clone(),
                         model_name: snapshot.profile.model_name.clone(),
-                        source,
+                        source: Box::new(source),
                     })?;
                 let (mut moved, mut offered) = (vec![snapshot.profile.clone()], Vec::new());
                 for companion in snapshot.companions(accounts) {

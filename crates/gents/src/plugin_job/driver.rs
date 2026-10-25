@@ -497,7 +497,6 @@ static STEP_TRANSACTION_RUNS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The step transaction: it re-reads every fact it admits against, so a
 /// conflict re-runs it whole and writes nothing in memory.
-#[allow(clippy::too_many_arguments)]
 fn record_refusal(error: &anyhow::Error) -> Option<&RecordError> {
     error
         .downcast_ref::<crate::plugin_job::records::JobRecordsError>()
@@ -514,6 +513,7 @@ fn record_refusal(error: &anyhow::Error) -> Option<&RecordError> {
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn step_transaction(
     txn: &ConfigApplyTxn<'_>,
     runtime: &JobRuntime,

@@ -219,8 +219,7 @@ impl ToolCallLifecycle {
         if resp.has_errors() {
             return Err(ToolCallQueryError::LoadQueryFailed {
                 errors: format!("{:?}", resp.errors),
-            }
-            .into());
+            });
         }
 
         if resp
@@ -401,8 +400,7 @@ impl ToolCallLifecycle {
         if request_response.has_errors() {
             return Err(ToolCallQueryError::RequestLookupFailed {
                 errors: format!("{:?}", request_response.errors),
-            }
-            .into());
+            });
         }
         let requests = request_response
             .data
