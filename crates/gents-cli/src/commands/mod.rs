@@ -47,3 +47,6 @@ pub(crate) mod ux;
 pub(crate) mod write;
 
 pub(crate) mod desktop;
+
+#[cfg(test)]
+pub(crate) mod shim_test_fixtures;
