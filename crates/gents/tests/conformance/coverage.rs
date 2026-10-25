@@ -1836,6 +1836,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimBindingCases".to_string(),
         ));
     }
+    if !lean_snapshot_demotion_cases().is_empty() {
+        emitted.insert((
+            "snapshot_demotion_cases".to_string(),
+            "SnapshotDemotionCases".to_string(),
+        ));
+    }
     if !lean_startup_readiness_cases().is_empty() {
         emitted.insert((
             "startup_readiness_cases".to_string(),

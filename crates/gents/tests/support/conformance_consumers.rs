@@ -1988,6 +1988,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "managed_exec_state_machine_contract_is_complete",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::runtime::tests::startup_recovery::generated_snapshot_demotions_preserve_healthy_agents",
+            package: "gents",
+            source_path: "crates/gents/src/agent/runtime/tests/startup_recovery.rs",
+            module_path: "agent::runtime::tests::startup_recovery",
+            function: "generated_snapshot_demotions_preserve_healthy_agents",
+        },
+        ConformanceConsumer::RustTest {
             id: "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases",
             package: "gents",
             source_path: "crates/gents/src/runtime_status/tests.rs",

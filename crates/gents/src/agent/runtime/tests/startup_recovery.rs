@@ -990,3 +990,119 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         );
     }
 }
+
+#[tokio::test]
+async fn generated_snapshot_demotions_preserve_healthy_agents() {
+    use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+    use rapidhash::{RapidHashMap, RapidHashSet};
+
+    fn ids(value: &Value) -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_u64().unwrap().to_string())
+            .collect()
+    }
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("snapshot-demotion"));
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_agent_backend(
+        &node,
+        identity.did(),
+        "demotion-backend",
+        endpoint.endpoint(),
+    )
+    .await;
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let baseline = startup::resolve_startup_snapshot(&agent).await.unwrap();
+    let template = baseline.agents.values().next().unwrap();
+    let surface = baseline.tool_surfaces.values().next().unwrap();
+    let cases = crate::lean_vocab_test::lean_snapshot_demotion_cases();
+    assert_eq!(cases.len(), 6);
+    for case in cases {
+        let runnable = ids(&case["runnable"]);
+        let mut snapshot = ResolvedRuntimeSnapshot::from_parts(
+            case["default_agent"].as_u64().unwrap().to_string(),
+            runnable
+                .iter()
+                .map(|id| {
+                    let mut configured = template.as_ref().clone();
+                    configured.agent_id = id.clone();
+                    Arc::new(configured)
+                })
+                .collect(),
+            runnable
+                .iter()
+                .map(|id| (id.clone(), surface.clone()))
+                .collect(),
+            ids(&case["unavailable"])
+                .into_iter()
+                .map(|id| {
+                    (
+                        id,
+                        UnavailableAgent::new(
+                            AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                            "unavailable fixture resource",
+                        ),
+                    )
+                })
+                .collect::<RapidHashMap<_, _>>(),
+        );
+        snapshot.validate_node_readiness_source().unwrap();
+        for id in ids(&case["demotions"]) {
+            snapshot.demote_agent(
+                &id,
+                UnavailableAgent::new(
+                    AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                    "unavailable fixture resource",
+                ),
+            );
+        }
+        assert_eq!(
+            snapshot.agents.keys().cloned().collect::<RapidHashSet<_>>(),
+            ids(&case["post_runnable"]).into_iter().collect(),
+            "{case}"
+        );
+        assert_eq!(
+            snapshot
+                .tool_surfaces
+                .keys()
+                .cloned()
+                .collect::<RapidHashSet<_>>(),
+            ids(&case["post_runnable"]).into_iter().collect(),
+            "{case}"
+        );
+        assert_eq!(
+            snapshot
+                .unavailable_agents
+                .keys()
+                .cloned()
+                .collect::<RapidHashSet<_>>(),
+            ids(&case["post_unavailable"]).into_iter().collect(),
+            "{case}"
+        );
+        assert_eq!(
+            snapshot.default_agent_id,
+            case["post_default_agent"].as_u64().unwrap().to_string(),
+            "{case}"
+        );
+        assert_eq!(
+            snapshot.validate_node_readiness_source().is_ok(),
+            case["well_formed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    node.shutdown().await;
+}
