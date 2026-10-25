@@ -168,12 +168,12 @@ pub(crate) async fn caused_request_terminals_in_txn(
             Ok(value) => value,
             Err(error)
                 if error
-                    .downcast_ref::<ReconstructionError>()
+                    .reconstruction()
                     .is_some_and(ReconstructionError::is_incomplete) =>
             {
                 continue
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         };
         anyhow::ensure!(
             header.request_doc_id.as_deref() == Some(doc_id)

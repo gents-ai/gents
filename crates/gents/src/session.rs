@@ -185,7 +185,7 @@ pub use fork::{
 };
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
-pub use history::{load_history, sequence_message_key};
+pub use history::{load_history, sequence_message_key, HistoryError};
 pub(crate) use history::{
     load_sequenced_history_for_request, load_sequenced_history_projection,
     retry_has_published_input,
@@ -211,13 +211,14 @@ pub(crate) use output::load_canonical_payload_from_node;
 pub(crate) use output::load_canonical_payload_in_txn;
 pub(crate) use output::load_canonical_payload_with_access;
 pub(crate) use output::load_source_rows_in_txn;
+pub(crate) use output::{
+    find_reconstruction_error, load_canonical_message_in_txn, load_request_headers_in_txn,
+    replay_resolution_error, resolve_canonical_replay_tags, validate_canonical_replay_boundary,
+    CanonicalReplayScope, TxnCanonicalReader,
+};
 pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
-};
-pub(crate) use output::{
-    load_canonical_message_in_txn, load_request_headers_in_txn, replay_resolution_error,
-    resolve_canonical_replay_tags, validate_canonical_replay_boundary, CanonicalReplayScope,
-    TxnCanonicalReader,
+    SessionOutputError,
 };
 pub(crate) use query::session_is_stopped;
 pub(crate) use query::session_stopped_in_txn;
@@ -227,6 +228,7 @@ pub use query::{
 pub(crate) use query::{load_session_agent_id, load_session_requester_scope, require_session};
 pub use request_output::{
     observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
+    RequestOutputError,
 };
 pub use rows::SessionOwnerRow;
 pub use sessions::close_session;

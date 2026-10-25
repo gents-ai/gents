@@ -88,7 +88,7 @@ pub(crate) async fn validate_manifest_against_live(
             for (trigger, task) in &joined {
                 match gents::config_client::event_trigger_document_field_names(trigger, task) {
                     Ok(names) if !names.is_empty() => walks_templates = true,
-                    Err(error) => errors.push(format!("{}", ErrorChain(error.as_ref()))),
+                    Err(error) => errors.push(format!("{}", ErrorChain(&error))),
                     Ok(_) => {}
                 }
             }

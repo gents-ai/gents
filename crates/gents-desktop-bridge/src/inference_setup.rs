@@ -333,17 +333,16 @@ async fn publish_discovered_catalog(
         (None, None) => BackendAuth::Unauthenticated,
     };
     let result = match core.operator_access(node_did) {
-        Ok(access) => {
-            gents::backend_registry::record_connection_catalog_on(
-                &access,
-                node_did,
-                spec.provider_kind,
-                &spec.endpoint,
-                &auth,
-                models,
-            )
-            .await
-        }
+        Ok(access) => gents::backend_registry::record_connection_catalog_on(
+            &access,
+            node_did,
+            spec.provider_kind,
+            &spec.endpoint,
+            &auth,
+            models,
+        )
+        .await
+        .map_err(Into::into),
         Err(error) => Err(error),
     };
     if let Err(error) = result {

@@ -279,11 +279,11 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     .expect_err("replicated ordinal twin must reject canonical reconstruction");
     assert!(
         matches!(
-            error.downcast_ref::<ReconstructionError>(),
+            error.reconstruction(),
             Some(ReconstructionError::ConflictingSegments { ordinal: 0, .. })
         ),
         "expected ordinal-0 segment conflict, got {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     Ok(())
 }

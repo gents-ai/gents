@@ -269,7 +269,7 @@ impl CallbackEngine {
                     %error,
                     "callback arrival cursor unavailable; delivery remains pending"
                 );
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -300,6 +300,7 @@ impl CallbackEngine {
             })
         })
         .await
+        .map_err(anyhow::Error::from)
     }
 
     pub(super) async fn deliver_arrivals(&mut self, collection: Option<&str>) {

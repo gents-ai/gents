@@ -1286,9 +1286,7 @@ async fn wait_for_hydrated_history(
                 Ok((_, native)) => {
                     message_present |= present_message(&native).body_markdown == expected_content;
                 }
-                Err(error) => {
-                    unresolved.push(format!("{}: {}", header.doc_id, ErrorChain(error.as_ref())))
-                }
+                Err(error) => unresolved.push(format!("{}: {}", header.doc_id, ErrorChain(&error))),
             }
         }
         if status.as_ref().is_some_and(|row| {

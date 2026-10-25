@@ -99,7 +99,7 @@ async fn stored_notification_text(
     .map_err(|error| {
         tracing::warn!(
             notification_doc_id,
-            error = %ErrorChain(error.as_ref()),
+            error = %ErrorChain(&error),
             "published background notification could not be read for replay"
         )
     })

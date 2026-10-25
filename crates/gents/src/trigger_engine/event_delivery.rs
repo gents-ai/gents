@@ -17,7 +17,7 @@ pub(crate) mod source_scan;
 type Result<T, E = EventDeliveryError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum EventDeliveryError {
+pub enum EventDeliveryError {
     #[error(transparent)]
     Engine(#[from] TriggerEngineError),
     #[error(transparent)]

@@ -132,11 +132,11 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         .await
         .expect_err("missing later payload must fail the complete selection");
     assert!(
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
             .to_string()
             .contains("not-yet-replicated-close"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     node.shutdown().await;
 }

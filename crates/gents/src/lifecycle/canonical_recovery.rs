@@ -167,11 +167,8 @@ async fn validate_selection(
             for header in headers.iter().filter(eligible) {
                 match reader.load_message(&header.doc_id).await {
                     Ok(_) => return Err(RecoverySelectionRejected.into()),
-                    Err(error)
-                        if error
-                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                            .is_some() => {}
-                    Err(error) => return Err(error),
+                    Err(error) if error.reconstruction().is_some() => {}
+                    Err(error) => return Err(error.into()),
                 }
             }
         }
@@ -528,8 +525,8 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     }
                     match reader.load_message(&header.doc_id).await {
                         Ok(_) => { selected = Some(header.doc_id.clone()); break; }
-                        Err(error) if error.downcast_ref::<gents_protocol::output::ReconstructionError>().is_some() => {}
-                        Err(error) => return Err(error),
+                        Err(error) if error.reconstruction().is_some() => {}
+                        Err(error) => return Err(error.into()),
                     }
                 }
             }
@@ -581,7 +578,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
             if !is_auxiliary {
                 session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, &timestamp).await?;
             }
-            Ok(RecoveryResult::Won { published: published.len() })
+            Ok::<_, anyhow::Error>(RecoveryResult::Won { published: published.len() })
         })},
     ).await
 }

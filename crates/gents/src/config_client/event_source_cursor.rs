@@ -1,9 +1,124 @@
-use super::ConfigApplyTxn;
+use super::{ConfigApplyTxn, ConfigClientError, TransactionFailure};
 use crate::graphql::escape_graphql_string;
-use anyhow::{Context, Result};
 use gents_protocol::event_delivery::EventConsumer;
 use gents_protocol::trigger_delivery::EventSourceCursor;
 use serde_json::json;
+
+#[derive(Debug, thiserror::Error)]
+pub enum EventSourceCursorError {
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    DesiredState(Box<super::desired_state::DesiredStateError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    ParseInt(#[from] std::num::ParseIntError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    EventDelivery(#[from] crate::trigger_engine::event_delivery::EventDeliveryError),
+    #[error(transparent)]
+    Introspection(#[from] crate::defra_query::DefraQueryFailure),
+    #[error(transparent)]
+    MissingReference(#[from] crate::document_config::MissingReference),
+    #[error(transparent)]
+    Protocol(#[from] gents_protocol::graphql::GraphqlError),
+    #[error("cursor trigger disappeared")]
+    TriggerMissing,
+    #[error("arrival cursor requires an event trigger")]
+    TriggerNotEvent,
+    #[error("cursor callback binding disappeared")]
+    CallbackBindingMissing,
+    #[error("event trigger is disabled")]
+    TriggerDisabled,
+    #[error("a Task sourced from FireOutcome cannot emit another FireOutcome")]
+    FireOutcomeChained,
+    #[error("event trigger Task binding changed before admission")]
+    TriggerTaskChanged,
+    #[error("event source binding changed before admission")]
+    SourceBindingChanged,
+    #[error("arrival prefix remains unadmitted")]
+    PrefixUnadmitted,
+    #[error("arrival cursor must resolve uniquely")]
+    CursorAmbiguous,
+    #[error("cursor query omitted rows")]
+    CursorRowsMissing,
+    #[error("arrival cursor lacks document ID")]
+    CursorDocIdMissing,
+    #[error("cursor must be an object")]
+    CursorNotObject,
+    #[error("invalid persisted arrival cursor")]
+    CursorDecode(#[source] serde_json::Error),
+    #[error("arrival cursor scope disagrees with its key")]
+    CursorScopeMismatch,
+    #[error("arrival journal omitted head")]
+    ArrivalJournalHeadMissing,
+    #[error("invalid saved arrival position")]
+    SavedPosition(#[source] std::num::ParseIntError),
+    #[error("invalid new arrival position")]
+    NewPosition(#[source] std::num::ParseIntError),
+    #[error("arrival source changed while fire was admitted")]
+    SourceChangedDuringFire,
+    #[error("source consumers omitted rows")]
+    SourceConsumersMissing,
+    #[error("source consumer lacks trigger ID")]
+    ConsumerTriggerIdMissing,
+    #[error("source callback consumers omitted rows")]
+    SourceCallbackConsumersMissing,
+    #[error("source consumer lacks binding ID")]
+    ConsumerBindingIdMissing,
+    #[error("event source binding changed before checkpoint")]
+    CheckpointSourceChanged,
+    #[error("invalid checkpoint position")]
+    CheckpointPosition(#[source] std::num::ParseIntError),
+    #[error("journal omitted head")]
+    JournalHeadMissing,
+    #[error("journal omitted next")]
+    JournalNextMissing,
+    #[error("journal omitted entries")]
+    JournalEntriesMissing,
+    #[error("journal failed to advance a complete prefix")]
+    JournalNotAdvancing,
+    #[error("arrival omitted cursor")]
+    ArrivalCursorMissing,
+    #[error("arrival outside native page")]
+    ArrivalOutsidePage,
+    #[error("arrival omitted document ID")]
+    ArrivalDocIdMissing,
+    #[error("filter probe omitted rows")]
+    FilterProbeRowsMissing,
+    #[error("receipt query omitted rows")]
+    ReceiptRowsMissing,
+    #[error("arrival receipt disagrees with canonical identity")]
+    ReceiptMismatch,
+    #[error("request query omitted rows")]
+    RequestRowsMissing,
+    #[error("callback receipt query omitted rows")]
+    CallbackReceiptRowsMissing,
+    #[error("invalid callback receipt origin")]
+    CallbackOriginDecode(#[source] serde_json::Error),
+    #[error("callback receipt disagrees with its arrival")]
+    CallbackReceiptMismatch,
+}
+
+impl From<super::desired_state::DesiredStateError> for EventSourceCursorError {
+    fn from(error: super::desired_state::DesiredStateError) -> Self {
+        Self::DesiredState(Box::new(error))
+    }
+}
+
+impl TransactionFailure for EventSourceCursorError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = EventSourceCursorError> = std::result::Result<T, E>;
 
 /// Receiving-node offsets must not replicate with shared EventSource configuration.
 pub(crate) struct CursorRecord {
@@ -26,10 +141,10 @@ async fn trigger_binding(
         trigger_id,
     )
     .await?
-    .context("cursor trigger disappeared")?;
+    .ok_or(EventSourceCursorError::TriggerMissing)?;
     let trigger: crate::document_config::Trigger = serde_json::from_value(value)?;
     let crate::document_config::TriggerSource::Event { event_source_id } = &trigger.source else {
-        anyhow::bail!("arrival cursor requires an event trigger")
+        return Err(EventSourceCursorError::TriggerNotEvent);
     };
     let source = super::read_desired_state_document_in_txn(
         txn,
@@ -70,7 +185,7 @@ async fn callback_binding(
         binding_id,
     )
     .await?
-    .context("cursor callback binding disappeared")?;
+    .ok_or(EventSourceCursorError::CallbackBindingMissing)?;
     let binding: crate::document_config::CallbackBinding = serde_json::from_value(value)?;
     let source = super::read_desired_state_document_in_txn(
         txn,
@@ -165,12 +280,12 @@ pub(crate) async fn seed_referencing_consumers(
         .await?;
     for row in response["data"]["Trigger"]
         .as_array()
-        .context("source consumers omitted rows")?
+        .ok_or(EventSourceCursorError::SourceConsumersMissing)?
     {
         if row["source"]["kind"] == "event" && row["source"]["event_source_id"] == event_source_id {
             let trigger_id = row["trigger_id"]
                 .as_str()
-                .context("source consumer lacks trigger ID")?;
+                .ok_or(EventSourceCursorError::ConsumerTriggerIdMissing)?;
             let consumer = EventConsumer::Trigger {
                 trigger_id: trigger_id.to_owned(),
             };
@@ -179,11 +294,11 @@ pub(crate) async fn seed_referencing_consumers(
     }
     for row in response["data"]["CallbackBinding"]
         .as_array()
-        .context("source callback consumers omitted rows")?
+        .ok_or(EventSourceCursorError::SourceCallbackConsumersMissing)?
     {
         let binding_id = row["binding_id"]
             .as_str()
-            .context("source consumer lacks binding ID")?;
+            .ok_or(EventSourceCursorError::ConsumerBindingIdMissing)?;
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding_id.to_owned(),
         };
@@ -200,26 +315,26 @@ pub(crate) async fn validate_event_admission(
 ) -> Result<()> {
     let (trigger, source) =
         trigger_binding(txn, &fire.identity.owner_did, &fire.identity.trigger_id).await?;
-    anyhow::ensure!(trigger.enabled, "event trigger is disabled");
-    anyhow::ensure!(
-        crate::trigger_engine::durable::outcome_source_allowed(
-            &source.source_collection,
-            fire.emit_outcome,
-        ),
-        "a Task sourced from FireOutcome cannot emit another FireOutcome"
-    );
-    anyhow::ensure!(
-        trigger.task_id == fire.task_id,
-        "event trigger Task binding changed before admission"
-    );
-    anyhow::ensure!(
-        if fire.identity.source_collection == "EventGroupState" {
-            source.group.is_some()
-        } else {
-            source.group.is_none() && source.source_collection == fire.identity.source_collection
-        },
-        "event source binding changed before admission"
-    );
+    if !trigger.enabled {
+        return Err(EventSourceCursorError::TriggerDisabled);
+    }
+    if !crate::trigger_engine::durable::outcome_source_allowed(
+        &source.source_collection,
+        fire.emit_outcome,
+    ) {
+        return Err(EventSourceCursorError::FireOutcomeChained);
+    }
+    if trigger.task_id != fire.task_id {
+        return Err(EventSourceCursorError::TriggerTaskChanged);
+    }
+    let source_matches = if fire.identity.source_collection == "EventGroupState" {
+        source.group.is_some()
+    } else {
+        source.group.is_none() && source.source_collection == fire.identity.source_collection
+    };
+    if !source_matches {
+        return Err(EventSourceCursorError::SourceBindingChanged);
+    }
     Ok(())
 }
 
@@ -230,10 +345,9 @@ pub(crate) async fn exclude_arrival(
     expected_collection: &str,
     after: &str,
 ) -> Result<()> {
-    anyhow::ensure!(
-        checkpoint_prefix(txn, owner, consumer, expected_collection, after, false).await?,
-        "arrival prefix remains unadmitted"
-    );
+    if !checkpoint_prefix(txn, owner, consumer, expected_collection, after, false).await? {
+        return Err(EventSourceCursorError::PrefixUnadmitted);
+    }
     Ok(())
 }
 
@@ -247,26 +361,28 @@ pub(crate) async fn load_for_source(
     let response = txn.execute(&format!("{{ EventSourceCursor(filter: {{cursor_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID cursor_key owner_did consumer source_collection after }} }}", escape_graphql_string(&key))).await?;
     let rows = response["data"]["EventSourceCursor"]
         .as_array()
-        .context("cursor query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "arrival cursor must resolve uniquely");
+        .ok_or(EventSourceCursorError::CursorRowsMissing)?;
+    if rows.len() > 1 {
+        return Err(EventSourceCursorError::CursorAmbiguous);
+    }
     if let Some(row) = rows.first() {
         let doc_id = row["_docID"]
             .as_str()
-            .context("arrival cursor lacks document ID")?
+            .ok_or(EventSourceCursorError::CursorDocIdMissing)?
             .to_owned();
         let mut value = row.clone();
         value
             .as_object_mut()
-            .context("cursor must be an object")?
+            .ok_or(EventSourceCursorError::CursorNotObject)?
             .remove("_docID");
         let cursor: EventSourceCursor =
-            serde_json::from_value(value).context("invalid persisted arrival cursor")?;
-        anyhow::ensure!(
-            cursor.owner_did == owner
-                && &cursor.consumer == consumer
-                && cursor.source_collection == collection,
-            "arrival cursor scope disagrees with its key"
-        );
+            serde_json::from_value(value).map_err(EventSourceCursorError::CursorDecode)?;
+        if !(cursor.owner_did == owner
+            && &cursor.consumer == consumer
+            && cursor.source_collection == collection)
+        {
+            return Err(EventSourceCursorError::CursorScopeMismatch);
+        }
         return Ok(Some(CursorRecord { doc_id, cursor }));
     }
     Ok(None)
@@ -296,7 +412,7 @@ pub(crate) async fn load_or_seed_for_source(
                 .await?;
             response["data"]["_documentArrivals"]["head"]
                 .as_str()
-                .context("arrival journal omitted head")?
+                .ok_or(EventSourceCursorError::ArrivalJournalHeadMissing)?
                 .to_owned()
         } else {
             "0".to_owned()
@@ -321,16 +437,15 @@ async fn persist_checkpoint(
     after: &str,
 ) -> Result<()> {
     let record = load_or_seed_for_source(txn, owner, consumer, expected_collection).await?;
-    anyhow::ensure!(
-        record.cursor.source_collection == expected_collection,
-        "arrival source changed while fire was admitted"
-    );
+    if record.cursor.source_collection != expected_collection {
+        return Err(EventSourceCursorError::SourceChangedDuringFire);
+    }
     let old: u64 = record
         .cursor
         .after
         .parse()
-        .context("invalid saved arrival position")?;
-    let next: u64 = after.parse().context("invalid new arrival position")?;
+        .map_err(EventSourceCursorError::SavedPosition)?;
+    let next: u64 = after.parse().map_err(EventSourceCursorError::NewPosition)?;
     if next > old {
         txn.execute(&format!("mutation {{update_EventSourceCursor(docID: \"{}\", input: {{after: \"{}\"}}) {{_docID}}}}",
             escape_graphql_string(&record.doc_id), escape_graphql_string(after))).await?;
@@ -353,18 +468,19 @@ pub(crate) async fn checkpoint_prefix(
         serial,
         source,
     } = event_binding(txn, owner, consumer).await?;
-    anyhow::ensure!(
-        source.source_collection == collection && source.group.is_none(),
-        "event source binding changed before checkpoint"
-    );
+    if source.source_collection != collection || source.group.is_some() {
+        return Err(EventSourceCursorError::CheckpointSourceChanged);
+    }
     crate::graphql::validate_collection_identifier(collection)?;
     let record = load_or_seed_for_source(txn, owner, consumer, collection).await?;
     let mut after: u64 = record
         .cursor
         .after
         .parse()
-        .context("invalid saved arrival position")?;
-    let through_position: u64 = through.parse().context("invalid checkpoint position")?;
+        .map_err(EventSourceCursorError::SavedPosition)?;
+    let through_position: u64 = through
+        .parse()
+        .map_err(EventSourceCursorError::CheckpointPosition)?;
     if through_position < after {
         return Ok(false);
     }
@@ -377,7 +493,7 @@ pub(crate) async fn checkpoint_prefix(
         let page = &response["data"]["_documentArrivals"];
         let head: u64 = page["head"]
             .as_str()
-            .context("journal omitted head")?
+            .ok_or(EventSourceCursorError::JournalHeadMissing)?
             .parse()?;
         if through_position > head {
             return Ok(false);
@@ -387,32 +503,30 @@ pub(crate) async fn checkpoint_prefix(
         }
         let next: u64 = page["next"]
             .as_str()
-            .context("journal omitted next")?
+            .ok_or(EventSourceCursorError::JournalNextMissing)?
             .parse()?;
-        anyhow::ensure!(
-            next > after && next <= head,
-            "journal failed to advance a complete prefix"
-        );
+        if !(next > after && next <= head) {
+            return Err(EventSourceCursorError::JournalNotAdvancing);
+        }
         let entries = page["entries"]
             .as_array()
-            .context("journal omitted entries")?;
+            .ok_or(EventSourceCursorError::JournalEntriesMissing)?;
         let mut visible = 0u64;
         for entry in entries {
             let position: u64 = entry["cursor"]
                 .as_str()
-                .context("arrival omitted cursor")?
+                .ok_or(EventSourceCursorError::ArrivalCursorMissing)?
                 .parse()?;
             if position > through_position {
                 break;
             }
-            anyhow::ensure!(
-                position > after && position <= next,
-                "arrival outside native page"
-            );
+            if !(position > after && position <= next) {
+                return Err(EventSourceCursorError::ArrivalOutsidePage);
+            }
             visible += 1;
             let doc_id = entry["docID"]
                 .as_str()
-                .context("arrival omitted document ID")?;
+                .ok_or(EventSourceCursorError::ArrivalDocIdMissing)?;
             if admitted_arrival(txn, owner, consumer, collection, doc_id).await? {
                 continue;
             }
@@ -430,7 +544,7 @@ pub(crate) async fn checkpoint_prefix(
                 .await?;
             let matched = !matched["data"][collection]
                 .as_array()
-                .context("filter probe omitted rows")?
+                .ok_or(EventSourceCursorError::FilterProbeRowsMissing)?
                 .is_empty();
             if !matched {
                 continue;
@@ -484,25 +598,25 @@ async fn admitted_arrival(
         escape_graphql_string(&fire_key))).await?;
     let receipts = receipt["data"]["TriggerFire"]
         .as_array()
-        .context("receipt query omitted rows")?;
+        .ok_or(EventSourceCursorError::ReceiptRowsMissing)?;
     if receipts.is_empty() {
         return Ok(false);
     }
-    anyhow::ensure!(
-        receipts.len() == 1
-            && receipts[0]["request_id"] == request_id
-            && receipts[0]["owner_did"] == owner
-            && receipts[0]["trigger_id"] == trigger_id
-            && receipts[0]["source_collection"] == source_collection
-            && receipts[0]["source_doc_id"] == source_doc_id,
-        "arrival receipt disagrees with canonical identity"
-    );
+    if !(receipts.len() == 1
+        && receipts[0]["request_id"] == request_id
+        && receipts[0]["owner_did"] == owner
+        && receipts[0]["trigger_id"] == trigger_id
+        && receipts[0]["source_collection"] == source_collection
+        && receipts[0]["source_doc_id"] == source_doc_id)
+    {
+        return Err(EventSourceCursorError::ReceiptMismatch);
+    }
     let request = txn.execute(&format!(
         "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID }} }}",
         escape_graphql_string(owner), escape_graphql_string(&request_id))).await?;
     Ok(request["data"]["AgentRequest"]
         .as_array()
-        .context("request query omitted rows")?
+        .ok_or(EventSourceCursorError::RequestRowsMissing)?
         .len()
         == 1)
 }
@@ -524,25 +638,26 @@ async fn admitted_callback_arrival(
         .await?;
     let rows = response["data"]["CallbackInvocation"]
         .as_array()
-        .context("callback receipt query omitted rows")?;
+        .ok_or(EventSourceCursorError::CallbackReceiptRowsMissing)?;
     let Some(row) = rows.first() else {
         return Ok(false);
     };
     let origin: crate::document_config::CallbackInvocationOrigin =
-        serde_json::from_value(row["origin"].clone()).context("invalid callback receipt origin")?;
-    anyhow::ensure!(
-        rows.len() == 1
-            && matches!(
-                origin,
-                crate::document_config::CallbackInvocationOrigin::Event {
-                    binding_id: ref binding,
-                    source_collection: ref collection,
-                    source_doc_id: ref doc,
-                    ..
-                } if binding == binding_id && collection == source_collection && doc == source_doc_id
-            ),
-        "callback receipt disagrees with its arrival"
-    );
+        serde_json::from_value(row["origin"].clone())
+            .map_err(EventSourceCursorError::CallbackOriginDecode)?;
+    if !(rows.len() == 1
+        && matches!(
+            origin,
+            crate::document_config::CallbackInvocationOrigin::Event {
+                binding_id: ref binding,
+                source_collection: ref collection,
+                source_doc_id: ref doc,
+                ..
+            } if binding == binding_id && collection == source_collection && doc == source_doc_id
+        ))
+    {
+        return Err(EventSourceCursorError::CallbackReceiptMismatch);
+    }
     Ok(true)
 }
 
@@ -555,10 +670,9 @@ pub(crate) async fn acknowledge_fire(
     _source_doc_id: &str,
     after: &str,
 ) -> Result<()> {
-    anyhow::ensure!(
-        checkpoint_prefix(txn, owner, consumer, source_collection, after, false).await?,
-        "arrival prefix remains unadmitted"
-    );
+    if !checkpoint_prefix(txn, owner, consumer, source_collection, after, false).await? {
+        return Err(EventSourceCursorError::PrefixUnadmitted);
+    }
     Ok(())
 }
 

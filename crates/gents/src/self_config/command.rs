@@ -689,7 +689,16 @@ impl ConfigCommandTool {
     ) -> (String, Value) {
         let missing =
             find_source::<crate::document_config::MissingReference>(error).or_else(|| {
-                match find_source::<crate::document_config::DocumentConfigError>(error) {
+                let document_error =
+                    find_source::<crate::document_config::DocumentConfigError>(error).or_else(
+                        || match find_source::<crate::config_client::DesiredStateError>(error) {
+                            Some(crate::config_client::DesiredStateError::DocumentConfig(
+                                error,
+                            )) => Some(error.as_ref()),
+                            _ => None,
+                        },
+                    );
+                match document_error {
                     Some(crate::document_config::DocumentConfigError::MissingReference(
                         missing,
                     )) => Some(missing),
@@ -715,7 +724,7 @@ impl ConfigCommandTool {
         if let Some(hint) = guidance {
             return (message, json!({"next_call":hint.next_call}));
         }
-        if let Some(schema) = find_source::<crate::config_client::OutcomeSourceSchemaError>(error) {
+        if let Some(schema) = crate::config_client::outcome_source_refusal(error) {
             let next = if schema.missing_handoff {
                 json!({"argv":["collection","preview","update",schema.collection],"options":{"patch":[{"op":"add","path":format!("/{}/Fields/-",schema.collection),"value":{"Name":"handoff_id","Kind":"String"}}]}})
             } else {
@@ -2094,11 +2103,11 @@ impl ConfigCommandTool {
             },
         )
         .await?;
-        crate::backend_registry::scoped_observation_view(
+        Ok(crate::backend_registry::scoped_observation_view(
             observation.as_ref(),
             &self.node_did,
             provider_kind,
-        )
+        )?)
     }
 
     async fn backend_document_observation(&self, document: &Value) -> Result<Value> {

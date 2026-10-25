@@ -63,13 +63,13 @@ pub use desired_state::read_record as read_desired_state_record_in_txn;
 pub use desired_state::read_records as read_desired_state_records_in_txn;
 pub use desired_state::{
     apply_desired_state_plan, config_projection, desired_state_document_digest,
-    event_trigger_document_field_names, stale_expectation, validate_event_trigger_document_fields,
-    DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan, DesiredStateError,
-    DesiredStateExpectation, DriftedDocument, StaleExpectation,
+    event_trigger_document_field_names, outcome_source_refusal, stale_expectation,
+    validate_event_trigger_document_fields, DesiredStateApplyCounts, DesiredStateApplyDocument,
+    DesiredStateApplyPlan, DesiredStateError, DesiredStateExpectation, DriftedDocument,
+    StaleExpectation,
 };
 pub(crate) use desired_state::{
     collection_is_installed, read_desired_state_document_in_txn, validate_desired_state_plan,
-    OutcomeSourceSchemaError,
 };
 pub(crate) use inference_backend::write_inference_backend_in_txn;
 pub use inference_backend::{

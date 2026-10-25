@@ -81,6 +81,12 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::trigger_engine::durable::DurableTriggerError>(cause))
         .or_else(|| wrapped::<crate::trigger_engine::event_delivery::EventDeliveryError>(cause))
         .or_else(|| wrapped::<crate::trigger_engine::event_source::EventSourceError>(cause))
+        .or_else(|| wrapped::<super::desired_state::DesiredStateError>(cause))
+        .or_else(|| wrapped::<super::event_source_cursor::EventSourceCursorError>(cause))
+        .or_else(|| wrapped::<crate::backend_registry::BackendRegistryError>(cause))
+        .or_else(|| wrapped::<crate::session::SessionOutputError>(cause))
+        .or_else(|| wrapped::<crate::session::HistoryError>(cause))
+        .or_else(|| wrapped::<crate::callback::CallbackError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

@@ -41,28 +41,24 @@ impl ReadSource<'_, '_> {
             "plugin terminal output must select stream zero"
         );
         match self {
-            Self::Access(access) => {
-                crate::session::load_canonical_payload_with_access(
-                    access,
-                    request_doc_id,
-                    node_did,
-                    requester_did,
-                    &payload.output,
-                    &expected_source,
-                )
-                .await
-            }
-            Self::Txn(txn) => {
-                crate::session::load_canonical_payload_in_txn(
-                    txn,
-                    request_doc_id,
-                    node_did,
-                    requester_did,
-                    &payload.output,
-                    &expected_source,
-                )
-                .await
-            }
+            Self::Access(access) => Ok(crate::session::load_canonical_payload_with_access(
+                access,
+                request_doc_id,
+                node_did,
+                requester_did,
+                &payload.output,
+                &expected_source,
+            )
+            .await?),
+            Self::Txn(txn) => Ok(crate::session::load_canonical_payload_in_txn(
+                txn,
+                request_doc_id,
+                node_did,
+                requester_did,
+                &payload.output,
+                &expected_source,
+            )
+            .await?),
         }
     }
 
@@ -73,24 +69,20 @@ impl ReadSource<'_, '_> {
         requester_did: Option<&str>,
     ) -> Result<(TranscriptMessage, Message)> {
         match self {
-            Self::Access(access) => {
-                crate::session::load_canonical_message(
-                    access,
-                    header_doc_id,
-                    node_did,
-                    requester_did,
-                )
-                .await
-            }
-            Self::Txn(txn) => {
-                crate::session::load_canonical_message_in_txn(
-                    txn,
-                    header_doc_id,
-                    node_did,
-                    requester_did,
-                )
-                .await
-            }
+            Self::Access(access) => Ok(crate::session::load_canonical_message(
+                access,
+                header_doc_id,
+                node_did,
+                requester_did,
+            )
+            .await?),
+            Self::Txn(txn) => Ok(crate::session::load_canonical_message_in_txn(
+                txn,
+                header_doc_id,
+                node_did,
+                requester_did,
+            )
+            .await?),
         }
     }
 }

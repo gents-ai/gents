@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[derive(Clone, Default)]
 struct IgnoredWireWarningCapture(Arc<Mutex<Vec<tracing::Level>>>);
 
@@ -35,14 +37,14 @@ fn document(value: Value) -> DesiredStateApplyDocument {
     }
 }
 
-async fn register_config_schemas(node: &EmbeddedNode) -> Result<()> {
+async fn register_config_schemas(node: &EmbeddedNode) -> TestResult<()> {
     register_config_schemas_dropping_unique_indexes(node, &[]).await
 }
 
 async fn register_config_schemas_dropping_unique_indexes(
     node: &EmbeddedNode,
     duplicate_collections: &[Collection],
-) -> Result<()> {
+) -> TestResult<()> {
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)
@@ -74,14 +76,31 @@ async fn register_config_schemas_dropping_unique_indexes(
     Ok(())
 }
 
-async fn apply(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> Result<()> {
+async fn apply(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> TestResult<()> {
     apply_with_counts(access, docs).await.map(|_| ())
+}
+
+/// Keeps the refusal's own error object, which converting it into a boxed
+/// error would hide from downcasts.
+async fn apply_refused(
+    access: &ConfigAccess,
+    docs: Vec<DesiredStateApplyDocument>,
+    expectation: &str,
+) -> impl AsRef<dyn std::error::Error + Send + Sync> {
+    let plan = DesiredStateApplyPlan::new(docs).expect("valid plan");
+    access
+        .transact_write("test.desired.apply", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect_err(expectation)
 }
 
 async fn apply_with_counts(
     access: &ConfigAccess,
     docs: Vec<DesiredStateApplyDocument>,
-) -> Result<DesiredStateApplyCounts> {
+) -> TestResult<DesiredStateApplyCounts> {
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
         .transact_write("test.desired.apply", |txn| {
@@ -89,11 +108,12 @@ async fn apply_with_counts(
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await
+        .map_err(Into::into)
 }
 
 #[tokio::test]
-async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_owner() -> Result<()>
-{
+async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_owner(
+) -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -122,7 +142,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 }
 
 #[tokio::test]
-async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result<()> {
+async fn unchanged_desired_state_replay_does_not_add_document_commit() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -149,7 +169,7 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
-        .context("created backend is missing _docID")?;
+        .ok_or("created backend is missing _docID")?;
     let before = crate::graphql::composite_commits(
         node.as_ref(),
         &doc_id,
@@ -211,7 +231,7 @@ fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
 }
 
 #[tokio::test]
-async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
+async fn replacement_resets_defaults_and_preserves_backend_observations() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -259,7 +279,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 }
 
 #[tokio::test]
-async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
+async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = ConfigAccess::local(node.clone());
@@ -299,7 +319,7 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
 }
 
 #[tokio::test]
-async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()> {
+async fn read_records_pages_across_batches_and_omits_missing_ids() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -333,7 +353,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 }
 
 #[tokio::test]
-async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> Result<()> {
+async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -358,7 +378,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
                 digest: Some(desired_state_document_digest(&doc.add)?),
             })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<TestResult<Vec<_>>>()?;
     let plan = plan.with_expected(expected)?;
     let (result, read_queries) = count_desired_state_read_page_queries(access.transact_write(
         "test.desired.apply.batched_reads",
@@ -383,7 +403,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
 }
 
 #[tokio::test]
-async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
+async fn read_records_rejects_duplicate_live_documents_naming_them() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = ConfigAccess::local(node.clone());
@@ -408,7 +428,7 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
         })
         .await
         .unwrap_err();
-    let message = format!("{}", ErrorChain(error.as_ref()));
+    let message = format!("{}", ErrorChain(&error));
     assert!(
         message.contains("multiple live InferenceBackend documents"),
         "{message}"
@@ -452,7 +472,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
 }
 
 #[tokio::test]
-async fn generated_default_replacements_preserve_runtime_startup_selection() -> Result<()> {
+async fn generated_default_replacements_preserve_runtime_startup_selection() -> TestResult<()> {
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
     let cases = snapshot.configuration_scope_cases["default_replacement"]
         .as_array()
@@ -541,7 +561,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
 }
 
 #[tokio::test]
-async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
+async fn retained_inbound_references_and_cycles_share_atomic_publication() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -655,7 +675,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
 }
 
 #[tokio::test]
-async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
+async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
     let access = ConfigAccess::local(node.clone());
@@ -688,7 +708,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
 }
 
 #[tokio::test]
-async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Result<()> {
+async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -722,9 +742,9 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         .await
         .unwrap_err();
     assert!(
-        stale_expectation(error.as_ref()).is_some(),
+        stale_expectation(&error).is_some(),
         "drifted live row must be rejected: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     Ok(())
 }
@@ -738,13 +758,13 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
     }
 }
 
-async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
+async fn cas_node() -> TestResult<(ConfigAccess, &'static str)> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     Ok((ConfigAccess::local(node), "did:key:owner"))
 }
 
-async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
+async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> TestResult<Option<String>> {
     let (owner, id) = (owner.to_owned(), id.to_owned());
     access
         .transact_write("test.cas.read", |txn| {
@@ -771,7 +791,7 @@ fn renamed(owner: &str, id: &str, name: &str) -> Value {
 }
 
 #[tokio::test]
-async fn matching_expectation_applies_the_plan() -> Result<()> {
+async fn matching_expectation_applies_the_plan() -> TestResult<()> {
     let (access, owner) = cas_node().await?;
     apply(&access, vec![document(backend(owner, "target"))]).await?;
     let digest = live_digest(&access, owner, "target").await?;
@@ -788,7 +808,7 @@ async fn matching_expectation_applies_the_plan() -> Result<()> {
 }
 
 #[tokio::test]
-async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
+async fn drifted_expectation_refuses_and_writes_nothing() -> TestResult<()> {
     let (access, owner) = cas_node().await?;
     apply(
         &access,
@@ -829,7 +849,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
 }
 
 #[tokio::test]
-async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
+async fn absent_expectations_are_checked_in_both_directions() -> TestResult<()> {
     let (access, owner) = cas_node().await?;
     apply(&access, vec![document(backend(owner, "present"))]).await?;
 
@@ -870,20 +890,20 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
 }
 
 #[tokio::test]
-async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
+async fn guarded_publication_matches_lean_publish_if_cases() -> TestResult<()> {
     use crate::lean_vocab_test::lean_publish_if_cases;
 
     fn doc_for(owner: &str, id: &str, content: &str) -> Value {
         renamed(owner, id, content)
     }
 
-    fn authored_digest(owner: &str, id: &str, content: &str) -> Result<String> {
+    fn authored_digest(owner: &str, id: &str, content: &str) -> TestResult<String> {
         let (_, projected) = config_projection(
             Collection::InferenceBackend,
             Some(&doc_for(owner, id, content)),
         )?;
         Ok(desired_state_document_digest(
-            &projected.context("projection")?,
+            &projected.ok_or("projection")?,
         )?)
     }
 
@@ -908,7 +928,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                     .transpose()?;
                 Ok(expectation(&row.target.node_did, &row.target.id, digest))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<TestResult<Vec<_>>>()?;
         let plan = DesiredStateApplyPlan::new(
             case.candidate
                 .iter()
@@ -1008,7 +1028,7 @@ fn rule_documents(
     emit_outcome: bool,
     group: Option<Value>,
     source_collection: &str,
-) -> Result<(
+) -> TestResult<(
     crate::document_config::Trigger,
     crate::document_config::Task,
     crate::document_config::EventSource,
@@ -1097,7 +1117,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
 }
 
 #[tokio::test]
-async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
+async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> TestResult<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -1144,7 +1164,7 @@ async fn preview_window(
     access: &ConfigAccess,
     profile: &dyn Fn(Value) -> DesiredStateApplyDocument,
     window: u64,
-) -> Result<()> {
+) -> TestResult<()> {
     let plan = DesiredStateApplyPlan::new(vec![profile(json!(window))])?;
     access
         .transact_write("test.preview.context_window", |txn| {
@@ -1152,6 +1172,7 @@ async fn preview_window(
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
         .await
+        .map_err(Into::into)
 }
 
 fn obligation_surface(
@@ -1188,7 +1209,7 @@ fn obligation_surface(
     }
 }
 
-async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
+async fn obligation_node() -> TestResult<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_schema(
@@ -1199,7 +1220,8 @@ async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
 }
 
 #[tokio::test]
-async fn output_obligation_count_field_must_hold_a_count_on_the_target_collection() -> Result<()> {
+async fn output_obligation_count_field_must_hold_a_count_on_the_target_collection() -> TestResult<()>
+{
     let node = obligation_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
@@ -1286,7 +1308,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
 }
 
 #[tokio::test]
-async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
+async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> TestResult<()> {
     let node = obligation_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
@@ -1338,7 +1360,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
 }
 
 #[tokio::test]
-async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Result<()> {
+async fn string_count_field_from_the_reported_failure_is_still_accepted() -> TestResult<()> {
     let node = obligation_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
@@ -1380,7 +1402,7 @@ async fn published_count_field(
     access: &ConfigAccess,
     owner: &str,
     surface_id: &str,
-) -> Result<String> {
+) -> TestResult<String> {
     let surface = crate::list_datastore_tool_surfaces(access, owner)
         .await?
         .into_iter()
@@ -1398,7 +1420,7 @@ async fn published_count_field(
 }
 
 #[tokio::test]
-async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
+async fn creation_judges_the_count_field_of_the_add_payload() -> TestResult<()> {
     let node = obligation_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
@@ -1453,7 +1475,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
 }
 
 #[tokio::test]
-async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()> {
+async fn replacement_judges_the_count_field_of_the_update_payload() -> TestResult<()> {
     let node = obligation_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
@@ -1516,7 +1538,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
     Ok(())
 }
 
-async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
+async fn event_source_node() -> TestResult<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_schema(
@@ -1569,7 +1591,7 @@ fn correlated_event_source(
     event_source_document(owner, id, collection, Some(correlation_field), None)
 }
 
-async fn published_event_sources(node: &EmbeddedNode) -> Result<Vec<Value>> {
+async fn published_event_sources(node: &EmbeddedNode) -> TestResult<Vec<Value>> {
     let rows = node
         .execute("{ EventSource { event_source_id correlation_field group } }")
         .await;
@@ -1581,7 +1603,7 @@ async fn published_event_sources(node: &EmbeddedNode) -> Result<Vec<Value>> {
 }
 
 #[tokio::test]
-async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -> Result<()> {
+async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -> TestResult<()> {
     let node = event_source_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
@@ -1665,7 +1687,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
 }
 
 #[tokio::test]
-async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
+async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> TestResult<()> {
     let node = event_source_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
@@ -1740,7 +1762,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
 }
 
 #[tokio::test]
-async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
+async fn event_source_correlation_field_must_be_a_string() -> TestResult<()> {
     let node = event_source_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
@@ -1801,7 +1823,10 @@ fn event_source_payloads(
     }
 }
 
-async fn published_count_field_of(node: &EmbeddedNode, event_source_id: &str) -> Result<String> {
+async fn published_count_field_of(
+    node: &EmbeddedNode,
+    event_source_id: &str,
+) -> TestResult<String> {
     let source = published_event_sources(node)
         .await?
         .into_iter()
@@ -1814,7 +1839,7 @@ async fn published_count_field_of(node: &EmbeddedNode, event_source_id: &str) ->
 }
 
 #[tokio::test]
-async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Result<()> {
+async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> TestResult<()> {
     let node = event_source_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
@@ -1874,7 +1899,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
 }
 
 #[tokio::test]
-async fn replacement_judges_the_count_field_of_the_event_source_update_payload() -> Result<()> {
+async fn replacement_judges_the_count_field_of_the_event_source_update_payload() -> TestResult<()> {
     let node = event_source_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
@@ -1948,7 +1973,8 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
 }
 
 #[tokio::test]
-async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> Result<()> {
+async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> TestResult<()>
+{
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     node.add_schema(
@@ -1980,14 +2006,14 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         rows.data.unwrap()["Trigger"].as_array().unwrap().len()
     };
 
-    let refused = apply(
+    let refused = apply_refused(
         &access,
         vec![source("PlainPing"), task(true), trigger.clone()],
+        "a collection without handoff_id can never carry an outcome",
     )
-    .await
-    .expect_err("a collection without handoff_id can never carry an outcome");
+    .await;
     let diagnostic = format!("{}", ErrorChain(refused.as_ref()));
-    let schema = refused.downcast_ref::<OutcomeSourceSchemaError>().unwrap();
+    let schema = outcome_source_refusal(refused.as_ref()).unwrap();
     assert_eq!(schema.collection, "PlainPing");
     assert!(schema.missing_handoff);
     assert!(
@@ -1995,13 +2021,13 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
             && diagnostic.contains("has no handoff_id field"),
         "{diagnostic}"
     );
-    let mistyped = apply(
+    let mistyped = apply_refused(
         &access,
         vec![source("NumberedPing"), task(true), trigger.clone()],
+        "a non-String handoff_id is not a handoff identity",
     )
-    .await
-    .expect_err("a non-String handoff_id is not a handoff identity");
-    let schema = mistyped.downcast_ref::<OutcomeSourceSchemaError>().unwrap();
+    .await;
+    let schema = outcome_source_refusal(mistyped.as_ref()).unwrap();
     assert_eq!(schema.collection, "NumberedPing");
     assert!(!schema.missing_handoff);
     assert!(
@@ -2056,7 +2082,7 @@ fn schema_fields(names: &[&str]) -> BTreeMap<String, SchemaField> {
 }
 
 #[test]
-fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
+fn template_doc_fields_follow_the_declared_schema_vocabulary() -> TestResult<()> {
     let declared = schema_fields(&["message", "reply_session_id", "_internal"]);
     for prompt in [
         "Work {{ doc.message }}",
@@ -2106,7 +2132,7 @@ fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
 }
 
 #[test]
-fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
+fn every_fire_template_is_judged_with_its_field_named() -> TestResult<()> {
     let (trigger, task, source) = rule_documents("Work", None, false, None, "GapInput")?;
     let mut session = trigger.clone();
     session.session_id_template = Some("Resume {{ doc.session }}".to_owned());
@@ -2153,8 +2179,8 @@ fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
 }
 
 #[tokio::test]
-async fn publication_applies_native_route_template_fields_the_schema_does_not_declare() -> Result<()>
-{
+async fn publication_applies_native_route_template_fields_the_schema_does_not_declare(
+) -> TestResult<()> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());

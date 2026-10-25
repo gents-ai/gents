@@ -30,6 +30,85 @@ pub(crate) use documents::{
 pub(crate) use documents::{idempotency_key, load_invocation};
 pub(crate) use run::recover_local_invocations;
 
+#[derive(Debug, thiserror::Error)]
+pub enum CallbackError {
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Response(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    DesiredState(Box<crate::config_client::DesiredStateError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("CallbackBinding {name} must be non-empty")]
+    BindingFieldEmpty { name: &'static str },
+    #[error("duplicate callback input field {field}")]
+    DuplicateInputField { field: String },
+    #[error("CallbackBinding {binding_id} source field `{field}` is secret-bearing")]
+    SecretSourceField { binding_id: String, field: String },
+    #[error("CallbackBinding {binding_id} filter field `{field}` is secret-bearing")]
+    SecretFilterField { binding_id: String, field: String },
+    #[error("ambiguous or foreign CallbackBinding")]
+    AmbiguousOrForeignBinding,
+    #[error("query CallbackInvocation {invocation_id}")]
+    QueryInvocation {
+        invocation_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("query CallbackInvocation states {states}")]
+    QueryInvocationStates {
+        states: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("query recent failed CallbackInvocation")]
+    QueryRecentFailed(#[source] crate::config_client::ConfigClientError),
+    #[error("query CallbackResult for {invocation_id}")]
+    QueryResult {
+        invocation_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("ambiguous node-scoped callback/workspace document")]
+    AmbiguousNodeDocument,
+    #[error("query IsolatedWorkspace {workspace_id}")]
+    QueryIsolatedWorkspace {
+        workspace_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("query WorkspacePlacement {workspace_id}")]
+    QueryWorkspacePlacement {
+        workspace_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+}
+
+impl From<crate::config_client::DesiredStateError> for CallbackError {
+    fn from(error: crate::config_client::DesiredStateError) -> Self {
+        Self::DesiredState(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for CallbackError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Response(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::DesiredState(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error.as_ref())
+            }
+            _ => None,
+        }
+    }
+}
+
 pub(crate) const LIFECYCLE_PENDING: &str = "pending";
 pub(crate) const LIFECYCLE_CLAIMED: &str = "claimed";
 pub(crate) const LIFECYCLE_RUNNING: &str = "running";

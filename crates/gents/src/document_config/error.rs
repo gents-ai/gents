@@ -529,6 +529,8 @@ pub enum DocumentConfigError {
     ConfigurationRequiresLogicalId,
     #[error("configuration requires node_did")]
     ConfigurationRequiresNodeDid,
+    #[error("{name} configuration query did not return rows")]
+    ConfigurationRowsMissing { name: String },
     #[error(transparent)]
     DesiredState(Box<crate::config_client::DesiredStateError>),
     #[error("missing canonical projection")]

@@ -24,7 +24,7 @@ mod durable;
 type Result<T, E = EventSourceError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum EventSourceError {
+pub enum EventSourceError {
     #[error(transparent)]
     Engine(#[from] TriggerEngineError),
     #[error(transparent)]

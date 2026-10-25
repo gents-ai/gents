@@ -1493,11 +1493,11 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                     let single =
                         output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
                             .await
-                            .map_err(|error| ErrorChain(error.as_ref()).to_string());
+                            .map_err(|error| ErrorChain(&error).to_string());
                     let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
                         .load_message(&target)
                         .await
-                        .map_err(|error| ErrorChain(error.as_ref()).to_string());
+                        .map_err(|error| ErrorChain(&error).to_string());
                     assert_eq!(single, bulk, "single/bulk mismatch for {case}");
                     assert_eq!(single.is_err(), case == "key", "{case}");
                     Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())

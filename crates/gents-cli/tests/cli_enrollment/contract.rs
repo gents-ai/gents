@@ -558,7 +558,7 @@ async fn wait_for_replicated_reply(
                     Err(error) => {
                         return Err(format!(
                         "canonical terminal reconstruction failed on the replica for {request}: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     )
                         .into())
                     }

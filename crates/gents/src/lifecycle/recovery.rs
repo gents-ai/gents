@@ -440,7 +440,7 @@ fn definitive_output_corruption(error: &(dyn std::error::Error + 'static)) -> bo
                 | RecoveryPlanError::MalformedExtent
         )
     ) || matches!(
-        find_source::<ReconstructionError>(error),
+        crate::session::find_reconstruction_error(error),
         Some(
             ReconstructionError::ConflictingSegments { .. }
                 | ReconstructionError::ConflictingClosures { .. }

@@ -8,6 +8,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::CallbackError;
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 
 use crate::workspace::{
@@ -183,30 +184,31 @@ pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
+pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<(), CallbackError> {
     for (name, value) in [
         ("binding_id", &binding.binding_id),
         ("node_did", &binding.node_did),
         ("callback_id", &binding.callback_id),
         ("event_source_id", &binding.event_source_id),
     ] {
-        anyhow::ensure!(
-            !value.trim().is_empty(),
-            "CallbackBinding {name} must be non-empty"
-        );
+        if value.trim().is_empty() {
+            return Err(CallbackError::BindingFieldEmpty { name });
+        }
     }
     let mut unique = RapidHashSet::new();
     for field in &binding.input_fields {
         crate::graphql::validate_graphql_name(field)?;
-        anyhow::ensure!(
-            unique.insert(field),
-            "duplicate callback input field {field}"
-        );
-        anyhow::ensure!(
-            !crate::toolset::is_secret_env_name(field),
-            "CallbackBinding {} source field `{field}` is secret-bearing",
-            binding.binding_id
-        );
+        if !unique.insert(field) {
+            return Err(CallbackError::DuplicateInputField {
+                field: field.clone(),
+            });
+        }
+        if crate::toolset::is_secret_env_name(field) {
+            return Err(CallbackError::SecretSourceField {
+                binding_id: binding.binding_id.clone(),
+                field: field.clone(),
+            });
+        }
     }
     Ok(())
 }
@@ -215,17 +217,23 @@ pub fn reject_secret_bearing_callback_fields(
     binding_id: &str,
     filter: Option<&str>,
     source_fields: Option<&str>,
-) -> Result<()> {
+) -> Result<(), CallbackError> {
     if let Some(filter) = filter.map(str::trim).filter(|filter| !filter.is_empty()) {
         crate::graphql::validate_graphql_filter_fragment(filter)?;
         if let Some(field) = secret_field_in_filter(filter) {
-            anyhow::bail!("CallbackBinding {binding_id} filter field `{field}` is secret-bearing");
+            return Err(CallbackError::SecretFilterField {
+                binding_id: binding_id.to_owned(),
+                field,
+            });
         }
     }
     for field in parse_string_list(source_fields) {
         crate::graphql::validate_graphql_name(&field)?;
         if crate::toolset::is_secret_env_name(&field) {
-            anyhow::bail!("CallbackBinding {binding_id} source field `{field}` is secret-bearing");
+            return Err(CallbackError::SecretSourceField {
+                binding_id: binding_id.to_owned(),
+                field,
+            });
         }
     }
     Ok(())
@@ -293,7 +301,7 @@ async fn load_config<T>(
     collection: crate::Collection,
     owner: &str,
     id: &str,
-) -> Result<Option<T>>
+) -> Result<Option<T>, CallbackError>
 where
     T: serde::de::DeserializeOwned + Send,
 {
@@ -316,7 +324,7 @@ where
 pub async fn list_enabled_bindings(
     node: &EmbeddedNode,
     owner: &str,
-) -> Result<Vec<CallbackBindingDoc>> {
+) -> Result<Vec<CallbackBindingDoc>, CallbackError> {
     let (fields, _) =
         crate::config_client::config_projection(crate::Collection::CallbackBinding, None)?;
     let query = format!(
@@ -328,10 +336,9 @@ pub async fn list_enabled_bindings(
     let mut bindings: Vec<CallbackBindingDoc> = rows(&response, "CallbackBinding")?;
     let mut ids = RapidHashSet::new();
     for binding in &bindings {
-        anyhow::ensure!(
-            binding.node_did == owner && ids.insert(&binding.binding_id),
-            "ambiguous or foreign CallbackBinding"
-        );
+        if binding.node_did != owner || !ids.insert(&binding.binding_id) {
+            return Err(CallbackError::AmbiguousOrForeignBinding);
+        }
         validate_callback_binding(binding)?;
     }
     bindings.retain(|binding| binding.enabled);
@@ -343,32 +350,34 @@ pub async fn load_callback_module(
     node: &std::sync::Arc<EmbeddedNode>,
     module_id: &str,
     owner: &str,
-) -> Result<Option<CallbackModuleDoc>> {
+) -> Result<Option<CallbackModuleDoc>, CallbackError> {
     load_config(node, crate::Collection::CallbackModule, owner, module_id).await
 }
 pub async fn load_callback(
     node: &std::sync::Arc<EmbeddedNode>,
     callback_id: &str,
     owner: &str,
-) -> Result<Option<crate::document_config::Callback>> {
+) -> Result<Option<crate::document_config::Callback>, CallbackError> {
     load_config(node, crate::Collection::Callback, owner, callback_id).await
 }
 pub async fn load_binding(
     node: &std::sync::Arc<EmbeddedNode>,
     binding_id: &str,
     owner: &str,
-) -> Result<Option<CallbackBindingDoc>> {
+) -> Result<Option<CallbackBindingDoc>, CallbackError> {
     load_config(node, crate::Collection::CallbackBinding, owner, binding_id).await
 }
 pub async fn load_event_source(
     node: &std::sync::Arc<EmbeddedNode>,
     source_id: &str,
     owner: &str,
-) -> Result<Option<crate::document_config::EventSource>> {
+) -> Result<Option<crate::document_config::EventSource>, CallbackError> {
     load_config(node, crate::Collection::EventSource, owner, source_id).await
 }
 
-pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeSet<String>> {
+pub async fn load_trusted_callback_signers(
+    node: &EmbeddedNode,
+) -> Result<BTreeSet<String>, CallbackError> {
     let query = r#"{
         Node(filter: { enabled: { _eq: true } }) {
             node_did
@@ -393,7 +402,7 @@ pub async fn load_invocation(
     node: &EmbeddedNode,
     invocation_id: &str,
     owner: &str,
-) -> Result<Option<CallbackInvocationDoc>> {
+) -> Result<Option<CallbackInvocationDoc>, CallbackError> {
     let query = format!(
         r#"{{
             CallbackInvocation(
@@ -406,11 +415,13 @@ pub async fn load_invocation(
     );
     let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation")
         .await
-        .with_context(|| format!("query CallbackInvocation {invocation_id}"))?;
-    anyhow::ensure!(
-        rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
+        .map_err(|source| CallbackError::QueryInvocation {
+            invocation_id: invocation_id.to_owned(),
+            source,
+        })?;
+    if rows::<Value>(&response, "CallbackInvocation")?.len() > 1 {
+        return Err(CallbackError::AmbiguousNodeDocument);
+    }
     Ok(first_row(&response, "CallbackInvocation")?)
 }
 
@@ -418,7 +429,7 @@ pub async fn load_invocation_by_key(
     node: &EmbeddedNode,
     key: &str,
     owner: &str,
-) -> Result<Option<CallbackInvocationDoc>> {
+) -> Result<Option<CallbackInvocationDoc>, CallbackError> {
     let query = format!(
         r#"{{
             CallbackInvocation(
@@ -432,17 +443,16 @@ pub async fn load_invocation_by_key(
     let response =
         graphql_with_transaction_retry(node, &query, "query CallbackInvocation by idempotency_key")
             .await?;
-    anyhow::ensure!(
-        rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
+    if rows::<Value>(&response, "CallbackInvocation")?.len() > 1 {
+        return Err(CallbackError::AmbiguousNodeDocument);
+    }
     Ok(first_row(&response, "CallbackInvocation")?)
 }
 
 pub async fn list_recoverable_invocations(
     node: &EmbeddedNode,
     owner_node_did: &str,
-) -> Result<Vec<CallbackInvocationDoc>> {
+) -> Result<Vec<CallbackInvocationDoc>, CallbackError> {
     let mut invocations =
         query_owner_invocations(node, owner_node_did, r#"["pending", "claimed", "running"]"#)
             .await?;
@@ -453,7 +463,7 @@ pub async fn list_recoverable_invocations(
 async fn list_recent_succeeded_missing_result(
     node: &EmbeddedNode,
     owner_node_did: &str,
-) -> Result<Vec<CallbackInvocationDoc>> {
+) -> Result<Vec<CallbackInvocationDoc>, CallbackError> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
     let query = format!(
         r#"{{
@@ -490,7 +500,7 @@ async fn list_recent_succeeded_missing_result(
 pub async fn list_recent_failed(
     node: &EmbeddedNode,
     owner_node_did: &str,
-) -> Result<Vec<CallbackInvocationDoc>> {
+) -> Result<Vec<CallbackInvocationDoc>, CallbackError> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
     let query = format!(
         r#"{{
@@ -511,7 +521,7 @@ pub async fn list_recent_failed(
     let response =
         crate::graphql::graphql_with_transaction_retry(node, &query, "callback.list_failed")
             .await
-            .context("query recent failed CallbackInvocation")?;
+            .map_err(CallbackError::QueryRecentFailed)?;
     Ok(rows(&response, "CallbackInvocation")?)
 }
 
@@ -536,7 +546,7 @@ async fn load_callback_results_for_invocations(
     node: &EmbeddedNode,
     invocation_ids: impl IntoIterator<Item = &str>,
     owner: &str,
-) -> Result<RapidHashSet<String>> {
+) -> Result<RapidHashSet<String>, CallbackError> {
     let ids: Vec<String> = invocation_ids
         .into_iter()
         .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
@@ -569,7 +579,7 @@ async fn query_owner_invocations(
     node: &EmbeddedNode,
     owner_node_did: &str,
     states: &str,
-) -> Result<Vec<CallbackInvocationDoc>> {
+) -> Result<Vec<CallbackInvocationDoc>, CallbackError> {
     let query = format!(
         r#"{{
             CallbackInvocation(
@@ -585,7 +595,10 @@ async fn query_owner_invocations(
     );
     let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation states")
         .await
-        .with_context(|| format!("query CallbackInvocation states {states}"))?;
+        .map_err(|source| CallbackError::QueryInvocationStates {
+            states: states.to_owned(),
+            source,
+        })?;
     Ok(rows(&response, "CallbackInvocation")?)
 }
 
@@ -593,7 +606,7 @@ pub async fn load_callback_result(
     node: &EmbeddedNode,
     invocation_id: &str,
     owner: &str,
-) -> Result<Option<CallbackResultDoc>> {
+) -> Result<Option<CallbackResultDoc>, CallbackError> {
     let query = format!(
         r#"{{
             CallbackResult(
@@ -606,11 +619,13 @@ pub async fn load_callback_result(
     );
     let response = graphql_with_transaction_retry(node, &query, "query CallbackResult")
         .await
-        .with_context(|| format!("query CallbackResult for {invocation_id}"))?;
-    anyhow::ensure!(
-        rows::<Value>(&response, "CallbackResult").map(|rows| rows.len())? <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
+        .map_err(|source| CallbackError::QueryResult {
+            invocation_id: invocation_id.to_owned(),
+            source,
+        })?;
+    if rows::<Value>(&response, "CallbackResult")?.len() > 1 {
+        return Err(CallbackError::AmbiguousNodeDocument);
+    }
     Ok(first_row(&response, "CallbackResult")?)
 }
 
@@ -870,7 +885,7 @@ pub(crate) async fn load_isolated_workspace(
     node: &EmbeddedNode,
     workspace_id: &str,
     owner: &str,
-) -> Result<Option<IsolatedWorkspaceDoc>> {
+) -> Result<Option<IsolatedWorkspaceDoc>, CallbackError> {
     let query = format!(
         r#"{{
             IsolatedWorkspace(
@@ -883,11 +898,13 @@ pub(crate) async fn load_isolated_workspace(
     );
     let response = graphql_with_transaction_retry(node, &query, "query IsolatedWorkspace")
         .await
-        .with_context(|| format!("query IsolatedWorkspace {workspace_id}"))?;
-    anyhow::ensure!(
-        rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
+        .map_err(|source| CallbackError::QueryIsolatedWorkspace {
+            workspace_id: workspace_id.to_owned(),
+            source,
+        })?;
+    if rows::<Value>(&response, "IsolatedWorkspace")?.len() > 1 {
+        return Err(CallbackError::AmbiguousNodeDocument);
+    }
     Ok(first_row(&response, "IsolatedWorkspace")?)
 }
 
@@ -895,7 +912,7 @@ pub(crate) async fn load_workspace_placement(
     node: &EmbeddedNode,
     workspace_id: &str,
     owner: &str,
-) -> Result<Option<WorkspacePlacementDoc>> {
+) -> Result<Option<WorkspacePlacementDoc>, CallbackError> {
     let query = format!(
         r#"{{
             WorkspacePlacement(
@@ -908,10 +925,12 @@ pub(crate) async fn load_workspace_placement(
     );
     let response = graphql_with_transaction_retry(node, &query, "query WorkspacePlacement")
         .await
-        .with_context(|| format!("query WorkspacePlacement {workspace_id}"))?;
-    anyhow::ensure!(
-        rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
+        .map_err(|source| CallbackError::QueryWorkspacePlacement {
+            workspace_id: workspace_id.to_owned(),
+            source,
+        })?;
+    if rows::<Value>(&response, "WorkspacePlacement")?.len() > 1 {
+        return Err(CallbackError::AmbiguousNodeDocument);
+    }
     Ok(first_row(&response, "WorkspacePlacement")?)
 }

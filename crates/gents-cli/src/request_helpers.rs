@@ -253,8 +253,11 @@ pub(crate) async fn observe_canonical_request_output(
     graphql: &GraphqlEndpoint,
     request: &AgentRequestRow,
 ) -> Result<gents::session::CanonicalRequestOutput> {
-    gents::session::observe_request_output(&gents::ConfigAccess::Graphql(graphql.clone()), request)
-        .await
+    Ok(gents::session::observe_request_output(
+        &gents::ConfigAccess::Graphql(graphql.clone()),
+        request,
+    )
+    .await?)
 }
 
 #[derive(Debug, Clone, Serialize)]

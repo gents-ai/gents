@@ -7,6 +7,8 @@ use crate::Collection;
 use serde_json::Value;
 use std::sync::Arc;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 fn document(collection: Collection, mut value: Value) -> DesiredStateApplyDocument {
     value["node_did"] = json!(PIN_FIXED_DID);
     DesiredStateApplyDocument {
@@ -35,7 +37,7 @@ fn trigger(enabled: bool) -> DesiredStateApplyDocument {
     )
 }
 
-async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> Result<()> {
+async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> TestResult<()> {
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
         .transact_write("test.cursor.publish", |txn| {
@@ -43,9 +45,10 @@ async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) ->
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
         .await
+        .map_err(Into::into)
 }
 
-async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, ConfigAccess)> {
+async fn fixture(enabled: bool) -> TestResult<(Arc<defra_node::EmbeddedNode>, ConfigAccess)> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -64,7 +67,7 @@ async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, Config
     Ok((node, access))
 }
 
-async fn create_source(access: &ConfigAccess, collection: &str, label: &str) -> Result<String> {
+async fn create_source(access: &ConfigAccess, collection: &str, label: &str) -> TestResult<String> {
     crate::graphql::validate_collection_identifier(collection)?;
     access
         .transact_write("test.cursor.source", |txn| {
@@ -89,7 +92,7 @@ fn trigger_consumer() -> EventConsumer {
     }
 }
 
-async fn cursor(access: &ConfigAccess, collection: &str) -> Result<String> {
+async fn cursor(access: &ConfigAccess, collection: &str) -> TestResult<String> {
     access
         .transact_write("test.cursor.saved", |txn| {
             Box::pin(async move {
@@ -105,8 +108,8 @@ async fn cursor(access: &ConfigAccess, collection: &str) -> Result<String> {
 }
 
 #[tokio::test]
-async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committed_ack() -> Result<()>
-{
+async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committed_ack(
+) -> TestResult<()> {
     let signing_home = tempfile::tempdir()?;
     let _identity = pin_fixed_signing_identity(signing_home.path());
     let (node, access) = fixture(true).await?;
@@ -195,7 +198,8 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
 }
 
 #[tokio::test]
-async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals() -> Result<()> {
+async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals() -> TestResult<()>
+{
     let (node, access) = fixture(false).await?;
     create_source(&access, "WorkB", "before-replacement").await?;
     publish(&access, vec![source("WorkB")]).await?;
@@ -223,7 +227,7 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
 }
 
 #[tokio::test]
-async fn source_registered_before_collection_retains_its_first_arrival() -> Result<()> {
+async fn source_registered_before_collection_retains_its_first_arrival() -> TestResult<()> {
     let (node, access) = fixture(false).await?;
     publish(&access, vec![source("FutureWork")]).await?;
     assert_eq!(cursor(&access, "FutureWork").await?, "0");

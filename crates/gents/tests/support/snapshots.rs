@@ -361,12 +361,7 @@ pub async fn fetch_message_snapshots_for_session(
             requester_did,
         )
         .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "reconstruct message {header_id}: {}",
-                ErrorChain(error.as_ref())
-            )
-        });
+        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {}", ErrorChain(&error)));
         let role = serde_json::to_value(header.role)
             .expect("serialize message role")
             .as_str()

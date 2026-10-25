@@ -2188,7 +2188,7 @@ pub(super) mod tests {
                 }
                 Err(error)
                     if error
-                        .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                        .reconstruction()
                         .is_some_and(|error| error.is_incomplete()) =>
                 {
                     tokio::time::sleep(Duration::from_millis(250)).await;
@@ -2197,7 +2197,7 @@ pub(super) mod tests {
                 Err(error) => {
                     panic!(
                         "reconstructing projected child result failed: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     );
                 }
             }

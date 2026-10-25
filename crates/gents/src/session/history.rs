@@ -1,5 +1,44 @@
 use super::*;
-use anyhow::{Context, Result};
+
+#[derive(Debug, thiserror::Error)]
+pub enum HistoryError {
+    #[error(transparent)]
+    Output(#[from] super::output::SessionOutputError),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error("retry parent chain contains a cycle")]
+    RetryParentCycle,
+    #[error("retry frontier query omitted data")]
+    RetryFrontierDataOmitted,
+    #[error("retry parent query omitted rows")]
+    RetryParentRowsOmitted,
+    #[error("retry parent must be an exact terminal request in the same agent scope")]
+    RetryParentNotTerminal,
+    #[error("retry continuation cannot cross requester scope")]
+    RetryRequesterScope,
+    #[error(
+        "retry parent still has unsettled foreground tool execution; wait for tool recovery before retrying"
+    )]
+    RetryToolUnsettled,
+    #[error("retry input query omitted rows")]
+    RetryInputRowsOmitted,
+    #[error("retry parent has ambiguous authored input")]
+    RetryAmbiguousInput,
+}
+
+impl crate::config_client::TransactionFailure for HistoryError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Output(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = HistoryError> = std::result::Result<T, E>;
 
 pub fn sequence_message_key(
     node_did: &str,
@@ -63,6 +102,7 @@ pub(crate) async fn load_sequenced_history_for_request(
         Some(provider_profile),
     )
     .await
+    .map_err(HistoryError::from)
 }
 
 pub(crate) async fn retry_has_published_input(
@@ -74,10 +114,9 @@ pub(crate) async fn retry_has_published_input(
     };
     let mut visited = rapidhash::RapidHashSet::default();
     loop {
-        anyhow::ensure!(
-            visited.insert(parent_id.clone()),
-            "retry parent chain contains a cycle"
-        );
+        if !visited.insert(parent_id.clone()) {
+            return Err(HistoryError::RetryParentCycle);
+        }
         let parent = crate::graphql::escape_graphql_string(&parent_id);
         let scope = super::query::session_scope_filter(
             &request.node_did,
@@ -104,37 +143,34 @@ pub(crate) async fn retry_has_published_input(
         let rows = response
             .data
             .as_ref()
-            .context("retry frontier query omitted data")?;
+            .ok_or(HistoryError::RetryFrontierDataOmitted)?;
         let parents = rows["AgentRequest"]
             .as_array()
-            .context("retry parent query omitted rows")?;
-        anyhow::ensure!(
-            parents.len() == 1
-                && parents[0]["node_did"].as_str() == Some(request.node_did.as_str())
-                && matches!(
-                    parents[0]["lifecycle_state"].as_str(),
-                    Some("failed" | "dead")
-                ),
-            "retry parent must be an exact terminal request in the same agent scope"
-        );
+            .ok_or(HistoryError::RetryParentRowsOmitted)?;
+        if !(parents.len() == 1
+            && parents[0]["node_did"].as_str() == Some(request.node_did.as_str())
+            && matches!(
+                parents[0]["lifecycle_state"].as_str(),
+                Some("failed" | "dead")
+            ))
+        {
+            return Err(HistoryError::RetryParentNotTerminal);
+        }
         if parents[0]["session_id"].as_str() != Some(request.session_id.as_str()) {
             return Ok(false);
         }
-        anyhow::ensure!(
-            parents[0]["requester_did"].as_str() == request.requester_did.as_deref(),
-            "retry continuation cannot cross requester scope"
-        );
-        anyhow::ensure!(
-            rows["AgentToolCall"].as_array().is_some_and(Vec::is_empty),
-            "retry parent still has unsettled foreground tool execution; wait for tool recovery before retrying"
-        );
+        if parents[0]["requester_did"].as_str() != request.requester_did.as_deref() {
+            return Err(HistoryError::RetryRequesterScope);
+        }
+        if !rows["AgentToolCall"].as_array().is_some_and(Vec::is_empty) {
+            return Err(HistoryError::RetryToolUnsettled);
+        }
         let prompts = rows["AgentMessage"]
             .as_array()
-            .context("retry input query omitted rows")?;
-        anyhow::ensure!(
-            prompts.len() <= 1,
-            "retry parent has ambiguous authored input"
-        );
+            .ok_or(HistoryError::RetryInputRowsOmitted)?;
+        if prompts.len() > 1 {
+            return Err(HistoryError::RetryAmbiguousInput);
+        }
         if !prompts.is_empty() {
             return Ok(true);
         }

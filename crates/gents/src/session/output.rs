@@ -6,7 +6,6 @@
 //! from its origin session, so segment reads are scoped by node/requester,
 //! not by the child session label.
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
@@ -20,15 +19,191 @@ use std::sync::Arc;
 
 use super::canonical_rows::{
     decode_output_segment_row, decode_scoped_request_output_segments,
-    decode_transcript_message_row, request_output_segments_query, AGENT_MESSAGE_FIELDS,
-    AGENT_OUTPUT_SEGMENT_FIELDS,
+    decode_transcript_message_row, request_output_segments_query, CanonicalRowsError,
+    AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use super::query::session_scope_filter;
 use super::SequencedMessage;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError, TransactionFailure};
+use crate::graphql::GraphqlResponseError;
 
-fn replay_violation(message: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::new(gents_loop::loop_stream::ReplayEvidenceViolation(
+#[derive(Debug, thiserror::Error)]
+pub enum SessionOutputError {
+    #[error(transparent)]
+    Violation(#[from] gents_loop::loop_stream::ReplayEvidenceViolation),
+    #[error(transparent)]
+    Read(#[from] CanonicalOutputReadError),
+    #[error(transparent)]
+    Rows(#[from] CanonicalRowsError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    RenderedRequest(#[from] crate::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    CaptureKey(#[from] gents_loop::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+    #[error(transparent)]
+    Origin(#[from] gents_protocol::output::origin::OriginError),
+    #[error(transparent)]
+    TurnIndex(#[from] std::num::TryFromIntError),
+    #[error("{context}")]
+    ReconstructContext {
+        context: String,
+        #[source]
+        source: gents_protocol::output::ReconstructionError,
+    },
+    #[error("reconstructing canonical message {doc_id} at sequence {sequence}")]
+    MessageContext {
+        doc_id: String,
+        sequence: u32,
+        #[source]
+        source: Box<SessionOutputError>,
+    },
+    #[error("{operation} failed: {errors}")]
+    ConfigOperationFailed {
+        operation: String,
+        errors: serde_json::Value,
+    },
+    #[error("loading canonical history for session_id={session_id}: {errors:?}")]
+    HistoryQueryFailed {
+        session_id: String,
+        errors: Vec<query::QueryResponseError>,
+    },
+    #[error("canonical history query omitted data")]
+    HistoryDataOmitted,
+    #[error("canonical history query omitted AgentMessage rows")]
+    HistoryRowsOmitted,
+    #[error("canonical header crossed requested session scope")]
+    HistoryHeaderScope,
+    #[error("ambiguous canonical session sequence {sequence}")]
+    AmbiguousSessionSequence { sequence: u32 },
+    #[error("ambiguous canonical session message key {key}")]
+    AmbiguousSessionKey { key: String },
+    #[error("canonical payload request id is blank")]
+    BlankPayloadRequest,
+    #[error("canonical payload close does not belong to the expected tool source")]
+    PayloadCloseSource,
+    #[error("created canonical output is not uniquely readable")]
+    CreatedOutputNotUnique,
+    #[error("created canonical header is not uniquely readable")]
+    CreatedHeaderNotUnique,
+    #[error("created canonical rows crossed their authorized scope")]
+    CreatedRowsCrossedScope,
+    #[error("request header lookup requires request document id")]
+    RequestHeaderBlankId,
+    #[error("request header crossed exact scope")]
+    RequestHeaderCrossedScope,
+    #[error("duplicate canonical message sequence for one request scope")]
+    DuplicateRequestSequence,
+    #[error("canonical header id is blank")]
+    BlankHeaderId,
+    #[error("canonical header scope mismatch")]
+    HeaderScopeMismatch,
+    #[error("canonical fork origin cycle at {origin_message_doc_id}")]
+    ForkOriginCycle { origin_message_doc_id: String },
+    #[error("canonical replay output batch returned an unrequested physical request")]
+    UnrequestedOutputRequest,
+    #[error("canonical replay request batch returned a row without _docID")]
+    ReplayRequestRowWithoutDocId,
+    #[error("canonical replay request batch returned an unrequested physical request")]
+    UnrequestedRequestRow,
+    #[error("canonical replay commit batch omitted {request_doc_id}")]
+    ReplayCommitBatchOmitted { request_doc_id: String },
+    #[error("canonical replay request batch omitted {request_doc_id}")]
+    ReplayRequestOmitted { request_doc_id: String },
+    #[error("canonical provider header has no physical request")]
+    ProviderHeaderRequestMissing,
+    #[error("canonical replay execution assistant has no physical request")]
+    ExecutionAssistantRequestMissing,
+    #[error("canonical replay candidate is not an execution publication")]
+    NotExecutionPublication,
+    #[error("canonical replay reference has a missing or conflicting physical close {close_id}")]
+    ConflictingClose { close_id: String },
+    #[error("canonical replay close crossed its request execution or is not complete")]
+    CloseCrossedExecution,
+    #[error("canonical replay assistant references a different provider loop scope")]
+    ProviderScopeMismatch,
+    #[error("canonical replay assistant combines different provider turns")]
+    ProviderTurnConflict,
+    #[error("canonical replay assistant references an invalid close source")]
+    InvalidCloseSource,
+    #[error("canonical replay assistant combines authored and provider sources")]
+    AuthoredProviderConflict,
+}
+
+type Result<T, E = SessionOutputError> = std::result::Result<T, E>;
+
+impl SessionOutputError {
+    pub fn reconstruction(&self) -> Option<&gents_protocol::output::ReconstructionError> {
+        match self {
+            Self::Reconstruction(error) | Self::ReconstructContext { source: error, .. } => {
+                Some(error)
+            }
+            Self::MessageContext { source, .. } => source.reconstruction(),
+            _ => None,
+        }
+    }
+
+    fn into_violation(
+        self,
+    ) -> std::result::Result<gents_loop::loop_stream::ReplayEvidenceViolation, Self> {
+        match self {
+            Self::Violation(violation) => Ok(violation),
+            Self::MessageContext {
+                doc_id,
+                sequence,
+                source,
+            } => (*source)
+                .into_violation()
+                .map_err(|source| Self::MessageContext {
+                    doc_id,
+                    sequence,
+                    source: Box::new(source),
+                }),
+            error => Err(error),
+        }
+    }
+}
+
+/// Finds a reconstruction failure anywhere in `error`'s chain, including one
+/// carried by the transparent `Reconstruction` variant, which `source()` skips.
+pub(crate) fn find_reconstruction_error<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a gents_protocol::output::ReconstructionError> {
+    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
+        cause
+            .downcast_ref::<gents_protocol::output::ReconstructionError>()
+            .or_else(|| {
+                cause
+                    .downcast_ref::<SessionOutputError>()
+                    .and_then(SessionOutputError::reconstruction)
+            })
+            .or_else(
+                || match cause.downcast_ref::<super::history::HistoryError>() {
+                    Some(super::history::HistoryError::Output(error)) => error.reconstruction(),
+                    _ => None,
+                },
+            )
+    })
+}
+
+impl TransactionFailure for SessionOutputError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => TransactionFailure::config_client_error(error),
+            Self::RenderedRequest(error) => TransactionFailure::config_client_error(error),
+            Self::MessageContext { source, .. } => source.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+fn replay_violation(message: impl Into<String>) -> SessionOutputError {
+    SessionOutputError::Violation(gents_loop::loop_stream::ReplayEvidenceViolation(
         message.into(),
     ))
 }
@@ -49,14 +224,6 @@ pub enum CanonicalOutputReadError {
     AmbiguousCanonicalHeader { header_doc_id: String },
     #[error("canonical output query omitted {collection} rows")]
     RowsOmitted { collection: String },
-}
-
-#[derive(Debug, thiserror::Error)]
-enum ReplayRequestFactsError {
-    #[error(transparent)]
-    Violation(#[from] gents_loop::loop_stream::ReplayEvidenceViolation),
-    #[error("canonical replay request batch omitted {request_doc_id}")]
-    Omitted { request_doc_id: String },
 }
 
 /// The physical request and node scope supplied by the owned restore.
@@ -317,22 +484,18 @@ impl ReadAccess<'_, '_> {
             Self::Txn(txn) => return Ok(txn.execute(document).await?),
             Self::Config(access) => {
                 let value = access.execute(document).await?;
-                anyhow::ensure!(
-                    value
-                        .get("errors")
-                        .is_none_or(|errors| errors.is_null()
-                            || errors.as_array().is_some_and(Vec::is_empty)),
-                    "{operation} failed: {}",
-                    value["errors"]
-                );
+                if !value.get("errors").is_none_or(|errors| {
+                    errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
+                }) {
+                    return Err(SessionOutputError::ConfigOperationFailed {
+                        operation: operation.to_owned(),
+                        errors: value["errors"].clone(),
+                    });
+                }
                 return Ok(value);
             }
         };
-        anyhow::ensure!(
-            !response.has_errors(),
-            "{operation} failed: {:?}",
-            response.errors
-        );
+        crate::graphql::ensure_no_errors(&response, operation)?;
         Ok(crate::graphql::into_data_envelope(response.data))
     }
 }
@@ -479,26 +642,24 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
             .query(&query, "load_created_canonical_message")
             .await?;
         let output = rows_value(&response, "created_output")?;
-        anyhow::ensure!(
-            output.len() == 1,
-            "created canonical output is not uniquely readable"
-        );
+        if output.len() != 1 {
+            return Err(SessionOutputError::CreatedOutputNotUnique);
+        }
         let output = decode_output_segment_row(&output[0])?;
         let headers = rows_value(&response, "created_header")?;
-        anyhow::ensure!(
-            headers.len() == 1,
-            "created canonical header is not uniquely readable"
-        );
+        if headers.len() != 1 {
+            return Err(SessionOutputError::CreatedHeaderNotUnique);
+        }
         let header = decode_transcript_message_row(&headers[0])?;
-        anyhow::ensure!(
-            output.doc_id == output_doc_id
-                && output.segment.node_did == self.node_did
-                && output.segment.requester_did.as_deref() == self.requester_did
-                && header.doc_id == header_doc_id
-                && header.message.node_did == self.node_did
-                && header.message.requester_did.as_deref() == self.requester_did,
-            "created canonical rows crossed their authorized scope"
-        );
+        if !(output.doc_id == output_doc_id
+            && output.segment.node_did == self.node_did
+            && output.segment.requester_did.as_deref() == self.requester_did
+            && header.doc_id == header_doc_id
+            && header.message.node_did == self.node_did
+            && header.message.requester_did.as_deref() == self.requester_did)
+        {
+            return Err(SessionOutputError::CreatedRowsCrossedScope);
+        }
         if let Some(rows) = self.cache.sources.get_mut(&(
             output.segment.request_doc_id.clone(),
             output.segment.source.clone(),
@@ -647,10 +808,9 @@ async fn load_canonical_payload(
     reference: &PayloadRef,
     expected_source: Option<&gents_protocol::output::OutputSource>,
 ) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
-    anyhow::ensure!(
-        !request_doc_id.trim().is_empty(),
-        "canonical payload request id is blank"
-    );
+    if request_doc_id.trim().is_empty() {
+        return Err(SessionOutputError::BlankPayloadRequest);
+    }
     let response = access
         .query(
             &request_output_segments_query(request_doc_id),
@@ -664,14 +824,13 @@ async fn load_canonical_payload(
         requester_did,
     )?;
     if let Some(expected_source) = expected_source {
-        anyhow::ensure!(
-            rows.iter().any(|row| {
-                row.doc_id == reference.close_doc_id
-                    && row.segment.source == *expected_source
-                    && row.segment.close.is_some()
-            }),
-            "canonical payload close does not belong to the expected tool source"
-        );
+        if !rows.iter().any(|row| {
+            row.doc_id == reference.close_doc_id
+                && row.segment.source == *expected_source
+                && row.segment.close.is_some()
+        }) {
+            return Err(SessionOutputError::PayloadCloseSource);
+        }
     }
     let observed = rows
         .iter()
@@ -680,8 +839,12 @@ async fn load_canonical_payload(
             segment: &row.segment,
         })
         .collect::<Vec<_>>();
-    gents_protocol::output::reconstruction::reconstruct_stream(&observed, &[], &[], reference)
-        .map_err(anyhow::Error::from)
+    Ok(gents_protocol::output::reconstruction::reconstruct_stream(
+        &observed,
+        &[],
+        &[],
+        reference,
+    )?)
 }
 
 /// Load only canonical headers bound to one exact request.  Callers that make
@@ -695,10 +858,9 @@ pub(crate) async fn load_request_headers_in_txn(
     requester_did: Option<&str>,
     request_doc_id: &str,
 ) -> Result<Vec<super::canonical_rows::TranscriptMessageRow>> {
-    anyhow::ensure!(
-        !request_doc_id.trim().is_empty(),
-        "request header lookup requires request document id"
-    );
+    if request_doc_id.trim().is_empty() {
+        return Err(SessionOutputError::RequestHeaderBlankId);
+    }
     let scope = session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{ AgentMessage(filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
@@ -711,17 +873,16 @@ pub(crate) async fn load_request_headers_in_txn(
         .collect::<Result<Vec<_>, _>>()?;
     let mut sequences = std::collections::BTreeSet::new();
     for header in &headers {
-        anyhow::ensure!(
-            header.message.session_id == session_id
-                && header.message.node_did == node_did
-                && header.message.requester_did.as_deref() == requester_did
-                && header.message.request_doc_id.as_deref() == Some(request_doc_id),
-            "request header crossed exact scope"
-        );
-        anyhow::ensure!(
-            sequences.insert(header.message.sequence),
-            "duplicate canonical message sequence for one request scope"
-        );
+        if !(header.message.session_id == session_id
+            && header.message.node_did == node_did
+            && header.message.requester_did.as_deref() == requester_did
+            && header.message.request_doc_id.as_deref() == Some(request_doc_id))
+        {
+            return Err(SessionOutputError::RequestHeaderCrossedScope);
+        }
+        if !sequences.insert(header.message.sequence) {
+            return Err(SessionOutputError::DuplicateRequestSequence);
+        }
     }
     Ok(headers)
 }
@@ -746,10 +907,9 @@ async fn load_header(
     requester_did: Option<&str>,
     cache: &mut ReadCache,
 ) -> Result<super::canonical_rows::TranscriptMessageRow> {
-    anyhow::ensure!(
-        !header_doc_id.trim().is_empty(),
-        "canonical header id is blank"
-    );
+    if header_doc_id.trim().is_empty() {
+        return Err(SessionOutputError::BlankHeaderId);
+    }
     if let Some(header) = cache.headers.get(header_doc_id) {
         return Ok(header.clone());
     }
@@ -771,19 +931,18 @@ async fn load_header(
             .collect::<Result<Vec<_>, _>>()?
     };
     match headers.len() {
-        0 => Err(anyhow::Error::new(
-            CanonicalOutputReadError::MissingCanonicalHeader {
-                header_doc_id: header_doc_id.to_owned(),
-            },
-        )),
+        0 => Err(CanonicalOutputReadError::MissingCanonicalHeader {
+            header_doc_id: header_doc_id.to_owned(),
+        }
+        .into()),
         1 => {
             let header = headers.pop().expect("one canonical header checked");
-            anyhow::ensure!(
-                header.doc_id == header_doc_id
-                    && header.message.node_did == node_did
-                    && header.message.requester_did.as_deref() == requester_did,
-                "canonical header scope mismatch"
-            );
+            if !(header.doc_id == header_doc_id
+                && header.message.node_did == node_did
+                && header.message.requester_did.as_deref() == requester_did)
+            {
+                return Err(SessionOutputError::HeaderScopeMismatch);
+            }
             // A pinned physical ID does not make a second header at the same
             // logical coordinate harmless. Include visible key/sequence twins
             // in the shared identity validator before caching the observation.
@@ -803,16 +962,14 @@ async fn load_header(
                 header_doc_id,
                 node_did,
                 requester_did,
-            )
-            .map_err(anyhow::Error::new)?;
+            )?;
             cache.headers.insert(header.doc_id.clone(), header.clone());
             Ok(header)
         }
-        _ => Err(anyhow::Error::new(
-            CanonicalOutputReadError::AmbiguousCanonicalHeader {
-                header_doc_id: header_doc_id.to_owned(),
-            },
-        )),
+        _ => Err(CanonicalOutputReadError::AmbiguousCanonicalHeader {
+            header_doc_id: header_doc_id.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -881,7 +1038,7 @@ fn validate_fork(
             message: &origin.message,
         },
     )
-    .map_err(anyhow::Error::new)
+    .map_err(SessionOutputError::Origin)
 }
 
 async fn validate_origin_chain(
@@ -901,10 +1058,11 @@ async fn validate_origin_chain(
         else {
             return Ok(child);
         };
-        anyhow::ensure!(
-            active.insert(origin_message_doc_id.clone()),
-            "canonical fork origin cycle at {origin_message_doc_id}"
-        );
+        if !active.insert(origin_message_doc_id.clone()) {
+            return Err(SessionOutputError::ForkOriginCycle {
+                origin_message_doc_id: origin_message_doc_id.clone(),
+            });
+        }
         let origin = load_header(
             access,
             origin_message_doc_id,
@@ -1046,10 +1204,9 @@ async fn preload_request_output_segments(
         let mut grouped: BTreeMap<String, Vec<super::canonical_rows::OutputSegmentRow>> =
             BTreeMap::new();
         for row in rows {
-            anyhow::ensure!(
-                allowed.contains(&row.segment.request_doc_id),
-                "canonical replay output batch returned an unrequested physical request"
-            );
+            if !allowed.contains(&row.segment.request_doc_id) {
+                return Err(SessionOutputError::UnrequestedOutputRequest);
+            }
             grouped
                 .entry(row.segment.request_doc_id.clone())
                 .or_default()
@@ -1112,11 +1269,10 @@ async fn load_replay_request_facts_batch(
             let request_doc_id = row
                 .get("_docID")
                 .and_then(serde_json::Value::as_str)
-                .with_context(|| "canonical replay request batch returned a row without _docID")?;
-            anyhow::ensure!(
-                allowed.contains(request_doc_id),
-                "canonical replay request batch returned an unrequested physical request"
-            );
+                .ok_or(SessionOutputError::ReplayRequestRowWithoutDocId)?;
+            if !allowed.contains(request_doc_id) {
+                return Err(SessionOutputError::UnrequestedRequestRow);
+            }
             grouped
                 .get_mut(request_doc_id)
                 .expect("requested request IDs were initialized")
@@ -1126,8 +1282,8 @@ async fn load_replay_request_facts_batch(
             let commit_rows = response
                 .pointer(&format!("/data/commit{index}"))
                 .and_then(serde_json::Value::as_array)
-                .with_context(|| {
-                    format!("canonical replay commit batch omitted {request_doc_id}")
+                .ok_or_else(|| SessionOutputError::ReplayCommitBatchOmitted {
+                    request_doc_id: request_doc_id.clone(),
                 })?;
             let commits = crate::graphql::decode_composite_commits(commit_rows)?;
             let rows = grouped
@@ -1339,7 +1495,10 @@ async fn reconstruct_scoped_message_with_facts(
         }
     }
     let message =
-        reconstructed.map_err(|(error, context)| anyhow::Error::new(error).context(context))?;
+        reconstructed.map_err(|(error, context)| SessionOutputError::ReconstructContext {
+            context,
+            source: error,
+        })?;
     Ok(ReconstructedScopedMessage {
         header,
         origin,
@@ -1511,7 +1670,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         let request_doc_id = origin_header
             .request_doc_id
             .as_deref()
-            .context("canonical provider header has no physical request")?;
+            .ok_or(SessionOutputError::ProviderHeaderRequestMissing)?;
         // Filter only after bounded-header and physical-coordinate validation
         // so unrequested history cannot bypass canonical-view checks.
         if let Some(tags) = selected_tags {
@@ -1585,8 +1744,8 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
                     &candidate.session_id,
                     facts,
                 )
-                .map_err(ReplayRequestFactsError::Violation),
-                None => Err(ReplayRequestFactsError::Omitted {
+                .map_err(SessionOutputError::Violation),
+                None => Err(SessionOutputError::ReplayRequestOmitted {
                     request_doc_id: candidate.request_doc_id.clone(),
                 }),
             },
@@ -1597,7 +1756,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             // makes only its turn non-replayable; the current request is
             // validated above. A failed store read says nothing about the
             // request and must not silently strip reasoning, so it propagates.
-            Err(ReplayRequestFactsError::Violation(violation))
+            Err(SessionOutputError::Violation(violation))
                 if candidate.request_doc_id != scope.request_doc_id =>
             {
                 tracing::warn!(
@@ -1607,10 +1766,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
                 );
                 continue;
             }
-            Err(ReplayRequestFactsError::Violation(violation)) => {
-                return Err(anyhow::Error::from(violation));
-            }
-            Err(error @ ReplayRequestFactsError::Omitted { .. }) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
         request_facts
             .entry(request_scope)
@@ -1851,12 +2007,9 @@ async fn validated_canonical_replay_boundary(
         &mut cache,
     )
     .await
-    .map_err(|error| {
-        if error.downcast_ref::<CanonicalOutputReadError>().is_some() {
-            replay_violation(error.to_string())
-        } else {
-            error
-        }
+    .map_err(|error| match error {
+        SessionOutputError::Read(error) => replay_violation(error.to_string()),
+        error => error,
     })?;
     replay_ensure!(
         high_water_header.message.session_id == scope.session_id
@@ -1880,16 +2033,16 @@ async fn validated_canonical_replay_boundary(
 }
 
 /// Separates a canonical replay violation from storage failures in
-/// `resolve_canonical_replay_tags`'s anyhow result; the violation may sit under
-/// added context.
+/// `resolve_canonical_replay_tags`'s result; the violation may sit under
+/// message context.
 pub(crate) fn replay_resolution_error(
-    error: anyhow::Error,
+    error: SessionOutputError,
 ) -> gents_loop::loop_stream::ReplayEvidenceResolveError {
-    use gents_loop::loop_stream::{ReplayEvidenceResolveError, ReplayEvidenceViolation};
-    match error.downcast::<ReplayEvidenceViolation>() {
+    use gents_loop::loop_stream::ReplayEvidenceResolveError;
+    match error.into_violation() {
         Ok(violation) => ReplayEvidenceResolveError::Violation(violation),
         Err(error) => ReplayEvidenceResolveError::Storage {
-            source: error.into(),
+            source: Box::new(error),
         },
     }
 }
@@ -1898,13 +2051,18 @@ pub(crate) fn replay_resolution_error(
 #[test]
 fn replay_violation_is_classified_through_context() {
     use gents_loop::loop_stream::{ReplayEvidenceResolveError, ReplayEvidenceViolation};
-    let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
-        .context("resolving required replay");
+    let error = SessionOutputError::MessageContext {
+        doc_id: "message".to_owned(),
+        sequence: 1,
+        source: Box::new(ReplayEvidenceViolation("invalid canonical join".into()).into()),
+    };
     assert!(matches!(
         replay_resolution_error(error),
         ReplayEvidenceResolveError::Violation(_)
     ));
-    let error = anyhow::anyhow!("canonical replay tag belongs to another physical request");
+    let error = SessionOutputError::ReplayRequestOmitted {
+        request_doc_id: "request".to_owned(),
+    };
     assert!(matches!(
         replay_resolution_error(error),
         ReplayEvidenceResolveError::Storage { .. }
@@ -2037,11 +2195,14 @@ async fn load_replay_physical_request(
 ) -> Result<(String, BTreeSet<String>)> {
     let request_doc_ids = [request_doc_id.to_owned()];
     let mut facts = requests.request_facts(&request_doc_ids).await?;
-    let facts = facts
-        .remove(request_doc_id)
-        .with_context(|| format!("canonical replay request batch omitted {request_doc_id}"))?;
+    let facts =
+        facts
+            .remove(request_doc_id)
+            .ok_or_else(|| SessionOutputError::ReplayRequestOmitted {
+                request_doc_id: request_doc_id.to_owned(),
+            })?;
     validate_replay_request_facts(request_doc_id, node_did, requester_did, session_id, &facts)
-        .map_err(anyhow::Error::from)
+        .map_err(SessionOutputError::Violation)
 }
 
 fn validate_replay_request_facts(
@@ -2107,12 +2268,12 @@ fn provider_coordinate_for_candidate_inner(
     let request_doc_id = header
         .request_doc_id
         .as_deref()
-        .context("canonical replay execution assistant has no physical request")?;
+        .ok_or(SessionOutputError::ExecutionAssistantRequestMissing)?;
     let MessagePublication::RequestExecution {
         execution_generation,
     } = &header.publication
     else {
-        anyhow::bail!("canonical replay candidate is not an execution publication");
+        return Err(SessionOutputError::NotExecutionPublication);
     };
     let close_ids = header
         .payload_references()
@@ -2133,26 +2294,25 @@ fn provider_coordinate_for_candidate_inner(
             .iter()
             .filter(|record| record.doc_id == close_id)
             .collect::<Vec<_>>();
-        anyhow::ensure!(
-            matches.len() == 1,
-            "canonical replay reference has a missing or conflicting physical close {close_id}"
-        );
+        if matches.len() != 1 {
+            return Err(SessionOutputError::ConflictingClose { close_id });
+        }
         let close = &matches[0].segment;
-        anyhow::ensure!(
-            close.node_did == header.node_did
-                && close.requester_did == header.requester_did
-                && close.session_id == header.session_id
-                && close.request_doc_id == request_doc_id
-                && matches!(&close.writer, OutputWriter::RequestExecution { execution_generation: writer } if writer == execution_generation)
-                && matches!(
-                    &close.close,
-                    Some(SourceClose::Closed {
-                        outcome: OutputOutcome::Complete,
-                        ..
-                    })
-                ),
-            "canonical replay close crossed its request execution or is not complete"
-        );
+        if !(close.node_did == header.node_did
+            && close.requester_did == header.requester_did
+            && close.session_id == header.session_id
+            && close.request_doc_id == request_doc_id
+            && matches!(&close.writer, OutputWriter::RequestExecution { execution_generation: writer } if writer == execution_generation)
+            && matches!(
+                &close.close,
+                Some(SourceClose::Closed {
+                    outcome: OutputOutcome::Complete,
+                    ..
+                })
+            ))
+        {
+            return Err(SessionOutputError::CloseCrossedExecution);
+        }
         match &close.source {
             OutputSource::Authored { .. } => authored = true,
             OutputSource::ProviderTurn {
@@ -2160,10 +2320,9 @@ fn provider_coordinate_for_candidate_inner(
                 turn_index,
                 attempt,
             } => {
-                anyhow::ensure!(
-                    capture_scope.kind == expected_scope_kind,
-                    "canonical replay assistant references a different provider loop scope"
-                );
+                if capture_scope.kind != expected_scope_kind {
+                    return Err(SessionOutputError::ProviderScopeMismatch);
+                }
                 let coordinate = CanonicalProviderCoordinate {
                     scope: *capture_scope,
                     turn_index: *turn_index,
@@ -2171,19 +2330,18 @@ fn provider_coordinate_for_candidate_inner(
                 };
                 match provider {
                     None => provider = Some(coordinate),
-                    Some(expected) => anyhow::ensure!(
-                        expected == coordinate,
-                        "canonical replay assistant combines different provider turns"
-                    ),
+                    Some(expected) if expected != coordinate => {
+                        return Err(SessionOutputError::ProviderTurnConflict);
+                    }
+                    Some(_) => {}
                 }
             }
-            _ => anyhow::bail!("canonical replay assistant references an invalid close source"),
+            _ => return Err(SessionOutputError::InvalidCloseSource),
         }
     }
-    anyhow::ensure!(
-        !(authored && provider.is_some()),
-        "canonical replay assistant combines authored and provider sources"
-    );
+    if authored && provider.is_some() {
+        return Err(SessionOutputError::AuthoredProviderConflict);
+    }
     Ok(provider)
 }
 
@@ -2225,7 +2383,7 @@ async fn replay_capture_from_row(
     .await
     {
         Ok(verified) => Ok(verified),
-        Err(error) if crate::rendered_request::is_capture_store_read(error.as_ref()) => Err(error),
+        Err(error) if is_capture_store_read(&error) => Err(error),
         Err(error) => {
             warn_unverifiable_replay_capture(capture_key, &error);
             Ok(None)
@@ -2233,9 +2391,18 @@ async fn replay_capture_from_row(
     }
 }
 
+fn is_capture_store_read(error: &SessionOutputError) -> bool {
+    match error {
+        SessionOutputError::RenderedRequest(error) => {
+            crate::rendered_request::is_capture_store_read(error)
+        }
+        _ => false,
+    }
+}
+
 /// A bad capture is re-read on every request of its session; one warning a
 /// minute, with the suppressed count, keeps it visible without flooding.
-fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
+fn warn_unverifiable_replay_capture(capture_key: &str, error: &SessionOutputError) {
     use crate::log_rate::{CallsiteRateLimiter, Decision, RateLimitConfig};
     static LIMITER: std::sync::LazyLock<std::sync::Mutex<CallsiteRateLimiter<()>>> =
         std::sync::LazyLock::new(|| {
@@ -2256,7 +2423,7 @@ fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
     tracing::warn!(
         capture_key = %capture_key,
         suppressed,
-        error = %ErrorChain(error.as_ref()),
+        error = %ErrorChain(error),
         "accepted turn capture is unverifiable; its reasoning is not replayed"
     );
 }
@@ -2431,19 +2598,19 @@ pub(super) async fn load_sequenced_messages(
     )
     .await?;
     if response.has_errors() {
-        anyhow::bail!(
-            "loading canonical history for session_id={session_id}: {:?}",
-            response.errors
-        );
+        return Err(SessionOutputError::HistoryQueryFailed {
+            session_id: session_id.to_owned(),
+            errors: response.errors,
+        });
     }
     let data = response
         .data
         .as_ref()
-        .context("canonical history query omitted data")?;
+        .ok_or(SessionOutputError::HistoryDataOmitted)?;
     let headers = data
         .get("AgentMessage")
         .and_then(serde_json::Value::as_array)
-        .context("canonical history query omitted AgentMessage rows")?
+        .ok_or(SessionOutputError::HistoryRowsOmitted)?
         .iter()
         .map(decode_transcript_message_row)
         .collect::<Result<Vec<_>, _>>()?;
@@ -2454,22 +2621,22 @@ pub(super) async fn load_sequenced_messages(
     let mut sequences = BTreeSet::new();
     let mut keys = BTreeSet::new();
     for row in &headers {
-        anyhow::ensure!(
-            row.message.session_id == session_id
-                && row.message.node_did == node_did
-                && row.message.requester_did.as_deref() == requester_did,
-            "canonical header crossed requested session scope"
-        );
-        anyhow::ensure!(
-            sequences.insert(row.message.sequence),
-            "ambiguous canonical session sequence {}",
-            row.message.sequence
-        );
-        anyhow::ensure!(
-            keys.insert(row.message.message_key.clone()),
-            "ambiguous canonical session message key {}",
-            row.message.message_key
-        );
+        if !(row.message.session_id == session_id
+            && row.message.node_did == node_did
+            && row.message.requester_did.as_deref() == requester_did)
+        {
+            return Err(SessionOutputError::HistoryHeaderScope);
+        }
+        if !sequences.insert(row.message.sequence) {
+            return Err(SessionOutputError::AmbiguousSessionSequence {
+                sequence: row.message.sequence,
+            });
+        }
+        if !keys.insert(row.message.message_key.clone()) {
+            return Err(SessionOutputError::AmbiguousSessionKey {
+                key: row.message.message_key.clone(),
+            });
+        }
         cache.headers.insert(row.doc_id.clone(), row.clone());
     }
     let output_requests = headers
@@ -2495,11 +2662,10 @@ pub(super) async fn load_sequenced_messages(
             &mut cache,
         )
         .await
-        .with_context(|| {
-            format!(
-                "reconstructing canonical message {} at sequence {sequence}",
-                row.doc_id
-            )
+        .map_err(|source| SessionOutputError::MessageContext {
+            doc_id: row.doc_id.clone(),
+            sequence,
+            source: Box::new(source),
         })?;
         let provider_source = if replay_profile.is_some()
             && reconstructed.origin.message.role == MessageRole::Assistant

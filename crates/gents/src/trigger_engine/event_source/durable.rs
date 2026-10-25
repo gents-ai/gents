@@ -413,5 +413,6 @@ impl EventSource {
             })
         })
         .await
+        .map_err(anyhow::Error::from)
     }
 }

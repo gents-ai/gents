@@ -395,7 +395,7 @@ pub async fn message_attachments(
         scope.requester_scope.as_deref(),
     )
     .await
-    .map_err(|e| BridgeError::untyped(ErrorChain(e.as_ref()).to_string()))?;
+    .map_err(|e| BridgeError::untyped(ErrorChain(&e).to_string()))?;
     if header.session_id != session_id || header.message_key != message_key {
         return Err(BridgeError::untyped(
             "The attachment message belongs to another session",

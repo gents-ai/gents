@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{ensure, Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -11,6 +10,8 @@ use crate::graphql::escape_graphql_string;
 use crate::Collection;
 
 use super::*;
+
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 #[error(
@@ -82,14 +83,16 @@ impl ConfigReferences {
     }
 
     pub async fn load_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Self> {
-        ensure!(
-            !node_did.trim().is_empty(),
-            "configuration requires node_did"
-        );
+        if node_did.trim().is_empty() {
+            return Err(DocumentConfigError::ConfigurationRequiresNodeDid);
+        }
         let mut documents = Vec::new();
         for collection in Collection::ALL {
             let name = collection.graphql_type();
-            let fields = config_projection(collection, None)?.0.join(" ");
+            let fields = config_projection(collection, None)
+                .map_err(|error| DocumentConfigError::DesiredState(Box::new(error)))?
+                .0
+                .join(" ");
             let response = txn
                 .execute(&format!(
                     r#"{{ {name}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
@@ -100,10 +103,12 @@ impl ConfigReferences {
                 .get("data")
                 .and_then(|data| data.get(name))
                 .and_then(Value::as_array)
-                .with_context(|| format!("{name} configuration query did not return rows"))?;
+                .ok_or_else(|| DocumentConfigError::ConfigurationRowsMissing {
+                    name: name.to_owned(),
+                })?;
             documents.extend(rows.iter().cloned().map(|row| (collection, row)));
         }
-        Ok(Self::from_documents(node_did, documents)?)
+        Self::from_documents(node_did, documents)
     }
 
     pub(crate) fn profile_with_backend(
@@ -212,7 +217,7 @@ impl ConfigReferences {
         Ok(())
     }
 
-    pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
+    pub fn validate_removal(&self, collection: Collection, id: &str) -> anyhow::Result<()> {
         let mut candidate = self.clone();
         if candidate
             .documents
@@ -227,7 +232,11 @@ impl ConfigReferences {
         Ok(())
     }
 
-    pub(crate) fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
+    pub(crate) fn validate_document(
+        &self,
+        collection: Collection,
+        value: &Value,
+    ) -> anyhow::Result<()> {
         if value["node_did"].as_str() != Some(&self.node_did) {
             return Err(DocumentConfigError::ConfigOwnerMismatch { collection }.into());
         }

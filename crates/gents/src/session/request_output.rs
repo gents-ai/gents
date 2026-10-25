@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gents_protocol::output::live::{
     observed_request_execution_owner, project_live, select_live_target, LiveObservation,
     LiveTarget, LiveTargetSelection, LiveView, OwnerLiveness,
@@ -15,9 +14,41 @@ use crate::config_client::ConfigAccess;
 
 use super::canonical_rows::{
     decode_scoped_canonical_rows, decode_scoped_request_output_segments,
-    decode_transcript_message_row, request_output_facts_query, OutputSegmentRow,
-    TranscriptMessageRow,
+    decode_transcript_message_row, request_output_facts_query, CanonicalRowsError,
+    OutputSegmentRow, TranscriptMessageRow,
 };
+use super::output::{CanonicalOutputReadError, SessionOutputError};
+
+#[derive(Debug, thiserror::Error)]
+pub enum RequestOutputError {
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Rows(#[from] CanonicalRowsError),
+    #[error("request output observation omitted physical request identity")]
+    MissingRequestDocId,
+    #[error("request output observation omitted node")]
+    MissingNode,
+    #[error("request output observation omitted session")]
+    MissingSession,
+    #[error("request output observation omitted lifecycle state")]
+    MissingLifecycleState,
+    #[error("terminal request output omitted node")]
+    TerminalMissingNode,
+    #[error("canonical request output query failed: {errors}")]
+    QueryFailed { errors: serde_json::Value },
+    #[error("canonical request output query omitted segments")]
+    SegmentsOmitted,
+    #[error("canonical request output query omitted messages")]
+    MessagesOmitted,
+    #[error("resolving canonical terminal output")]
+    ResolvingTerminal {
+        #[source]
+        source: SessionOutputError,
+    },
+}
+
+type Result<T, E = RequestOutputError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanonicalPresentation {
@@ -89,14 +120,15 @@ fn native_presentation(message: &gents_protocol::message::Message) -> CanonicalP
     }
 }
 
-fn classify_terminal_read_error(error: &anyhow::Error) -> Option<CanonicalRequestOutput> {
-    if matches!(
-        error.downcast_ref::<super::CanonicalOutputReadError>(),
-        Some(super::CanonicalOutputReadError::MissingCanonicalHeader { .. })
-    ) {
-        return Some(CanonicalRequestOutput::Loading);
-    }
-    let error = error.downcast_ref::<ReconstructionError>()?;
+fn classify_terminal_read_error(error: &SessionOutputError) -> Option<CanonicalRequestOutput> {
+    let error = match error {
+        SessionOutputError::Read(CanonicalOutputReadError::MissingCanonicalHeader { .. }) => {
+            return Some(CanonicalRequestOutput::Loading)
+        }
+        SessionOutputError::Reconstruction(error)
+        | SessionOutputError::ReconstructContext { source: error, .. } => error,
+        _ => return None,
+    };
     if error.is_incomplete() {
         Some(CanonicalRequestOutput::Loading)
     } else {
@@ -119,34 +151,38 @@ async fn load_facts(
     let request_doc_id = request
         .doc_id
         .as_deref()
-        .context("request output observation omitted physical request identity")?;
+        .ok_or(RequestOutputError::MissingRequestDocId)?;
     let node_did = request
         .node_did
         .as_deref()
-        .context("request output observation omitted node")?;
+        .ok_or(RequestOutputError::MissingNode)?;
     let session_id = request
         .session_id
         .as_deref()
-        .context("request output observation omitted session")?;
+        .ok_or(RequestOutputError::MissingSession)?;
     let response = access
         .execute(&request_output_facts_query(request_doc_id))
         .await?;
-    anyhow::ensure!(
-        response
-            .get("errors")
-            .and_then(serde_json::Value::as_array)
-            .is_none_or(Vec::is_empty),
-        "canonical request output query failed: {}",
-        response.get("errors").unwrap_or(&serde_json::Value::Null)
-    );
+    if !response
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        return Err(RequestOutputError::QueryFailed {
+            errors: response
+                .get("errors")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        });
+    }
     let segment_rows = response
         .pointer("/data/AgentOutputSegment")
         .and_then(serde_json::Value::as_array)
-        .context("canonical request output query omitted segments")?;
+        .ok_or(RequestOutputError::SegmentsOmitted)?;
     let message_rows = response
         .pointer("/data/AgentMessage")
         .and_then(serde_json::Value::as_array)
-        .context("canonical request output query omitted messages")?;
+        .ok_or(RequestOutputError::MessagesOmitted)?;
     let segments = decode_scoped_request_output_segments(
         segment_rows,
         node_did,
@@ -170,10 +206,10 @@ pub async fn observe_request_output(
     let request_doc_id = request
         .doc_id
         .as_deref()
-        .context("request output observation omitted physical request identity")?;
+        .ok_or(RequestOutputError::MissingRequestDocId)?;
     let state = request
         .lifecycle_state
-        .context("request output observation omitted lifecycle state")?;
+        .ok_or(RequestOutputError::MissingLifecycleState)?;
     if state.is_terminal() {
         return match request.terminal_output.as_ref() {
             None => Ok(CanonicalRequestOutput::Loading),
@@ -182,7 +218,7 @@ pub async fn observe_request_output(
                 let owner = request
                     .node_did
                     .as_deref()
-                    .context("terminal request output omitted node")?;
+                    .ok_or(RequestOutputError::TerminalMissingNode)?;
                 match super::load_canonical_message(
                     access,
                     message_doc_id,
@@ -212,13 +248,10 @@ pub async fn observe_request_output(
                             })
                         }
                     }
-                    Err(error) => {
-                        classify_terminal_read_error(&error)
-                            .map(Ok)
-                            .unwrap_or_else(|| {
-                                Err(error.context("resolving canonical terminal output"))
-                            })
-                    }
+                    Err(error) => match classify_terminal_read_error(&error) {
+                        Some(output) => Ok(output),
+                        None => Err(RequestOutputError::ResolvingTerminal { source: error }),
+                    },
                 }
             }
         };

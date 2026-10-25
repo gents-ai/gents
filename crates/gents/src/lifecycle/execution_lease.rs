@@ -791,11 +791,8 @@ async fn terminalize_execution_in_txn(
                 }
                 match reader.load_message(&header.doc_id).await {
                     Ok(_) => return Err(ExecutionLeaseError::NoMessageReplacement.into()),
-                    Err(error)
-                        if error
-                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                            .is_some() => {}
-                    Err(error) => return Err(error),
+                    Err(error) if error.reconstruction().is_some() => {}
+                    Err(error) => return Err(error.into()),
                 }
             }
         }

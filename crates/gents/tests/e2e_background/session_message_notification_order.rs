@@ -91,12 +91,7 @@ async fn session_transcript(node: &EmbeddedNode, node_did: &str) -> Vec<Transcri
             Some(node_did),
         )
         .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "reconstruct message {header_id}: {}",
-                ErrorChain(error.as_ref())
-            )
-        });
+        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {}", ErrorChain(&error)));
         rows.push(TranscriptRow {
             sequence: header.sequence,
             content: serde_json::to_string(&message).expect("serialize message"),

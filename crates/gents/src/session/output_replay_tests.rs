@@ -66,7 +66,10 @@ impl ReplayFixture {
         }
     }
 
-    async fn candidates(&self) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
+    async fn candidates(
+        &self,
+    ) -> Result<Vec<super::output::CanonicalAssistantCandidate>, super::output::SessionOutputError>
+    {
         load_canonical_assistant_candidates(&self.node, self.scope(), &self.boundary).await
     }
 
@@ -1112,9 +1115,10 @@ async fn replay_rejects_forged_high_water_and_storage_rejects_sequence_twins() {
             .await
             .err()
             .expect("forged high-water must fail");
-    assert!(bad_high_water
-        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-        .is_some());
+    assert!(matches!(
+        bad_high_water,
+        super::output::SessionOutputError::Violation(_)
+    ));
     let mut forged_request = observed.boundary.clone();
     forged_request.request_commit_cid = "not-a-request-commit".into();
     let forged_scope = CanonicalReplayScope {
@@ -1226,7 +1230,10 @@ impl ReplayRequestReader for CountingRequests<'_> {
     async fn request_facts(
         &self,
         ids: &[String],
-    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
+    ) -> Result<
+        std::collections::BTreeMap<String, super::output::ReplayRequestFacts>,
+        super::output::SessionOutputError,
+    > {
         self.commits
             .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
         self.rows
@@ -1331,12 +1338,23 @@ impl ReplayRequestReader for FaultingRequests<'_> {
     async fn request_facts(
         &self,
         request_doc_ids: &[String],
-    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
+    ) -> Result<
+        std::collections::BTreeMap<String, super::output::ReplayRequestFacts>,
+        super::output::SessionOutputError,
+    > {
         if request_doc_ids.iter().any(|id| id == self.request_doc_id) {
             match self.fault {
-                Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
+                Some(RequestFault::RowsReadFails) => {
+                    return Err(super::output::SessionOutputError::ConfigOperationFailed {
+                        operation: "AgentRequest read".to_owned(),
+                        errors: serde_json::json!("injected"),
+                    })
+                }
                 Some(RequestFault::CommitsReadFails) => {
-                    anyhow::bail!("injected composite commit read")
+                    return Err(super::output::SessionOutputError::ConfigOperationFailed {
+                        operation: "composite commit read".to_owned(),
+                        errors: serde_json::json!("injected"),
+                    })
                 }
                 _ => {}
             }
@@ -1357,7 +1375,7 @@ async fn load_with_fault(
     boundary: &SourceBoundary,
     fault: Option<RequestFault>,
     selected_tags: Option<&[ReplayTag]>,
-) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
+) -> Result<Vec<super::output::CanonicalAssistantCandidate>, super::output::SessionOutputError> {
     let requests = FaultingRequests {
         node: &fixture.node,
         request_doc_id: &fixture.request_doc_id,
@@ -1505,11 +1523,9 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
             .err()
             .unwrap_or_else(|| panic!("{fault:?} must fail the lookup"));
         assert!(
-            error
-                .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-                .is_none(),
+            !matches!(error, super::output::SessionOutputError::Violation(_)),
             "{fault:?} is not a replay violation: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 }

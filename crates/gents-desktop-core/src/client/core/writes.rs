@@ -738,9 +738,9 @@ impl ClientCore {
                 .context("local store access is unavailable")?
                 .clone(),
         };
-        gents::session::observe_request_output(&access, answer)
-            .await
-            .map(Some)
+        Ok(Some(
+            gents::session::observe_request_output(&access, answer).await?,
+        ))
     }
 
     pub async fn request_timeline(

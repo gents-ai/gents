@@ -1,4 +1,5 @@
 use crate::backend_provider::BackendProviderKind;
+use crate::config_client::ConfigClientError;
 pub use crate::document_config::InferenceBackend;
 use crate::document_config::{
     AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackendObservation,
@@ -7,8 +8,9 @@ use crate::graphql::escape_graphql_string;
 use crate::openai_wire::OpenAiWireApi;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+
+type Result<T, E = BackendRegistryError> = std::result::Result<T, E>;
 
 pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
@@ -48,10 +50,76 @@ pub enum BackendRegistryError {
     NodeOAuthCredentialRequired,
     #[error("ambiguous backend catalog authentication scope")]
     AmbiguousCatalogScope,
+    #[error("ambiguous catalog authentication scope")]
+    AmbiguousCatalogEntryScope,
     #[error("backend owner DID must not be blank")]
     OwnerBlank,
     #[error("backend ID must not be blank")]
     BackendIdBlank,
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    BackendProvider(#[from] crate::backend_provider::BackendProviderError),
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
+    #[error(transparent)]
+    Timestamp(#[from] chrono::ParseError),
+    #[error("ambiguous backend reference {backend_id:?} for {node_did:?}")]
+    AmbiguousReference {
+        backend_id: String,
+        node_did: String,
+    },
+    #[error("InferenceBackend query did not return rows")]
+    QueryRowsMissing,
+    #[error("InferenceBackend row missing _docID")]
+    RowDocIdMissing,
+    #[error("backend owner must be nonempty")]
+    OwnerRequired,
+    #[error("ambiguous backend reference")]
+    AmbiguousScope,
+    #[error("backend observation target does not exist")]
+    ObservationTargetMissing,
+    #[error("backend observation query did not return rows")]
+    ObservationRowsMissing,
+    #[error("ambiguous backend observation reference")]
+    AmbiguousObservation,
+    #[error("decoding backend observation")]
+    DecodeObservation(#[source] serde_json::Error),
+    #[error("invalid catalog observation timestamp")]
+    CatalogObservedAt(#[source] chrono::ParseError),
+    #[error("catalog credential scope does not match backend authentication")]
+    CatalogScopeMismatch,
+    #[error("catalog model name must be nonempty and canonical")]
+    CatalogModelName,
+    #[error("duplicate catalog model name")]
+    DuplicateCatalogModel,
+    #[error("advertised token limits must be positive when known")]
+    TokenLimitsNotPositive,
+    #[error("backend catalog query returned no rows")]
+    CatalogRowsMissing,
+    #[error("backend catalog target is absent or ambiguous")]
+    CatalogTargetAmbiguous,
+    #[error("backend connection changed during discovery")]
+    ConnectionChanged,
+    #[error("decoding backend catalogs")]
+    DecodeCatalogs(#[source] serde_json::Error),
+    #[error("backend catalog target has no physical identity")]
+    CatalogDocIdMissing,
+    #[error("backend connection query returned no rows")]
+    ConnectionRowsMissing,
+    #[error("discovered backend observation is missing")]
+    DiscoveredObservationMissing,
+}
+
+impl crate::config_client::TransactionFailure for BackendRegistryError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
@@ -266,10 +334,12 @@ pub(crate) async fn lookup_backend_record(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let filter = scope_filter(node_did, backend_id)?;
     let mut records = query_backend_records(node, &format!("filter: {filter}"), false).await?;
-    anyhow::ensure!(
-        records.len() <= 1,
-        "ambiguous backend reference {backend_id:?} for {node_did:?}"
-    );
+    if records.len() > 1 {
+        return Err(BackendRegistryError::AmbiguousReference {
+            backend_id: backend_id.to_owned(),
+            node_did: node_did.to_owned(),
+        });
+    }
     Ok(records.pop())
 }
 
@@ -298,7 +368,7 @@ async fn query_backend_records(
         .as_ref()
         .and_then(|data| data.get("InferenceBackend"))
         .and_then(serde_json::Value::as_array)
-        .context("InferenceBackend query did not return rows")?
+        .ok_or(BackendRegistryError::QueryRowsMissing)?
         .iter()
         .filter(|row| {
             let Some(provider_kind) = unknown_provider_kind(row).filter(|_| skip_unknown_kind)
@@ -312,11 +382,11 @@ async fn query_backend_records(
             );
             false
         })
-        .map(|row| {
+        .map(|row| -> Result<(String, InferenceBackend)> {
             let doc_id = row
                 .get("_docID")
                 .and_then(serde_json::Value::as_str)
-                .context("InferenceBackend row missing _docID")?;
+                .ok_or(BackendRegistryError::RowDocIdMissing)?;
             Ok((doc_id.to_owned(), InferenceBackend::from_value(row)?))
         })
         .collect()
@@ -350,10 +420,9 @@ pub async fn list_enabled_backends_for_agent(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<InferenceBackend>> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "backend owner must be nonempty"
-    );
+    if node_did.trim().is_empty() {
+        return Err(BackendRegistryError::OwnerRequired);
+    }
     let filter = format!(
         r#"filter: {{ node_did: {{ _eq: "{}" }}, enabled: {{ _eq: true }} }}"#,
         escape_graphql_string(node_did)
@@ -362,11 +431,10 @@ pub async fn list_enabled_backends_for_agent(
     let mut ids = std::collections::BTreeSet::new();
     records
         .into_iter()
-        .map(|(_, backend)| {
-            anyhow::ensure!(
-                ids.insert(backend.backend_id.clone()),
-                "ambiguous backend reference"
-            );
+        .map(|(_, backend)| -> Result<InferenceBackend> {
+            if !ids.insert(backend.backend_id.clone()) {
+                return Err(BackendRegistryError::AmbiguousScope);
+            }
             Ok(backend)
         })
         .collect()
@@ -403,10 +471,14 @@ pub async fn lookup_backend_observation_in_txn(
         .get("data")
         .and_then(|data| data.get("InferenceBackend"))
         .and_then(serde_json::Value::as_array)
-        .context("backend observation query did not return rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous backend observation reference");
+        .ok_or(BackendRegistryError::ObservationRowsMissing)?;
+    if rows.len() > 1 {
+        return Err(BackendRegistryError::AmbiguousObservation);
+    }
     rows.first()
-        .map(|row| serde_json::from_value(row.clone()).context("decoding backend observation"))
+        .map(|row| {
+            serde_json::from_value(row.clone()).map_err(BackendRegistryError::DecodeObservation)
+        })
         .transpose()
 }
 
@@ -451,7 +523,7 @@ async fn write_probe_observation(
     // never cause a multi-document update.
     let (doc_id, _) = lookup_backend_record(node, node_did, backend_id)
         .await?
-        .context("backend observation target does not exist")?;
+        .ok_or(BackendRegistryError::ObservationTargetMissing)?;
     let input = gents_protocol::graphql::graphql_input_literal(&input)?;
     let mutation = format!(
         r#"mutation {{ update_InferenceBackend(docID: "{}", input: {input}) {{ _docID }} }}"#,
@@ -490,27 +562,24 @@ pub async fn record_model_catalog_in_txn(
     backend: &InferenceBackend,
     catalog: BackendModelCatalog,
 ) -> Result<()> {
-    anyhow::ensure!(
-        catalog.node_did.as_deref() == backend.catalog_scope(),
-        "catalog credential scope does not match backend authentication"
-    );
+    if catalog.node_did.as_deref() != backend.catalog_scope() {
+        return Err(BackendRegistryError::CatalogScopeMismatch);
+    }
     let observed_at = chrono::DateTime::parse_from_rfc3339(&catalog.observed_at)
-        .context("invalid catalog observation timestamp")?;
+        .map_err(BackendRegistryError::CatalogObservedAt)?;
     let mut names = rapidhash::RapidHashSet::default();
     for model in &catalog.models {
-        anyhow::ensure!(
-            !model.model_name.trim().is_empty() && model.model_name.trim() == model.model_name,
-            "catalog model name must be nonempty and canonical"
-        );
-        anyhow::ensure!(
-            names.insert(&model.model_name),
-            "duplicate catalog model name"
-        );
-        anyhow::ensure!(
-            model.context_window.is_none_or(|value| value > 0)
-                && model.max_output_tokens.is_none_or(|value| value > 0),
-            "advertised token limits must be positive when known"
-        );
+        if model.model_name.trim().is_empty() || model.model_name.trim() != model.model_name {
+            return Err(BackendRegistryError::CatalogModelName);
+        }
+        if !names.insert(&model.model_name) {
+            return Err(BackendRegistryError::DuplicateCatalogModel);
+        }
+        if !(model.context_window.is_none_or(|value| value > 0)
+            && model.max_output_tokens.is_none_or(|value| value > 0))
+        {
+            return Err(BackendRegistryError::TokenLimitsNotPositive);
+        }
     }
     let filter = scope_filter(&backend.node_did, &backend.backend_id)?;
     let response = txn.execute(&format!(
@@ -520,31 +589,29 @@ pub async fn record_model_catalog_in_txn(
         .get("data")
         .and_then(|data| data.get("InferenceBackend"))
         .and_then(serde_json::Value::as_array)
-        .context("backend catalog query returned no rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "backend catalog target is absent or ambiguous"
-    );
+        .ok_or(BackendRegistryError::CatalogRowsMissing)?;
+    if rows.len() != 1 {
+        return Err(BackendRegistryError::CatalogTargetAmbiguous);
+    }
     let row = &rows[0];
     let current = InferenceBackend::from_value(row)?;
-    anyhow::ensure!(
-        current.endpoint == backend.endpoint
-            && current.provider_kind == backend.provider_kind
-            && current.auth == backend.auth,
-        "backend connection changed during discovery"
-    );
+    if !(current.endpoint == backend.endpoint
+        && current.provider_kind == backend.provider_kind
+        && current.auth == backend.auth)
+    {
+        return Err(BackendRegistryError::ConnectionChanged);
+    }
     let mut catalogs = serde_json::from_value::<InferenceBackendObservation>(row.clone())
-        .context("decoding backend catalogs")?
+        .map_err(BackendRegistryError::DecodeCatalogs)?
         .catalogs;
     let matching: Vec<_> = catalogs
         .iter()
         .enumerate()
         .filter(|(_, old)| old.node_did == catalog.node_did)
         .collect();
-    anyhow::ensure!(
-        matching.len() <= 1,
-        "ambiguous catalog authentication scope"
-    );
+    if matching.len() > 1 {
+        return Err(BackendRegistryError::AmbiguousCatalogEntryScope);
+    }
     if let Some((index, old)) = matching.first() {
         if chrono::DateTime::parse_from_rfc3339(&old.observed_at)? > observed_at
             || old.models == catalog.models
@@ -563,7 +630,7 @@ pub async fn record_model_catalog_in_txn(
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
-        .context("backend catalog target has no physical identity")?;
+        .ok_or(BackendRegistryError::CatalogDocIdMissing)?;
     txn.execute_with_variables(
         &format!(
             "mutation($catalogs: JSON) {{ update_InferenceBackend(docID: \"{}\", input: {{ catalogs: $catalogs }}) {{ _docID }} }}",
@@ -604,7 +671,9 @@ pub async fn record_connection_catalog_on(
     auth: &BackendAuth,
     models: Vec<AdvertisedModel>,
 ) -> Result<usize> {
-    anyhow::ensure!(!owner.trim().is_empty(), "backend owner must be nonempty");
+    if owner.trim().is_empty() {
+        return Err(BackendRegistryError::OwnerRequired);
+    }
     let query = format!(
         r#"{{ InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, provider_kind: {{ _eq: "{}" }} }}) {{ {BACKEND_CONFIG_FIELDS} }} }}"#,
         escape_graphql_string(owner),
@@ -620,7 +689,7 @@ pub async fn record_connection_catalog_on(
                     .get("data")
                     .and_then(|data| data.get("InferenceBackend"))
                     .and_then(serde_json::Value::as_array)
-                    .context("backend connection query returned no rows")?;
+                    .ok_or(BackendRegistryError::ConnectionRowsMissing)?;
                 let mut recorded = 0;
                 for row in rows {
                     let backend = InferenceBackend::from_value(row)?;
@@ -728,7 +797,7 @@ pub(crate) async fn discover_shared_backend(
     .await?;
     lookup_backend_observation(node, &backend.node_did, &backend.backend_id)
         .await?
-        .context("discovered backend observation is missing")
+        .ok_or(BackendRegistryError::DiscoveredObservationMissing)
 }
 
 #[cfg(test)]

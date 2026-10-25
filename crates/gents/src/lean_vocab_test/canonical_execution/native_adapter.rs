@@ -556,9 +556,7 @@ impl NativeCanonicalExecution {
                 if error
                     .downcast_ref::<crate::lifecycle::RecoverySelectionRejected>()
                     .is_some()
-                    || error
-                        .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                        .is_some() =>
+                    || crate::session::find_reconstruction_error(error.as_ref()).is_some() =>
             {
                 return self.observe(false).await;
             }
@@ -2100,9 +2098,7 @@ impl NativeCanonicalExecution {
                 if error
                     .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
                     .is_some()
-                    || error
-                        .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                        .is_some()
+                    || crate::session::find_reconstruction_error(error.as_ref()).is_some()
                     || owner_error_is(
                         &error,
                         "output source does not match its request purpose",
@@ -2214,9 +2210,7 @@ impl NativeCanonicalExecution {
                 if error
                     .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
                     .is_some()
-                    || error
-                        .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                        .is_some() =>
+                    || crate::session::find_reconstruction_error(error.as_ref()).is_some() =>
             {
                 return self.observe(false).await;
             }

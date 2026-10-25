@@ -1,8 +1,8 @@
-use super::{mint_recreate_identity, ConfigApplyTxn};
+use super::{mint_recreate_identity, ConfigApplyTxn, ConfigClientError, TransactionFailure};
 use crate::defra_query::SchemaField;
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::{Collection, DESIRED_STATE_APPLY_ORDER};
-use anyhow::{Context, Result};
+type Result<T, E = DesiredStateError> = std::result::Result<T, E>;
 use gents_protocol::graphql::{extract_mutation_doc_id, graphql_rows_from_response};
 use serde::{
     de::{DeserializeOwned, Visitor},
@@ -72,6 +72,83 @@ pub enum DesiredStateError {
     NodeDefaultAgentCleared { current_default: String },
     #[error(transparent)]
     Template(#[from] crate::template::TemplateError),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    DocumentConfig(Box<crate::document_config::DocumentConfigError>),
+    #[error(transparent)]
+    BackendRegistry(#[from] crate::backend_registry::BackendRegistryError),
+    #[error(transparent)]
+    EventSourceCursor(Box<super::event_source_cursor::EventSourceCursorError>),
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
+    #[error(transparent)]
+    Introspection(#[from] crate::defra_query::DefraQueryFailure),
+    #[error(transparent)]
+    OutcomeSource(#[from] OutcomeSourceSchemaError),
+    #[error("multiple live {name} documents share owner {owner:?} and ID {id:?}")]
+    MultipleLiveDocuments {
+        name: String,
+        owner: String,
+        id: String,
+    },
+    #[error("configuration row missing logical ID")]
+    RowLogicalIdMissing,
+    #[error("grouped configuration row is empty")]
+    RowGroupEmpty,
+    #[error("configuration row must be an object")]
+    RowNotObject,
+    #[error("configuration row missing physical ID")]
+    RowPhysicalIdMissing,
+    #[error("canonical projection missing")]
+    CanonicalProjectionMissing,
+    #[error("decoding EventSource for live-field validation")]
+    EventSourceDecode(#[source] serde_json::Error),
+    #[error(
+        "DatastoreToolSurface {} tool {:?} output_obligation.expected_count_field {:?} names a {} field of {}, which cannot carry the count; the runtime parses an integer or its canonical decimal spelling out of the call argument",
+        .0.surface_id,
+        .0.tool_name,
+        .0.field,
+        .0.declared_type,
+        .0.collection
+    )]
+    ObligationCountNotCarryable(Box<UncountableObligationField>),
+    #[error("DatastoreToolSurface {surface_id} tool {tool_name:?} output_obligation.expected_count_field {field:?} does not exist on {collection}")]
+    ObligationCountFieldMissing {
+        surface_id: String,
+        tool_name: String,
+        field: String,
+        collection: String,
+    },
+    #[error("EventSource {event_source_id} correlation_field {field:?} must be String, found {declared_type}")]
+    CorrelationFieldNotString {
+        event_source_id: String,
+        field: String,
+        declared_type: String,
+    },
+    #[error(
+        "EventSource {event_source_id} correlation_field {field:?} does not exist on {collection}"
+    )]
+    CorrelationFieldMissing {
+        event_source_id: String,
+        field: String,
+        collection: String,
+    },
+    #[error("EventSource {event_source_id} expected_count_field {field:?} names a {declared_type} field of {collection}, which cannot carry the count; the runtime parses an integer or its canonical decimal spelling out of the source document")]
+    CountFieldCannotHold {
+        event_source_id: String,
+        field: String,
+        declared_type: String,
+        collection: String,
+    },
+    #[error("EventSource {event_source_id} expected_count_field {field:?} does not exist on {collection}")]
+    CountFieldMissing {
+        event_source_id: String,
+        field: String,
+        collection: String,
+    },
     #[error("trigger {trigger_id} {field} references doc.{name}, but {source_collection} has no field {name:?}; its fields are {fields}")]
     TriggerFieldUnknown {
         trigger_id: String,
@@ -80,6 +157,39 @@ pub enum DesiredStateError {
         source_collection: String,
         fields: String,
     },
+}
+
+#[derive(Debug)]
+pub struct UncountableObligationField {
+    surface_id: String,
+    tool_name: String,
+    field: String,
+    declared_type: String,
+    collection: String,
+}
+
+impl TransactionFailure for DesiredStateError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::DocumentConfig(error) => error.config_client_error(),
+            Self::EventSourceCursor(error) => error.config_client_error(),
+            Self::BackendRegistry(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::document_config::DocumentConfigError> for DesiredStateError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
+}
+
+impl From<super::event_source_cursor::EventSourceCursorError> for DesiredStateError {
+    fn from(error: super::event_source_cursor::EventSourceCursorError) -> Self {
+        Self::EventSourceCursor(Box::new(error))
+    }
 }
 
 #[derive(Default)]
@@ -299,12 +409,11 @@ async fn read_records_paged(
 ) -> Result<BTreeMap<String, (String, Value)>> {
     let mut unique_ids = BTreeSet::new();
     for id in ids {
-        anyhow::ensure!(
-            !owner.trim().is_empty() && !id.trim().is_empty(),
-            "configuration reference requires owner and ID"
-        );
-        if collection == Collection::Node {
-            anyhow::ensure!(*id == owner, "node reference must match owner");
+        if owner.trim().is_empty() || id.trim().is_empty() {
+            return Err(DesiredStateError::ReferenceRequired);
+        }
+        if collection == Collection::Node && *id != owner {
+            return Err(DesiredStateError::NodeReferenceMismatch);
         }
         unique_ids.insert(*id);
     }
@@ -342,24 +451,33 @@ async fn read_records_paged(
             let id = row
                 .get(unique_field)
                 .and_then(Value::as_str)
-                .context("configuration row missing logical ID")?
+                .ok_or(DesiredStateError::RowLogicalIdMissing)?
                 .to_owned();
             by_id.entry(id).or_default().push(row);
         }
         for (id, mut rows) in by_id {
-            anyhow::ensure!(
-                rows.len() <= 1,
-                "multiple live {name} documents share owner {owner:?} and ID {id:?}"
-            );
-            let mut row = rows.pop().context("grouped configuration row is empty")?;
+            if rows.len() > 1 {
+                return Err(DesiredStateError::MultipleLiveDocuments {
+                    name: name.to_owned(),
+                    owner: owner.to_owned(),
+                    id,
+                });
+            }
+            let mut row = rows.pop().ok_or(DesiredStateError::RowGroupEmpty)?;
             let doc_id = row
                 .as_object_mut()
-                .context("configuration row must be an object")?
+                .ok_or(DesiredStateError::RowNotObject)?
                 .remove("_docID")
                 .and_then(|value| value.as_str().map(str::to_owned))
-                .context("configuration row missing physical ID")?;
+                .ok_or(DesiredStateError::RowPhysicalIdMissing)?;
             let (_, value) = config_projection(collection, Some(&row))?;
-            out.insert(id, (doc_id, value.context("canonical projection missing")?));
+            out.insert(
+                id,
+                (
+                    doc_id,
+                    value.ok_or(DesiredStateError::CanonicalProjectionMissing)?,
+                ),
+            );
         }
     }
     Ok(out)
@@ -432,7 +550,7 @@ pub(crate) async fn expect_existing_documents_unchanged(
 pub(crate) async fn validate_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let mut owners = BTreeSet::new();
     for document in plan.documents() {
         owners.insert(document_identity(document.collection, &document.add)?.0);
@@ -644,7 +762,7 @@ pub fn event_trigger_document_field_names(
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
-pub(crate) struct OutcomeSourceSchemaError {
+pub struct OutcomeSourceSchemaError {
     pub collection: String,
     pub missing_handoff: bool,
     message: String,
@@ -901,17 +1019,25 @@ async fn validate_output_obligation_count_fields(
         match fields.get(field) {
             Some(declared)
                 if crate::defra_write::can_hold_canonical_count(declared.named_type()) => {}
-            Some(declared) => anyhow::bail!(
-                "DatastoreToolSurface {surface_id} tool {:?} output_obligation.expected_count_field {field:?} names a {} field of {}, which cannot carry the count; the runtime parses an integer or its canonical decimal spelling out of the call argument",
-                tool_name,
-                declared.type_name,
-                collection,
-            ),
-            None => anyhow::bail!(
-                "DatastoreToolSurface {surface_id} tool {:?} output_obligation.expected_count_field {field:?} does not exist on {}",
-                tool_name,
-                collection,
-            ),
+            Some(declared) => {
+                return Err(DesiredStateError::ObligationCountNotCarryable(Box::new(
+                    UncountableObligationField {
+                        surface_id: surface_id.to_owned(),
+                        tool_name,
+                        field: field.to_owned(),
+                        declared_type: declared.type_name.to_string(),
+                        collection,
+                    },
+                )))
+            }
+            None => {
+                return Err(DesiredStateError::ObligationCountFieldMissing {
+                    surface_id: surface_id.to_owned(),
+                    tool_name,
+                    field: field.to_owned(),
+                    collection,
+                })
+            }
         }
     }
     Ok(())
@@ -922,8 +1048,8 @@ async fn validate_event_source_live_fields(
     candidate: &Value,
     introspected: &mut IntrospectedFields,
 ) -> Result<()> {
-    let source: crate::document_config::EventSource = serde_json::from_value(candidate.clone())
-        .context("decoding EventSource for live-field validation")?;
+    let source: crate::document_config::EventSource =
+        serde_json::from_value(candidate.clone()).map_err(DesiredStateError::EventSourceDecode)?;
     let (correlation, count_field) = event_source_schema_fields(&source);
     if correlation.is_none() && count_field.is_none() {
         return Ok(());
@@ -934,39 +1060,41 @@ async fn validate_event_source_live_fields(
     if let Some(field) = correlation {
         match fields.get(field) {
             Some(declared) if declared.named_type() == "String" => {}
-            Some(declared) => anyhow::bail!(
-                "EventSource {} correlation_field {:?} must be String, found {}",
-                source.event_source_id,
-                field,
-                declared.type_name
-            ),
-            None => anyhow::bail!(
-                "EventSource {} correlation_field {:?} does not exist on {}",
-                source.event_source_id,
-                field,
-                source.source_collection
-            ),
+            Some(declared) => {
+                return Err(DesiredStateError::CorrelationFieldNotString {
+                    event_source_id: source.event_source_id.clone(),
+                    field: field.to_owned(),
+                    declared_type: declared.type_name.to_string(),
+                })
+            }
+            None => {
+                return Err(DesiredStateError::CorrelationFieldMissing {
+                    event_source_id: source.event_source_id.clone(),
+                    field: field.to_owned(),
+                    collection: source.source_collection.clone(),
+                })
+            }
         }
     }
     if let Some(field) = count_field {
         match fields.get(field) {
             Some(declared)
                 if crate::defra_write::can_hold_canonical_count(declared.named_type()) => {}
-            Some(declared) => anyhow::bail!(
-                "EventSource {} expected_count_field {:?} names a {} field of {}, which cannot \
-                 carry the count; the runtime parses an integer or its canonical decimal spelling \
-                 out of the source document",
-                source.event_source_id,
-                field,
-                declared.type_name,
-                source.source_collection
-            ),
-            None => anyhow::bail!(
-                "EventSource {} expected_count_field {:?} does not exist on {}",
-                source.event_source_id,
-                field,
-                source.source_collection
-            ),
+            Some(declared) => {
+                return Err(DesiredStateError::CountFieldCannotHold {
+                    event_source_id: source.event_source_id.clone(),
+                    field: field.to_owned(),
+                    declared_type: declared.type_name.to_string(),
+                    collection: source.source_collection.clone(),
+                })
+            }
+            None => {
+                return Err(DesiredStateError::CountFieldMissing {
+                    event_source_id: source.event_source_id.clone(),
+                    field: field.to_owned(),
+                    collection: source.source_collection.clone(),
+                })
+            }
         }
     }
     Ok(())
@@ -1032,6 +1160,19 @@ pub fn stale_expectation<'a>(
                 _ => None,
             }
         })
+    })
+}
+
+pub fn outcome_source_refusal<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a OutcomeSourceSchemaError> {
+    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
+        cause
+            .downcast_ref::<OutcomeSourceSchemaError>()
+            .or_else(|| match cause.downcast_ref::<DesiredStateError>() {
+                Some(DesiredStateError::OutcomeSource(refusal)) => Some(refusal),
+                _ => None,
+            })
     })
 }
 
@@ -1286,7 +1427,7 @@ fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<(), D
 pub async fn apply_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
-) -> Result<DesiredStateApplyCounts> {
+) -> anyhow::Result<DesiredStateApplyCounts> {
     ensure_expectations_hold(txn, plan).await?;
     let mut introspected = IntrospectedFields::new();
     prefetch_declared_fields(txn, plan, &mut introspected).await?;
