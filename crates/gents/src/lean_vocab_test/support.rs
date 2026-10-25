@@ -152,6 +152,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_settings_cases: serde_json::Value,
     pub(crate) client_data_publication_cases: serde_json::Value,
     pub(crate) client_request_patch_publication_cases: serde_json::Value,
+    pub(crate) storage_failure_cases: Vec<serde_json::Value>,
     pub(crate) client_request_closure_cases: Vec<serde_json::Value>,
     pub(crate) client_request_cache_identity_cases: Vec<serde_json::Value>,
     pub(crate) client_session_queue_order_cases: Vec<serde_json::Value>,

@@ -152,7 +152,7 @@ pub async fn desktop_chat_send(
 
     send_chat_message(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]

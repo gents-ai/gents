@@ -3,6 +3,7 @@ pub mod chatgpt_oauth;
 pub mod client_installation;
 pub mod client_media;
 pub mod client_protocol;
+pub mod database_error;
 pub mod enrollment;
 pub mod event_delivery;
 pub mod file_changes;

@@ -1,3 +1,4 @@
+import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
@@ -129,6 +130,7 @@ def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
 def snapshotJson : String :=
   "{"
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
+    ++ "\"storage_failure_cases\":" ++ Conformance.StorageFailureContracts.casesJson ++ ","
     ++ "\"root_admission_cases\":"
       ++ Conformance.RootAdmissionContracts.casesJson ++ ","
     ++ "\"vocabularies\":"

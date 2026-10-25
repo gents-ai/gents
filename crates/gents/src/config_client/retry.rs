@@ -77,7 +77,8 @@ pub(super) fn receipt_write_backoff(retry_index: u32) -> Duration {
 }
 
 pub(super) fn is_retryable_ambiguous_write(error: &anyhow::Error) -> bool {
-    gents_protocol::graphql::graphql_error_is_retryable(error)
+    !crate::graphql::is_storage_full(error)
+        && gents_protocol::graphql::graphql_error_is_retryable(error)
 }
 
 pub(super) fn is_transaction_conflict_text(text: &str) -> bool {
@@ -153,5 +154,31 @@ mod tests {
         ] {
             assert!(!graphql_value_is_transaction_conflict(&value), "{value}");
         }
+    }
+}
+
+#[cfg(test)]
+mod storage_failure_tests {
+    use super::*;
+
+    #[test]
+    fn full_storage_does_not_enter_ambiguous_write_retries() {
+        let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        for case in contract["storage_failure_cases"].as_array().unwrap() {
+            let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
+                "write",
+                serde_json::json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+            ));
+            if case["stop_automatic_retry"].as_bool().unwrap() {
+                assert!(!is_retryable_ambiguous_write(&error));
+            }
+        }
+        let error = anyhow::Error::new(storage::corekv::Error::from(std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            "please retry",
+        )))
+        .context("native transaction");
+        assert!(crate::graphql::is_storage_full(&error));
+        assert!(!is_retryable_ambiguous_write(&error));
     }
 }

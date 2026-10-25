@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/database_error.rs",
+            module_path: "gents_protocol::database_error::tests",
+            function: "generated_storage_failures_preserve_recovery_evidence",
+        },
+        ConformanceConsumer::RustTest {
             id: "client_installation::tests::generated_installation_traces_preserve_draining_and_replacement_guards",
             package: "gents-protocol",
             source_path: "crates/gents-protocol/src/client_installation.rs",

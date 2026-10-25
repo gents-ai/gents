@@ -42,6 +42,9 @@ pub struct ChatSendResult {
     pub outcome: Option<ChatSendOutcome>,
     #[ts(optional = nullable)]
     pub submission_receipt: Option<ChatSubmissionReceipt>,
+    /// Recovery information does not change the retained request's delivery outcome.
+    #[ts(optional = nullable)]
+    pub delivery_error: Option<crate::error::BridgeError>,
 }
 
 /// Native receipt fields are echoed for acknowledgement; the native owner
@@ -95,6 +98,7 @@ impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
             agent_id: receipt.agent_id,
             outcome: None,
             submission_receipt: None,
+            delivery_error: None,
         }
     }
 }

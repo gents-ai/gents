@@ -71,6 +71,7 @@ pub struct SubmissionOutcomeUnknown {
     pub request_id: String,
     pub session_id: String,
     pub pending: UnresolvedSubmission,
+    pub cause: Option<anyhow::Error>,
 }
 
 impl std::fmt::Display for SubmissionOutcomeUnknown {
@@ -83,7 +84,11 @@ impl std::fmt::Display for SubmissionOutcomeUnknown {
     }
 }
 
-impl std::error::Error for SubmissionOutcomeUnknown {}
+impl std::error::Error for SubmissionOutcomeUnknown {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_ref().map(|cause| cause.as_ref())
+    }
+}
 
 /// An earlier send whose delivery cannot be decided without its signed
 /// payload (for example after a restart).
@@ -153,7 +158,7 @@ impl UnresolvedSubmission {
         })
     }
 
-    fn outcome_unknown(&self) -> anyhow::Error {
+    fn outcome_unknown(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
         tracing::warn!(
             action = "chat_submit_receipt_unresolved",
             request_id = %self.request_id,
@@ -165,6 +170,7 @@ impl UnresolvedSubmission {
             request_id: self.request_id.clone(),
             session_id: self.session_id.clone(),
             pending: self.clone(),
+            cause,
         }
         .into()
     }
@@ -237,7 +243,8 @@ async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) 
 
 /// Commit a retained signed submission, reconciling ambiguous outcomes.
 ///
-/// Embedded (local) writes are atomic, so their errors are definite. An owner
+/// Full-storage errors retain uncertain delivery even for embedded writes:
+/// failure to sync or roll back a WAL is not proof that nothing committed. An owner
 /// write is only a definite rejection when the owner answered with a GraphQL
 /// `errors` body and the receipt proves it holds no such request; every other
 /// post-send failure (HTTP status, transport, undecodable body, unreadable
@@ -256,6 +263,9 @@ pub(super) async fn commit_signed_submission(
     let Err(error) = written else {
         return Ok(pending.result);
     };
+    if gents::graphql::is_storage_full(&error) {
+        return Err(pending.outcome_unknown(Some(error)));
+    }
     if !matches!(access, ConfigAccess::Graphql(_)) {
         return Err(error);
     }
@@ -269,7 +279,7 @@ pub(super) async fn commit_signed_submission(
             _ => {}
         }
     }
-    Err(pending.outcome_unknown())
+    Err(pending.outcome_unknown(Some(error)))
 }
 
 /// The owner processed the mutation and answered with GraphQL errors.
@@ -368,7 +378,7 @@ pub async fn resolve_unresolved_submission(
     match owner_receipt(access, &pending.create).await {
         Ok(true) => Ok(pending.result.clone()),
         Ok(false) => commit_signed_submission(access, pending.clone()).await,
-        Err(_) => Err(pending.outcome_unknown()),
+        Err(error) => Err(pending.outcome_unknown(Some(error))),
     }
 }
 
@@ -662,6 +672,49 @@ mod tests {
             Some(pending.mutation.as_str()),
             "the replay must be the retained signed mutation byte-for-byte"
         );
+    }
+
+    #[tokio::test]
+    async fn generated_storage_failures_retain_signed_submissions_without_replay() {
+        let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        for case in contract["storage_failure_cases"].as_array().unwrap() {
+            let server = MockServer::start().await;
+            mount_create(
+                &server,
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "errors": [{"message": case["message"], "extensions": {"code": case["code"]}}]
+                })),
+            )
+            .await;
+            mount_receipt(&server, Vec::new()).await;
+            let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+            let pending = test_pending();
+            let error = commit_signed_submission(&access, pending.clone())
+                .await
+                .unwrap_err();
+            let unknown = error.downcast_ref::<SubmissionOutcomeUnknown>();
+            assert_eq!(
+                unknown.is_some(),
+                case["outcome_unknown"].as_bool().unwrap()
+            );
+            if let Some(unknown) = unknown {
+                assert_eq!(unknown.request_id, pending.request_id);
+                assert_eq!(unknown.session_id, pending.session_id);
+                assert_eq!(unknown.pending.mutation, pending.mutation);
+                assert_eq!(
+                    unknown.pending.create.admission.signature,
+                    pending.create.admission.signature
+                );
+                assert!(gents::graphql::is_storage_full(&error));
+                assert_eq!(
+                    server.received_requests().await.unwrap().len(),
+                    1,
+                    "storage failure must not trigger another write or receipt probe"
+                );
+                assert!(case["same_request"].as_bool().unwrap());
+                assert!(case["same_bytes"].as_bool().unwrap());
+            }
+        }
     }
 
     #[tokio::test]
