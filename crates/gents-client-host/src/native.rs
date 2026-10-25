@@ -106,6 +106,8 @@ pub async fn attach(paths: DesktopPaths, editor_store: bool, interactive: bool) 
     attach_inner(paths, editor_store, interactive).await
 }
 
+/// Editors keep attachment stdin open until the helper exits, so host socket
+/// EOF must end the attachment even when no more editor input is available.
 async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
     #[cfg(windows)]
     keep_stdio_in_attachment()?;
@@ -235,7 +237,19 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
         Result::<(), std::io::Error>::Ok(())
     };
     #[cfg(unix)]
-    tokio::try_join!(input, output)?;
+    {
+        // If editor stdin ends first, finish sending its bytes and drain the
+        // host's final replies before returning.
+        tokio::pin!(input);
+        tokio::pin!(output);
+        tokio::select! {
+            result = &mut output => result?,
+            result = &mut input => {
+                result?;
+                output.await?;
+            }
+        }
+    }
     #[cfg(windows)]
     tokio::select! {
         result = input => result?,

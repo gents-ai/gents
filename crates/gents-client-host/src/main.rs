@@ -34,15 +34,23 @@ fn main() -> Result<()> {
     {
         return gents_server::run_cli_without_keychain_prompts();
     }
-    tokio::runtime::Builder::new_multi_thread()
+    let args = Args::parse();
+    let attachment_process = !args.serve && !args.describe;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(16 * 1024 * 1024)
-        .build()?
-        .block_on(client_main())
+        .build()?;
+    let result = runtime.block_on(client_main(args));
+    if attachment_process {
+        // Tokio's stdin read cannot be cancelled while editor stdin is open.
+        // The server owns request execution and database cleanup; this
+        // attachment must exit without joining its remaining input read.
+        runtime.shutdown_background();
+    }
+    result
 }
 
-async fn client_main() -> Result<()> {
-    let args = Args::parse();
+async fn client_main(args: Args) -> Result<()> {
     if args.describe {
         use gents_desktop_bridge::host::protocol;
         let mut output = std::io::stdout().lock();

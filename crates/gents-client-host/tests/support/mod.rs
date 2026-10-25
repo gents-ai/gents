@@ -13,7 +13,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub struct Attachment {
     child: Child,
-    input: FramedWrite<ChildStdin, LengthDelimitedCodec>,
+    input: Option<FramedWrite<ChildStdin, LengthDelimitedCodec>>,
     output: FramedRead<ChildStdout, LengthDelimitedCodec>,
 }
 
@@ -54,7 +54,7 @@ impl Attachment {
         let output = FramedRead::new(child.stdout.take().unwrap(), LengthDelimitedCodec::new());
         let mut attachment = Self {
             child,
-            input,
+            input: Some(input),
             output,
         };
         attachment
@@ -68,6 +68,8 @@ impl Attachment {
 
     pub async fn send(&mut self, message: Value) {
         self.input
+            .as_mut()
+            .expect("open attachment input")
             .send(Bytes::from(serde_json::to_vec(&message).unwrap()))
             .await
             .unwrap();
@@ -130,20 +132,28 @@ impl Attachment {
         self.call(id, "desktop_client_snapshot", json!({})).await
     }
 
-    pub async fn close(mut self) {
-        self.input.close().await.unwrap();
-        drop(self.input);
+    pub async fn wait_for_output_eof(&mut self) {
         tokio::time::timeout(Duration::from_secs(10), async {
             while let Some(frame) = self.output.next().await {
-                frame.unwrap();
+                frame.expect("complete native frame before EOF");
             }
         })
         .await
-        .expect("native attachment closes its output");
-        let status = tokio::time::timeout(Duration::from_secs(10), self.child.wait())
+        .expect("native attachment output EOF deadline");
+    }
+
+    pub async fn wait_for_exit(&mut self) -> std::process::ExitStatus {
+        tokio::time::timeout(Duration::from_secs(10), self.child.wait())
             .await
+            .expect("native attachment process exit deadline")
             .unwrap()
-            .unwrap();
+    }
+
+    pub async fn close(mut self) {
+        self.input.as_mut().unwrap().close().await.unwrap();
+        drop(self.input.take());
+        self.wait_for_output_eof().await;
+        let status = self.wait_for_exit().await;
         assert!(status.success());
     }
 }

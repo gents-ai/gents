@@ -329,8 +329,10 @@ async fn different_build_with_compatible_inventory_is_reused_without_retirement(
     };
     assert_eq!(hello["installationBuild"], "different-compatible-build");
 
-    attachment.close().await;
     stop.cancel();
+    attachment.wait_for_output_eof().await;
+    let status = attachment.wait_for_exit().await;
+    assert!(status.success(), "stdio attachment exited with {status}");
     tokio::time::timeout(Duration::from_secs(10), server)
         .await
         .expect("compatible host did not stop after cancellation")
