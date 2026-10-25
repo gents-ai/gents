@@ -27,7 +27,12 @@ mod editor_store;
 #[cfg(any(unix, windows))]
 mod native;
 
+#[cfg(windows)]
+mod windows_stdio;
+
 fn main() -> Result<()> {
+    #[cfg(windows)]
+    windows_stdio::prevent_inheritance()?;
     if std::env::args_os()
         .nth(1)
         .is_some_and(|argument| !argument.to_string_lossy().starts_with('-'))
