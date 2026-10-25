@@ -432,6 +432,43 @@ fn reason(row: &serde_json::Value) -> &str {
 }
 
 #[tokio::test]
+async fn retirement_leaves_the_same_physical_request_pending_until_a_new_runtime_claims_it() {
+    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
+
+    let harness = Harness::new().await;
+    harness
+        .install_task(json!([{
+            "hook_id": "prepare", "phase": "before",
+            "command": ["sh", "-c", harness.touch("admitted")], "timeout_secs": 30,
+        }]))
+        .await;
+    let request = harness.create_request(Lineage::Trigger, false).await;
+    let before = harness.request_row(&request.doc_id).await;
+    let executions = BackgroundExecutionRegistry::default();
+    executions
+        .service_admission()
+        .retire(RetirementAuthority {
+            operator_authenticated: true,
+            observed_build_matches: true,
+        })
+        .unwrap();
+    let mut retired = harness.daemon_with(false, executions);
+    let (_shutdown, receiver) = tokio::sync::watch::channel(false);
+    retired
+        .process_request(request.clone(), receiver)
+        .await
+        .unwrap();
+    assert_eq!(harness.request_row(&request.doc_id).await, before);
+    assert_eq!(harness.calls(), 0);
+    assert!(!harness.mark("admitted").exists());
+
+    let row = harness.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+    assert_eq!(harness.calls(), 1);
+    assert!(harness.mark("admitted").exists());
+}
+
+#[tokio::test]
 async fn a_failing_before_hook_stops_the_request_before_the_provider() {
     let harness = Harness::new().await;
     harness

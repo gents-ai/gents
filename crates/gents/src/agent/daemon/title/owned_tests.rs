@@ -1337,6 +1337,7 @@ impl TitleFixture {
             agent_config: self.agent_config.clone(),
             provider_family: None,
             model: Arc::new(model),
+            service_admission: Default::default(),
             verifier: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.identity.clone(),
