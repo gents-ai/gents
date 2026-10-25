@@ -1582,6 +1582,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 serde_json::to_vec_pretty(&observations)?,
             )
             .await?;
+            #[cfg(feature = "editor-e2e")]
             copy_editor_evidence(root, "editor-inventory-failure.json")?;
         }
         editor?;
