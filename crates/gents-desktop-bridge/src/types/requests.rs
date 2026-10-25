@@ -164,6 +164,16 @@ pub struct SessionRenameRequest {
     pub title: String,
 }
 
+/// Archive revisions are decimal strings so browser callers retain all native bits.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionArchiveRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub expected_revision: String,
+    pub archived: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -637,4 +647,22 @@ pub struct DesktopBackgroundToolRequest {
     pub session_id: String,
     pub request_id: String,
     pub tool_call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionHistoryRequest {
+    pub node_did: String,
+    #[serde(default)]
+    pub visibility: gents_protocol::session::SessionArchiveVisibility,
+    pub query: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHistoryPage {
+    pub sessions: Vec<super::SessionSummary>,
+    pub next_cursor: Option<String>,
 }

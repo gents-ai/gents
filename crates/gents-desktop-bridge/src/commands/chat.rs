@@ -285,6 +285,27 @@ mod edit_fork_tests {
     }
 }
 
+pub async fn set_session_archived(
+    core: &ClientCore,
+    request: crate::types::SessionArchiveRequest,
+) -> Result<gents_protocol::session::SessionArchiveReceipt> {
+    let revision: u64 = request
+        .expected_revision
+        .parse()
+        .context("expectedRevision must be a canonical nonnegative decimal integer")?;
+    anyhow::ensure!(
+        revision.to_string() == request.expected_revision,
+        "expectedRevision must be a canonical nonnegative decimal integer"
+    );
+    core.set_session_archived(
+        request.node_did.trim(),
+        request.session_id.trim(),
+        revision,
+        request.archived,
+    )
+    .await
+}
+
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
     let node_did = request.node_did.trim().to_string();
     if node_did.is_empty() {

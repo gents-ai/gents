@@ -174,6 +174,8 @@ where
             tauri_commands::chat::desktop_goal_control,
             tauri_commands::chat::desktop_session_fork_before_message,
             tauri_commands::chat::desktop_session_rename,
+            tauri_commands::chat::desktop_session_archive,
+            tauri_commands::chat::desktop_session_history,
             tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,
             tauri_commands::mailbox::desktop_mailbox_list,

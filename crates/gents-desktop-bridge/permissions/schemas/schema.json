@@ -1519,6 +1519,18 @@
           "markdownDescription": "Denies the desktop_schedule_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_session_archive command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-archive",
+          "markdownDescription": "Enables the desktop_session_archive command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_archive command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-archive",
+          "markdownDescription": "Denies the desktop_session_archive command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_session_fork_before_message command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-session-fork-before-message",
@@ -1541,6 +1553,18 @@
           "type": "string",
           "const": "deny-desktop-session-goal",
           "markdownDescription": "Denies the desktop_session_goal command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-history",
+          "markdownDescription": "Enables the desktop_session_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-history",
+          "markdownDescription": "Denies the desktop_session_history command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_session_hydration_retry command without any pre-configured scope.",
@@ -1861,10 +1885,10 @@
           "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
         },
         {
-          "description": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`",
+          "description": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-history`\n- `allow-desktop-session-goal`",
           "type": "string",
           "const": "session-read",
-          "markdownDescription": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`"
+          "markdownDescription": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-history`\n- `allow-desktop-session-goal`"
         },
         {
           "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",
@@ -1885,10 +1909,10 @@
           "markdownDescription": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`"
         },
         {
-          "description": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`",
+          "description": "Chat submission, branching, rename and archive\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`\n- `allow-desktop-session-archive`",
           "type": "string",
           "const": "chat-write",
-          "markdownDescription": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`"
+          "markdownDescription": "Chat submission, branching, rename and archive\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`\n- `allow-desktop-session-archive`"
         },
         {
           "description": "Owner-scoped mailbox envelope reads\n#### This permission set includes:\n\n- `allow-desktop-mailbox-list`",

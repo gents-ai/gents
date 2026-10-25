@@ -3,6 +3,7 @@ use super::*;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionDocumentCases {
+    pub(crate) archive: Vec<serde_json::Value>,
     pub(crate) document_reference_encoding: String,
     pub(crate) selection: Vec<serde_json::Value>,
     pub(crate) projection: Vec<serde_json::Value>,

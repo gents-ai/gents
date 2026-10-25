@@ -1626,6 +1626,8 @@ mod agent_tools_tests {
                 agent_id: "worker".to_owned(),
                 created_at: "2026-10-14T00:00:00Z".to_owned(),
                 closed_at: None,
+                archived_at: None,
+                archive_revision: 0,
                 stopped_at: None,
                 title: None,
                 tags: Vec::new(),

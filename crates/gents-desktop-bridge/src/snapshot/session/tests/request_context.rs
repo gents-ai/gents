@@ -106,6 +106,8 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         agent_id: "default".into(),
         created_at: "2026-08-24T12:00:00Z".into(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: None,
         tags: Vec::new(),

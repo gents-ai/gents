@@ -14,4 +14,6 @@ type AgentSession @branchable @index(fields: ["node_did", "session_id"], unique:
     observation: JSON
     tags: [String!]
     stopped_at: String @index
+    archived_at: String @index
+    archive_revision: Int
 }

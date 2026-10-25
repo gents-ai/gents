@@ -36,3 +36,30 @@ const wrongResult: Promise<string> = invoke("desktop_managed_server_status");
 void wrongResult;
 // @ts-expect-error The invoker's generic parameter names a native command.
 invoke<string>("desktop_managed_server_status");
+
+invoke("desktop_session_archive", {
+  request: {
+    nodeDid: "node",
+    sessionId: "session",
+    archived: true,
+    expectedRevision: "9007199254740993",
+  },
+});
+invoke("desktop_session_history", {
+  request: {
+    nodeDid: "node",
+    visibility: "archived",
+    query: null,
+    cursor: null,
+    limit: 30,
+  },
+});
+invoke("desktop_session_archive", {
+  request: {
+    nodeDid: "node",
+    sessionId: "session",
+    archived: true,
+    // @ts-expect-error Browser numbers cannot preserve native archive revisions.
+    expectedRevision: 1,
+  },
+});

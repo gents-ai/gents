@@ -291,8 +291,16 @@ pub enum ClientCommand {
     ForkBeforeMessage {
         request: crate::types::SessionForkBeforeRequest,
     },
+    #[serde(rename = "desktop_session_history")]
+    SessionHistory {
+        request: crate::types::SessionHistoryRequest,
+    },
     #[serde(rename = "desktop_session_rename")]
     Rename { request: SessionRenameRequest },
+    #[serde(rename = "desktop_session_archive")]
+    Archive {
+        request: crate::types::SessionArchiveRequest,
+    },
     #[serde(rename = "desktop_interrupt_request")]
     Interrupt { request: DesktopInterruptRequest },
 }
@@ -351,6 +359,8 @@ impl ClientCommand {
         "desktop_pending_message_steer",
         "desktop_session_fork_before_message",
         "desktop_session_rename",
+        "desktop_session_archive",
+        "desktop_session_history",
         "desktop_interrupt_request",
     ];
 
@@ -382,6 +392,7 @@ impl ClientCommand {
                 | Self::SessionLiveDelta(_)
                 | Self::SessionGoal(_)
                 | Self::SessionProvenance { .. }
+                | Self::SessionHistory { .. }
         )
     }
 }

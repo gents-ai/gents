@@ -54,6 +54,10 @@ import type {
   DesktopSessionProvenanceRequest,
   DesktopSessionSnapshot,
   SessionRenameRequest,
+  SessionArchiveRequest,
+  SessionArchiveReceipt,
+  SessionHistoryRequest,
+  SessionHistoryPage,
   SessionLiveDeltaView,
   SessionRowsView,
   SessionRowsWindow,
@@ -242,6 +246,12 @@ export type DesktopApiAdapter = {
     request: SessionForkBeforeRequest,
   ) => Promise<SessionForkResult>;
   renameSession: (request: SessionRenameRequest) => Promise<void>;
+  setSessionArchived: (
+    request: SessionArchiveRequest,
+  ) => Promise<SessionArchiveReceipt>;
+  sessionHistory: (
+    request: SessionHistoryRequest,
+  ) => Promise<SessionHistoryPage>;
   resendRequest: (
     requestId: string,
     nodeDid?: string,

@@ -22,6 +22,9 @@ pub mod mcp_health;
 mod peer;
 #[path = "commands/session.rs"]
 mod session;
+#[path = "commands/session_history.rs"]
+mod session_history;
+pub use session_history::session_history;
 #[path = "commands/task.rs"]
 mod task;
 #[path = "commands/tool_service.rs"]
@@ -31,7 +34,7 @@ mod util;
 
 pub use chat::{
     edit_pending_queue, fork_session_before_message, inventory_file_change, rename_session,
-    request_output, retry_request, send_chat_message, session_file_inventory,
+    request_output, retry_request, send_chat_message, session_file_inventory, set_session_archived,
     steer_pending_message, tool_file_changes,
 };
 #[cfg_attr(test, allow(unused_imports))]

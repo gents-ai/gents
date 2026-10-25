@@ -16,6 +16,12 @@ const TOOL_LEGACY_BACKGROUND: &str = "bafyreigxgxq4itlpku2ajqwpb7axfy2pqckgpab3l
 const SESSION_ROOT: &str = "bafyreietunsrqsijc3k6x3gf6y2nwkim74uf6j4lskv7p3pjrl44q4tthe";
 const SESSION_TARGET: &str = "bafyreifbqcjrp64kux3uawewu3rn4xrfi7v2soi2mcuwzq4bk7vuqsq5au";
 
+const SESSION_CURRENT_ROOT: &str = "bafyreiajedcyxilotygvagpzwbruh3nofyd5mr3kao7phf6fc73x3sdc7u";
+const SESSION_ARCHIVE_CURRENT: &str = "bafyreif5fb2oygthj7amoqgnt7rkgctqyku5bwk4vdmtssqoftnsdgzvwa";
+const SESSION_ARCHIVE_AFTER_STOP: &str =
+    "bafyreih2muyccdxla5ox6f32aoriserpdko45a5fxqsb6zgrkkg2yeenrm";
+const SESSION_ARCHIVE_PATCH: &str = r#"[{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"archived_at","Kind":"String"}},{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"archive_revision","Kind":"Int"}}]"#;
+
 /// DefraDB field positions are persistent identifiers. Existing RC1 lineages
 /// append fields through versioned patches; fresh stores retain the current
 /// canonical roots. Only these exact source and destination versions qualify.
@@ -77,10 +83,13 @@ pub(crate) fn include_existing(
         let after_background_patch = name == "AgentToolCall"
             && root == TOOL_ROOT
             && current.version_id == TOOL_LEGACY_BACKGROUND;
+        let after_session_archive =
+            name == "AgentSession" && current.version_id == SESSION_ARCHIVE_AFTER_STOP;
         if current.version_id != root
             && current.version_id != target
             && !after_job_patch
             && !after_background_patch
+            && !after_session_archive
         {
             continue;
         }
@@ -99,5 +108,42 @@ pub(crate) fn include_existing(
             });
         }
     }
+    include_session_archive(node, baseline, steps)?;
+    Ok(())
+}
+
+fn include_session_archive(
+    node: &EmbeddedNode,
+    baseline: &mut [BaselineCollection<'static>],
+    steps: &mut Vec<MigrationStep<'static>>,
+) -> Result<()> {
+    let Some(current) = node
+        .get_collection("AgentSession")
+        .map_err(|error| Error::Node(error.into()))?
+    else {
+        return Ok(());
+    };
+    let target = match current.version_id.as_str() {
+        SESSION_ROOT | SESSION_TARGET | SESSION_ARCHIVE_AFTER_STOP => SESSION_ARCHIVE_AFTER_STOP,
+        SESSION_CURRENT_ROOT | SESSION_ARCHIVE_CURRENT => {
+            if let Some(entry) = baseline
+                .iter_mut()
+                .find(|entry| entry.name == "AgentSession")
+            {
+                entry.expected_version = Some(SESSION_CURRENT_ROOT);
+            }
+            SESSION_ARCHIVE_CURRENT
+        }
+        _ => return Ok(()),
+    };
+    steps.push(MigrationStep::PatchVersioned {
+        id: "agent-session-add-archive-state",
+        collection: "AgentSession",
+        patch: SESSION_ARCHIVE_PATCH,
+        lens: None,
+        expected_version: Some(target),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["archived_at", "archive_revision"]),
+    });
     Ok(())
 }

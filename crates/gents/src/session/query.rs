@@ -5,7 +5,7 @@ use anyhow::Context;
 /// Fields for one canonical `AgentSession` read. Nested values are DefraDB
 /// JSON scalar columns: read the bare field name, never an object subselection.
 pub const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id \
-created_at closed_at stopped_at title provenance observation tags _docID";
+created_at closed_at stopped_at archived_at archive_revision title provenance observation tags _docID";
 
 pub(crate) async fn session_stopped_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -80,6 +80,14 @@ pub(super) fn validate_agent_session(
     if let Some(closed_at) = session.closed_at.as_deref() {
         chrono::DateTime::parse_from_rfc3339(closed_at).context("session closed_at is invalid")?;
     }
+    if let Some(archived_at) = session.archived_at.as_deref() {
+        chrono::DateTime::parse_from_rfc3339(archived_at)
+            .context("session archived_at is invalid")?;
+    }
+    anyhow::ensure!(
+        session.archive_revision <= i64::MAX as u64,
+        "session archive revision exceeds the database integer range"
+    );
     if let Some(stopped_at) = session.stopped_at.as_deref() {
         chrono::DateTime::parse_from_rfc3339(stopped_at)
             .context("session stopped_at is invalid")?;

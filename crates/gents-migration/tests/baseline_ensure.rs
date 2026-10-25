@@ -1,4 +1,7 @@
+use defra_node::EmbeddedNode;
+use gents_protocol::schemas;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use gents_migration::{
     ensure_migrations, ensure_migrations_dynamic, ensure_migrations_with_registry,
@@ -107,7 +110,11 @@ async fn existing_agent_session_schema_upgrades_in_place_and_preserves_rows() {
     let node = fresh_node().await;
     let legacy_sdl = gents_protocol::schemas::AGENT_SESSION
         .lines()
-        .filter(|line| !line.trim_start().starts_with("stopped_at:"))
+        .filter(|line| {
+            !["stopped_at:", "archived_at:", "archive_revision:"]
+                .iter()
+                .any(|field| line.trim_start().starts_with(field))
+        })
         .collect::<Vec<_>>()
         .join("\n");
     node.add_schema(&legacy_sdl)
@@ -833,5 +840,110 @@ async fn file_image_receipt_is_local_and_matches_its_pinned_root() {
         Some(collection.version_id.as_str()),
         baseline.expected_version
     );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn archive_columns_preserve_existing_sessions_and_field_identities() {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("data");
+    let did = common::node_identity();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(&data)
+            .with_node_identity_did(&did)
+            .build()
+            .await
+            .unwrap(),
+    );
+    let previous = schemas::AGENT_SESSION
+        .lines()
+        .filter(|line| {
+            !["archived_at:", "archive_revision:"]
+                .iter()
+                .any(|field| line.trim_start().starts_with(field))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    node.add_schema(&previous).await.unwrap();
+    let before = node.get_collection("AgentSession").unwrap().unwrap();
+    let created = node
+        .execute(
+            r#"mutation {add_AgentSession(input: {
+        node_did: "runtime", session_id: "retained", agent_id: "engineer",
+        created_at: "2026-01-01T00:00:00Z", stopped_at: "2026-01-02T00:00:00Z",
+        title: {text: "Original title", source: "user"}, tags: ["keep"],
+        provenance: {task_id: "original-task"}
+    }) {_docID}}"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "{created:?}");
+    let created = created.data.unwrap()["add_AgentSession"][0]["_docID"].clone();
+    ensure_migrations(node.as_ref()).await.unwrap();
+    let after = node.get_collection("AgentSession").unwrap().unwrap();
+    assert_eq!(after.collection_id, before.collection_id);
+    for field in before.fields {
+        assert_eq!(
+            after
+                .fields
+                .iter()
+                .find(|current| current.name == field.name)
+                .unwrap()
+                .id,
+            field.id,
+            "AgentSession.{} moved",
+            field.name
+        );
+    }
+    let query = "{AgentSession {_docID session_id created_at stopped_at title tags provenance archived_at archive_revision}}";
+    let read = node.execute(query).await;
+    assert!(!read.has_errors(), "{read:?}");
+    let rows = read.data.unwrap();
+    let retained = &rows["AgentSession"][0];
+    assert_eq!(retained["_docID"], created);
+    assert_eq!(retained["title"]["text"], "Original title");
+    assert_eq!(retained["stopped_at"], "2026-01-02T00:00:00Z");
+    assert_eq!(retained["tags"], serde_json::json!(["keep"]));
+    assert_eq!(retained["provenance"]["task_id"], "original-task");
+    assert!(retained["archived_at"].is_null());
+    assert!(retained["archive_revision"].is_null());
+    assert!(after
+        .indexes
+        .iter()
+        .any(|index| index.name == "AgentSession_archived_at_ASC"));
+    let versions = node.get_all_collection_versions().await.unwrap().len();
+    assert_eq!(
+        ensure_migrations(node.as_ref())
+            .await
+            .unwrap()
+            .steps_applied,
+        0
+    );
+    assert_eq!(
+        node.get_all_collection_versions().await.unwrap().len(),
+        versions
+    );
+    let repeated = node.execute(query).await;
+    assert!(!repeated.has_errors(), "{repeated:?}");
+    assert_eq!(repeated.data.unwrap(), rows);
+    node.shutdown().await;
+    drop(node);
+    let node = EmbeddedNode::builder()
+        .data_path(&data)
+        .with_node_identity_did(&did)
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0);
+    assert_eq!(
+        node.get_collection("AgentSession")
+            .unwrap()
+            .unwrap()
+            .version_id,
+        after.version_id
+    );
+    let reopened = node.execute(query).await;
+    assert!(!reopened.has_errors(), "{reopened:?}");
+    assert_eq!(reopened.data.unwrap(), rows);
     node.shutdown().await;
 }

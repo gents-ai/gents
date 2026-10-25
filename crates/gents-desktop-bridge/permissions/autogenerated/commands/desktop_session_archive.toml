@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-session-archive"
+description = "Enables the desktop_session_archive command without any pre-configured scope."
+commands.allow = ["desktop_session_archive"]
+
+[[permission]]
+identifier = "deny-desktop-session-archive"
+description = "Denies the desktop_session_archive command without any pre-configured scope."
+commands.deny = ["desktop_session_archive"]

@@ -5,11 +5,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
+mod archive;
 pub mod canonical_rows;
+pub use archive::{set_session_archived, set_session_archived_on};
 mod compaction_entries;
 mod control;
 mod fork;
 mod history;
+#[cfg(test)]
+mod model_test_support;
 mod observations;
 mod output;
 #[cfg(test)]

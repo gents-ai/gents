@@ -163,6 +163,8 @@ pub(crate) fn session_summaries(
                     .and_then(|request| request.doc_id.clone())
                     .or_else(|| indexed.map(|indexed| indexed.request_doc_id.clone())),
                 closed_at: session.closed_at.clone(),
+                archived_at: session.archived_at.clone(),
+                archive_revision: session.archive_revision.to_string(),
                 tags: session.tags.clone(),
                 provenance: session.provenance.clone(),
                 title: session

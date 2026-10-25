@@ -813,6 +813,8 @@ mod agent_environment_tests {
             requester_did: None,
             latest_request_doc_id: None,
             closed_at: None,
+            archived_at: None,
+            archive_revision: "0".into(),
             tags: vec![],
             provenance: None,
             session_id: session_id.to_string(),

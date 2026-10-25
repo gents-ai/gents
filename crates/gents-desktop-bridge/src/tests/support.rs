@@ -316,6 +316,8 @@ pub async fn create_session(
         agent_id: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: None,
         tags: Vec::new(),

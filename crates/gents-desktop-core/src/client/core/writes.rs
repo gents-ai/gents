@@ -1105,6 +1105,42 @@ impl ClientCore {
         .map_err(Into::into)
     }
 
+    pub async fn set_session_archived(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        expected_revision: u64,
+        archived: bool,
+    ) -> Result<gents_protocol::session::SessionArchiveReceipt> {
+        let access = self.operator_access(node_did)?;
+        let result = gents::session::set_session_archived_on(
+            &access,
+            node_did,
+            session_id,
+            &self.node_identity,
+            expected_revision,
+            archived,
+        )
+        .await;
+        match result {
+            Ok(receipt) => {
+                if self.refresh_node(node_did).await?.is_none() {
+                    self.refresh_store().await?;
+                }
+                self.clear_mutation_error();
+                Ok(receipt)
+            }
+            Err(error) => Err(self.record_mutation_error(
+                if archived {
+                    "archive session"
+                } else {
+                    "restore session"
+                },
+                error,
+            )),
+        }
+    }
+
     pub async fn rename_session(
         &self,
         node_did: &str,
