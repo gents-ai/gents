@@ -110,7 +110,8 @@ pub async fn attach(paths: DesktopPaths, editor_store: bool, interactive: bool) 
 /// EOF must end the attachment even when no more editor input is available.
 async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
     #[cfg(windows)]
-    keep_stdio_in_attachment()?;
+    crate::windows_stdio::prevent_inheritance()
+        .context("keeping attachment pipes out of the shared client process")?;
     let mut bootstrap = editor_store.then(|| {
         crate::editor_store::frames(tokio::io::join(tokio::io::stdin(), tokio::io::stdout()))
     });
@@ -254,27 +255,6 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
     tokio::select! {
         result = input => result?,
         result = output => result?,
-    }
-    Ok(())
-}
-
-/// Windows inherits every inheritable handle, even when a child's configured
-/// stdio is NUL. The attachment owns its original pipes for its whole lifetime;
-/// leaking its output handle into the shared server prevents EOF until that
-/// server exits. Explicit child stdio still uses Rust's separate duplicates.
-#[cfg(windows)]
-fn keep_stdio_in_attachment() -> Result<()> {
-    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
-    use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
-
-    for stream in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE] {
-        // SAFETY: GetStdHandle borrows a process-owned standard handle. Changing
-        // its inheritance flag does not close it or affect current I/O.
-        let result = unsafe { SetHandleInformation(GetStdHandle(stream), HANDLE_FLAG_INHERIT, 0) };
-        if result == 0 {
-            return Err(std::io::Error::last_os_error())
-                .context("keeping attachment pipes out of the shared client process");
-        }
     }
     Ok(())
 }

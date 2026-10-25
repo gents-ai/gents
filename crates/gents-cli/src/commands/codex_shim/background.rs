@@ -378,7 +378,7 @@ mod tests {
 
     use super::super::{CodexSidecar, ConnectionState, ShimState};
     use super::*;
-    use crate::commands::test_fixtures::seed_job_row;
+    use crate::commands::shim_test_fixtures::seed_job_row;
 
     async fn insert_segment(node: &EmbeddedNode, segment: &OutputSegment) -> String {
         let response = node

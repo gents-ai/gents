@@ -27,6 +27,9 @@ mod editor_store;
 #[cfg(any(unix, windows))]
 mod native;
 
+#[cfg(windows)]
+mod windows_stdio;
+
 fn main() -> Result<()> {
     if std::env::args_os()
         .nth(1)
