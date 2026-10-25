@@ -263,7 +263,10 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             assert!(receipt(&access, &doc_id).await.is_none());
         }
         let requests = access
-            .execute("{ AgentRequest(filter: {request_id: {_eq: \"first\"}}) { _docID } }")
+            .execute(&format!(
+                "{{ AgentRequest(filter: {{request_id: {{_eq: \"first\"}}}}) {{ {} }} }}",
+                crate::SIGNED_REQUEST_FIELDS,
+            ))
             .await
             .unwrap();
         assert_eq!(
@@ -275,6 +278,17 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             "{} first request",
             case.name
         );
+        for value in requests["data"]["AgentRequest"].as_array().unwrap() {
+            let request = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(
+                super::super::load_applied_opening_goal_id(&access, &request)
+                    .await
+                    .unwrap(),
+                Some(deterministic_goal_id(identity.did(), SESSION)),
+                "{} applied opening provenance",
+                case.name,
+            );
+        }
         let goal = load_canonical_goal(&node, identity.did(), SESSION)
             .await
             .unwrap();

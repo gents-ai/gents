@@ -1065,6 +1065,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
         RenderedTimelineItem::PendingUserTurn {
             item_key: "pending-interrupted".into(),
             request_id: "interrupted".into(),
+            started_goal_id: None,
             content: "keep this input".into(),
             captured_context: None,
             attachments: None,
@@ -1104,6 +1105,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
         .map(|index| RenderedTimelineItem::PendingUserTurn {
             item_key: format!("pending-{index}"),
             request_id: format!("request-{index}"),
+            started_goal_id: None,
             content: format!("input {index}"),
             captured_context: None,
             attachments: None,
@@ -1139,6 +1141,7 @@ fn local_pending_history_pages_with_durable_anchor_cursor() {
     let pending = RenderedTimelineItem::PendingUserTurn {
         item_key: "pending-old".into(),
         request_id: "old".into(),
+        started_goal_id: None,
         content: "interrupted input".into(),
         captured_context: None,
         attachments: None,
@@ -1176,6 +1179,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
         RenderedTimelineItem::PendingUserTurn {
             item_key: "pending-current".into(),
             request_id: "current".into(),
+            started_goal_id: None,
             content: "current input".into(),
             captured_context: None,
             attachments: None,
@@ -1379,72 +1383,4 @@ fn a_rows_read_draws_the_rows_the_session_snapshot_draws() {
             RenderedTimelineItem::AssistantMessage { .. },
         ] if prompt == "req-1"
     ));
-}
-
-#[test]
-fn only_the_authored_opening_goal_input_keeps_its_marker_after_reload() {
-    for (assignment, expected) in [
-        (None, None),
-        (
-            Some(serde_json::json!({ "goal_id": "goal-1" })),
-            Some("goal-1"),
-        ),
-        (
-            Some(serde_json::json!({ "goal_id": "goal-1", "root_request_doc_id": "opening-doc" })),
-            None,
-        ),
-    ] {
-        let mut rows = ClientStoreRows {
-            sessions: vec![timeline_session()],
-            requests: vec![AgentRequestRow {
-                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-                doc_id: Some("request-doc".into()),
-                request_id: "request-1".into(),
-                node_did: Some("did:test:amy".into()),
-                session_id: Some("sess-1".into()),
-                lifecycle_state: Some(RequestLifecycleState::Completed),
-                content: Some("Review the changes".into()),
-                input: Some(
-                    serde_json::from_value(serde_json::json!({ "goal_assignment": assignment }))
-                        .unwrap(),
-                ),
-                ..Default::default()
-            }],
-            ..ClientStoreRows::default()
-        };
-        for (key, sequence, role) in [
-            ("authored:request-doc:context", 1, MessageRole::User),
-            ("authored:request-doc:prompt", 2, MessageRole::User),
-            ("answer", 3, MessageRole::Assistant),
-        ] {
-            push_canonical_text_message(
-                &mut rows,
-                key,
-                "sess-1",
-                Some("request-doc"),
-                sequence,
-                role,
-                "Review the changes",
-            );
-        }
-        for _ in 0..2 {
-            let snapshot = build_session_snapshot_from_store(
-                &ClientStore::from_rows(rows.clone()),
-                "sess-1",
-                None,
-            )
-            .unwrap();
-            let markers = snapshot
-                .timeline_items
-                .iter()
-                .filter_map(|item| match item {
-                    RenderedTimelineItem::UserMessage {
-                        started_goal_id, ..
-                    } => started_goal_id.as_deref(),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(markers, expected.into_iter().collect::<Vec<_>>());
-        }
-    }
 }
