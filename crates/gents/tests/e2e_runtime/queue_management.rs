@@ -112,6 +112,7 @@ async fn submit_edit_inner(
                 session_id,
                 edit,
                 selected,
+                None,
             )
             .await
         }

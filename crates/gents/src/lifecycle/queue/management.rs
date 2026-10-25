@@ -344,6 +344,7 @@ pub async fn prepare_pending_user_edit(
         requester_did,
         edit,
         None,
+        None,
     )
     .await
 }
@@ -358,6 +359,7 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
     requester_did: &str,
     edit: &PendingQueueEdit,
     deliveries: Option<&[QueueDelivery]>,
+    first_request_id: Option<&str>,
 ) -> Result<Vec<AgentRequestCreate>> {
     anyhow::ensure!(
         signer.did() == requester_did && admission.signer_did == requester_did,
@@ -396,7 +398,11 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
                 node_did,
                 session_id,
                 requester_did,
-                request_id: uuid::Uuid::new_v4().to_string(),
+                request_id: (index == 0)
+                    .then_some(first_request_id)
+                    .flatten()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 delivery,
             },
@@ -789,6 +795,7 @@ pub(super) async fn replace_pending_user_messages(
         requester_did,
         &edit,
         Some(deliveries),
+        None,
     )
     .await?;
     access

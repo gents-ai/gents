@@ -229,3 +229,36 @@ test("keeps confirmed opening attribution through pending-to-durable handoff", (
   expect(render(confirmed, [durable]).match(/Sent as goal/g)).toHaveLength(1);
   expect(render(undefined, [durable]).match(/Sent as goal/g)).toHaveLength(1);
 });
+
+test.each([
+  ["parent", "request", false, "Sent without waiting for a receipt", 0],
+  ["request", "other-input", false, "Earlier folded input", 1],
+  ["request", undefined, true, "Sent without waiting for a receipt", 0],
+])(
+  "reconciles optimistic input with its authored identity (%s, %s)",
+  (requestId, inputRequestId, ownsTurn, content, pendingCards) => {
+    const durable: RenderedTimelineItem = {
+      kind: "userMessage",
+      itemKey: "canonical-input",
+      requestId,
+      inputRequestId,
+      ownsTurn,
+      content,
+      timestamp: null,
+      reconstruction: { state: "ready" },
+    };
+    const html = renderToStaticMarkup(
+      <ChatTranscriptPanel
+        selectedSessionId="session"
+        session={{ ...session, timelineItems: [durable] }}
+        optimisticPendingTurn={pending}
+        activity={null}
+      />,
+    );
+    expect(html.match(/Sent without waiting for a receipt/g)).toHaveLength(1);
+    expect(html.match(/class="message-card pending-card"/g) ?? []).toHaveLength(
+      pendingCards,
+    );
+    if (content === "Earlier folded input") expect(html).toContain(content);
+  },
+);
