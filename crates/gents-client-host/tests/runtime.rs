@@ -54,6 +54,8 @@ mod initialization;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
+#[path = "support/runtime_replacement.rs"]
+mod runtime_replacement;
 #[path = "support/speech.rs"]
 mod speech;
 mod support;
@@ -64,6 +66,7 @@ use support::Attachment;
 #[derive(Clone, Copy)]
 enum Journey {
     Conversation,
+    RuntimeReplacement,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     Editor,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
@@ -168,6 +171,29 @@ async fn native_client_submits_signed_input_and_observes_live_and_durable_output
         })
         .join("\n")
     })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_runtime_replacement_preserves_running_input_enrollment_and_transcript(
+) -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::RuntimeReplacement)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "runtime-replacement.err",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -737,7 +763,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         graphql,
         identity.did(),
     ));
-    if matches!(journey, Journey::Conversation) {
+    if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
         client
             .call(1, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -792,7 +818,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
         .context("runtime default agent")?;
-    if matches!(journey, Journey::Conversation | Journey::EditorDelivery) {
+    if matches!(
+        journey,
+        Journey::Conversation | Journey::RuntimeReplacement | Journey::EditorDelivery
+    ) {
         if matches!(journey, Journey::EditorDelivery) {
             client
                 .call(id, "client_connect_local", json!({"nodeHome":node_home}))
@@ -964,6 +993,21 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("live output was not observed before provider completion")??;
+    if matches!(journey, Journey::RuntimeReplacement) {
+        runtime_replacement::refuse_busy(&host_binary, &node_home).await?;
+        let unchanged = access.execute(&signed_query).await?;
+        let unchanged = &unchanged["data"]["AgentRequest"][0];
+        ensure!(
+            unchanged["_docID"] == original_doc_id,
+            "busy refusal replaced the input: {unchanged}"
+        );
+        ensure!(
+            !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+                unchanged["lifecycle_state"].as_str()
+            ),
+            "busy refusal terminated the input: {unchanged}"
+        );
+    }
     if matches!(journey, Journey::EditorSteering) {
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
@@ -1290,6 +1334,27 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("the exact request's terminal answer was not observed")??;
+    if matches!(journey, Journey::RuntimeReplacement) {
+        runtime_replacement::Fixture {
+            root,
+            home: &node_home,
+            binary: &host_binary,
+            node_did,
+            agent_id,
+            session,
+            client_did: &client_did,
+            original_doc_id: &original_doc_id,
+            access: &access,
+        }
+        .replace_and_verify(&mut runtime, &mut client, &mut id)
+        .await.with_context(|| {
+            let requests: Vec<_> = provider.captured_chat_requests().iter().map(|request| json!({
+                "model":request["model"], "stream":request["stream"],
+                "userMessages":request["messages"].as_array().into_iter().flatten().filter(|message| message["role"] == "user").map(|message| message["content"].clone()).collect::<Vec<_>>(),
+            })).collect();
+            format!("provider observations: {}; completion gate permits: {}", json!(requests), gate.available_permits())
+        })?;
+    }
     let wrong_scope = client
         .try_call(
             id,
@@ -1384,7 +1449,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         user_rounds
             == if matches!(journey, Journey::EditorGoalRecovery) {
                 7
-            } else if matches!(journey, Journey::EditorSteering) {
+            } else if matches!(
+                journey,
+                Journey::EditorSteering | Journey::RuntimeReplacement
+            ) {
                 2
             } else {
                 1
@@ -1960,9 +2028,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     stop(&mut host)
         .await
         .context("stopping the fixture client host")?;
-    stop(&mut runtime)
-        .await
-        .context("stopping the fixture runtime")?;
+    if !matches!(journey, Journey::RuntimeReplacement) {
+        stop(&mut runtime)
+            .await
+            .context("stopping the fixture runtime")?;
+    }
     Ok(())
 }
 

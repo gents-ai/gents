@@ -462,6 +462,9 @@ pub(crate) async fn serve_prepared(
     serve_with_startup(args, runtime, Some(startup)).await
 }
 
+/// Regolith retains its OS store lock while closed engine handles remain.
+/// The claim therefore outlives every node reference in the foreground scope,
+/// including references that are not carried by ConfigAccess.
 async fn serve_with_startup(
     args: ServeArgs,
     runtime: tokio::runtime::Handle,
@@ -471,7 +474,10 @@ async fn serve_with_startup(
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
     gents::runtime_service::executable_build_id().await?;
-    serve_foreground(args, runtime, startup).await
+    let mut store_lifetime = None;
+    let outcome = serve_foreground(args, runtime, startup, &mut store_lifetime).await;
+    drop(store_lifetime);
+    outcome
 }
 
 async fn wait_for_shutdown_signal() {
@@ -578,6 +584,7 @@ async fn serve_foreground(
     mut args: ServeArgs,
     executor: tokio::runtime::Handle,
     mut startup: Option<super::prepare_runtime::PreparedStartup>,
+    store_lifetime: &mut Option<gents::config_client::ConfigAccess>,
 ) -> Result<()> {
     #[cfg(not(unix))]
     anyhow::ensure!(
@@ -792,6 +799,7 @@ async fn serve_foreground(
                 return Err(error);
             }
         };
+    *store_lifetime = Some(store_access.clone());
     let mut runtime =
         ServeRuntime::new(executor).retain_shutdown_owner(node.clone(), store_access.clone());
     #[cfg(unix)]
@@ -1410,6 +1418,7 @@ async fn shutdown_claimed_node(
 ) {
     let shutdown = tokio::spawn(async move {
         node.shutdown().await;
+        drop(node);
         drop(access);
     });
     if let Err(error) = shutdown.await {

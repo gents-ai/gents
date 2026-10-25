@@ -32,7 +32,8 @@ fn packaged_host_exposes_the_owned_runtime_cli_without_changing_host_flags() {
 #[tokio::test]
 async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setup_on_reload() {
     use gents_protocol::serve_lifecycle::preparation::{
-        RuntimePreparationOutcome, RuntimePreparationResult,
+        RuntimePreparationOutcome, RuntimePreparationRefusal, RuntimePreparationReport,
+        RuntimePreparationResult,
     };
     use std::process::Stdio;
     use std::sync::Arc;
@@ -63,6 +64,37 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     );
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let initial_config = std::fs::read(home.join("init.json")).unwrap();
+    let failed = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new(executable)
+            .args(["prepare-runtime", "--home"])
+            .arg(&home)
+            .args(["--http-port", &port.to_string(), "--http-addr", "127.0.0.1"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!failed.status.success());
+    let refused: RuntimePreparationReport = serde_json::from_slice(&failed.stdout)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&failed.stderr)));
+    assert!(
+        matches!(
+            refused.result,
+            RuntimePreparationResult::Refused {
+                reason: RuntimePreparationRefusal::Failed,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read(home.join("init.json")).unwrap(),
+        initial_config
+    );
+    assert!(!home.join("runtime.json").exists());
     drop(listener);
     let log_path = root.path().join("runtime.log");
     let log = std::fs::File::create(&log_path).unwrap();
