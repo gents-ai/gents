@@ -18,7 +18,7 @@ use crate::{
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BackgroundError {
     #[error(transparent)]
-    Duration(#[from] crate::request_helpers::RequestHelpersError),
+    Duration(crate::request_helpers::RequestHelpersError),
     #[error("duration too large")]
     DurationTooLarge(#[source] std::num::TryFromIntError),
     #[error(transparent)]
@@ -188,7 +188,7 @@ fn age_cutoff(
     let Some(raw) = normalize_optional_string(raw) else {
         return Ok(None);
     };
-    let duration = parse_duration_suffix(&raw)?;
+    let duration = parse_duration_suffix(&raw).map_err(BackgroundError::Duration)?;
     let secs = i64::try_from(duration.as_secs()).map_err(BackgroundError::DurationTooLarge)?;
     Ok(Some(now - chrono::Duration::seconds(secs)))
 }

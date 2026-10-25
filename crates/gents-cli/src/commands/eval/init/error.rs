@@ -209,6 +209,6 @@ pub(crate) enum EvalInitError {
     DecodeAuthorReadiness(#[source] serde_json::Error),
     #[error("parsing pack config JSON")]
     ParsePackConfig(#[source] serde_json::Error),
-    #[error("refusing to replace --out: {error}")]
-    OutRefused { error: String },
+    #[error("refusing to replace --out")]
+    OutRefused(#[source] Box<crate::CliError>),
 }

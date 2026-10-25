@@ -150,8 +150,6 @@ pub(crate) enum RequestHelpersError {
         #[source]
         source: Box<gents::config_client::ReceiptWriteError<RequestHelpersError>>,
     },
-    #[error("committed signed request receipt missing")]
-    PreparedReceiptMissing,
     #[error("committed signed request receipt is missing")]
     CommittedReceiptMissing,
     #[error("the command produced no report")]
@@ -685,7 +683,7 @@ pub(crate) async fn submit_prepared_agent_request_committed(
         })?;
     let row = matching_prepared_receipt(graphql, &prepared.create)
         .await?
-        .ok_or(RequestHelpersError::PreparedReceiptMissing)?;
+        .ok_or(RequestHelpersError::CommittedReceiptMissing)?;
     submitted_from_receipt(row)
 }
 

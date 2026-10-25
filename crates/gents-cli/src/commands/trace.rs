@@ -11,7 +11,6 @@ use gents::adapter_projection::{
     ProjectionRedactionMode,
 };
 use gents::config_client::ConfigClientError;
-use gents::document_config::DocumentConfigError;
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
@@ -98,88 +97,8 @@ pub(crate) enum TraceError {
     Config(#[from] ConfigClientError),
     #[error(transparent)]
     TraceExport(#[from] TraceExportError),
-    #[error("projection ACP enforcement requires --actor-did")]
-    ProjectionActorRequired,
-    #[error("projection ACP enforcement requires --graphql so DefraDB ACP can decide documents")]
-    ProjectionAcpNeedsGraphql,
     #[error(transparent)]
-    ProjectionResourceMap(Box<DocumentConfigError>),
-    #[error(
-        "ambiguous ProjectionAcpBinding rows for projection {projection_id} request {request_id}: {first} and {second}"
-    )]
-    AmbiguousProjectionBinding {
-        projection_id: String,
-        request_id: String,
-        first: String,
-        second: String,
-    },
-    #[error("enabled ProjectionAcpBinding {binding} is published but still has staged_policy_id")]
-    BindingPublishedWithStaged { binding: String },
-    #[error("enabled ProjectionAcpBinding {binding} is rotating but has no staged_policy_id")]
-    BindingRotatingWithoutStaged { binding: String },
-    #[error("enabled ProjectionAcpBinding {binding} staged_policy_id must differ from policy_id")]
-    BindingStagedEqualsActive { binding: String },
-    #[error(
-        "enabled ProjectionAcpBinding {binding} has non-operational publication_status {status}; disable it or publish it before projection enforcement"
-    )]
-    BindingNonOperational { binding: String, status: String },
-    #[error("enabled ProjectionAcpBinding {binding} has invalid publication_status {status}")]
-    BindingInvalidStatus { binding: String, status: String },
-    #[error(
-        "enabled ProjectionAcpBinding {binding} previous_policy_id must differ from policy_id"
-    )]
-    BindingPreviousEqualsActive { binding: String },
-    #[error(
-        "enabled ProjectionAcpBinding {binding} previous_policy_id must differ from staged_policy_id"
-    )]
-    BindingPreviousEqualsStaged { binding: String },
-    #[error("DefraDB ACP projection decisions require _docID for {resource} {label}")]
-    MissingAcpDocId { resource: String, label: String },
-    #[error("DefraDB ACP denied read access to root request {request_id}")]
-    RootRequestDenied { request_id: String },
-    #[error("DefraDB ACP projection decisions require _docID for Goal history")]
-    GoalDocIdMissing,
-    #[error(
-        "DefraDB ACP projection decisions require _docID for ProviderContextReduction {reduction_key}"
-    )]
-    ReductionDocIdMissing { reduction_key: String },
-    #[error(
-        "DefraDB ACP projection decisions require _docID for RenderedRequest {request_commit_cid}"
-    )]
-    RenderedRequestDocIdMissing { request_commit_cid: String },
-    #[error("building ACP decision client")]
-    DecisionClient(#[source] reqwest::Error),
-    #[error("requesting DefraDB ACP read decision for {resource}/{doc_id}")]
-    DecisionRequest {
-        resource: String,
-        doc_id: String,
-        #[source]
-        source: reqwest::Error,
-    },
-    #[error("reading DefraDB ACP decision response")]
-    DecisionResponse(#[source] reqwest::Error),
-    #[error("DefraDB ACP decision endpoint returned {status} for {resource}/{doc_id}: {body}")]
-    DecisionEndpoint {
-        status: reqwest::StatusCode,
-        resource: String,
-        doc_id: String,
-        body: String,
-    },
-    #[error("parsing DefraDB ACP decision response for {resource}/{doc_id}")]
-    DecisionParse {
-        resource: String,
-        doc_id: String,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("projection scope denied request {request_id} for {scope}")]
-    ScopeDenied { request_id: String, scope: String },
-}
-
-impl From<DocumentConfigError> for TraceError {
-    fn from(error: DocumentConfigError) -> Self {
-        Self::ProjectionResourceMap(Box::new(error))
-    }
+    ProjectionAcp(#[from] projection_acp::ProjectionAcpError),
 }
 
 pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {

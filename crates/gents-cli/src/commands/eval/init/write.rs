@@ -237,9 +237,7 @@ fn replaceable_out(
         });
     }
     let resolved = crate::overwritable_home(out, user_home)
-        .map_err(|error| EvalInitError::OutRefused {
-            error: gents_protocol::error_chain::ErrorChain(&error).to_string(),
-        })?
+        .map_err(|error| EvalInitError::OutRefused(Box::new(error)))?
         .ok_or_else(|| EvalInitError::OutMissing {
             out: out.to_path_buf(),
         })?;
