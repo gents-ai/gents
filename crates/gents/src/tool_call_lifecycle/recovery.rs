@@ -10,6 +10,33 @@ use crate::graphql::escape_graphql_string;
 
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolCallRecoveryError {
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error("AgentRequest field missing from parent recovery query")]
+    ParentRequestFieldMissing,
+    #[error("decode parent AgentRequest rows for tool-call recovery")]
+    DecodeParentRequests(#[source] serde_json::Error),
+    #[error("background parent scope is ambiguous")]
+    AmbiguousParentScope,
+    #[error("decode {collection} deletion rows")]
+    DecodeDeletionRows {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+impl crate::config_client::TransactionFailure for ToolCallRecoveryError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ToolCallRecoveryReport {
     pub tool_calls_recovered: usize,
@@ -1111,7 +1138,7 @@ async fn lookup_parent_request(
     node_did: &str,
     request_id: &str,
     exact: Option<(&str, &str)>,
-) -> Result<Option<AgentRequestRow>> {
+) -> Result<Option<AgentRequestRow>, ToolCallRecoveryError> {
     let escaped_request_id = escape_graphql_string(request_id);
     let filter = match exact {
         Some((doc_id, scope)) => format!(
@@ -1139,13 +1166,12 @@ async fn lookup_parent_request(
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
-        .context("AgentRequest field missing from parent recovery query")?;
+        .ok_or(ToolCallRecoveryError::ParentRequestFieldMissing)?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
-        .context("decode parent AgentRequest rows for tool-call recovery")?;
-    anyhow::ensure!(
-        exact.is_none() || rows.len() <= 1,
-        "background parent scope is ambiguous"
-    );
+        .map_err(ToolCallRecoveryError::DecodeParentRequests)?;
+    if exact.is_some() && rows.len() > 1 {
+        return Err(ToolCallRecoveryError::AmbiguousParentScope);
+    }
     Ok(rows.into_iter().next())
 }
 
@@ -1356,14 +1382,17 @@ struct DeletionRow {
 fn deletion_rows(
     response: &defra_node::QueryResponse,
     collection: &str,
-) -> Result<Vec<DeletionRow>> {
+) -> Result<Vec<DeletionRow>, ToolCallRecoveryError> {
     let value = response
         .data
         .as_ref()
         .and_then(|data| data.get(collection))
         .cloned()
         .unwrap_or(serde_json::Value::Array(Vec::new()));
-    serde_json::from_value(value).with_context(|| format!("decode {collection} deletion rows"))
+    serde_json::from_value(value).map_err(|source| ToolCallRecoveryError::DecodeDeletionRows {
+        collection: collection.to_owned(),
+        source,
+    })
 }
 
 fn classify_terminal_parent_tool_recovery(

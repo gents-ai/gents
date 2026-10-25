@@ -335,7 +335,7 @@ async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> 
     let count = rows
         .iter()
         .map(gents::session::is_user_turn)
-        .collect::<Result<Vec<_>>>()?
+        .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
         .filter(|is_user| *is_user)
         .count();

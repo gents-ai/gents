@@ -2058,7 +2058,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents/src/session_message/inspection.rs",
     "crates/gents/src/session/compaction_entries.rs",
     "crates/gents/src/session/control.rs",
-    "crates/gents/src/session/fork.rs",
     "crates/gents/src/session/observations.rs",
     "crates/gents/src/session/output_replay_tests.rs",
     "crates/gents/src/skills/import.rs",

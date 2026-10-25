@@ -31,9 +31,21 @@ pub(crate) struct ProviderPublicationPlan {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum CanonicalError {
+pub(crate) enum CanonicalStreamError {
     #[error(transparent)]
     GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Reconstruction(#[from] ReconstructionError),
+    #[error(transparent)]
+    StreamIndex(#[from] std::num::TryFromIntError),
+    #[error("reusable recovery closure is not Partial")]
+    RecoveryClosureNotPartial,
+    #[error("reusable recovery closure has wrong writer")]
+    RecoveryClosureWrongWriter,
+    #[error("reusable recovery closure truncates or disagrees with committed extent")]
+    RecoveryClosureTruncated,
     #[error("create AgentToolCall omitted response data")]
     ToolCallResponseDataMissing,
     #[error("create AgentToolCall omitted its mutation field")]
@@ -58,17 +70,28 @@ enum CanonicalError {
     CloseCandidateNotTerminal,
 }
 
+impl crate::config_client::TransactionFailure for CanonicalStreamError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::GraphqlResponse(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
+
 fn created_tool_call_doc_ids(
     response: &serde_json::Value,
     expected_keys: &[String],
-) -> Result<Vec<String>, CanonicalError> {
+) -> Result<Vec<String>, CanonicalStreamError> {
     let rows = mutation_documents(response, "create_AgentToolCall")?
-        .ok_or(CanonicalError::ToolCallResponseDataMissing)?;
+        .ok_or(CanonicalStreamError::ToolCallResponseDataMissing)?;
     if rows.is_empty() {
-        return Err(CanonicalError::ToolCallMutationMissing);
+        return Err(CanonicalStreamError::ToolCallMutationMissing);
     }
     if rows.len() != expected_keys.len() {
-        return Err(CanonicalError::ToolCallRowCount {
+        return Err(CanonicalStreamError::ToolCallRowCount {
             rows: rows.len(),
             expected: expected_keys.len(),
         });
@@ -78,7 +101,7 @@ fn created_tool_call_doc_ids(
         .map(String::as_str)
         .collect::<rapidhash::RapidHashSet<_>>();
     if expected.len() != expected_keys.len() {
-        return Err(CanonicalError::DuplicateToolCallKeys);
+        return Err(CanonicalStreamError::DuplicateToolCallKeys);
     }
     let mut doc_ids =
         rapidhash::RapidHashMap::with_capacity_and_hasher(rows.len(), Default::default());
@@ -86,17 +109,17 @@ fn created_tool_call_doc_ids(
         let key = row
             .get("tool_call_key")
             .and_then(serde_json::Value::as_str)
-            .ok_or(CanonicalError::ToolCallKeyMissing)?;
+            .ok_or(CanonicalStreamError::ToolCallKeyMissing)?;
         if !expected.contains(key) {
-            return Err(CanonicalError::UnexpectedToolCallKey);
+            return Err(CanonicalStreamError::UnexpectedToolCallKey);
         }
         let doc_id = row
             .get("_docID")
             .and_then(serde_json::Value::as_str)
             .filter(|id| !id.trim().is_empty())
-            .ok_or(CanonicalError::ToolCallIdentityMissing)?;
+            .ok_or(CanonicalStreamError::ToolCallIdentityMissing)?;
         if doc_ids.insert(key.to_owned(), doc_id.to_owned()).is_some() {
-            return Err(CanonicalError::DuplicateToolCallKey);
+            return Err(CanonicalStreamError::DuplicateToolCallKey);
         }
     }
     expected_keys
@@ -104,7 +127,7 @@ fn created_tool_call_doc_ids(
         .map(|key| {
             doc_ids
                 .remove(key)
-                .ok_or_else(|| CanonicalError::ToolCallKeyUnanswered { key: key.clone() })
+                .ok_or_else(|| CanonicalStreamError::ToolCallKeyUnanswered { key: key.clone() })
         })
         .collect()
 }
@@ -176,7 +199,10 @@ pub(crate) struct ProviderPartialCandidate {
     pub(crate) header: Option<PartialHeaderFactory>,
 }
 
-pub(crate) fn partial_message_key(request_doc_id: &str, source: &OutputSource) -> Result<String> {
+pub(crate) fn partial_message_key(
+    request_doc_id: &str,
+    source: &OutputSource,
+) -> Result<String, CanonicalStreamError> {
     Ok(format!(
         "request-recovery:{request_doc_id}:{}",
         serde_json::to_string(source)?
@@ -189,29 +215,27 @@ pub(crate) fn retained_partial_blocks(
     source: &OutputSource,
     writer: &OutputWriter,
     closing: &OutputSegmentRow,
-) -> Result<Vec<MessageBlock>> {
+) -> Result<Vec<MessageBlock>, CanonicalStreamError> {
     let Some(SourceClose::Closed {
         outcome: OutputOutcome::Partial,
         segments,
         stream_bytes,
     }) = closing.segment.close.as_ref()
     else {
-        anyhow::bail!("reusable recovery closure is not Partial")
+        return Err(CanonicalStreamError::RecoveryClosureNotPartial);
     };
-    anyhow::ensure!(
-        &closing.segment.writer == writer,
-        "reusable recovery closure has wrong writer"
-    );
+    if &closing.segment.writer != writer {
+        return Err(CanonicalStreamError::RecoveryClosureWrongWriter);
+    }
     let extent = gents_protocol::output::extent::inspect_open_source(
         records,
         request_doc_id,
         source,
         writer,
     )?;
-    anyhow::ensure!(
-        &extent.segments == segments && &extent.stream_bytes == stream_bytes,
-        "reusable recovery closure truncates or disagrees with committed extent"
-    );
+    if &extent.segments != segments || &extent.stream_bytes != stream_bytes {
+        return Err(CanonicalStreamError::RecoveryClosureTruncated);
+    }
     if source.is_auxiliary_audit() {
         return Ok(Vec::new());
     }
@@ -502,7 +526,7 @@ pub(crate) async fn close_provider_attempt_at(
 fn validate_closing_shape(
     prepared: &OutputSegment,
     closing: &OutputSegment,
-) -> Result<(), CanonicalError> {
+) -> Result<(), CanonicalStreamError> {
     if !(closing.node_did == prepared.node_did
         && closing.requester_did == prepared.requester_did
         && closing.session_id == prepared.session_id
@@ -510,10 +534,10 @@ fn validate_closing_shape(
         && closing.source == prepared.source
         && closing.writer == prepared.writer)
     {
-        return Err(CanonicalError::CloseCandidateIdentityChanged);
+        return Err(CanonicalStreamError::CloseCandidateIdentityChanged);
     }
     if !(closing.ordinal.is_none() && closing.runs.is_empty() && closing.payload.is_empty()) {
-        return Err(CanonicalError::CloseCandidateNotTerminal);
+        return Err(CanonicalStreamError::CloseCandidateNotTerminal);
     }
     Ok(())
 }

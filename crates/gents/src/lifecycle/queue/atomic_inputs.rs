@@ -745,7 +745,7 @@ pub(super) async fn steering_transaction_attempt(
     request_mutation: &str,
 ) -> Result<EnqueuedAgentRequest> {
     let request_response = txn.execute(request_mutation).await?;
-    let request_doc_id = transaction_created_doc_id(&request_response, "AgentRequest")?;
+    let request_doc_id = crate::graphql::created_doc_id(&request_response, "AgentRequest")?;
 
     Ok(EnqueuedAgentRequest {
         doc_id: request_doc_id,
@@ -758,7 +758,7 @@ pub(crate) async fn next_append_sequence_in_transaction(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<u32> {
+) -> Result<u32, crate::config_client::ConfigClientError> {
     let response = txn
         .execute(&append_sequence_query(node_did, session_id))
         .await?;

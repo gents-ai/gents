@@ -3,6 +3,7 @@ use defra_node::EmbeddedNode;
 use std::sync::Arc;
 
 use crate::config_client::ConfigClientError;
+use crate::managed_exec::ownership::ManagedExecError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionControlError {
@@ -10,6 +11,24 @@ pub enum SessionControlError {
     Config(#[from] ConfigClientError),
     #[error("session execution query omitted AgentToolCall rows; retry resume")]
     ToolCallRowsOmitted,
+    #[error("session-owned request or tool execution is still settling; retry agent_resume after agent_session_read reports completion")]
+    ExecutionsSettling,
+    #[error(
+        "session-owned background execution is still active; retry agent_resume after it settles"
+    )]
+    BackgroundExecutionActive,
+    #[error(
+        "cannot verify retained process ownership before resume; retry after runtime recovery"
+    )]
+    ProcessOwnershipUnverified(#[source] ManagedExecError),
+    #[error(
+        "session-owned process has not been observed exited; retry agent_resume after settlement"
+    )]
+    ProcessNotExited,
+    #[error(
+        "session-owned plugin job is still executing; retry agent_resume after its step settles"
+    )]
+    PluginJobExecuting,
 }
 
 impl crate::config_client::TransactionFailure for SessionControlError {
@@ -215,7 +234,7 @@ async fn ensure_session_executions_settled_in_txn(
     requester_did: Option<&str>,
     background_executions: &crate::hook::BackgroundExecutionRegistry,
     job_driver: &crate::plugin_job::driver::JobDriver,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let unsettled = session_tool_call_exists_in_txn(
         txn,
@@ -224,35 +243,33 @@ async fn ensure_session_executions_settled_in_txn(
         ),
     )
     .await?;
-    anyhow::ensure!(!unsettled, "session-owned request or tool execution is still settling; retry agent_resume after agent_session_read reports completion");
+    if unsettled {
+        return Err(SessionControlError::ExecutionsSettling);
+    }
 
-    anyhow::ensure!(
-        !session_doc_exists_in_txn(
-            txn,
-            &scope,
-            background_executions.active_tool_call_doc_ids()
-        )
-        .await?,
-        "session-owned background execution is still active; retry agent_resume after it settles"
-    );
+    if session_doc_exists_in_txn(
+        txn,
+        &scope,
+        background_executions.active_tool_call_doc_ids(),
+    )
+    .await?
+    {
+        return Err(SessionControlError::BackgroundExecutionActive);
+    }
     let unexited = background_executions
         .try_process_record_list()
-        .context(
-            "cannot verify retained process ownership before resume; retry after runtime recovery",
-        )?
+        .map_err(SessionControlError::ProcessOwnershipUnverified)?
         .into_iter()
         .filter(|record| {
             record.identity.observe() != crate::managed_exec::ownership::ProcessObservation::Exited
         })
         .map(|record| record.tool_call_doc_id);
-    anyhow::ensure!(
-        !session_doc_exists_in_txn(txn, &scope, unexited).await?,
-        "session-owned process has not been observed exited; retry agent_resume after settlement"
-    );
-    anyhow::ensure!(
-        !session_doc_exists_in_txn(txn, &scope, job_driver.in_flight_row_ids()).await?,
-        "session-owned plugin job is still executing; retry agent_resume after its step settles"
-    );
+    if session_doc_exists_in_txn(txn, &scope, unexited).await? {
+        return Err(SessionControlError::ProcessNotExited);
+    }
+    if session_doc_exists_in_txn(txn, &scope, job_driver.in_flight_row_ids()).await? {
+        return Err(SessionControlError::PluginJobExecuting);
+    }
     Ok(())
 }
 

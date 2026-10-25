@@ -149,6 +149,7 @@ pub use query::{
 pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
 mod recovery;
+pub(crate) use recovery::ToolCallRecoveryError;
 pub(crate) mod runtime;
 mod transition;
 

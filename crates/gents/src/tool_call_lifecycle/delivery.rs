@@ -49,6 +49,42 @@ pub(crate) enum DeliveryError {
     BackgroundReceiptMissingArguments,
     #[error("background receipt requires execution generation")]
     BackgroundReceiptMissingGeneration,
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    IntegerRange(#[from] std::num::TryFromIntError),
+    #[error("tool presentation range is not a UTF-8 source boundary")]
+    PresentationRangeInvalid,
+    #[error("interrupted tool call has no resolved output budget")]
+    InterruptedWithoutOutputBudget,
+    #[error("terminal raw tool result is not an exact extension of persisted raw output")]
+    TerminalRawNotExtension,
+    #[error("prepared tool presentation does not reconstruct to the terminal native text")]
+    PreparedPresentationMismatch,
+    #[error("file changes belong to another physical tool")]
+    FileChangesOtherTool,
+    #[error("file changes lost their physical tool binding")]
+    FileChangeBindingLost,
+    #[error("file change lookup omitted observations")]
+    FileChangeLookupOmitted,
+    #[error("file changes conflict with an existing observation")]
+    FileChangeConflict,
+    #[error("file change observation was not retained")]
+    FileChangeNotRetained,
+}
+
+impl crate::config_client::TransactionFailure for DeliveryError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,22 +111,21 @@ async fn retain_file_changes(
     session_id: &str,
     requester_did: Option<&str>,
     changes: &crate::toolset::FileChanges,
-) -> Result<()> {
-    anyhow::ensure!(
-        changes.belongs_to(tool_call_doc_id),
-        "file changes belong to another physical tool"
-    );
+) -> Result<(), DeliveryError> {
+    if !changes.belongs_to(tool_call_doc_id) {
+        return Err(DeliveryError::FileChangesOtherTool);
+    }
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let binding = txn.execute(&format!(
         r#"{{ AgentToolCall(docID: "{}", filter: {{ request_doc_id: {{ _eq: "{}" }}, {scope} }}) {{ _docID }} }}"#,
         escape_graphql_string(tool_call_doc_id), escape_graphql_string(request_doc_id),
     )).await?;
-    anyhow::ensure!(
-        binding["data"]["AgentToolCall"].as_array().is_some_and(
-            |rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id)
-        ),
-        "file changes lost their physical tool binding"
-    );
+    if !binding["data"]["AgentToolCall"]
+        .as_array()
+        .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id))
+    {
+        return Err(DeliveryError::FileChangeBindingLost);
+    }
     let input = serde_json::json!({
         "tool_call_doc_id": tool_call_doc_id, "request_doc_id": request_doc_id,
         "node_did": node_did, "session_id": session_id,
@@ -102,23 +137,22 @@ async fn retain_file_changes(
     )).await?;
     let rows = existing["data"]["ToolFileChange"]
         .as_array()
-        .context("file change lookup omitted observations")?;
+        .ok_or(DeliveryError::FileChangeLookupOmitted)?;
     if !rows.is_empty() {
-        anyhow::ensure!(
-            rows.len() == 1 && rows[0] == input,
-            "file changes conflict with an existing observation"
-        );
+        if !(rows.len() == 1 && rows[0] == input) {
+            return Err(DeliveryError::FileChangeConflict);
+        }
         return Ok(());
     }
     let result = txn.execute_with_variables(
         "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
         &serde_json::json!({"input": input}),
     ).await?;
-    anyhow::ensure!(
-        crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
-            .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
-        "file change observation was not retained"
-    );
+    if !crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
+        .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some())
+    {
+        return Err(DeliveryError::FileChangeNotRetained);
+    }
     Ok(())
 }
 
@@ -253,7 +287,7 @@ use crate::graphql::created_doc_id;
 pub(crate) fn render_presentation(
     source: &str,
     presentation: &PayloadPresentation,
-) -> Result<String> {
+) -> Result<String, DeliveryError> {
     match presentation {
         PayloadPresentation::Full => Ok(source.to_owned()),
         PayloadPresentation::Composed { parts } => {
@@ -269,13 +303,13 @@ pub(crate) fn render_presentation(
                     } => {
                         let start = usize::try_from(*start_byte)?;
                         let end = usize::try_from(*end_byte)?;
-                        anyhow::ensure!(
-                            start <= end
-                                && end <= source.len()
-                                && source.is_char_boundary(start)
-                                && source.is_char_boundary(end),
-                            "tool presentation range is not a UTF-8 source boundary"
-                        );
+                        if !(start <= end
+                            && end <= source.len()
+                            && source.is_char_boundary(start)
+                            && source.is_char_boundary(end))
+                        {
+                            return Err(DeliveryError::PresentationRangeInvalid);
+                        }
                         rendered.push_str(&source[start..end]);
                     }
                 }
@@ -297,7 +331,7 @@ pub(crate) fn terminal_diagnostic_presentation(
     raw: &str,
     cause: &str,
     tail_budget: usize,
-) -> Result<PayloadPresentation> {
+) -> Result<PayloadPresentation, DeliveryError> {
     use gents_protocol::output::PresentationPart;
 
     let tail = terminal_output_tail(raw, tail_budget);
@@ -328,7 +362,11 @@ struct TerminalOutputPlan<'a> {
     diagnostic: bool,
 }
 
-fn diagnostic_replay_matches(raw: &str, cause: &str, stored: &PayloadPresentation) -> Result<bool> {
+fn diagnostic_replay_matches(
+    raw: &str,
+    cause: &str,
+    stored: &PayloadPresentation,
+) -> Result<bool, DeliveryError> {
     use gents_protocol::output::PresentationPart;
     let budget = match stored {
         PayloadPresentation::Composed { parts } => match parts.first() {
@@ -356,15 +394,14 @@ fn terminal_output_plan<'a>(
     prepared: Option<&PayloadPresentation>,
     state: ToolCallState,
     output_budget: Option<usize>,
-) -> Result<TerminalOutputPlan<'a>> {
+) -> Result<TerminalOutputPlan<'a>, DeliveryError> {
     let candidate_raw = if prepared.is_some() {
         pending_raw.unwrap_or(prefix)
     } else {
         text
     };
     if state != ToolCallState::Completed && !candidate_raw.starts_with(prefix) {
-        let output_budget =
-            output_budget.context("interrupted tool call has no resolved output budget")?;
+        let output_budget = output_budget.ok_or(DeliveryError::InterruptedWithoutOutputBudget)?;
         let presentation = terminal_diagnostic_presentation(prefix, text, output_budget)?;
         let rendered = render_presentation(prefix, &presentation)?;
         return Ok(TerminalOutputPlan {
@@ -374,16 +411,14 @@ fn terminal_output_plan<'a>(
             diagnostic: true,
         });
     }
-    anyhow::ensure!(
-        candidate_raw.starts_with(prefix),
-        "terminal raw tool result is not an exact extension of persisted raw output"
-    );
+    if !candidate_raw.starts_with(prefix) {
+        return Err(DeliveryError::TerminalRawNotExtension);
+    }
     let presentation = prepared.cloned().unwrap_or(PayloadPresentation::Full);
     let rendered = render_presentation(candidate_raw, &presentation)?;
-    anyhow::ensure!(
-        rendered == text,
-        "prepared tool presentation does not reconstruct to the terminal native text"
-    );
+    if rendered != text {
+        return Err(DeliveryError::PreparedPresentationMismatch);
+    }
     Ok(TerminalOutputPlan {
         raw: candidate_raw,
         presentation,

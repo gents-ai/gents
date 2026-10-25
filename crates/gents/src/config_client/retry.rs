@@ -95,6 +95,9 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::graph_package::EntryError>(cause))
         .or_else(|| wrapped::<crate::tool_surface::RootAdmissionError>(cause))
         .or_else(|| wrapped::<crate::tool_surface::BuildError>(cause))
+        .or_else(|| wrapped::<crate::tool_call_lifecycle::delivery::DeliveryError>(cause))
+        .or_else(|| wrapped::<crate::streaming::canonical::CanonicalStreamError>(cause))
+        .or_else(|| wrapped::<crate::tool_call_lifecycle::ToolCallRecoveryError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

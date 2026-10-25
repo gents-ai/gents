@@ -525,10 +525,10 @@ impl NativeCanonicalExecution {
                         .map(|closing| -> Result<String> {
                             let source =
                                 self.provider_segment(closing, expected_generation)?.source;
-                            crate::streaming::canonical::partial_message_key(
+                            Ok(crate::streaming::canonical::partial_message_key(
                                 &self.request_doc_id,
                                 &source,
-                            )
+                            )?)
                         })
                         .transpose()?)
                     .unwrap_or_else(|| format!("lean-unmapped-recovery-message-{id}"));

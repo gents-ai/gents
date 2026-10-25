@@ -368,7 +368,9 @@ fn map_fork_error(error: ForkError) -> anyhow::Error {
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy
         | ForkError::ForkMessageNotEditable(_) => anyhow::anyhow!("{error}"),
-        ForkError::ForkCopyFailed(inner) => inner.context("fork copy step failed"),
+        ForkError::ForkCopyFailed(inner) => {
+            anyhow::Error::new(inner).context("fork copy step failed")
+        }
     }
 }
 
@@ -376,7 +378,7 @@ fn map_graphql_fork_error(error: ForkError, graphql: &str) -> anyhow::Error {
     match error {
         ForkError::ForkCopyFailed(inner) => anyhow::anyhow!(
             "{}\n{}",
-            inner.context("fork copy step failed"),
+            anyhow::Error::new(inner).context("fork copy step failed"),
             graphql_diagnostic_hint(graphql)
         ),
         other => map_fork_error(other),

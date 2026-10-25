@@ -1399,9 +1399,14 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         modeled["blocked"],
         "terminal tool rows do not prove process quiescence"
     );
+    let blocked_detail = blocked
+        .as_ref()
+        .err()
+        .map(|error| format!("{error:#}"))
+        .unwrap_or_default();
     assert!(
-        format!("{blocked:#?}").contains("has not been observed exited"),
-        "the retained physical process witness should block resume: {blocked:#?}"
+        blocked_detail.contains("has not been observed exited"),
+        "the retained physical process witness should block resume: {blocked_detail}"
     );
 
     let other_session = format!("unrelated-{}", uuid::Uuid::new_v4());

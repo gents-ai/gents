@@ -921,7 +921,15 @@ async fn fork_rolls_back_at_every_mutation_position() {
     };
 
     let (outcome, writes) = crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
-        || fork(&node, params.clone()),
+        || {
+            let params = params.clone();
+            let node = &node;
+            async move {
+                fork(node, params)
+                    .await
+                    .map_err(|error| ErrorChain(&error).to_string())
+            }
+        },
         || session_rewrite_rows(&node),
     )
     .await;

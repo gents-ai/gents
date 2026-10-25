@@ -1,23 +1,28 @@
 use std::collections::BTreeSet;
+use std::num::TryFromIntError;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, TranscriptMessage};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
 use serde_json::{json, Value};
 
 use super::canonical_rows::{
-    decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
-    CREATE_AGENT_MESSAGE_MUTATION,
+    decode_transcript_message_row, transcript_message_create_variables, CanonicalRowsError,
+    AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
 };
 use super::compaction_entries::{
     compaction_key, validate_compaction_chain, CompactionGenerationRow,
 };
 use super::history::sequence_message_key;
-use super::output::load_canonical_message_in_txn;
+use super::output::{load_canonical_message_in_txn, SessionOutputError};
 use super::query::session_scope_filter;
 use super::sessions::{ensure_session_in_txn, load_agent_session_row_in_txn};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use super::SessionError;
+use crate::config_client::{
+    read_desired_state_document_in_txn, ConfigAccess, ConfigApplyTxn, ConfigClientError,
+    DesiredStateError, TransactionFailure,
+};
+use crate::graphql::GraphqlResponseError;
 
 #[derive(Debug, Clone)]
 pub enum ForkBoundary<'a> {
@@ -58,34 +63,109 @@ pub enum ForkError {
     #[error("target agent not found: {0}")]
     ForkAgentNotFound(String),
     #[error("fork copy step failed: {0}")]
-    ForkCopyFailed(#[from] anyhow::Error),
+    ForkCopyFailed(#[source] Box<SessionForkError>),
 }
 
-fn fork_error(error: anyhow::Error) -> ForkError {
-    match error.downcast::<ForkError>() {
-        Ok(error) => error,
-        Err(error) => ForkError::ForkCopyFailed(error),
+/// Wrapping variants are transparent so [`ForkError::ForkCopyFailed`] renders
+/// the callee's own chain.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionForkError {
+    #[error(transparent)]
+    Fork(#[from] ForkError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    Session(#[from] SessionError),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    Output(#[from] SessionOutputError),
+    #[error(transparent)]
+    CanonicalRows(#[from] CanonicalRowsError),
+    #[error(transparent)]
+    LifecycleState(#[from] InvalidRequestLifecycleState),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    IntegerRange(#[from] TryFromIntError),
+    #[error("{message}")]
+    InvalidRequestPurpose { message: &'static str },
+    #[error("fork snapshot omitted {collection} rows")]
+    SnapshotRowsOmitted { collection: &'static str },
+    #[error("fork row has no string {field}")]
+    StringFieldMissing { field: &'static str },
+    #[error("fork row has malformed optional string {field}")]
+    MalformedOptionalField { field: &'static str },
+    #[error("fork row has no nonnegative {field}")]
+    NonnegativeFieldMissing { field: &'static str },
+    #[error("fork {field} exceeds supported sequence range")]
+    SequenceOutOfRange {
+        field: &'static str,
+        #[source]
+        source: TryFromIntError,
+    },
+    #[error("fork compaction crossed exact source scope")]
+    CompactionScope,
+    #[error("fork compaction row is not an object")]
+    CompactionNotObject,
+    #[error("fork compaction cursor does not name a retained child header")]
+    CompactionCursorUnretained,
+    #[error("the edit anchor is not a source user turn")]
+    EditAnchorNotUserTurn,
+    #[error("fork header crossed exact source scope")]
+    HeaderScope,
+    #[error("fork source has duplicate sequence")]
+    DuplicateSequence,
+    #[error("fork origin header changed or conflicts during dependency validation")]
+    OriginChanged,
+    #[error("fork child session already exists")]
+    ChildExists,
+    #[error("fork target agent is disabled")]
+    AgentDisabled,
+}
+
+impl TransactionFailure for SessionForkError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => TransactionFailure::config_client_error(error),
+            Self::Session(error) => TransactionFailure::config_client_error(error),
+            Self::DesiredState(error) => TransactionFailure::config_client_error(error),
+            Self::Output(error) => TransactionFailure::config_client_error(error),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = SessionForkError> = std::result::Result<T, E>;
+
+fn fork_error(error: SessionForkError) -> ForkError {
+    match error {
+        SessionForkError::Fork(error) => error,
+        error => ForkError::ForkCopyFailed(Box::new(error)),
     }
 }
 
 pub async fn fork(
     node: &std::sync::Arc<EmbeddedNode>,
     params: ForkParams<'_>,
-) -> Result<ForkOutcome, ForkError> {
+) -> std::result::Result<ForkOutcome, ForkError> {
     fork_on(&ConfigAccess::local(node.clone()), params).await
 }
 
 pub async fn fork_via_http(
     endpoint: &crate::config_client::GraphqlEndpoint,
     params: ForkParams<'_>,
-) -> Result<ForkOutcome, ForkError> {
+) -> std::result::Result<ForkOutcome, ForkError> {
     fork_on(&ConfigAccess::Graphql(endpoint.clone()), params).await
 }
 
 pub async fn fork_on(
     access: &ConfigAccess,
     params: ForkParams<'_>,
-) -> Result<ForkOutcome, ForkError> {
+) -> std::result::Result<ForkOutcome, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
     access
         .transact_write("session.fork", |txn| {
@@ -97,39 +177,38 @@ pub async fn fork_on(
         .map_err(fork_error)
 }
 
-fn rows(response: &Value, collection: &str) -> Result<Vec<Value>> {
+fn rows(response: &Value, collection: &'static str) -> Result<Vec<Value>> {
     response
         .get("data")
         .and_then(|data| data.get(collection))
         .and_then(Value::as_array)
         .cloned()
-        .with_context(|| format!("fork snapshot omitted {collection} rows"))
+        .ok_or(SessionForkError::SnapshotRowsOmitted { collection })
 }
 
-fn text<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
+fn text<'a>(row: &'a Value, field: &'static str) -> Result<&'a str> {
     row.get(field)
         .and_then(Value::as_str)
-        .with_context(|| format!("fork row has no string {field}"))
+        .ok_or(SessionForkError::StringFieldMissing { field })
 }
 
-fn optional_text<'a>(row: &'a Value, field: &str) -> Result<Option<&'a str>> {
+fn optional_text<'a>(row: &'a Value, field: &'static str) -> Result<Option<&'a str>> {
     match row.get(field) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value)),
-        Some(_) => anyhow::bail!("fork row has malformed optional string {field}"),
+        Some(_) => Err(SessionForkError::MalformedOptionalField { field }),
     }
 }
 
-fn ordinal(row: &Value, field: &str) -> Result<u32> {
-    u32::try_from(
-        row.get(field)
-            .and_then(Value::as_u64)
-            .with_context(|| format!("fork row has no nonnegative {field}"))?,
-    )
-    .with_context(|| format!("fork {field} exceeds supported sequence range"))
+fn ordinal(row: &Value, field: &'static str) -> Result<u32> {
+    let value = row
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or(SessionForkError::NonnegativeFieldMissing { field })?;
+    u32::try_from(value).map_err(|source| SessionForkError::SequenceOutOfRange { field, source })
 }
 
-pub fn is_user_turn(row: &Value) -> Result<bool> {
+pub fn is_user_turn(row: &Value) -> Result<bool, CanonicalRowsError> {
     let message = decode_transcript_message_row(row)?.message;
     Ok(is_user_message(&message))
 }
@@ -176,16 +255,16 @@ fn fork_header(
 }
 
 fn fork_compaction(origin: &Value, child: &str, params: &ForkParams<'_>) -> Result<Value> {
-    anyhow::ensure!(
-        text(origin, "session_id")? == params.source_session_id
-            && text(origin, "node_did")? == params.caller_node_did
-            && optional_text(origin, "requester_did")? == params.caller_requester_did,
-        "fork compaction crossed exact source scope"
-    );
+    if !(text(origin, "session_id")? == params.source_session_id
+        && text(origin, "node_did")? == params.caller_node_did
+        && optional_text(origin, "requester_did")? == params.caller_requester_did)
+    {
+        return Err(SessionForkError::CompactionScope);
+    }
     let sequence = ordinal(origin, "sequence")?;
     let mut row = origin
         .as_object()
-        .context("fork compaction row is not an object")?
+        .ok_or(SessionForkError::CompactionNotObject)?
         .clone();
     row.remove("_docID");
     row.insert("session_id".into(), json!(child));
@@ -230,13 +309,13 @@ async fn fork_in_txn(
     .await?
     .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_owned()))?
     .session;
-    anyhow::ensure!(
-        parent.node_did == params.caller_node_did
-            && parent.requester_did.as_deref() == params.caller_requester_did,
-        ForkError::ForkNotSameAgent
-    );
+    if !(parent.node_did == params.caller_node_did
+        && parent.requester_did.as_deref() == params.caller_requester_did)
+    {
+        return Err(ForkError::ForkNotSameAgent.into());
+    }
     let agent = params.target_agent_id.unwrap_or(&parent.agent_id);
-    let agent_document = crate::config_client::read_desired_state_document_in_txn(
+    let agent_document = read_desired_state_document_in_txn(
         txn,
         crate::collection::Collection::Agent,
         params.caller_node_did,
@@ -244,10 +323,9 @@ async fn fork_in_txn(
     )
     .await?
     .ok_or_else(|| ForkError::ForkAgentNotFound(agent.to_owned()))?;
-    anyhow::ensure!(
-        agent_document["enabled"] == true,
-        "fork target agent is disabled"
-    );
+    if agent_document["enabled"] != true {
+        return Err(SessionForkError::AgentDisabled);
+    }
 
     let scope = session_scope_filter(
         params.caller_node_did,
@@ -266,7 +344,7 @@ async fn fork_in_txn(
     for request in rows(&snapshot, "AgentRequest")? {
         let purpose =
             gents_protocol::request_admission::RequestPurpose::try_from(text(&request, "purpose")?)
-                .map_err(anyhow::Error::msg)?;
+                .map_err(|message| SessionForkError::InvalidRequestPurpose { message })?;
         if purpose.is_auxiliary() {
             continue;
         }
@@ -277,19 +355,18 @@ async fn fork_in_txn(
     let headers = rows(&snapshot, "AgentMessage")?
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut sequences = BTreeSet::new();
     for header in &headers {
-        anyhow::ensure!(
-            header.message.session_id == params.source_session_id
-                && header.message.node_did == params.caller_node_did
-                && header.message.requester_did.as_deref() == params.caller_requester_did,
-            "fork header crossed exact source scope"
-        );
-        anyhow::ensure!(
-            sequences.insert(header.message.sequence),
-            "fork source has duplicate sequence"
-        );
+        if !(header.message.session_id == params.source_session_id
+            && header.message.node_did == params.caller_node_did
+            && header.message.requester_did.as_deref() == params.caller_requester_did)
+        {
+            return Err(SessionForkError::HeaderScope);
+        }
+        if !sequences.insert(header.message.sequence) {
+            return Err(SessionForkError::DuplicateSequence);
+        }
     }
     let turns = headers
         .iter()
@@ -302,12 +379,11 @@ async fn fork_in_txn(
         ForkBoundary::BeforeMessageKey(key) => {
             let cut = edit_cut(headers.iter().map(|header| &header.message), key)
                 .ok_or_else(|| ForkError::ForkMessageNotEditable(key.to_owned()))?;
-            u32::try_from(
-                turns
-                    .iter()
-                    .position(|sequence| *sequence == cut)
-                    .context("the edit anchor is not a source user turn")?,
-            )?
+            let position = turns
+                .iter()
+                .position(|sequence| *sequence == cut)
+                .ok_or(SessionForkError::EditAnchorNotUserTurn)?;
+            u32::try_from(position)?
         }
     };
     if at_user_turn > total {
@@ -353,10 +429,9 @@ async fn fork_in_txn(
             params.caller_requester_did,
         )
         .await?;
-        anyhow::ensure!(
-            resolved == origin.message,
-            "fork origin header changed or conflicts during dependency validation"
-        );
+        if resolved != origin.message {
+            return Err(SessionForkError::OriginChanged);
+        }
         let child_header = fork_header(
             origin.doc_id.clone(),
             child,
@@ -382,10 +457,9 @@ async fn fork_in_txn(
     for origin in compactions {
         let through = ordinal(&origin, "compacted_through_sequence")?;
         if u64::from(through) < cut {
-            anyhow::ensure!(
-                retained_sequences.contains(&through),
-                "fork compaction cursor does not name a retained child header"
-            );
+            if !retained_sequences.contains(&through) {
+                return Err(SessionForkError::CompactionCursorUnretained);
+            }
             child_compactions.push(fork_compaction(&origin, child, params)?);
         }
     }
@@ -404,26 +478,26 @@ async fn fork_in_txn(
         create_compaction(txn, compaction).await?;
         copied_compactions += 1;
     }
-    anyhow::ensure!(
-        ensure_session_in_txn(
-            txn,
-            child,
-            params.caller_node_did,
-            agent,
-            params.caller_requester_did,
-            None,
-            Some(gents_protocol::session::SessionProvenance {
-                fork: Some(gents_protocol::session::SessionFork {
-                    source_session_id: params.source_session_id.to_owned(),
-                    at_user_turn,
-                }),
-                ..Default::default()
+    if !(ensure_session_in_txn(
+        txn,
+        child,
+        params.caller_node_did,
+        agent,
+        params.caller_requester_did,
+        None,
+        Some(gents_protocol::session::SessionProvenance {
+            fork: Some(gents_protocol::session::SessionFork {
+                source_session_id: params.source_session_id.to_owned(),
+                at_user_turn,
             }),
-            &chrono::Utc::now().to_rfc3339(),
-        )
-        .await?,
-        "fork child session already exists"
-    );
+            ..Default::default()
+        }),
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await?)
+    {
+        return Err(SessionForkError::ChildExists);
+    }
     Ok(ForkOutcome {
         session_id: child.to_owned(),
         copied_messages: u32::try_from(retained.len())?,
