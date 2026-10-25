@@ -407,7 +407,9 @@ mod tests {
                     sessions: vec![SessionSummary {
             started_by: None,
                         node_did: "did:test:agent".into(), requester_did: None,
-                        latest_request_doc_id: None, closed_at: None, tags: vec![], provenance: None,
+                        latest_request_doc_id: None, closed_at: None,
+                archived_at: None,
+                archive_revision: "0".into(), tags: vec![], provenance: None,
                         session_id: "sess_1".into(),
                         title: Some("Chat".into()),
                         preview_text: Some("hi".into()),

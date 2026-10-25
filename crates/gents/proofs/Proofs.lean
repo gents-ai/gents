@@ -14,6 +14,7 @@ import Proofs.TitleText
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
 import Proofs.AgentSession
+import Proofs.Session.Archive
 import Proofs.SessionFork
 import Proofs.SessionRecovery
 import Proofs.SessionHydration

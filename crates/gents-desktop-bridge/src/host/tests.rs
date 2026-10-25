@@ -1,3 +1,4 @@
+mod archive;
 mod file_inventory;
 mod runtime;
 

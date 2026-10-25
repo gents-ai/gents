@@ -1,4 +1,5 @@
 import Proofs.ClientShell.Timeline
+import Proofs.Session.Archive
 import Proofs.Conformance.ContractCases.SessionDocuments
 import Proofs.Conformance.ContractCases.Types
 import Lean
@@ -22,6 +23,7 @@ private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
 def documentJson (d : AgentSession.Document) : Json := Json.mkObj
   [("scope", scopeJson d.scope), ("agent", toJson d.agent),
    ("created_at", toJson d.createdAt), ("closed_at", toJson d.closedAt),
+   ("stopped_at", toJson d.stoppedAt), ("archived_at", toJson d.archivedAt), ("archive_revision", toJson d.archiveRevision),
    ("provenance", d.provenance.map provenanceJson |>.getD Json.null),
    ("tags", toJson d.tags), ("title", d.title.map (fun t => Json.mkObj
       [("text", toJson t.text), ("source", toJson t.source.toWireName)]) |>.getD Json.null),
@@ -205,10 +207,43 @@ private def editAnchorJson (witness : EditAnchorCase) : Json := Json.mkObj
    ("retained_count", toJson ((SessionFork.editCut witness.source witness.key).map fun cut =>
       (SessionFork.copyPrefix witness.source child remap childKey cut).messages.length))]
 
+private def archiveDecisionName : AgentSession.Archive.Decision → String
+  | .denied => "denied"
+  | .unchanged => "unchanged"
+  | .conflict => "conflict"
+  | .exhausted => "exhausted"
+  | .applied => "applied"
+
+private def archiveCases : List Json := do
+  let limit : Nat := 9223372036854775807
+  let (archivedAt, revision) ← ([(none, 0), (some 3, 1), (none, 2), (some 3, limit)] :
+    List (Option Nat × Nat))
+  let lifecycle ← [0, 1, 2]
+  let authorized ← [false, true]
+  let expected ← [0, 1, 2, limit]
+  let archived ← [false, true]
+  let before := { indexed with
+    archivedAt, archiveRevision := revision
+    closedAt := if lifecycle = 1 then some 5 else none
+    stoppedAt := if lifecycle = 2 then some 6 else none
+    observation := indexed.observation.map fun o => { o with
+      latest := some { newerRequest.observed with
+        state := if lifecycle = 0 then .processing else .failed } } }
+  let (decision, after) := AgentSession.Archive.apply before authorized expected archived 7 limit
+  pure (Json.mkObj [
+    ("before", documentJson before), ("authorized", toJson authorized),
+    ("expected_revision", toJson expected), ("archived", toJson archived),
+    ("now", toJson (7 : Nat)), ("limit", toJson limit),
+    ("decision", toJson (archiveDecisionName decision)), ("after", documentJson after),
+    ("active_visible", toJson (AgentSession.Archive.visible .active after)),
+    ("archived_visible", toJson (AgentSession.Archive.visible .archived after)),
+    ("all_visible", toJson (AgentSession.Archive.visible .all after))])
+
 /-- Header-only fork inputs and computed durable outputs. Payload/tool/segment
 rows remain origin dependencies and are never copied or remapped. -/
 def sessionDocumentsJson : String := (Json.mkObj
-  [("document_reference_encoding", toJson "interned collection plus _docID, not raw _docID"),
+  [("archive", toJson archiveCases),
+   ("document_reference_encoding", toJson "interned collection plus _docID, not raw _docID"),
    ("retry", toJson [
       retryJson "exact_parent" [old] 101,
       retryJson "newer_authoritative_row" [old, newerRequest] 101,

@@ -67,6 +67,8 @@ const COMMANDS: &[&str] = &[
     "desktop_goal_control",
     "desktop_session_fork_before_message",
     "desktop_session_rename",
+    "desktop_session_archive",
+    "desktop_session_history",
     "desktop_mailbox_list",
     "desktop_mailbox_start_request",
     "desktop_mailbox_dismiss",

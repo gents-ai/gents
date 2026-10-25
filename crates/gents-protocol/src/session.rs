@@ -15,6 +15,16 @@ pub struct AgentSession {
     /// Authoritative request execution state remains on AgentRequest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
+    /// Shared history visibility; independent of closing, stopping and request execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<String>,
+    /// Native transaction fence for archive/restore observations, including ABA changes.
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "archive_revision_is_zero"
+    )]
+    pub archive_revision: u64,
     /// Durable explicit-stop latch. Interrupts pause autonomous Goal work but
     /// leave this unset so subsequent ordinary messages remain admissible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,4 +148,49 @@ where
     } else {
         value
     })
+}
+
+fn archive_revision_is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum SessionArchiveOutcome {
+    Applied,
+    Unchanged,
+    Conflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionArchiveReceipt {
+    pub node_did: String,
+    pub session_id: String,
+    pub archived_at: Option<String>,
+    /// Decimal text preserves the database revision range in JavaScript clients.
+    pub revision: String,
+    pub outcome: SessionArchiveOutcome,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum SessionArchiveVisibility {
+    #[default]
+    Active,
+    Archived,
+    All,
+}
+
+impl SessionArchiveVisibility {
+    pub fn includes(self, archived: bool) -> bool {
+        match self {
+            Self::Active => !archived,
+            Self::Archived => archived,
+            Self::All => true,
+        }
+    }
 }

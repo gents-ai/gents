@@ -1336,6 +1336,8 @@ fn imported_session(
             agent_id: agent_id.to_owned(),
             created_at: created_at.to_owned(),
             closed_at: None,
+            archived_at: None,
+            archive_revision: 0,
             stopped_at: None,
             title: Some(SessionTitle {
                 text: title,

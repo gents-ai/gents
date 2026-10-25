@@ -592,6 +592,8 @@ pub fn session_document(
         agent_id: agent_id.into(),
         created_at: created_at.into(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: None,
         tags: vec![],

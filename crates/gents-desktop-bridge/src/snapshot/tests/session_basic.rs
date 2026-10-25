@@ -9,6 +9,8 @@ fn session(id: &str, node: &str, latest: Option<(&str, RequestLifecycleState)>) 
         agent_id: "default".to_string(),
         created_at: "2026-04-21T12:00:00Z".to_string(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: Some(SessionTitle {
             text: format!("{node} run"),

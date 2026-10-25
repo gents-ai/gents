@@ -241,6 +241,8 @@ pub struct SessionSummary {
     pub requester_did: Option<String>,
     pub latest_request_doc_id: Option<String>,
     pub closed_at: Option<String>,
+    pub archived_at: Option<String>,
+    pub archive_revision: String,
     pub tags: Vec<String>,
     pub provenance: Option<gents_protocol::session::SessionProvenance>,
     pub title: Option<String>,

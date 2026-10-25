@@ -387,6 +387,8 @@ async fn seed_session_recovery_pre_state(
         agent_id: RECOVERY_AGENT_ID.to_owned(),
         created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: None,
         tags: Vec::new(),

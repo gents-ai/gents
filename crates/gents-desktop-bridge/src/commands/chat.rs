@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
@@ -193,6 +193,27 @@ pub async fn fork_session_before_message(
         node_did: request.node_did.trim().to_owned(),
         session_id: outcome.session_id,
     })
+}
+
+pub async fn set_session_archived(
+    core: &ClientCore,
+    request: crate::types::SessionArchiveRequest,
+) -> Result<gents_protocol::session::SessionArchiveReceipt> {
+    let revision: u64 = request
+        .expected_revision
+        .parse()
+        .context("expectedRevision must be a canonical nonnegative decimal integer")?;
+    anyhow::ensure!(
+        revision.to_string() == request.expected_revision,
+        "expectedRevision must be a canonical nonnegative decimal integer"
+    );
+    core.set_session_archived(
+        request.node_did.trim(),
+        request.session_id.trim(),
+        revision,
+        request.archived,
+    )
+    .await
 }
 
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {

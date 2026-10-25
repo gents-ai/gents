@@ -636,6 +636,16 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::SessionHistory { request } => encode(
+                crate::commands::session_history(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::Archive { request } => encode(
+                crate::commands::set_session_archived(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::Rename { request } => encode(
                 crate::commands::rename_session(&self.core, request)
                     .await

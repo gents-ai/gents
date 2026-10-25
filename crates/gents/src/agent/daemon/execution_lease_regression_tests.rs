@@ -131,6 +131,8 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "shutdown reasoning regression".into(),
@@ -543,6 +545,8 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "lease loss tool regression".into(),
@@ -743,6 +747,8 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             agent_id: agent_config.agent_id.clone(),
             created_at: request.created_at.clone(),
             closed_at: None,
+            archived_at: None,
+            archive_revision: 0,
             stopped_at: None,
             title: Some(gents_protocol::session::SessionTitle {
                 text: "lease regression".into(),
@@ -986,6 +992,8 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "late wake interrupt regression".into(),
@@ -1193,6 +1201,8 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "active short lease".into(),
@@ -1328,6 +1338,8 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
         stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "deadline reasoning regression".into(),

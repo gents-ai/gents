@@ -478,6 +478,30 @@ pub(super) async fn handle_request(
             .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
+        ("POST", "/desktop/session/archive") => {
+            let request = decode::<gents_desktop_bridge::types::SessionArchiveRequest>(
+                &request.body,
+                "decoding session archive request",
+            )?;
+            let result = gents_desktop_bridge::commands::set_session_archived(
+                fixture.desktop_core().as_ref(),
+                request,
+            )
+            .await?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
+        ("POST", "/desktop/session/history") => {
+            let request = decode::<gents_desktop_bridge::types::SessionHistoryRequest>(
+                &request.body,
+                "decoding session history request",
+            )?;
+            let result = gents_desktop_bridge::commands::session_history(
+                fixture.desktop_core().as_ref(),
+                request,
+            )
+            .await?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
         ("POST", "/desktop/session/rename") => {
             let request = decode::<SessionRenameRequest>(&request.body, "decoding rename request")?;
             rename_session(fixture.desktop_core().as_ref(), request).await?;

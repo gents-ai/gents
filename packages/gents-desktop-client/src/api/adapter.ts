@@ -118,6 +118,10 @@ export function createDesktopApiAdapter(
       }),
     forkSessionBeforeMessage: (request) =>
       invokeDesktop("desktop_session_fork_before_message", { request }),
+    setSessionArchived: (request) =>
+      invokeDesktop("desktop_session_archive", { request }),
+    sessionHistory: (request) =>
+      invokeDesktop("desktop_session_history", { request }),
     renameSession: (request) =>
       invokeDesktop("desktop_session_rename", { request }),
     resendRequest: (requestId, nodeDid) =>
