@@ -24,6 +24,7 @@ use gents_protocol::request_admission::{
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::time::Duration;
+use tracing::instrument::WithSubscriber;
 
 async fn receive_page(
     node: &Arc<EmbeddedNode>,
@@ -37,7 +38,12 @@ async fn receive_page(
         loop {
             if let Some(verified) = verified_client_response(node, demand, identity).await? {
                 if let FileInventoryResponse::Refused(receipt) = verified.response() {
-                    anyhow::bail!("inventory request refused: {:?}", receipt.reason);
+                    anyhow::bail!(
+                        "inventory request refused: {:?}; attempt={} cursor={:?}",
+                        receipt.reason,
+                        demand.attempt_id,
+                        demand.cursor
+                    );
                 }
                 if let Some(page) = verified.read_page(node.clone(), identity).await? {
                     return Ok(page);
@@ -64,6 +70,17 @@ async fn enrolled_inventory_retries_keep_preparation_and_refusal_after_revocatio
 }
 
 async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter("gents::agent::p2p_reconcile::session_hydration_reconcile=debug")
+        .without_time()
+        .with_test_writer()
+        .finish();
+    exercise_inventory_delivery_inner(recovery)
+        .with_subscriber(subscriber)
+        .await
+}
+
+async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
     let contracts: Value =
         tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>).await??;
     let model = contracts["file_inventory_receiver_cases"]
@@ -131,15 +148,18 @@ async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
         ],
     )?;
     let enrollment_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
-        run_enrollment_reconciler(source_node.clone(), source.clone(), owner, cancel.clone()),
+        run_enrollment_reconciler(source_node.clone(), source.clone(), owner, cancel.clone())
+            .with_current_subscriber(),
     ));
-    let pairing_task =
-        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(run_pairing_reconciler(
+    let pairing_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        run_pairing_reconciler(
             source_node.clone(),
             source.clone(),
             authority.clone(),
             cancel.clone(),
-        )));
+        )
+        .with_current_subscriber(),
+    ));
     client_admin
         .add_replicator(
             &source_addresses,
@@ -198,6 +218,12 @@ async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
                 decide_hydration(&demand.admission.request, &admission.catalog),
                 HydrationVerdict::Admit(_)
             ) {
+                tracing::debug!(
+                    expected_enrollment = %enrollment,
+                    observed_enrollment = ?admission.authorization.as_ref().map(|value| value.request_id.as_str()),
+                    sequence = ?admission.authorization.as_ref().map(|value| value.authorization_sequence),
+                    "file inventory route admitted"
+                );
                 return Ok::<_, anyhow::Error>(());
             }
             authority_changes
@@ -299,13 +325,15 @@ async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
         "native inventory omitted real mutations"
     );
     let source_cancel = cancel.child_token();
-    let source_task =
-        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(run_session_hydration_reconciler(
+    let source_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        run_session_hydration_reconciler(
             source_node.clone(),
             authority.clone(),
             source.clone(),
             source_cancel.clone(),
-        )));
+        )
+        .with_current_subscriber(),
+    ));
     begin_client_progress(
         &client_node,
         &demand.admission,
@@ -318,7 +346,9 @@ async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
         .context("modeled pages")?
         .len()
     {
-        let page = receive_page(&client_node, &demand, client.as_ref()).await?;
+        let page = receive_page(&client_node, &demand, client.as_ref())
+            .await
+            .context("initial inventory enumeration")?;
         let next = page.page.next.clone();
         let progress = receive_client_reply(
             &client_node,
@@ -551,7 +581,9 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
         .response
         .context("recovered response")?;
     VerifiedInventoryResponse::verify(response.clone(), &retry, client.as_ref()).await?;
-    let recovered = receive_page(client_node, &retry, client.as_ref()).await?;
+    let recovered = receive_page(client_node, &retry, client.as_ref())
+        .await
+        .context("recovering the prepared inventory after lost acknowledgment")?;
     let preparation = contracts["file_inventory_preparation_cases"]
         .as_array()
         .context("preparation cases")?
@@ -657,7 +689,7 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
             "PeerPairingApplied",
         ],
     )?;
-    let _new_enrollment = authorize_enrollment_peer(
+    let new_enrollment = authorize_enrollment_peer(
         source_node.clone(),
         source.clone(),
         client.clone(),
@@ -672,6 +704,12 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
                 decide_hydration(&revoked.admission.request, &admission.catalog),
                 HydrationVerdict::Admit(_)
             ) {
+                tracing::debug!(
+                    expected_enrollment = %new_enrollment,
+                    observed_enrollment = ?admission.authorization.as_ref().map(|value| value.request_id.as_str()),
+                    sequence = ?admission.authorization.as_ref().map(|value| value.authorization_sequence),
+                    "file inventory route restored after reenrollment"
+                );
                 return Ok::<_, anyhow::Error>(());
             }
             authority_changes
@@ -706,7 +744,9 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
         client.as_ref(),
     )
     .await?;
-    let page = receive_page(client_node, &fresh, client.as_ref()).await?;
+    let page = receive_page(client_node, &fresh, client.as_ref())
+        .await
+        .context("fresh inventory after reenrollment")?;
     anyhow::ensure!(
         &page.page.binding == changed.binding(),
         "explicit retry did not select the current snapshot"
