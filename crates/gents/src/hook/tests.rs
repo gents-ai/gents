@@ -2655,11 +2655,14 @@ async fn interruption_leaves_background_workers_running() {
         .await;
         lifecycle.start_running().await.unwrap();
         let token = CancellationToken::new();
-        let reservation = hook.background_executions.reserve(
-            id.into(),
-            lifecycle.doc_id().unwrap().to_owned(),
-            token.clone(),
-        );
+        let reservation = hook
+            .background_executions
+            .reserve(
+                id.into(),
+                lifecycle.doc_id().unwrap().to_owned(),
+                token.clone(),
+            )
+            .unwrap();
         if detached {
             reservations.push(reservation);
         } else {
@@ -2693,11 +2696,15 @@ async fn interruption_leaves_background_workers_running() {
     .await;
     unrelated.start_running().await.unwrap();
     let unrelated_token = CancellationToken::new();
-    reservations.push(hook.background_executions.reserve(
-        "unrelated".into(),
-        unrelated.doc_id().unwrap().to_owned(),
-        unrelated_token.clone(),
-    ));
+    reservations.push(
+        hook.background_executions
+            .reserve(
+                "unrelated".into(),
+                unrelated.doc_id().unwrap().to_owned(),
+                unrelated_token.clone(),
+            )
+            .unwrap(),
+    );
     tokens.push(unrelated_token);
     let process_name = format!("background-parent-cascade-{}", uuid::Uuid::new_v4());
     let name = process_name.clone();
@@ -3711,23 +3718,86 @@ async fn remote_presentations_persist_the_same_selected_identity() {
 }
 
 #[tokio::test]
+async fn background_ownership_blocks_retirement_and_stopping_refuses_new_reservations() {
+    use crate::runtime_service::RetirementError;
+    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
+
+    let registry = BackgroundExecutionRegistry::default();
+    let authority = RetirementAuthority {
+        operator_authenticated: true,
+        observed_build_matches: true,
+    };
+    let reservation = registry
+        .reserve("owned".into(), "owned-doc".into(), CancellationToken::new())
+        .unwrap();
+    assert_eq!(
+        registry.service_admission().retire(authority),
+        Err(RetirementError::Busy)
+    );
+    drop(reservation);
+    registry.service_admission().retire(authority).unwrap();
+    let refusal = registry
+        .reserve(
+            "refused".into(),
+            "refused-doc".into(),
+            CancellationToken::new(),
+        )
+        .err()
+        .expect("stopping runtime must refuse a reservation");
+    assert_eq!(
+        refusal.downcast_ref::<RetirementError>(),
+        Some(&RetirementError::Stopping)
+    );
+    assert!(!registry.contains("refused").await);
+}
+
+#[tokio::test]
+async fn replacing_a_registry_entry_does_not_release_the_original_workers_retirement_guard() {
+    use crate::runtime_service::RetirementError;
+    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
+
+    let registry = BackgroundExecutionRegistry::default();
+    let old = registry
+        .reserve("same".into(), "old-doc".into(), CancellationToken::new())
+        .unwrap();
+    let new = registry
+        .reserve("same".into(), "new-doc".into(), CancellationToken::new())
+        .unwrap();
+    drop(new);
+    let authority = RetirementAuthority {
+        operator_authenticated: true,
+        observed_build_matches: true,
+    };
+    assert_eq!(
+        registry.service_admission().retire(authority),
+        Err(RetirementError::Busy)
+    );
+    drop(old);
+    registry.service_admission().retire(authority).unwrap();
+}
+
+#[tokio::test]
 async fn background_execution_reservation_drop_releases_ownership() {
     let registry = BackgroundExecutionRegistry::default();
     {
-        let _reservation = registry.reserve(
-            "tool-reserved".to_string(),
-            "tool-reserved-doc".to_string(),
-            CancellationToken::new(),
-        );
+        let _reservation = registry
+            .reserve(
+                "tool-reserved".to_string(),
+                "tool-reserved-doc".to_string(),
+                CancellationToken::new(),
+            )
+            .unwrap();
         assert!(registry.contains("tool-reserved").await);
     }
     assert!(!registry.contains("tool-reserved").await);
 
-    let reservation = registry.reserve(
-        "tool-transferred".to_string(),
-        "tool-transferred-doc".to_string(),
-        CancellationToken::new(),
-    );
+    let reservation = registry
+        .reserve(
+            "tool-transferred".to_string(),
+            "tool-transferred-doc".to_string(),
+            CancellationToken::new(),
+        )
+        .unwrap();
     reservation.disarm();
     assert!(registry.contains("tool-transferred").await);
     registry.remove("tool-transferred").await;
@@ -3736,11 +3806,13 @@ async fn background_execution_reservation_drop_releases_ownership() {
 #[tokio::test]
 async fn background_execution_completion_wait_is_missed_event_safe() {
     let registry = BackgroundExecutionRegistry::default();
-    let reservation = registry.reserve(
-        "tool-waited".to_string(),
-        "tool-waited-doc".to_string(),
-        CancellationToken::new(),
-    );
+    let reservation = registry
+        .reserve(
+            "tool-waited".to_string(),
+            "tool-waited-doc".to_string(),
+            CancellationToken::new(),
+        )
+        .unwrap();
     reservation.disarm();
 
     let waiter_registry = registry.clone();
@@ -3767,11 +3839,13 @@ async fn background_execution_completion_wait_is_missed_event_safe() {
 #[tokio::test]
 async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
     let registry = BackgroundExecutionRegistry::default();
-    let reservation = registry.reserve(
-        "tool-aborted".to_string(),
-        "tool-aborted-doc".to_string(),
-        CancellationToken::new(),
-    );
+    let reservation = registry
+        .reserve(
+            "tool-aborted".to_string(),
+            "tool-aborted-doc".to_string(),
+            CancellationToken::new(),
+        )
+        .unwrap();
     let task = tokio::spawn(async move {
         let _reservation = reservation;
         std::future::pending::<()>().await;

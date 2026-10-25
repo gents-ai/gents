@@ -77,6 +77,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_installation_compatibility_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "serve_lifecycle::replacement::tests::generated_replacement_traces_match_authenticated_admission_and_release_guards",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/serve_lifecycle/replacement.rs",
+            module_path: "serve_lifecycle::replacement::tests",
+            function: "generated_replacement_traces_match_authenticated_admission_and_release_guards",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_request_coverage_uses_only_selected_physical_scope",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",

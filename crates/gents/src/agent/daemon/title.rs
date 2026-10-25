@@ -36,6 +36,7 @@ where
     model: Arc<M>,
     verifier: crate::request_admission::AgentRequestAdmissionVerifier,
     capture_factory: Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+    service_admission: crate::runtime_service::RuntimeServiceAdmission,
 }
 
 enum AuxiliaryResult {
@@ -60,6 +61,10 @@ where
             model: Arc::clone(&self.model),
             verifier: self.request_admission.clone(),
             capture_factory: self.rendered_request_capture_factory.clone(),
+            service_admission: self
+                .background_execution_registry
+                .service_admission()
+                .clone(),
         }
     }
 
@@ -73,7 +78,15 @@ where
         }
         let node = Arc::clone(&self.node);
         let parent = request.clone();
+        let Ok(service_work) = self
+            .background_execution_registry
+            .service_admission()
+            .admit()
+        else {
+            return;
+        };
         tokio::spawn(Box::pin(async move {
+            let _service_work = service_work;
             let result: Result<()> = async {
                 if !session::session_needs_generated_title(
                     node.as_ref(),
@@ -202,6 +215,9 @@ where
         review: Option<review::ReviewExecution>,
     ) -> Result<Option<String>> {
         anyhow::ensure!(request.purpose.is_auxiliary(), "expected auxiliary request");
+        let Ok(_service_work) = self.service_admission.admit() else {
+            return Ok(None);
+        };
         let Some(request) = super::verify_request_at_claim_boundary(
             &self.verifier,
             Arc::clone(&self.node),

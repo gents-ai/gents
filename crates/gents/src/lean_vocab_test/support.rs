@@ -148,6 +148,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) mailbox_sweep_cases: Vec<serde_json::Value>,
     pub(crate) client_installation_cases: Vec<serde_json::Value>,
     pub(crate) client_installation_compatibility_cases: Vec<serde_json::Value>,
+    pub(crate) runtime_service_replacement_cases: Vec<serde_json::Value>,
     pub(crate) client_observation_scope_cases: Vec<serde_json::Value>,
     pub(crate) client_observation_admission_cases: Vec<serde_json::Value>,
     pub(crate) client_settings_cases: serde_json::Value,

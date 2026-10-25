@@ -1120,8 +1120,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
 
         let registry = crate::BackgroundExecutionRegistry::default();
         let token = tokio_util::sync::CancellationToken::new();
-        let reservation =
-            registry.reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone());
+        let reservation = registry
+            .reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone())
+            .unwrap();
         let (identity_tx, identity_rx) = tokio::sync::oneshot::channel();
         let worker = {
             let registry = registry.clone();
@@ -1318,7 +1319,9 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
 
     let registry = crate::BackgroundExecutionRegistry::default();
     let token = tokio_util::sync::CancellationToken::new();
-    let reservation = registry.reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone());
+    let reservation = registry
+        .reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone())
+        .unwrap();
     let worker_token = token.clone();
     let (identity_tx, identity_rx) = tokio::sync::oneshot::channel();
     let (release_reservation_tx, release_reservation_rx) = tokio::sync::oneshot::channel();
