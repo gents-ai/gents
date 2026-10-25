@@ -269,9 +269,8 @@ pub async fn configure_child_agent(
                     })
                     .collect(),
             )?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
-                .await
-                .map(|_| ())
+            gents::config_client::apply_desired_state_plan(txn, &plan).await?;
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
     })
     .await
@@ -300,7 +299,7 @@ pub async fn configure_agent_tools(
         Box::pin(async move {
             let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("behavior {agent_id} is missing"))?;
+                .ok_or_else(|| format!("behavior {agent_id} is missing"))?;
             let mut behavior: gents::AgentDocument = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id
@@ -343,9 +342,8 @@ pub async fn configure_agent_tools(
                     })
                     .collect(),
             )?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
-                .await
-                .map(|_| ())
+            gents::config_client::apply_desired_state_plan(txn, &plan).await?;
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
     })
     .await

@@ -26,16 +26,40 @@ use crate::lean_vocab_test::{
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
-fn fixture_time(value: u64) -> Result<DateTime<Utc>> {
+#[derive(Debug, thiserror::Error)]
+enum NativeFixtureError {
+    #[error("modeled time exceeds native range")]
+    ModeledTimeRange(#[source] std::num::TryFromIntError),
+    #[error("modeled time overflows native timestamp")]
+    ModeledTimeOverflow,
+    #[error("modeled capture scope exceeds native allocation range")]
+    CaptureScopeOverflow,
+    #[error("native capture scope has no modeled allocation")]
+    CaptureScopeUnderflow,
+    #[error("native timestamp differs beyond modeled range")]
+    NativeTimestampRange,
+    #[error("native timestamp precedes fixture epoch")]
+    NativeTimestampBeforeEpoch(#[source] std::num::TryFromIntError),
+    #[error(transparent)]
+    Timestamp(#[from] chrono::ParseError),
+    #[error("native sequence must be positive")]
+    SequenceUnderflow,
+    #[error("modeled sequence overflow")]
+    SequenceOverflow,
+    #[error("native sequence exceeds u32")]
+    SequenceOutOfRange(#[source] std::num::TryFromIntError),
+}
+
+fn fixture_time(value: u64) -> Result<DateTime<Utc>, NativeFixtureError> {
     fixture_time_at(FIXTURE_EPOCH_SECONDS, value)
 }
 
-fn fixture_time_at(epoch_seconds: i64, value: u64) -> Result<DateTime<Utc>> {
-    let seconds = i64::try_from(value).context("modeled time exceeds native range")?;
+fn fixture_time_at(epoch_seconds: i64, value: u64) -> Result<DateTime<Utc>, NativeFixtureError> {
+    let seconds = i64::try_from(value).map_err(NativeFixtureError::ModeledTimeRange)?;
     let timestamp = epoch_seconds
         .checked_add(seconds)
-        .context("modeled time overflows native timestamp")?;
-    DateTime::from_timestamp(timestamp, 0).context("modeled time overflows native timestamp")
+        .ok_or(NativeFixtureError::ModeledTimeOverflow)?;
+    DateTime::from_timestamp(timestamp, 0).ok_or(NativeFixtureError::ModeledTimeOverflow)
 }
 
 fn symbolic_generation(value: u64) -> String {
@@ -46,45 +70,59 @@ fn parse_generation(value: Option<&str>) -> Option<u64> {
     value?.strip_prefix("lean-generation-")?.parse().ok()
 }
 
-fn native_capture_seq(modeled: u64) -> Result<u64> {
+fn native_capture_seq(modeled: u64) -> Result<u64, NativeFixtureError> {
     modeled
         .checked_add(1)
-        .context("modeled capture scope exceeds native allocation range")
+        .ok_or(NativeFixtureError::CaptureScopeOverflow)
 }
 
-fn modeled_capture_seq(native: u64) -> Result<u64> {
+fn modeled_capture_seq(native: u64) -> Result<u64, NativeFixtureError> {
     native
         .checked_sub(1)
-        .context("native capture scope has no modeled allocation")
+        .ok_or(NativeFixtureError::CaptureScopeUnderflow)
 }
 
-fn modeled_time_at(epoch_seconds: i64, value: &str) -> Result<u64> {
+fn modeled_time_at(epoch_seconds: i64, value: &str) -> Result<u64, NativeFixtureError> {
     let elapsed = DateTime::parse_from_rfc3339(value)?
         .timestamp()
         .checked_sub(epoch_seconds)
-        .context("native timestamp differs beyond modeled range")?;
-    u64::try_from(elapsed).context("native timestamp precedes fixture epoch")
+        .ok_or(NativeFixtureError::NativeTimestampRange)?;
+    u64::try_from(elapsed).map_err(NativeFixtureError::NativeTimestampBeforeEpoch)
 }
 
-fn modeled_sequence(value: u64) -> Result<u64> {
+fn modeled_sequence(value: u64) -> Result<u64, NativeFixtureError> {
     value
         .checked_sub(1)
-        .context("native sequence must be positive")
+        .ok_or(NativeFixtureError::SequenceUnderflow)
 }
 
-fn native_sequence(value: u64) -> Result<u32> {
-    u32::try_from(value.checked_add(1).context("modeled sequence overflow")?)
-        .context("native sequence exceeds u32")
+fn native_sequence(value: u64) -> Result<u32, NativeFixtureError> {
+    let next = value
+        .checked_add(1)
+        .ok_or(NativeFixtureError::SequenceOverflow)?;
+    u32::try_from(next).map_err(NativeFixtureError::SequenceOutOfRange)
 }
 
 fn owner_error_is(error: &anyhow::Error, message: &str) -> bool {
     error.chain().any(|cause| cause.to_string() == message)
 }
 
+#[derive(Debug, thiserror::Error)]
+enum AuxiliaryCandidateError {
+    #[error("auxiliary publication candidate is not an assistant message")]
+    NotAssistant,
+    #[error("unsupported auxiliary publication candidate block")]
+    UnsupportedBlock,
+    #[error(transparent)]
+    Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+    #[error(transparent)]
+    Arguments(#[from] serde_json::Error),
+}
+
 fn auxiliary_publication_candidate(
     records: &[ObservedSegment<'_>],
     header: &TranscriptMessage,
-) -> Result<gents_protocol::message::Message> {
+) -> Result<gents_protocol::message::Message, AuxiliaryCandidateError> {
     use gents_protocol::message::{
         AssistantContent, Message, Reasoning, ReasoningContent, Text, ToolCall, ToolFunction,
     };
@@ -92,68 +130,77 @@ fn auxiliary_publication_candidate(
         reconstruct_presented_payload, reconstruct_stream,
     };
 
-    anyhow::ensure!(
-        header.role == MessageRole::Assistant,
-        "auxiliary publication candidate is not an assistant message"
-    );
-    let stream = |reference: &PayloadRef| -> Result<String> {
+    if header.role != MessageRole::Assistant {
+        return Err(AuxiliaryCandidateError::NotAssistant);
+    }
+    let stream = |reference: &PayloadRef| -> Result<String, AuxiliaryCandidateError> {
         Ok(reconstruct_stream(records, &[], &[], reference)?.text)
     };
     let content = header
         .blocks
         .iter()
-        .map(|block| -> Result<AssistantContent> {
-            Ok(match block {
-                MessageBlock::Text { text } => AssistantContent::Text(Text {
-                    text: reconstruct_presented_payload(records, &[], &[], text)?,
-                }),
-                MessageBlock::Reasoning { id, parts } => AssistantContent::Reasoning(Reasoning {
-                    id: id.clone(),
-                    content: parts
-                        .iter()
-                        .map(|part| -> Result<ReasoningContent> {
-                            Ok(match part {
-                                ReasoningPart::Text { text, signature } => ReasoningContent::Text {
-                                    text: stream(text)?,
-                                    signature: signature.clone(),
-                                },
-                                ReasoningPart::Encrypted { data } => {
-                                    ReasoningContent::Encrypted(stream(data)?)
-                                }
-                                ReasoningPart::Redacted { data } => ReasoningContent::Redacted {
-                                    data: stream(data)?,
-                                },
-                                ReasoningPart::Summary { text } => {
-                                    ReasoningContent::Summary(stream(text)?)
-                                }
-                            })
+        .map(
+            |block| -> Result<AssistantContent, AuxiliaryCandidateError> {
+                Ok(match block {
+                    MessageBlock::Text { text } => AssistantContent::Text(Text {
+                        text: reconstruct_presented_payload(records, &[], &[], text)?,
+                    }),
+                    MessageBlock::Reasoning { id, parts } => {
+                        AssistantContent::Reasoning(Reasoning {
+                            id: id.clone(),
+                            content: parts
+                                .iter()
+                                .map(
+                                    |part| -> Result<ReasoningContent, AuxiliaryCandidateError> {
+                                        Ok(match part {
+                                            ReasoningPart::Text { text, signature } => {
+                                                ReasoningContent::Text {
+                                                    text: stream(text)?,
+                                                    signature: signature.clone(),
+                                                }
+                                            }
+                                            ReasoningPart::Encrypted { data } => {
+                                                ReasoningContent::Encrypted(stream(data)?)
+                                            }
+                                            ReasoningPart::Redacted { data } => {
+                                                ReasoningContent::Redacted {
+                                                    data: stream(data)?,
+                                                }
+                                            }
+                                            ReasoningPart::Summary { text } => {
+                                                ReasoningContent::Summary(stream(text)?)
+                                            }
+                                        })
+                                    },
+                                )
+                                .collect::<Result<Vec<_>, AuxiliaryCandidateError>>()?,
                         })
-                        .collect::<Result<Vec<_>>>()?,
-                }),
-                MessageBlock::ToolCall {
-                    id,
-                    call_id,
-                    name,
-                    arguments,
-                    signature,
-                    additional_params,
-                    ..
-                } => AssistantContent::ToolCall(ToolCall {
-                    id: id.clone(),
-                    call_id: call_id.clone(),
-                    function: ToolFunction {
-                        name: name.clone(),
-                        arguments: serde_json::from_str(&stream(arguments)?)?,
-                    },
-                    signature: signature.clone(),
-                    additional_params: additional_params.clone(),
-                }),
-                MessageBlock::ToolResult { .. } | MessageBlock::Media(_) => {
-                    anyhow::bail!("unsupported auxiliary publication candidate block")
-                }
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+                    }
+                    MessageBlock::ToolCall {
+                        id,
+                        call_id,
+                        name,
+                        arguments,
+                        signature,
+                        additional_params,
+                        ..
+                    } => AssistantContent::ToolCall(ToolCall {
+                        id: id.clone(),
+                        call_id: call_id.clone(),
+                        function: ToolFunction {
+                            name: name.clone(),
+                            arguments: serde_json::from_str(&stream(arguments)?)?,
+                        },
+                        signature: signature.clone(),
+                        additional_params: additional_params.clone(),
+                    }),
+                    MessageBlock::ToolResult { .. } | MessageBlock::Media(_) => {
+                        return Err(AuxiliaryCandidateError::UnsupportedBlock)
+                    }
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, AuxiliaryCandidateError>>()?;
     Ok(Message::Assistant {
         id: header.native_id.clone(),
         content,
@@ -246,11 +293,11 @@ pub(crate) struct NativeCanonicalExecution {
 }
 
 impl NativeCanonicalExecution {
-    fn fixture_time(&self, value: u64) -> Result<DateTime<Utc>> {
+    fn fixture_time(&self, value: u64) -> Result<DateTime<Utc>, NativeFixtureError> {
         fixture_time_at(self.fixture_epoch_seconds, value)
     }
 
-    fn modeled_time(&self, value: &str) -> Result<u64> {
+    fn modeled_time(&self, value: &str) -> Result<u64, NativeFixtureError> {
         modeled_time_at(self.fixture_epoch_seconds, value)
     }
 

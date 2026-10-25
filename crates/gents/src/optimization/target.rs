@@ -1,11 +1,11 @@
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config_client::{
-    desired_state_document_digest, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan, DesiredStateExpectation,
+    desired_state_document_digest, ConfigApplyTxn, ConfigClientError, DesiredStateApplyDocument,
+    DesiredStateApplyPlan, DesiredStateError, DesiredStateExpectation, TransactionFailure,
 };
+use crate::document_config::DocumentConfigError;
 use crate::Collection;
 
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +18,33 @@ pub enum TargetError {
     },
     #[error("target document is not an object")]
     NotAnObject,
+    #[error("closure document has no node_did")]
+    ClosureMissingOwner,
+    #[error("closure document has no logical ID")]
+    ClosureMissingId,
+    #[error("canonical projection missing")]
+    ProjectionMissing,
+    #[error("pack document has no logical ID")]
+    PackMissingId,
+    #[error(transparent)]
+    References(#[from] Box<DocumentConfigError>),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    Baseline(#[from] BaselineMismatch),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+}
+
+impl TransactionFailure for TargetError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::References(error) => TransactionFailure::config_client_error(&**error),
+            Self::DesiredState(error) => TransactionFailure::config_client_error(error),
+            _ => None,
+        }
+    }
 }
 
 type Result<T, E = TargetError> = std::result::Result<T, E>;
@@ -98,8 +125,10 @@ pub(crate) fn is_closure_collection(collection: Collection) -> bool {
     collection != Collection::EvalDefinition
 }
 
-pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> anyhow::Result<Closure> {
-    let references = crate::ConfigReferences::load_in_txn(txn, owner).await?;
+pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Closure> {
+    let references = crate::ConfigReferences::load_in_txn(txn, owner)
+        .await
+        .map_err(Box::new)?;
     let mut closure: Closure = references
         .documents()
         .filter(|((collection, _), _)| is_closure_collection(*collection))
@@ -125,15 +154,14 @@ fn document_owner(value: &Value) -> Option<String> {
     value.get("node_did")?.as_str().map(str::to_owned)
 }
 
-pub fn closure_digests(closure: &Closure) -> anyhow::Result<Vec<FrozenDocument>> {
+pub fn closure_digests(closure: &Closure) -> Result<Vec<FrozenDocument>> {
     closure
         .iter()
         .map(|(collection, value)| {
             Ok(FrozenDocument {
                 collection: *collection,
-                owner: document_owner(value).context("closure document has no node_did")?,
-                id: document_id(*collection, value)
-                    .context("closure document has no logical ID")?,
+                owner: document_owner(value).ok_or(TargetError::ClosureMissingOwner)?,
+                id: document_id(*collection, value).ok_or(TargetError::ClosureMissingId)?,
                 digest: desired_state_document_digest(value)?,
             })
         })
@@ -178,7 +206,7 @@ pub fn apply_text(closure: &Closure, target: &Target, text: &str) -> Result<Clos
     Ok(patched)
 }
 
-pub fn target_digest(closure: &Closure, target: &Target) -> anyhow::Result<String> {
+pub fn target_digest(closure: &Closure, target: &Target) -> Result<String> {
     Ok(desired_state_document_digest(
         &closure[target_index(closure, target)?].1,
     )?)
@@ -200,7 +228,7 @@ pub fn target_plan(
     closure: &Closure,
     target: &Target,
     frozen: &[FrozenDocument],
-) -> anyhow::Result<DesiredStateApplyPlan> {
+) -> Result<DesiredStateApplyPlan> {
     let (collection, value) = &closure[target_index(closure, target)?];
     Ok(DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: *collection,
@@ -252,28 +280,23 @@ fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document:
     }
 }
 
-fn comparable(
-    collection: Collection,
-    document: &Value,
-    pack_document: &Value,
-) -> anyhow::Result<Value> {
+fn comparable(collection: Collection, document: &Value, pack_document: &Value) -> Result<Value> {
     let (_, projected) = crate::config_client::config_projection(collection, Some(document))?;
-    let mut projected = projected.context("canonical projection missing")?;
+    let mut projected = projected.ok_or(TargetError::ProjectionMissing)?;
     if let Some(object) = projected.as_object_mut() {
         object.retain(|field, _| !remapped_by_trial(collection, Some(field), pack_document));
     }
     Ok(projected)
 }
 
-pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> anyhow::Result<()> {
+pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> Result<()> {
     for document in pack.documents() {
         let collection = document.collection;
         if !is_closure_collection(collection) || remapped_by_trial(collection, None, &document.add)
         {
             continue;
         }
-        let id =
-            document_id(collection, &document.add).context("pack document has no logical ID")?;
+        let id = document_id(collection, &document.add).ok_or(TargetError::PackMissingId)?;
         let pack_value = comparable(collection, &document.add, &document.add)?;
         let live_value = live
             .iter()
@@ -283,12 +306,11 @@ pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> any
             .map(|(_, value)| comparable(collection, value, &document.add))
             .transpose()?;
         let Some(live_value) = live_value else {
-            return Err(BaselineMismatch {
+            return Err(TargetError::Baseline(BaselineMismatch {
                 collection,
                 id,
                 field: None,
-            }
-            .into());
+            }));
         };
         if desired_state_document_digest(&pack_value)?
             == desired_state_document_digest(&live_value)?
@@ -297,12 +319,11 @@ pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> any
         }
         let field = first_differing_field(&pack_value, &live_value)
             .unwrap_or_else(|| "its canonical form".to_owned());
-        return Err(BaselineMismatch {
+        return Err(TargetError::Baseline(BaselineMismatch {
             collection,
             id,
             field: Some(field),
-        }
-        .into());
+        }));
     }
     Ok(())
 }

@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError, TransactionFailure};
 use crate::document_config::EvalSplit;
 use crate::eval::runner::Capture;
 use crate::eval::{DefinitionRef, SubjectRef};
@@ -214,6 +213,8 @@ impl std::fmt::Display for JournalConflict {
 
 impl std::error::Error for JournalConflict {}
 
+type Result<T, E = OptimizationError> = std::result::Result<T, E>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizationError {
     #[error("{field}")]
@@ -228,10 +229,32 @@ pub enum OptimizationError {
         #[source]
         source: std::io::Error,
     },
+    #[error("create_OptimizationJob")]
+    CreateJob(#[source] ConfigClientError),
+    #[error("OptimizationJob query returned a row for another owner")]
+    OwnerMismatch,
+    #[error(transparent)]
+    Journal(#[from] JournalConflict),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
-pub fn journal_conflict(error: &anyhow::Error) -> Option<&JournalConflict> {
-    error.downcast_ref::<JournalConflict>()
+impl TransactionFailure for OptimizationError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+pub fn journal_conflict(error: &OptimizationError) -> Option<&JournalConflict> {
+    match error {
+        OptimizationError::Journal(conflict) => Some(conflict),
+        _ => None,
+    }
 }
 
 fn filter(owner: &str, job_id: &str) -> String {
@@ -274,7 +297,7 @@ pub async fn create_job(
             })
         })
         .await
-        .context("create_OptimizationJob")?;
+        .map_err(OptimizationError::CreateJob)?;
     tracing::info!(job_id, owner, "optimization job created");
     Ok(JobRecord {
         job_id: job_id.to_owned(),
@@ -331,11 +354,11 @@ pub(crate) async fn load_job_in_txn(
             filter(owner, job_id)
         ))
         .await?;
-    Ok(response["data"]["OptimizationJob"]
+    response["data"]["OptimizationJob"]
         .as_array()
         .and_then(|rows| rows.first())
         .map(decode)
-        .transpose()?)
+        .transpose()
 }
 
 pub(crate) async fn fold_jobs_for_owner<T, F>(
@@ -345,7 +368,7 @@ pub(crate) async fn fold_jobs_for_owner<T, F>(
 ) -> Result<T>
 where
     T: Default + Send + 'static,
-    F: Fn(&mut T, JobRecord) -> Result<()> + Send + Sync + 'static,
+    F: Fn(&mut T, JobRecord) -> Result<(), OptimizationError> + Send + Sync + 'static,
 {
     const JOB_BATCH_SIZE: usize = 64;
     let owner = owner.to_owned();
@@ -383,10 +406,9 @@ where
                     for job_id in batch {
                         if let Some(row) = first_by_id.get(job_id) {
                             let job = decode(row)?;
-                            anyhow::ensure!(
-                                job.owner == owner,
-                                "OptimizationJob query returned a row for another owner"
-                            );
+                            if job.owner != owner {
+                                return Err(OptimizationError::OwnerMismatch);
+                            }
                             fold(&mut aggregate, job)?;
                         }
                     }
@@ -460,7 +482,7 @@ pub(crate) async fn append_in_txn(
     if matched {
         Ok(())
     } else {
-        Err(anyhow::Error::new(JournalConflict { expected }))
+        Err(OptimizationError::Journal(JournalConflict { expected }))
     }
 }
 
@@ -621,8 +643,7 @@ mod tests {
         let error = append(&access, &mut stale, proposed(1, "racing"))
             .await
             .unwrap_err();
-        let conflict =
-            journal_conflict(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
+        let conflict = journal_conflict(&error).unwrap_or_else(|| panic!("{}", ErrorChain(&error)));
         assert_eq!(conflict.expected, 0);
         assert!(stale.journal.is_empty());
 

@@ -39,8 +39,8 @@ use crate::optimization::subject::{
     MaterializedPack,
 };
 use crate::optimization::target::{
-    baseline_equivalence, capture_closure, closure_digests, current_text, BaselineMismatch,
-    Closure, JobTarget, Target,
+    baseline_equivalence, capture_closure, closure_digests, current_text, Closure, JobTarget,
+    Target, TargetError,
 };
 
 #[derive(Clone, Debug)]
@@ -807,19 +807,19 @@ fn proposed_candidate(
 
 async fn read_closure(access: &ConfigAccess, owner: &str) -> Result<Closure> {
     let owner = owner.to_owned();
-    access
+    Ok(access
         .transact_write("optimization.capture_closure", |txn| {
             let owner = &owner;
             Box::pin(async move { capture_closure(txn, owner).await })
         })
-        .await
+        .await?)
 }
 
 async fn append_all(
     access: &ConfigAccess,
     job: &mut JobRecord,
     entries: Vec<JournalEntry>,
-) -> Result<()> {
+) -> Result<(), OptimizationError> {
     {
         let (current, entries) = (&*job, &entries);
         access
@@ -830,7 +830,7 @@ async fn append_all(
                         append_in_txn(txn, &advanced, entry).await?;
                         advanced.journal.push(entry.clone());
                     }
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, OptimizationError>(())
                 })
             })
             .await?;
@@ -892,9 +892,9 @@ async fn freeze_job(
         &crate::config_client::DesiredStateApplyPlan::from_pack_config(&source.config)?,
         &closure,
     ) {
-        return Err(match error.downcast::<BaselineMismatch>() {
-            Ok(mismatch) => refused(mismatch.to_string()),
-            Err(error) => error,
+        return Err(match error {
+            TargetError::Baseline(mismatch) => refused(mismatch.to_string()),
+            error => anyhow::Error::from(error),
         });
     }
 
@@ -2019,7 +2019,7 @@ mod tests {
         assert!(
             crate::optimization::job::journal_conflict(&error).is_some(),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let after = load_job(&access, &origin.owner, "job-1")
             .await

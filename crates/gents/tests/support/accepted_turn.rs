@@ -274,14 +274,15 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
                     &backend_id,
                 )
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("accepted-turn backend {backend_id} missing"))?;
+                .ok_or_else(|| format!("accepted-turn backend {backend_id} missing"))?;
                 backend["max_concurrent"] = max_concurrent.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                     collection: gents::Collection::InferenceBackend,
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(txn, &plan).await?;
+                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
         },
     )

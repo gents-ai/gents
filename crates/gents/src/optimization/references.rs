@@ -1,10 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
-
 use crate::config_client::ConfigAccess;
 use crate::optimization::job::{
-    derive_state, fold_jobs_for_owner, job_ids_in_txn, JobState, JournalEntry,
+    derive_state, fold_jobs_for_owner, job_ids_in_txn, JobState, JournalEntry, OptimizationError,
 };
 
 pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
@@ -30,7 +28,7 @@ pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
     ids
 }
 
-pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> {
+pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>, OptimizationError> {
     let owner = owner.to_owned();
     let response = access
         .transact_readonly("optimization.job_ids", |txn| {
@@ -41,7 +39,10 @@ pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> 
     Ok(response)
 }
 
-pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BTreeSet<String>> {
+pub async fn referenced_run_ids(
+    access: &ConfigAccess,
+    owner: &str,
+) -> Result<BTreeSet<String>, OptimizationError> {
     fold_jobs_for_owner(access, owner, |ids: &mut BTreeSet<String>, job| {
         ids.extend(journal_run_ids(&job.journal));
         Ok(())
@@ -64,7 +65,7 @@ pub fn removable(state: &JobState) -> bool {
 pub async fn held_runs(
     access: &ConfigAccess,
     owner: &str,
-) -> Result<BTreeMap<String, (String, JobState)>> {
+) -> Result<BTreeMap<String, (String, JobState)>, OptimizationError> {
     fold_jobs_for_owner(
         access,
         owner,

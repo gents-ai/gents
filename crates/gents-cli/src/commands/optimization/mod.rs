@@ -462,7 +462,7 @@ async fn print_new_entries(
         Ok(Some(job)) => job.journal,
         Ok(None) => return,
         Err(error) => {
-            tracing::warn!(job_id, error = %format!("{}", ErrorChain(error.as_ref())), "could not read the job's journal for progress");
+            tracing::warn!(job_id, error = %ErrorChain(&error), "could not read the job's journal for progress");
             return;
         }
     };

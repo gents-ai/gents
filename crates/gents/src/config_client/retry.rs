@@ -101,6 +101,8 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::tool_call_lifecycle::delivery::DeliveryError>(cause))
         .or_else(|| wrapped::<crate::streaming::canonical::CanonicalStreamError>(cause))
         .or_else(|| wrapped::<crate::tool_call_lifecycle::ToolCallRecoveryError>(cause))
+        .or_else(|| wrapped::<crate::optimization::target::TargetError>(cause))
+        .or_else(|| wrapped::<crate::optimization::job::OptimizationError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

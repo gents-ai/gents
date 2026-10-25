@@ -41,6 +41,8 @@ pub enum InferenceSelectorError {
     },
     #[error("{EVAL_TARGET_VARIABLE} names no inference target")]
     NoTargets,
+    #[error("inference target {target} requires {variable} to be set")]
+    CredentialMissing { target: String, variable: String },
 }
 
 fn workspace_root() -> PathBuf {
@@ -149,13 +151,14 @@ impl InferenceTarget {
         Ok(targets)
     }
 
-    fn require_credential(&self) -> Result<()> {
+    fn require_credential(&self) -> Result<(), InferenceSelectorError> {
         if let BackendAuth::Environment { variable } = &self.backend.auth {
-            anyhow::ensure!(
-                std::env::var(variable).is_ok_and(|key| !key.trim().is_empty()),
-                "inference target {} requires {variable} to be set",
-                self.name
-            );
+            if !std::env::var(variable).is_ok_and(|key| !key.trim().is_empty()) {
+                return Err(InferenceSelectorError::CredentialMissing {
+                    target: self.name.clone(),
+                    variable: variable.clone(),
+                });
+            }
         }
         Ok(())
     }
