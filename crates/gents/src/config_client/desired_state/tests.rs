@@ -80,13 +80,11 @@ async fn apply(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> T
     apply_with_counts(access, docs).await.map(|_| ())
 }
 
-/// Keeps the refusal's own error object, which converting it into a boxed
-/// error would hide from downcasts.
 async fn apply_refused(
     access: &ConfigAccess,
     docs: Vec<DesiredStateApplyDocument>,
     expectation: &str,
-) -> impl AsRef<dyn std::error::Error + Send + Sync> {
+) -> DesiredStateError {
     let plan = DesiredStateApplyPlan::new(docs).expect("valid plan");
     access
         .transact_write("test.desired.apply", |txn| {
@@ -551,7 +549,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             assert_eq!(after["display_name"], "Changed");
         } else {
             assert_eq!(after, before, "refused replacement changed the principal");
-            let message = format!("{}", ErrorChain(published.unwrap_err().as_ref()));
+            let message = format!("{}", ErrorChain(&published.unwrap_err()));
             assert!(message.contains("default_agent_id"), "{message}");
             assert!(message.contains("coding"), "{message}");
         }
@@ -633,7 +631,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Te
         })
         .await
         .unwrap_err();
-    assert!(format!("{}", ErrorChain(error.as_ref())).contains("references missing AgentContext"));
+    assert!(format!("{}", ErrorChain(&error)).contains("references missing AgentContext"));
     let after = node.execute("{InferenceBackend{_docID node_did name probe_status} AgentContext{_docID node_did context_id}}").await.data;
     assert_eq!(
         before, after,
@@ -836,7 +834,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> TestResult<()> {
         .await
         .unwrap_err();
 
-    let stale = stale_expectation(error.as_ref()).expect("typed StaleExpectation");
+    let stale = stale_expectation(&error).expect("typed StaleExpectation");
     assert_eq!(stale.drifted.len(), 1);
     assert_eq!(stale.drifted[0].id, "other");
     assert_eq!(stale.drifted[0].expected, frozen_other);
@@ -871,7 +869,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> TestResult<()> 
         })
         .await
         .unwrap_err();
-    assert!(stale_expectation(error.as_ref()).is_some());
+    assert!(stale_expectation(&error).is_some());
 
     let wrongly_present =
         DesiredStateApplyPlan::new(vec![document(backend(owner, "third"))])?.with_expected(
@@ -884,7 +882,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> TestResult<()> 
         })
         .await
         .unwrap_err();
-    let stale = stale_expectation(error.as_ref()).expect("typed StaleExpectation");
+    let stale = stale_expectation(&error).expect("typed StaleExpectation");
     assert_eq!(stale.drifted[0].found, None);
     Ok(())
 }
@@ -946,10 +944,10 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> TestResult<()> {
         assert_eq!(outcome.is_ok(), case.applied, "case {}", case.name);
         if let Err(error) = &outcome {
             assert!(
-                stale_expectation(error.as_ref()).is_some(),
+                stale_expectation(error).is_some(),
                 "case {}: {}",
                 case.name,
-                ErrorChain(error.as_ref())
+                ErrorChain(error)
             );
         }
 
@@ -989,10 +987,10 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> TestResult<()> {
             );
             if let Err(error) = &replay {
                 assert!(
-                    stale_expectation(error.as_ref()).is_some(),
+                    stale_expectation(error).is_some(),
                     "case {} replay: {}",
                     case.name,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(error)
                 );
             }
             for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
@@ -1292,9 +1290,9 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         .await
         .expect_err("preflight refuses the same obligation");
     assert!(
-        format!("{}", ErrorChain(previewed.as_ref())).contains("expected_count_field"),
+        format!("{}", ErrorChain(&previewed)).contains("expected_count_field"),
         "{}",
-        ErrorChain(previewed.as_ref())
+        ErrorChain(&previewed)
     );
 
     assert!(
@@ -1449,9 +1447,9 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> TestResult<()> 
         .await
         .expect_err("preflight judges the same add payload");
     assert!(
-        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        format!("{}", ErrorChain(&previewed)).contains("\"flag\" names a Boolean field"),
         "{}",
-        ErrorChain(previewed.as_ref())
+        ErrorChain(&previewed)
     );
     assert!(
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner)
@@ -1514,9 +1512,9 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> TestResul
         .await
         .expect_err("preflight judges the same update payload");
     assert!(
-        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        format!("{}", ErrorChain(&previewed)).contains("\"flag\" names a Boolean field"),
         "{}",
-        ErrorChain(previewed.as_ref())
+        ErrorChain(&previewed)
     );
     assert_eq!(
         published_count_field(&access, owner, "replaced").await?,
@@ -1673,9 +1671,9 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         .await
         .expect_err("preflight refuses the same event source");
     assert!(
-        format!("{}", ErrorChain(previewed.as_ref())).contains("expected_count_field"),
+        format!("{}", ErrorChain(&previewed)).contains("expected_count_field"),
         "{}",
-        ErrorChain(previewed.as_ref())
+        ErrorChain(&previewed)
     );
 
     assert!(
@@ -1876,9 +1874,9 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Te
         .await
         .expect_err("preflight judges the same add payload");
     assert!(
-        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        format!("{}", ErrorChain(&previewed)).contains("\"flag\" names a Boolean field"),
         "{}",
-        ErrorChain(previewed.as_ref())
+        ErrorChain(&previewed)
     );
     assert!(published_event_sources(&node).await?.is_empty());
 
@@ -1946,9 +1944,9 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
         .await
         .expect_err("preflight judges the same update payload");
     assert!(
-        format!("{}", ErrorChain(previewed.as_ref())).contains("\"flag\" names a Boolean field"),
+        format!("{}", ErrorChain(&previewed)).contains("\"flag\" names a Boolean field"),
         "{}",
-        ErrorChain(previewed.as_ref())
+        ErrorChain(&previewed)
     );
     assert_eq!(
         published_count_field_of(&node, "replaced").await?,
@@ -2012,8 +2010,8 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         "a collection without handoff_id can never carry an outcome",
     )
     .await;
-    let diagnostic = format!("{}", ErrorChain(refused.as_ref()));
-    let schema = outcome_source_refusal(refused.as_ref()).unwrap();
+    let diagnostic = format!("{}", ErrorChain(&refused));
+    let schema = outcome_source_refusal(&refused).unwrap();
     assert_eq!(schema.collection, "PlainPing");
     assert!(schema.missing_handoff);
     assert!(
@@ -2027,14 +2025,13 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         "a non-String handoff_id is not a handoff identity",
     )
     .await;
-    let schema = outcome_source_refusal(mistyped.as_ref()).unwrap();
+    let schema = outcome_source_refusal(&mistyped).unwrap();
     assert_eq!(schema.collection, "NumberedPing");
     assert!(!schema.missing_handoff);
     assert!(
-        format!("{}", ErrorChain(mistyped.as_ref()))
-            .contains("NumberedPing.handoff_id is Int, not String"),
+        format!("{}", ErrorChain(&mistyped)).contains("NumberedPing.handoff_id is Int, not String"),
         "{}",
-        ErrorChain(mistyped.as_ref())
+        ErrorChain(&mistyped)
     );
     assert_eq!(triggers().await, 0, "a refused delivery publishes nothing");
 

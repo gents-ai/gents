@@ -2,7 +2,7 @@ use super::*;
 use crate::config_client::{
     validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents_protocol::error_chain::{find_source, ErrorChain};
+use gents_protocol::error_chain::ErrorChain;
 
 impl ConfigCommandTool {
     pub(super) async fn validate_saved(&self, argv: &[String]) -> Result<String> {
@@ -25,9 +25,9 @@ impl ConfigCommandTool {
                         let mut diagnostic = json!({
                             "collection": collection.graphql_type(),
                             "id": id,
-                            "error": ErrorChain(error.as_ref()).to_string()
+                            "error": ErrorChain(&error).to_string()
                         });
-                        if let Some(crate::document_config::DocumentConfigError::MissingReference(missing)) = find_source::<crate::document_config::DocumentConfigError>(error.as_ref()) {
+                        if let crate::document_config::DocumentConfigError::MissingReference(missing) = &error {
                             diagnostic["field"] = json!(missing.field);
                             diagnostic["missing"] = json!({"collection":missing.target.graphql_type(),"id":missing.target_id});
                         }
@@ -50,7 +50,7 @@ impl ConfigCommandTool {
                         if crate::config_client::is_transaction_step_unavailable(&error) {
                             return Err(error);
                         }
-                        errors.push(json!({"error":ErrorChain(error.as_ref()).to_string()}));
+                        errors.push(json!({"error":ErrorChain(&error).to_string()}));
                     }
                 }
                 let selected: std::collections::BTreeSet<String> = references.documents()

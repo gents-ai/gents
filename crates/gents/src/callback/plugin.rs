@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use gents_protocol::graphql::GraphqlError;
 use gents_protocol::job::DataWrite;
 use serde_json::{Map, Value};
 
@@ -32,17 +33,53 @@ use crate::plugin::PluginVerdict;
 use crate::workspace::journal::advance;
 use crate::workspace::{ActionJournalEntry, ActionJournalState};
 
+#[derive(Debug, thiserror::Error)]
+pub enum CallbackPluginError {
+    #[error(transparent)]
+    Graphql(#[from] GraphqlError),
+    #[error("a plugin cannot write {collection}, which belongs to the runtime")]
+    RuntimeCollection { collection: String },
+    #[error(transparent)]
+    ProtectedCollection(Box<crate::document_config::DocumentConfigError>),
+    #[error(transparent)]
+    Coordinate(#[from] crate::plugin::store::PluginStoreError),
+    #[error("callback plugin {plugin} pins {digest:?}, which is not sha256:<64 hex>")]
+    DigestNotSha256 { plugin: String, digest: String },
+    #[error("callback plugin {plugin} declares output {name:?} twice")]
+    DuplicateOutput { plugin: String, name: String },
+    #[error(
+        "callback plugin {plugin} writes {collection} with a correlation field but reads none from its source"
+    )]
+    OutputWithoutCorrelation { plugin: String, collection: String },
+    #[error("CallbackInvocation {invocation_id} is no longer running")]
+    NotRunning { invocation_id: String },
+    #[error(transparent)]
+    PluginWrites(#[from] crate::application_write::PluginWritesError),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+}
+
+impl crate::config_client::TransactionFailure for CallbackPluginError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::PluginWrites(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
 /// A plugin writes only a pack's own collections: never the runtime's
 /// documents and never a protected collection.
-pub(crate) fn writable_output_collection(collection: &str) -> Result<()> {
+pub(crate) fn writable_output_collection(collection: &str) -> Result<(), CallbackPluginError> {
     crate::graphql::validate_collection_identifier(collection)?;
-    anyhow::ensure!(
-        !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection),
-        "a plugin cannot write {collection}, which belongs to the runtime"
-    );
-    Ok(crate::document_config::reject_protected_collection_name(
-        collection,
-    )?)
+    if gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection) {
+        return Err(CallbackPluginError::RuntimeCollection {
+            collection: collection.to_owned(),
+        });
+    }
+    crate::document_config::reject_protected_collection_name(collection)
+        .map_err(|error| CallbackPluginError::ProtectedCollection(Box::new(error)))
 }
 
 pub fn validate_handler(
@@ -50,13 +87,15 @@ pub fn validate_handler(
     digest: &str,
     correlation_field: Option<&str>,
     outputs: &[PortSpec],
-) -> Result<()> {
+) -> Result<(), CallbackPluginError> {
     crate::plugin::store::parse_coordinate(plugin)?;
     let hex = digest.strip_prefix("sha256:").unwrap_or_default();
-    anyhow::ensure!(
-        hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()),
-        "callback plugin {plugin} pins {digest:?}, which is not sha256:<64 hex>"
-    );
+    if !(hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())) {
+        return Err(CallbackPluginError::DigestNotSha256 {
+            plugin: plugin.to_owned(),
+            digest: digest.to_owned(),
+        });
+    }
     if let Some(field) = correlation_field {
         crate::graphql::validate_graphql_name(field)?;
     }
@@ -64,16 +103,18 @@ pub fn validate_handler(
     for output in outputs {
         writable_output_collection(&output.collection)?;
         crate::graphql::validate_graphql_name(&output.correlation_field)?;
-        anyhow::ensure!(
-            names.insert(output.name.as_str()),
-            "callback plugin {plugin} declares output {:?} twice",
-            output.name
-        );
-        anyhow::ensure!(
-            correlation_field.is_some(),
-            "callback plugin {plugin} writes {} with a correlation field but reads none from its source",
-            output.collection
-        );
+        if !names.insert(output.name.as_str()) {
+            return Err(CallbackPluginError::DuplicateOutput {
+                plugin: plugin.to_owned(),
+                name: output.name.clone(),
+            });
+        }
+        if correlation_field.is_none() {
+            return Err(CallbackPluginError::OutputWithoutCorrelation {
+                plugin: plugin.to_owned(),
+                collection: output.collection.clone(),
+            });
+        }
     }
     Ok(())
 }
@@ -107,7 +148,7 @@ pub(crate) fn output_documents(
     let mut documents = Vec::new();
     for (port, value) in per_port {
         writable_output_collection(&port.collection)
-            .map_err(|error| ErrorChain(error.as_ref()).to_string())?;
+            .map_err(|error| ErrorChain(&error).to_string())?;
         let rows: Vec<&Value> = match (&port.cardinality, value) {
             (_, None | Some(Value::Null)) => Vec::new(),
             (PortCardinality::One, Some(value)) => vec![value],
@@ -259,7 +300,7 @@ pub(super) async fn execute(
                         Ok(()) => return Ok(()),
                         Err(error) => Some(format!(
                             "writing the plugin's results failed: {}",
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         )),
                     }
                 }
@@ -283,7 +324,7 @@ async fn commit_success(
     documents: Vec<(String, Value)>,
     writes: Option<(PluginData, Vec<DataWrite>)>,
     correlation: Option<String>,
-) -> Result<()> {
+) -> Result<(), CallbackPluginError> {
     let mut succeeded = invocation.clone();
     succeeded.action_journal = Some(encode_journal(journal));
     succeeded.lifecycle_state = LIFECYCLE_SUCCEEDED.to_owned();
@@ -308,7 +349,7 @@ async fn commit_success(
                 "mutation {{ create_{collection}(input: {input}) {{ _docID }} }}"
             ))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, CallbackPluginError>>()?;
     let invocation_id = invocation.invocation_id.clone();
     let stamps = StampContext::Callback {
         node_did: invocation.owner_node_did.clone(),
@@ -326,13 +367,15 @@ async fn commit_success(
             let stamps = &stamps;
             Box::pin(async move {
                 let updated = txn.execute(update).await?;
-                anyhow::ensure!(
-                    updated
-                        .pointer("/data/update_CallbackInvocation")
-                        .and_then(Value::as_array)
-                        .is_some_and(|rows| !rows.is_empty()),
-                    "CallbackInvocation {invocation_id} is no longer running"
-                );
+                if !updated
+                    .pointer("/data/update_CallbackInvocation")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    return Err(CallbackPluginError::NotRunning {
+                        invocation_id: invocation_id.clone(),
+                    });
+                }
                 for create in creates {
                     txn.execute(create).await?;
                 }

@@ -211,10 +211,10 @@ pub(crate) async fn load_caller_session_tools(
 ) -> Result<AgentToolConfig> {
     let (_, tools, targets) =
         crate::request_admission::load_request_context(node, node_did, agent_id).await?;
-    tools
+    Ok(tools
         .map(|tools| AgentToolConfig::from_document_with_targets(&tools, &targets))
-        .transpose()
-        .map(Option::unwrap_or_default)
+        .transpose()?)
+    .map(Option::unwrap_or_default)
 }
 
 pub(crate) async fn render_body(

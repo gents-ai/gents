@@ -20,7 +20,9 @@ pub(crate) struct AgentToolConfig {
 }
 
 impl AgentToolConfig {
-    pub(crate) fn from_document(tools: &crate::document_config::Tools) -> Result<Self> {
+    pub(crate) fn from_document(
+        tools: &crate::document_config::Tools,
+    ) -> Result<Self, super::ToolSurfaceError> {
         tools.validate()?;
         Ok(Self {
             targets: Vec::new(),
@@ -35,7 +37,7 @@ impl AgentToolConfig {
     pub(crate) fn from_document_with_targets<'a>(
         tools: &crate::document_config::Tools,
         targets: impl IntoIterator<Item = &'a crate::document_config::AgentTargetDocument>,
-    ) -> Result<Self> {
+    ) -> Result<Self, super::ToolSurfaceError> {
         let mut resolved = Self::from_document(tools)?;
         let mut by_id = rapidhash::RapidHashMap::default();
         for target in targets {
@@ -48,8 +50,7 @@ impl AgentToolConfig {
             {
                 return Err(super::ToolSurfaceError::DuplicateScopedAgentTarget {
                     target_id: target.target_id.clone(),
-                }
-                .into());
+                });
             }
         }
         let mut names = rapidhash::RapidHashSet::default();
@@ -68,13 +69,12 @@ impl AgentToolConfig {
                 && !target.target_node_did.trim().is_empty()
                 && !target.agent_id.trim().is_empty())
             {
-                return Err(super::ToolSurfaceError::InvalidAgentTarget { id: id.clone() }.into());
+                return Err(super::ToolSurfaceError::InvalidAgentTarget { id: id.clone() });
             }
             if !names.insert(target.name.as_str()) {
                 return Err(super::ToolSurfaceError::DuplicateAgentTargetName {
                     name: target.name.clone(),
-                }
-                .into());
+                });
             }
             resolved.targets.push((*target).clone());
         }

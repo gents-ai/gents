@@ -1,21 +1,101 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use super::desired_state::DesiredStateError;
+use super::inference_backend::InferenceBackendError;
 use super::{
-    apply_desired_state_plan, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+    apply_desired_state_plan, ConfigAccess, ConfigApplyTxn, ConfigClientError,
+    DesiredStateApplyDocument, DesiredStateApplyPlan, TransactionFailure,
 };
-use crate::config::advertised_model_for_profile;
-use crate::document_config::{ConfigReferences, InferenceBackendObservation, InferenceProfile};
+use crate::backend_registry::BackendRegistryError;
+use crate::config::{advertised_model_for_profile, ConfigError};
+use crate::document_config::{
+    ConfigReferences, DocumentConfigError, InferenceBackendObservation, InferenceProfile,
+};
 use crate::oauth_credential::{
     backend_account, enabled_accounts_note, list_accounts, no_switch_candidate_note, provider_name,
-    serving_account, AccountState, AccountSummary, ServingAccount,
+    serving_account, AccountState, AccountSummary, OAuthCredentialError, ServingAccount,
 };
-use crate::usage_observation::{usage_for_backend, usage_view, UsageView};
+use crate::usage_observation::{usage_for_backend, usage_view, UsageObservationError, UsageView};
 use crate::{Collection, InferenceBackend};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProfileSwitchError {
+    #[error("{note}")]
+    NoCandidate { note: String },
+    #[error("no backend {backend_id:?}")]
+    NoBackend { backend_id: String },
+    #[error(
+        "account {label:?} belongs to another provider; profile {profile_id:?} moves only to another {provider} account"
+    )]
+    OtherProvider {
+        label: String,
+        profile_id: String,
+        provider: String,
+    },
+    #[error("profile {profile_id:?} is already on account {label:?}")]
+    SameAccount { profile_id: String, label: String },
+    #[error("account {label:?} is {state}{note}")]
+    AccountUnavailable {
+        label: String,
+        state: &'static str,
+        note: String,
+    },
+    #[error("account {label:?} does not offer {model_name}")]
+    ModelNotOffered {
+        label: String,
+        model_name: String,
+        #[source]
+        source: ConfigError,
+    },
+    #[error("no profile {profile_id:?}; `gents config profile list` shows them")]
+    NoProfile { profile_id: String },
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error(transparent)]
+    DocumentConfig(#[from] DocumentConfigError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    InferenceBackend(#[from] InferenceBackendError),
+    #[error(transparent)]
+    BackendRegistry(#[from] BackendRegistryError),
+    #[error(transparent)]
+    OAuthCredential(#[from] OAuthCredentialError),
+    #[error(transparent)]
+    UsageObservation(#[from] UsageObservationError),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+}
+
+impl TransactionFailure for ProfileSwitchError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::DocumentConfig(error) => error.config_client_error(),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::InferenceBackend(error) => error.config_client_error(),
+            Self::BackendRegistry(error) => error.config_client_error(),
+            Self::OAuthCredential(error) => error.config_client_error(),
+            Self::UsageObservation(error) => error.config_client_error(),
+            Self::NoCandidate { .. }
+            | Self::NoBackend { .. }
+            | Self::OtherProvider { .. }
+            | Self::SameAccount { .. }
+            | Self::AccountUnavailable { .. }
+            | Self::ModelNotOffered { .. }
+            | Self::NoProfile { .. }
+            | Self::Config(_)
+            | Self::Json(_) => None,
+        }
+    }
+}
+
+type Result<T, E = ProfileSwitchError> = std::result::Result<T, E>;
 
 /// What a move costs, shown with every plan and receipt.
 pub const SWITCH_COST: &str = "After the move the provider's prompt cache starts empty, so the \
@@ -92,11 +172,11 @@ pub async fn switch_candidates(
             usage: usage_view(stored.as_ref(), backend.provider_kind, now),
         });
     }
-    anyhow::ensure!(
-        !candidates.is_empty(),
-        "{}",
-        no_switch_candidate_note(&own_provider, &snapshot.profile.model_name)
-    );
+    if candidates.is_empty() {
+        return Err(ProfileSwitchError::NoCandidate {
+            note: no_switch_candidate_note(&own_provider, &snapshot.profile.model_name),
+        });
+    }
     candidates.sort_by(|a, b| a.label.cmp(&b.label));
     Ok(SwitchPlan {
         profile: profile_id.to_owned(),
@@ -136,42 +216,46 @@ pub async fn switch_profile_account(
                     .backends
                     .iter()
                     .find(|(backend, _)| backend.backend_id == target_backend_id)
-                    .with_context(|| format!("no backend {target_backend_id:?}"))?;
+                    .ok_or_else(|| ProfileSwitchError::NoBackend {
+                        backend_id: target_backend_id.to_owned(),
+                    })?;
                 let serving = serving_account(target, accounts);
                 let own_provider = provider(&snapshot.backend, accounts);
-                anyhow::ensure!(
-                    provider(target, accounts) == own_provider,
-                    "account {:?} belongs to another provider; profile {profile_id:?} moves \
-                     only to another {} account",
-                    serving.label,
-                    provider_name(&own_provider)
-                );
-                anyhow::ensure!(
-                    account_key(target, accounts) != account_key(&snapshot.backend, accounts),
-                    "profile {profile_id:?} is already on account {:?}",
-                    serving.label
-                );
+                if provider(target, accounts) != own_provider {
+                    return Err(ProfileSwitchError::OtherProvider {
+                        label: serving.label.clone(),
+                        profile_id: profile_id.to_owned(),
+                        provider: provider_name(&own_provider).to_string(),
+                    });
+                }
+                if account_key(target, accounts) == account_key(&snapshot.backend, accounts) {
+                    return Err(ProfileSwitchError::SameAccount {
+                        profile_id: profile_id.to_owned(),
+                        label: serving.label.clone(),
+                    });
+                }
                 let state = if target.enabled {
                     serving.state
                 } else {
                     AccountState::Disabled
                 };
-                anyhow::ensure!(
-                    state == AccountState::Enabled,
-                    "account {:?} is {}{}",
-                    serving.label,
-                    state.as_str(),
-                    serving
-                        .provider
-                        .map(|provider| format!("; {}", enabled_accounts_note(provider, accounts)))
-                        .unwrap_or_default()
-                );
+                if state != AccountState::Enabled {
+                    return Err(ProfileSwitchError::AccountUnavailable {
+                        label: serving.label.clone(),
+                        state: state.as_str(),
+                        note: serving
+                            .provider
+                            .map(|provider| {
+                                format!("; {}", enabled_accounts_note(provider, accounts))
+                            })
+                            .unwrap_or_default(),
+                    });
+                }
                 advertised_model_for_profile(target, &snapshot.profile, observation.as_ref())
-                    .with_context(|| {
-                        format!(
-                            "account {:?} does not offer {}",
-                            serving.label, snapshot.profile.model_name
-                        )
+                    .map_err(|source| ProfileSwitchError::ModelNotOffered {
+                        label: serving.label.clone(),
+                        model_name: snapshot.profile.model_name.clone(),
+                        source,
                     })?;
                 let (mut moved, mut offered) = (vec![snapshot.profile.clone()], Vec::new());
                 for companion in snapshot.companions(accounts) {
@@ -266,12 +350,11 @@ impl Snapshot {
         profile_id: &str,
     ) -> Result<Self> {
         let references = ConfigReferences::load_in_txn(txn, node_did).await?;
-        let (profile, backend) =
-            references
-                .profile_with_backend(profile_id)?
-                .with_context(|| {
-                    format!("no profile {profile_id:?}; `gents config profile list` shows them")
-                })?;
+        let (profile, backend) = references
+            .profile_with_backend(profile_id)?
+            .ok_or_else(|| ProfileSwitchError::NoProfile {
+                profile_id: profile_id.to_owned(),
+            })?;
         let mut backends = Vec::new();
         for backend in super::list_inference_backends_in_txn(txn, node_did).await? {
             let observation = crate::backend_registry::lookup_backend_observation_in_txn(

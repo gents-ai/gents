@@ -591,11 +591,11 @@ mod tests {
     }
 
     async fn apply(access: &ConfigAccess, plan: &DesiredStateApplyPlan) -> Result<()> {
-        access
+        Ok(access
             .transact_write("test.apply_plan", |txn| {
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
-            .await
+            .await?)
     }
 
     #[tokio::test]

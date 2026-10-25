@@ -1,8 +1,8 @@
-use crate::document_config::ConfigReferences;
+use crate::document_config::{ConfigReferences, DocumentConfigError};
 use crate::Collection;
 use serde_json::{json, Value};
 
-fn validate(documents: Vec<(Collection, Value)>) -> anyhow::Result<()> {
+fn validate(documents: Vec<(Collection, Value)>) -> Result<(), DocumentConfigError> {
     ConfigReferences::from_documents("owner", documents)?.validate()
 }
 

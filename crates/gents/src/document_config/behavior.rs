@@ -55,7 +55,7 @@ impl Agent {
             .unwrap_or_default()
     }
 
-    pub fn validate_references(&self, refs: &ConfigReferences) -> anyhow::Result<()> {
+    pub fn validate_references(&self, refs: &ConfigReferences) -> Result<(), DocumentConfigError> {
         refs.validate_document(crate::Collection::Agent, &serde_json::to_value(self)?)?;
         refs.validate()
     }

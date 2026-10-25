@@ -147,7 +147,7 @@ impl BackendAdmissionConfig {
 
 /// The term of [`BackendAdmissionConfig::availability`] that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BackendAvailability {
+pub enum BackendAvailability {
     Available,
     Disabled,
     ProbeNotHealthy,

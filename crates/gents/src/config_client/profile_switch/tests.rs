@@ -495,9 +495,9 @@ async fn assert_refused(fixture: &Fixture, to: &str, message: &str) {
     let before = fixture.profiles().await;
     let error = fixture.switch("p", to, true).await.unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains(message),
+        format!("{}", ErrorChain(&error)).contains(message),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(fixture.profiles().await, before, "nothing written");
 }
@@ -549,7 +549,7 @@ async fn no_candidate_says_how_to_add_one() {
     let fixture = Fixture::build(DID, &["a"]).await;
     let error = fixture.plan().await.unwrap_err();
     assert_eq!(
-        format!("{}", ErrorChain(error.as_ref())),
+        format!("{}", ErrorChain(&error)),
         "no other Claude account offers model-x; add one with `gents claude-login --label <label>`"
     );
 }

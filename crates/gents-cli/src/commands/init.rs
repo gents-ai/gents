@@ -1122,7 +1122,7 @@ async fn publish_home_config(
     enabled: bool,
     documents: Vec<DesiredStateApplyDocument>,
 ) -> Result<()> {
-    access
+    Ok(access
         .transact_write("init.initialize_runtime_home", |txn| {
             let mut documents = documents.clone();
             Box::pin(async move {
@@ -1149,7 +1149,7 @@ async fn publish_home_config(
                 apply_desired_state_plan(txn, &plan).await.map(|_| ())
             })
         })
-        .await
+        .await?)
 }
 
 fn replacement<T>(collection: Collection, document: &T) -> Result<DesiredStateApplyDocument>

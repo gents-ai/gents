@@ -550,7 +550,7 @@ pub(crate) async fn expect_existing_documents_unchanged(
 pub(crate) async fn validate_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let mut owners = BTreeSet::new();
     for document in plan.documents() {
         owners.insert(document_identity(document.collection, &document.add)?.0);
@@ -1427,7 +1427,7 @@ fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<(), D
 pub async fn apply_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
-) -> anyhow::Result<DesiredStateApplyCounts> {
+) -> Result<DesiredStateApplyCounts> {
     ensure_expectations_hold(txn, plan).await?;
     let mut introspected = IntrospectedFields::new();
     prefetch_declared_fields(txn, plan, &mut introspected).await?;

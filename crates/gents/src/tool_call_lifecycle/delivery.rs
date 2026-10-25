@@ -1221,7 +1221,7 @@ impl ToolCallLifecycle {
                             pending.writes.clone(),
                         )
                         .await
-                        .map_err(plugin_writes_failed)?;
+                        .map_err(|error| plugin_writes_failed(error.into()))?;
                     }
                     if let (true, Some(changes)) = (published, &file_changes) {
                         retain_file_changes(

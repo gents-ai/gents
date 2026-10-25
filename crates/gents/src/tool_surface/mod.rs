@@ -151,6 +151,14 @@ pub enum ToolSurfaceError {
     EthCallToolDuplicate { name: String },
     #[error("plugin tool `{name}` has the same name as another tool; rename one of them")]
     PluginToolDuplicate { name: String },
+    #[error(transparent)]
+    DocumentConfig(Box<crate::document_config::DocumentConfigError>),
+}
+
+impl From<crate::document_config::DocumentConfigError> for ToolSurfaceError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
 }
 
 use crate::defra_query::{

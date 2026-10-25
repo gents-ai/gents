@@ -196,7 +196,7 @@ pub async fn upsert_inference_profile(
             update: value,
         },
     ])?;
-    crate::config_client::ConfigAccess::transact_local_write(
+    Ok(crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "document_config.inference_profile.upsert",
@@ -209,5 +209,5 @@ pub async fn upsert_inference_profile(
             })
         },
     )
-    .await
+    .await?)
 }

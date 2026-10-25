@@ -1,15 +1,25 @@
-use anyhow::Result;
 use gents_protocol::job::{DataOp, DataWrite};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
-use crate::config_client::ConfigApplyTxn;
+use crate::config_client::{ConfigApplyTxn, ConfigClientError, TransactionFailure};
 use crate::plugin::data::{
     admit_write, insert_note, AdmittedWrite, InsertOutcome, OnConflict, PluginData, StampContext,
+    WriteRefusal,
 };
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PluginWritesError {
+pub enum PluginWritesError {
+    #[error(transparent)]
+    Refused(#[from] WriteRefusal),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Filter(#[from] crate::defra_query::DefraQueryFailure),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error("{name} affected {count} documents, expected 1; check the doc_id")]
     AffectedCount { name: String, count: usize },
     #[error("an update needs at least one field")]
@@ -37,6 +47,17 @@ pub(crate) enum PluginWritesError {
     #[error("duplicate {collection} {label}")]
     DuplicateRow { collection: String, label: String },
 }
+
+impl TransactionFailure for PluginWritesError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = PluginWritesError> = std::result::Result<T, E>;
 
 /// Applies a plugin's data writes in the caller's transaction and returns one
 /// receipt per write. Any refused or failed write fails the whole output; the
@@ -102,8 +123,7 @@ async fn apply_one(
         return Err(PluginWritesError::AffectedCount {
             name,
             count: rows.len(),
-        }
-        .into());
+        });
     }
     Ok(rows[0].clone())
 }
@@ -111,7 +131,7 @@ async fn apply_one(
 async fn input(txn: &ConfigApplyTxn<'_>, write: &DataWrite) -> Result<String> {
     let collection = write.collection.as_str();
     if write.op != DataOp::Insert && write.fields.is_empty() {
-        return Err(PluginWritesError::UpdateNeedsField.into());
+        return Err(PluginWritesError::UpdateNeedsField);
     }
     let version: ::schema::CollectionVersion =
         serde_json::from_value(txn.collection_version(collection).await?.ok_or_else(|| {
@@ -123,7 +143,7 @@ async fn input(txn: &ConfigApplyTxn<'_>, write: &DataWrite) -> Result<String> {
     for (name, value) in &write.fields {
         crate::graphql::validate_graphql_name(name)?;
         if name.starts_with('_') {
-            return Err(PluginWritesError::InternalField { name: name.clone() }.into());
+            return Err(PluginWritesError::InternalField { name: name.clone() });
         }
         let field = version
             .fields
@@ -163,8 +183,7 @@ async fn resolve_conflict(
         return Err(PluginWritesError::UniqueKeyCount {
             collection: collection.to_owned(),
             count: keys.len(),
-        }
-        .into());
+        });
     };
     let mut filter = Map::new();
     let mut label = Vec::with_capacity(key.len());
@@ -240,8 +259,7 @@ async fn resolve_conflict(
             return Err(PluginWritesError::DuplicateRow {
                 collection: collection.to_owned(),
                 label: label.join(","),
-            }
-            .into())
+            })
         }
     })
 }

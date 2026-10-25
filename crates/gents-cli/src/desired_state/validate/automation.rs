@@ -25,7 +25,7 @@ pub(super) fn validate_automation(manifest: &DesiredStateManifest, errors: &mut 
             binding
                 .projected_fields()
                 .map(|_| ())
-                .map_err(|error| format!("{}", ErrorChain(error.as_ref())))
+                .map_err(|error| format!("{}", ErrorChain(&error)))
         }))
         .chain(manifest.repository_placements.iter().map(|placement| {
             placement

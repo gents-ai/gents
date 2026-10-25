@@ -151,7 +151,7 @@ fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), Struc
         .try_for_each(|document| {
             references
                 .validate_document(Collection::Trigger, &document.add)
-                .map_err(invalid)
+                .map_err(|error| invalid(error.into()))
         })
 }
 

@@ -1,11 +1,40 @@
-use anyhow::{Context, Result};
-
 use crate::collection::Collection;
 use crate::AgentDocument as Agent;
 
+use super::desired_state::DesiredStateError;
 #[cfg(test)]
 use super::ConfigApplyTxn;
-use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use super::{
+    ConfigAccess, ConfigClientError, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    TransactionFailure,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentWriteError {
+    #[error("replaced Agent missing")]
+    Missing,
+    #[cfg(test)]
+    #[error("decoding canonical Agent")]
+    Decode(#[source] serde_json::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+}
+
+impl TransactionFailure for AgentWriteError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = AgentWriteError> = std::result::Result<T, E>;
 
 pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Result<String> {
     access
@@ -26,7 +55,7 @@ pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Re
                 )
                 .await?
                 .map(|(doc_id, _)| doc_id)
-                .context("replaced Agent missing")
+                .ok_or(AgentWriteError::Missing)
             })
         })
         .await
@@ -42,7 +71,7 @@ async fn load_agent_in_txn(
         .await?
         .map(serde_json::from_value)
         .transpose()
-        .context("decoding canonical Agent")
+        .map_err(AgentWriteError::Decode)
 }
 
 #[cfg(test)]
@@ -54,8 +83,10 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     #[tokio::test]
-    async fn replacement_is_scoped_clears_context_and_rolls_back_dangling_links() -> Result<()> {
+    async fn replacement_is_scoped_clears_context_and_rolls_back_dangling_links() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
@@ -119,7 +150,7 @@ mod tests {
                             .await?
                             .unwrap();
                     assert_eq!(actual_foreign, *foreign);
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, AgentWriteError>(())
                 })
             })
             .await?;
@@ -136,7 +167,7 @@ mod tests {
                             .as_ref(),
                         Some(behavior)
                     );
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, AgentWriteError>(())
                 })
             })
             .await?;

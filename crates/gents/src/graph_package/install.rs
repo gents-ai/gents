@@ -31,6 +31,8 @@ pub enum GraphPackageInstallError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Installation(Box<crate::pack::InstallationError>),
+    #[error(transparent)]
+    Provenance(Box<crate::pack::ProvenanceError>),
     #[error("package owner DID must not be blank")]
     OwnerDidBlank,
     #[error("package owner node is missing")]
@@ -97,6 +99,12 @@ pub enum GraphPackageInstallError {
     ActorNotOwner,
 }
 
+impl From<crate::pack::ProvenanceError> for GraphPackageInstallError {
+    fn from(error: crate::pack::ProvenanceError) -> Self {
+        Self::Provenance(Box::new(error))
+    }
+}
+
 impl From<crate::pack::InstallationError> for GraphPackageInstallError {
     fn from(error: crate::pack::InstallationError) -> Self {
         Self::Installation(Box::new(error))
@@ -110,6 +118,7 @@ impl TransactionFailure for GraphPackageInstallError {
             Self::DesiredState(error) => error.config_client_error(),
             Self::GraphPipeline(error) => error.config_client_error(),
             Self::Installation(error) => error.config_client_error(),
+            Self::Provenance(error) => error.config_client_error(),
             _ => None,
         }
     }
@@ -571,7 +580,8 @@ async fn prepare_package(
             Box::pin(async move {
                 let effective =
                     crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
-                crate::config_client::validate_desired_state_plan(txn, &effective).await
+                crate::config_client::validate_desired_state_plan(txn, &effective).await?;
+                Ok::<_, GraphPackageInstallError>(())
             })
         })
         .await?;

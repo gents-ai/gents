@@ -548,12 +548,12 @@ async fn apply(
     operation: &'static str,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
-    access
+    Ok(access
         .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
-        .await
+        .await?)
 }
 
 fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {

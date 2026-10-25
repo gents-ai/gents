@@ -179,7 +179,7 @@ async fn changed_targets_and_overbroad_selection_never_apply() {
             Some(json!({"and":[{"eq":{"reference":"one"}}]})),
         );
         let error = tool.execute(&malformed).await.unwrap_err();
-        assert!(ErrorChain(error.as_ref())
+        assert!(ErrorChain(&error)
             .to_string()
             .contains("unknown filter field/operator"));
     }

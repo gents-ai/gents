@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::references::ConfigReferences;
+use super::DocumentConfigError;
 
 /// This document describes how context is assembled; conversation messages,
 /// activated skills, and generated compaction entries remain session state.
@@ -55,7 +56,7 @@ impl AgentContext {
             .unwrap_or_default()
     }
 
-    pub fn validate_references(&self, refs: &ConfigReferences) -> anyhow::Result<()> {
+    pub fn validate_references(&self, refs: &ConfigReferences) -> Result<(), DocumentConfigError> {
         refs.validate_document(
             crate::Collection::AgentContext,
             &serde_json::to_value(self)?,

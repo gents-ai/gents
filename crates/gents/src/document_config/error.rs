@@ -634,6 +634,46 @@ pub enum DocumentConfigError {
         #[source]
         source: serde_json::Error,
     },
+    #[error(transparent)]
+    DocumentView(Box<crate::agent::document_view::DocumentViewError>),
+    #[error(transparent)]
+    ToolSurface(Box<crate::tool_surface::ToolSurfaceError>),
+    #[error(transparent)]
+    BackendRegistry(Box<crate::backend_registry::BackendRegistryError>),
+    #[error(transparent)]
+    Callback(Box<crate::callback::CallbackError>),
+    #[error(transparent)]
+    CallbackPlugin(Box<crate::callback::plugin::CallbackPluginError>),
+}
+
+impl From<crate::agent::document_view::DocumentViewError> for DocumentConfigError {
+    fn from(error: crate::agent::document_view::DocumentViewError) -> Self {
+        Self::DocumentView(Box::new(error))
+    }
+}
+
+impl From<crate::tool_surface::ToolSurfaceError> for DocumentConfigError {
+    fn from(error: crate::tool_surface::ToolSurfaceError) -> Self {
+        Self::ToolSurface(Box::new(error))
+    }
+}
+
+impl From<crate::backend_registry::BackendRegistryError> for DocumentConfigError {
+    fn from(error: crate::backend_registry::BackendRegistryError) -> Self {
+        Self::BackendRegistry(Box::new(error))
+    }
+}
+
+impl From<crate::callback::CallbackError> for DocumentConfigError {
+    fn from(error: crate::callback::CallbackError) -> Self {
+        Self::Callback(Box::new(error))
+    }
+}
+
+impl From<crate::callback::plugin::CallbackPluginError> for DocumentConfigError {
+    fn from(error: crate::callback::plugin::CallbackPluginError) -> Self {
+        Self::CallbackPlugin(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for DocumentConfigError {

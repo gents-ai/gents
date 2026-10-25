@@ -210,14 +210,14 @@ impl ConfigReferences {
             .collect()
     }
 
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> Result<()> {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;
         }
         Ok(())
     }
 
-    pub fn validate_removal(&self, collection: Collection, id: &str) -> anyhow::Result<()> {
+    pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
         let mut candidate = self.clone();
         if candidate
             .documents
@@ -232,11 +232,7 @@ impl ConfigReferences {
         Ok(())
     }
 
-    pub(crate) fn validate_document(
-        &self,
-        collection: Collection,
-        value: &Value,
-    ) -> anyhow::Result<()> {
+    pub(crate) fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
         if value["node_did"].as_str() != Some(&self.node_did) {
             return Err(DocumentConfigError::ConfigOwnerMismatch { collection }.into());
         }

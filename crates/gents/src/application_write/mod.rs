@@ -5,12 +5,12 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError, TransactionFailure};
 use crate::defra_query::{CollectionScope, DefraQueryParams};
 use crate::llm::tool::{Tool, ToolDefinition};
 
 mod plugin_writes;
-pub use plugin_writes::apply_plugin_writes_in_txn;
+pub use plugin_writes::{apply_plugin_writes_in_txn, PluginWritesError};
 
 pub const WRITE_TOOL_NAME: &str = "write";
 
@@ -62,7 +62,7 @@ pub struct WriteError(String);
 /// carries the next call the model should make, which `WriteTool::call`
 /// renders beside the message.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ApplicationWriteError {
+pub enum ApplicationWriteError {
     #[error("help accepts argv only")]
     HelpArgvOnly,
     #[error("help accepts [help] or [help, command]")]
@@ -106,6 +106,24 @@ pub(crate) enum ApplicationWriteError {
         "mutation receipt differs from observed target count; transaction rolled back: {response}"
     )]
     ReceiptMismatch { response: Value },
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Filter(#[from] crate::defra_query::NativeFilterError),
+    #[error(transparent)]
+    Query(#[from] crate::defra_query::DefraQueryFailure),
+}
+
+impl TransactionFailure for ApplicationWriteError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Filter(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 fn recovery(message: impl Into<String>, tool: &str, args: Value) -> ApplicationWriteError {
@@ -171,11 +189,11 @@ impl WriteTool {
             actor,
         }
     }
-    pub async fn execute(&self, args: &WriteParams) -> anyhow::Result<Value> {
+    pub async fn execute(&self, args: &WriteParams) -> Result<Value, ApplicationWriteError> {
         if args.argv.first().is_some_and(|v| v == "help")
             || args.argv.last().is_some_and(|v| v == "--help")
         {
-            return Ok(help_response(args)?);
+            return help_response(args);
         }
         let plan = self.plan(args)?;
         let preview = plan.preview;
@@ -323,7 +341,7 @@ impl WriteTool {
         txn: &ConfigApplyTxn<'_>,
         args: &WriteParams,
         plan: WritePlan<'_>,
-    ) -> anyhow::Result<Value> {
+    ) -> Result<Value, ApplicationWriteError> {
         let WritePlan {
             operation,
             preview,
@@ -345,7 +363,7 @@ impl WriteTool {
             for (name, value) in input.iter_mut() {
                 crate::graphql::validate_graphql_name(name)?;
                 if name.starts_with('_') {
-                    return Err(ApplicationWriteError::InternalField { name: name.clone() }.into());
+                    return Err(ApplicationWriteError::InternalField { name: name.clone() });
                 }
                 let field = version
                     .fields
@@ -386,7 +404,7 @@ impl WriteTool {
             .replace("{ _docID }", "{ _docID _version { cid height fieldName } }");
             let rows = txn.execute(&query).await?["data"][collection].clone();
             if !rows.is_array() {
-                return Err(ApplicationWriteError::NoTargetRows.into());
+                return Err(ApplicationWriteError::NoTargetRows);
             }
             rows
         };
@@ -418,7 +436,7 @@ impl WriteTool {
                 == Some(digest.as_str()),
         };
         if !observation.admitted() {
-            return Err(recovery(format!("selected {targets} targets; expected 1–{limit}. Narrow the filter before previewing"), WRITE_TOOL_NAME, serde_json::to_value(preview_call(args))?).into());
+            return Err(recovery(format!("selected {targets} targets; expected 1–{limit}. Narrow the filter before previewing"), WRITE_TOOL_NAME, serde_json::to_value(preview_call(args))?));
         }
         let mut next = intent.clone();
         next.options.insert("digest".into(), json!(digest));
@@ -432,8 +450,7 @@ impl WriteTool {
                 "missing or stale digest; inspect a fresh preview before applying its next_call",
                 WRITE_TOOL_NAME,
                 serde_json::to_value(preview_call(args))?,
-            )
-            .into());
+            ));
         }
         let target_filter = if operation == "create" {
             String::new()
@@ -476,7 +493,7 @@ impl WriteTool {
             .as_array()
             .is_some_and(|rows| rows.len() == targets)
         {
-            return Err(ApplicationWriteError::ReceiptMismatch { response }.into());
+            return Err(ApplicationWriteError::ReceiptMismatch { response });
         }
         Ok(
             json!({"effect":{"operation":operation,"collection":collection,"affected_count":targets,"documents":receipts},"committed":true}),
@@ -500,13 +517,12 @@ impl Tool for WriteTool {
             ))
             .map_err(|e| WriteError(e.to_string())),
             Err(error) => {
-                let next = match error.downcast_ref::<ApplicationWriteError>() {
-                    Some(ApplicationWriteError::Recovery { recovery, .. }) => recovery.clone(),
+                let next = match &error {
+                    ApplicationWriteError::Recovery { recovery, .. } => recovery.clone(),
                     _ => json!({"tool":"write","args":{"argv":["help"]}}),
                 };
                 Err(WriteError(
-                    json!({"error":ErrorChain(error.as_ref()).to_string(),"recovery":next})
-                        .to_string(),
+                    json!({"error":ErrorChain(&error).to_string(),"recovery":next}).to_string(),
                 ))
             }
         }

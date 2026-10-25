@@ -225,15 +225,17 @@ pub async fn resume_goal_on_account(
         Some(profile) => {
             let receipt = async {
                 let slots = plugin_slots(&profile)?;
-                crate::config_client::switch_profile_account(
-                    access,
-                    node_did,
-                    &profile,
-                    target_backend_id,
-                    move_companions,
-                    &slots,
+                Ok::<_, anyhow::Error>(
+                    crate::config_client::switch_profile_account(
+                        access,
+                        node_did,
+                        &profile,
+                        target_backend_id,
+                        move_companions,
+                        &slots,
+                    )
+                    .await?,
                 )
-                .await
             }
             .await
             .map_err(|error| {

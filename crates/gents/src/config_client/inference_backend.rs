@@ -1,8 +1,47 @@
-use super::{ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use crate::oauth_credential::ServingAccount;
+use super::desired_state::DesiredStateError;
+use super::{
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, DesiredStateApplyDocument,
+    DesiredStateApplyPlan, TransactionFailure,
+};
+use crate::document_config::DocumentConfigError;
+use crate::oauth_credential::{OAuthCredentialError, ServingAccount};
 use crate::{Collection, InferenceBackend};
-use anyhow::{Context, Result};
 use std::collections::BTreeMap;
+
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceBackendError {
+    #[error("decoding scoped InferenceBackend")]
+    Decode(#[source] serde_json::Error),
+    #[error("replaced InferenceBackend missing")]
+    Missing,
+    #[error(transparent)]
+    Invalid(#[from] DocumentConfigError),
+    #[error(transparent)]
+    BackendRegistry(#[from] crate::backend_registry::BackendRegistryError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    OAuthCredential(#[from] OAuthCredentialError),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+}
+
+impl TransactionFailure for InferenceBackendError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Invalid(error) => error.config_client_error(),
+            Self::BackendRegistry(error) => error.config_client_error(),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::OAuthCredential(error) => error.config_client_error(),
+            Self::Decode(_) | Self::Missing | Self::Json(_) => None,
+        }
+    }
+}
+
+type Result<T, E = InferenceBackendError> = std::result::Result<T, E>;
 
 pub async fn load_inference_backend_in_txn(
     txn: &ConfigApplyTxn<'_>,
@@ -11,7 +50,7 @@ pub async fn load_inference_backend_in_txn(
 ) -> Result<Option<InferenceBackend>> {
     super::desired_state::read_record(txn, Collection::InferenceBackend, node_did, backend_id)
         .await?
-        .map(|(_, value)| serde_json::from_value(value).context("decoding scoped InferenceBackend"))
+        .map(|(_, value)| serde_json::from_value(value).map_err(InferenceBackendError::Decode))
         .transpose()
 }
 
@@ -30,7 +69,7 @@ pub async fn list_inference_backends_in_txn(
         .await?;
     gents_protocol::graphql::graphql_rows_from_response(&response, "InferenceBackend")
         .into_iter()
-        .map(|row| serde_json::from_value(row).context("decoding scoped InferenceBackend"))
+        .map(|row| serde_json::from_value(row).map_err(InferenceBackendError::Decode))
         .collect()
 }
 
@@ -66,7 +105,7 @@ pub async fn write_inference_backend_document(
                 )
                 .await?
                 .map(|(id, _)| id)
-                .context("replaced InferenceBackend missing")
+                .ok_or(InferenceBackendError::Missing)
             })
         })
         .await
@@ -100,6 +139,8 @@ mod tests {
     use crate::oauth_credential::{set_account_enabled, store_sign_in, AccountState};
     use serde_json::json;
     use std::sync::Arc;
+
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
     fn claude_sign_in(did: &str, who: &str) -> crate::oauth_credential::OAuthCredential {
         crate::claude_oauth::credential_from_login_tokens(
@@ -137,7 +178,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serving_accounts_reads_backends_and_accounts() -> Result<()> {
+    async fn serving_accounts_reads_backends_and_accounts() -> TestResult {
         let did = "did:key:z6MkTestServing";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;

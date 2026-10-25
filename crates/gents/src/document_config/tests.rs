@@ -72,7 +72,7 @@ fn validate_rejects_blank_agent_target_ids() {
     );
 }
 
-fn validate_write_tools(decls: &[WriteToolDecl]) -> anyhow::Result<()> {
+fn validate_write_tools(decls: &[WriteToolDecl]) -> Result<(), DocumentConfigError> {
     super::write_tool::validate_write_tool_declarations(decls, &[], &[])
 }
 
@@ -1153,7 +1153,6 @@ fn default_agent_publication_matches_lean() {
             ),
         ];
         let accepted = ConfigReferences::from_documents(scope, documents)
-            .map_err(anyhow::Error::from)
             .and_then(|refs| refs.validate())
             .is_ok();
         assert_eq!(

@@ -57,7 +57,7 @@ pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;
 mod search;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
-pub(crate) use native_filter::validate_filter;
+pub(crate) use native_filter::{validate_filter, NativeFilterError};
 pub(crate) mod query;
 pub(crate) mod render;
 pub(crate) mod schema;

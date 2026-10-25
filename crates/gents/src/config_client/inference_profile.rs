@@ -1,10 +1,57 @@
-use anyhow::{Context, Result};
-
 use crate::collection::Collection;
-use crate::document_config::InferenceProfile;
+use crate::document_config::{DocumentConfigError, InferenceProfile};
 use crate::oauth_credential::ServingAccount;
 
-use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use super::desired_state::DesiredStateError;
+use super::inference_backend::InferenceBackendError;
+use super::{
+    ConfigAccess, ConfigClientError, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    TransactionFailure,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceProfileError {
+    #[error("decoding scoped InferenceProfile")]
+    DecodeProfile(#[source] serde_json::Error),
+    #[error("decoding scoped {collection:?}")]
+    Decode {
+        collection: Collection,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("replaced InferenceProfile missing")]
+    Missing,
+    #[error("agent {agent_id:?} not found")]
+    AgentNotFound { agent_id: String },
+    #[error(transparent)]
+    Invalid(#[from] DocumentConfigError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    Backend(#[from] InferenceBackendError),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+}
+
+impl TransactionFailure for InferenceProfileError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Invalid(error) => error.config_client_error(),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::Backend(error) => error.config_client_error(),
+            Self::DecodeProfile(_)
+            | Self::Decode { .. }
+            | Self::Missing
+            | Self::AgentNotFound { .. }
+            | Self::Json(_) => None,
+        }
+    }
+}
+
+type Result<T, E = InferenceProfileError> = std::result::Result<T, E>;
 
 pub async fn list_inference_profiles_in_txn(
     txn: &super::ConfigApplyTxn<'_>,
@@ -21,7 +68,7 @@ pub async fn list_inference_profiles_in_txn(
         .await?;
     gents_protocol::graphql::graphql_rows_from_response(&response, "InferenceProfile")
         .into_iter()
-        .map(|row| serde_json::from_value(row).context("decoding scoped InferenceProfile"))
+        .map(|row| serde_json::from_value(row).map_err(InferenceProfileError::DecodeProfile))
         .collect()
 }
 
@@ -48,7 +95,7 @@ pub async fn write_inference_profile_document(
                 )
                 .await?
                 .map(|(doc_id, _)| doc_id)
-                .context("replaced InferenceProfile missing")
+                .ok_or(InferenceProfileError::Missing)
             })
         })
         .await
@@ -65,7 +112,9 @@ pub async fn agent_accounts(
                 let agent: crate::document_config::Agent =
                     read(txn, Collection::Agent, node_did, agent_id)
                         .await?
-                        .with_context(|| format!("agent {agent_id:?} not found"))?;
+                        .ok_or_else(|| InferenceProfileError::AgentNotFound {
+                            agent_id: agent_id.to_owned(),
+                        })?;
                 let mut profile_ids = vec![agent.inference_profile_id];
                 let context: Option<crate::document_config::AgentContext> =
                     match agent.context_id.as_deref() {
@@ -91,7 +140,7 @@ pub async fn agent_accounts(
                         profile_backends.push((profile_id.clone(), profile.backend_id));
                     }
                 }
-                Ok::<_, anyhow::Error>(profile_backends)
+                Ok::<_, InferenceProfileError>(profile_backends)
             })
         })
         .await?;
@@ -118,7 +167,8 @@ where
     super::desired_state::read_record(txn, collection, node_did, id)
         .await?
         .map(|(_, value)| {
-            serde_json::from_value(value).with_context(|| format!("decoding scoped {collection:?}"))
+            serde_json::from_value(value)
+                .map_err(|source| InferenceProfileError::Decode { collection, source })
         })
         .transpose()
 }
@@ -130,8 +180,10 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     #[tokio::test]
-    async fn replacement_preserves_other_owner_and_clears_optional_selection() -> Result<()> {
+    async fn replacement_preserves_other_owner_and_clears_optional_selection() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
@@ -190,7 +242,7 @@ mod tests {
                         let actual: InferenceProfile = serde_json::from_value(value)?;
                         assert_eq!(&actual, expected);
                     }
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, InferenceProfileError>(())
                 })
             })
             .await?;
@@ -215,7 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_events_never_repoint_a_profile() -> Result<()> {
+    async fn account_events_never_repoint_a_profile() -> TestResult {
         use crate::oauth_credential::{
             remove_account_in_txn, resolve_oauth_credential, set_account_enabled, store_sign_in,
             AccountPick,
@@ -281,7 +333,7 @@ mod tests {
                                 .expect("profile"),
                             );
                         }
-                        Ok::<_, anyhow::Error>(records)
+                        Ok::<_, InferenceProfileError>(records)
                     })
                 })
                 .await
@@ -359,7 +411,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_accounts_follow_profile_and_compaction() -> Result<()> {
+    async fn agent_accounts_follow_profile_and_compaction() -> TestResult {
         use crate::oauth_credential::{set_account_enabled, store_sign_in, AccountState};
         let did = "did:key:z6MkTestAgentAccounts";
         let node = Arc::new(crate::test_support::node_builder().build().await?);

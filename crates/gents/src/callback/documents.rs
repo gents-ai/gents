@@ -59,7 +59,7 @@ pub use crate::document_config::{
 };
 
 impl CallbackBindingDoc {
-    pub fn projected_fields(&self) -> Result<Vec<String>> {
+    pub fn projected_fields(&self) -> Result<Vec<String>, CallbackError> {
         validate_callback_binding(self)?;
         Ok(self.input_fields.clone())
     }

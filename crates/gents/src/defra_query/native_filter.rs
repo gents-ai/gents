@@ -1,11 +1,70 @@
 use std::collections::BTreeMap;
 
-use anyhow::{bail, ensure, Context, Result};
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::config_client::ConfigRead;
+use crate::config_client::{ConfigClientError, ConfigRead};
+
+#[derive(Debug, thiserror::Error)]
+pub enum NativeFilterError {
+    #[error("filter must be a JSON object")]
+    NotObject,
+    #[error(transparent)]
+    Depth(#[from] ::query::QueryError),
+    #[error("invalid filter for {collection}; call query with argv:[help,find] for filter syntax")]
+    Invalid {
+        collection: String,
+        #[source]
+        source: Box<NativeFilterError>,
+    },
+    #[error("filter contains null for a non-null native input")]
+    NullForNonNull,
+    #[error("native non-null type lacks its inner type")]
+    NonNullInner,
+    #[error("native list type lacks its element type")]
+    ListElement,
+    #[error("native input type lacks its name")]
+    InputName,
+    #[error(transparent)]
+    ScalarKind(#[from] serde_json::Error),
+    #[error("filter operand for native {name} has the wrong value type")]
+    OperandType { name: String },
+    #[error("unsupported native filter input kind {kind}")]
+    UnsupportedKind { kind: String },
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error("native filter definition {name} is unavailable")]
+    DefinitionUnavailable {
+        name: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("filter condition must be an object")]
+    ConditionNotObject,
+    #[error(transparent)]
+    Protected(Box<crate::document_config::DocumentConfigError>),
+    #[error("unknown filter field/operator {key:?} in {name}; available: [{available}]")]
+    UnknownField {
+        key: String,
+        name: String,
+        available: String,
+    },
+    #[error("filtering on restricted credential field {collection}.{key} is not allowed")]
+    RestrictedField { collection: String, key: String },
+}
+
+impl crate::config_client::TransactionFailure for NativeFilterError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Invalid { source, .. } => source.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = NativeFilterError> = std::result::Result<T, E>;
 
 #[derive(Clone, Deserialize)]
 struct TypeRef {
@@ -32,7 +91,7 @@ pub(crate) async fn validate_filter(
     }
     let conditions = filter
         .as_object()
-        .context("filter must be a JSON object")?
+        .ok_or(NativeFilterError::NotObject)?
         .clone();
     ::query::mapper::Filter::from_conditions(conditions).validate_depth()?;
     let root = TypeRef {
@@ -42,7 +101,10 @@ pub(crate) async fn validate_filter(
     };
     validate_value(access, &root, filter, &mut BTreeMap::new())
         .await
-        .with_context(|| format!("invalid filter for {collection}; call query with argv:[help,find] for filter syntax"))
+        .map_err(|source| NativeFilterError::Invalid {
+            collection: collection.to_owned(),
+            source: Box::new(source),
+        })
 }
 
 fn validate_value<'a>(
@@ -53,15 +115,14 @@ fn validate_value<'a>(
 ) -> BoxFuture<'a, Result<()>> {
     Box::pin(async move {
         if ty.kind == "NON_NULL" {
-            ensure!(
-                !value.is_null(),
-                "filter contains null for a non-null native input"
-            );
+            if value.is_null() {
+                return Err(NativeFilterError::NullForNonNull);
+            }
             return validate_value(
                 access,
                 ty.of_type
                     .as_deref()
-                    .context("native non-null type lacks its inner type")?,
+                    .ok_or(NativeFilterError::NonNullInner)?,
                 value,
                 cache,
             )
@@ -74,7 +135,7 @@ fn validate_value<'a>(
             let inner = ty
                 .of_type
                 .as_deref()
-                .context("native list type lacks its element type")?;
+                .ok_or(NativeFilterError::ListElement)?;
             if let Some(values) = value.as_array() {
                 for item in values {
                     validate_value(access, inner, item, cache).await?;
@@ -84,29 +145,31 @@ fn validate_value<'a>(
             }
             return Ok(());
         }
-        let name = ty
-            .name
-            .as_deref()
-            .context("native input type lacks its name")?;
+        let name = ty.name.as_deref().ok_or(NativeFilterError::InputName)?;
         if ty.kind == "SCALAR" {
             let kind: ::schema::FieldKind = serde_json::from_value(json!(name))?;
-            ensure!(
-                kind.accepts_filter_value(value),
-                "filter operand for native {name} has the wrong value type"
-            );
+            if !kind.accepts_filter_value(value) {
+                return Err(NativeFilterError::OperandType {
+                    name: name.to_owned(),
+                });
+            }
             return Ok(());
         }
-        ensure!(
-            ty.kind == "INPUT_OBJECT",
-            "unsupported native filter input kind {}",
-            ty.kind
-        );
+        if ty.kind != "INPUT_OBJECT" {
+            return Err(NativeFilterError::UnsupportedKind {
+                kind: ty.kind.clone(),
+            });
+        }
         if !cache.contains_key(name) {
             let query = format!("{{ __type(name: \"{}\") {{ inputFields {{ name type {{ kind name ofType {{ kind name ofType {{ kind name ofType {{ kind name }} }} }} }} }} }} }}", crate::graphql::escape_graphql_string(name));
             let response = access.execute_read(&query).await?;
-            let fields: Vec<InputField> =
-                serde_json::from_value(response["data"]["__type"]["inputFields"].clone())
-                    .with_context(|| format!("native filter definition {name} is unavailable"))?;
+            let fields: Vec<InputField> = serde_json::from_value(
+                response["data"]["__type"]["inputFields"].clone(),
+            )
+            .map_err(|source| NativeFilterError::DefinitionUnavailable {
+                name: name.to_owned(),
+                source,
+            })?;
             cache.insert(name.to_owned(), fields);
         }
         let fields = cache[name].clone();
@@ -122,10 +185,11 @@ fn validate_value<'a>(
         }
         let object = value
             .as_object()
-            .context("filter condition must be an object")?;
+            .ok_or(NativeFilterError::ConditionNotObject)?;
         if !fields.iter().any(|field| field.name == "_eq") {
             if let Some(collection) = name.strip_suffix("FilterArg") {
-                crate::document_config::reject_protected_collection_name(collection)?;
+                crate::document_config::reject_protected_collection_name(collection)
+                    .map_err(|error| NativeFilterError::Protected(Box::new(error)))?;
             }
         }
         for (key, operand) in object {
@@ -143,13 +207,19 @@ fn validate_value<'a>(
                     .map(|field| field.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                bail!("unknown filter field/operator {key:?} in {name}; available: [{available}]");
+                return Err(NativeFilterError::UnknownField {
+                    key: key.clone(),
+                    name: name.to_owned(),
+                    available,
+                });
             };
             if let Some(collection) = name.strip_suffix("FilterArg") {
-                ensure!(
-                    !super::query::is_restricted_field(collection, key),
-                    "filtering on restricted credential field {collection}.{key} is not allowed"
-                );
+                if super::query::is_restricted_field(collection, key) {
+                    return Err(NativeFilterError::RestrictedField {
+                        collection: collection.to_owned(),
+                        key: key.clone(),
+                    });
+                }
             }
             validate_value(access, &field.type_ref, operand, cache).await?;
         }
@@ -186,10 +256,7 @@ mod tests {
             validate_filter(&access, "FilterBook", &filter)
                 .await
                 .unwrap_or_else(|error| {
-                    panic!(
-                        "valid native filter {filter}: {}",
-                        ErrorChain(error.as_ref())
-                    )
+                    panic!("valid native filter {filter}: {}", ErrorChain(&error))
                 });
         }
         for filter in [
@@ -209,7 +276,7 @@ mod tests {
         let error = validate_filter(&access, "OAuthCredential", &json!({"unknown_field":"x"}))
             .await
             .unwrap_err();
-        let diagnostic = format!("{}", ErrorChain(error.as_ref()));
+        let diagnostic = format!("{}", ErrorChain(&error));
         assert!(diagnostic.contains("credential_id"));
         for field in ["access_token", "refresh_token", "id_token"] {
             assert!(!diagnostic.contains(field), "{diagnostic}");

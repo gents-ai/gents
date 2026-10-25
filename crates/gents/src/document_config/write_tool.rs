@@ -327,7 +327,7 @@ pub(crate) fn validate_write_tool_declarations(
     decls: &[WriteToolDecl],
     cli_tool_names: &[String],
     additional_tool_names: &[String],
-) -> anyhow::Result<()> {
+) -> Result<(), DocumentConfigError> {
     let cli_tool_names = cli_tool_names
         .iter()
         .map(|name| name.trim())
@@ -355,8 +355,7 @@ pub(crate) fn validate_write_tool_declarations(
             return Err(DocumentConfigError::WriteToolOutputObligation {
                 index: i,
                 tool_name: decl.tool_name.clone(),
-            }
-            .into());
+            });
         }
         reject_tool_name_surface_collisions(
             "write_tools",
@@ -373,8 +372,7 @@ pub(crate) fn validate_write_tool_declarations(
                     index: i,
                     tool_name: decl.tool_name.clone(),
                     field: field.name.trim().to_owned(),
-                }
-                .into());
+                });
             }
             if field.fill.is_some() && field.required {
                 return Err(DocumentConfigError::WriteToolRuntimeFilledRequired {
@@ -382,8 +380,7 @@ pub(crate) fn validate_write_tool_declarations(
                     tool_name: decl.tool_name.clone(),
                     field_index: j,
                     field: field.name.clone(),
-                }
-                .into());
+                });
             }
             if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
                 crate::graphql::validate_graphql_name(source_field).map_err(|error| {
@@ -400,8 +397,7 @@ pub(crate) fn validate_write_tool_declarations(
         if !seen_tool_names.insert(decl.tool_name.trim()) {
             return Err(DocumentConfigError::WriteToolDuplicateName {
                 tool_name: decl.tool_name.trim().to_owned(),
-            }
-            .into());
+            });
         }
     }
     Ok(())

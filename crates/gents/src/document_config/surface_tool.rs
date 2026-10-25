@@ -441,7 +441,7 @@ pub(crate) fn validate_surface_tool_names(
     query_tools: &[QueryToolDecl],
     cli_tool_names: &[String],
     additional_tool_names: &[String],
-) -> anyhow::Result<()> {
+) -> Result<(), DocumentConfigError> {
     validate_write_tool_declarations(write_tools, cli_tool_names, additional_tool_names)?;
     let mut extra = additional_tool_names.to_vec();
     extra.extend(write_tools.iter().map(|decl| decl.tool_name.clone()));

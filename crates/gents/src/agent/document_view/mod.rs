@@ -14,7 +14,7 @@ use rapidhash::RapidHashMap;
 use crate::admission::BackendAvailability;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum DocumentViewError {
+pub enum DocumentViewError {
     #[error("runtime view owner mismatch")]
     OwnerMismatch,
     #[error("runtime view requires an owner DID")]
@@ -101,6 +101,8 @@ pub(crate) enum DocumentViewError {
     Config(#[from] crate::config::ConfigError),
     #[error(transparent)]
     DocumentConfig(Box<crate::document_config::DocumentConfigError>),
+    #[error(transparent)]
+    Eth(#[from] crate::eth::EthError),
 }
 
 impl From<crate::document_config::DocumentConfigError> for DocumentViewError {
@@ -197,7 +199,7 @@ mod tests;
 pub(crate) fn merge_surface_tools(
     tools: &Tools,
     view: &DocumentRuntimeView,
-) -> anyhow::Result<crate::document_config::MergedSurfaceTools> {
+) -> Result<crate::document_config::MergedSurfaceTools, DocumentViewError> {
     Ok(crate::document_config::merge_datastore_tool_surfaces(
         tools,
         view.datastore_tool_surfaces
@@ -215,7 +217,7 @@ pub(crate) struct ExpandedEthTools {
 pub(crate) fn expand_eth_tools(
     selection: &Tools,
     view: &DocumentRuntimeView,
-) -> anyhow::Result<ExpandedEthTools> {
+) -> Result<ExpandedEthTools, DocumentViewError> {
     expand_eth_tools_with(selection, |tool_id| {
         view.eth_tools.get(tool_id).map(|record| &record.value)
     })
@@ -224,7 +226,7 @@ pub(crate) fn expand_eth_tools(
 pub(crate) fn expand_eth_tools_from_docs(
     selection: &Tools,
     docs: &[crate::document_config::EthToolDocument],
-) -> anyhow::Result<ExpandedEthTools> {
+) -> Result<ExpandedEthTools, DocumentViewError> {
     expand_eth_tools_with(selection, |tool_id| {
         docs.iter().find(|doc| doc.tool_id == tool_id)
     })
@@ -233,7 +235,7 @@ pub(crate) fn expand_eth_tools_from_docs(
 fn expand_eth_tools_with<'a>(
     selection: &Tools,
     lookup: impl Fn(&str) -> Option<&'a crate::document_config::EthToolDocument>,
-) -> anyhow::Result<ExpandedEthTools> {
+) -> Result<ExpandedEthTools, DocumentViewError> {
     use rapidhash::{HashSetExt, RapidHashSet};
 
     let mut out = ExpandedEthTools::default();
@@ -249,15 +251,13 @@ fn expand_eth_tools_with<'a>(
         if tool_id.is_empty() {
             return Err(DocumentViewError::EthToolIdEmpty {
                 tools_id: selection.tools_id.clone(),
-            }
-            .into());
+            });
         }
         if !linked_ids.insert(tool_id) {
             return Err(DocumentViewError::EthToolListedTwice {
                 tools_id: selection.tools_id.clone(),
                 tool_id: tool_id.to_owned(),
-            }
-            .into());
+            });
         }
         let doc = lookup(tool_id).ok_or_else(|| DocumentViewError::EthToolMissing {
             tools_id: selection.tools_id.clone(),
@@ -267,8 +267,7 @@ fn expand_eth_tools_with<'a>(
             return Err(DocumentViewError::EthToolForeignOwner {
                 tools_id: selection.tools_id.clone(),
                 tool_id: tool_id.to_owned(),
-            }
-            .into());
+            });
         }
         if !doc.enabled {
             continue;
@@ -279,8 +278,7 @@ fn expand_eth_tools_with<'a>(
                     tool_name: resolved.tool_name(),
                     tool_id: tool_id.to_owned(),
                     tools_id: selection.tools_id.clone(),
-                }
-                .into());
+                });
             }
             out.queries.push(resolved);
         }
@@ -304,16 +302,14 @@ fn expand_eth_tools_with<'a>(
                         tool_name: call.tool_name.clone(),
                         tool_id: tool_id.to_owned(),
                         tools_id: selection.tools_id.clone(),
-                    }
-                    .into());
+                    });
                 }
                 out.calls.push(call);
             }
         } else if !decls.is_empty() {
             return Err(DocumentViewError::EthToolCallsWithoutRpc {
                 tool_id: tool_id.to_owned(),
-            }
-            .into());
+            });
         }
     }
     Ok(out)
