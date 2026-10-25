@@ -64,6 +64,7 @@ where
 
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
     pub async fn build(
+        cache: Arc<crate::usage_observation::UsageCache>,
         node: Arc<EmbeddedNode>,
         node_did: &str,
         account_ref: Option<&str>,
@@ -81,6 +82,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
             bearer,
             http: ReqwestClient::new(),
             usage: Some(UsageReporter::new(
+                cache,
                 node,
                 UsageAccount::for_credential(&credential),
             )),
@@ -122,6 +124,8 @@ where
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ClaudeStreamResponse {
     pub usage: Option<Usage>,
+    #[serde(default)]
+    pub token_usage: gents_protocol::usage::TokenUsage,
 }
 
 impl GetTokenUsage for ClaudeStreamResponse {
@@ -173,7 +177,7 @@ impl<S> CompletionModel for ClaudeSubscriptionModel<S>
 where
     S: BearerSource + 'static,
 {
-    type Response = ();
+    type Response = ClaudeStreamResponse;
     type StreamingResponse = ClaudeStreamResponse;
     type Client = ClaudeSubscriptionClient<S>;
 
@@ -203,6 +207,7 @@ where
         futures::pin_mut!(stream);
         let mut text = String::new();
         let mut usage = Usage::new();
+        let mut raw_response = ClaudeStreamResponse::default();
         while let Some(item) = stream.next().await {
             match item? {
                 RawStreamingChoice::Message(chunk) => text.push_str(&chunk),
@@ -210,6 +215,7 @@ where
                     if let Some(reported) = raw.token_usage() {
                         usage = reported;
                     }
+                    raw_response = raw;
                     break;
                 }
                 _ => {}
@@ -223,7 +229,7 @@ where
         Ok(CompletionResponse {
             choice: OneOrMany::one(rig::completion::AssistantContent::text(text)),
             usage,
-            raw_response: (),
+            raw_response,
             message_id: None,
         })
     }

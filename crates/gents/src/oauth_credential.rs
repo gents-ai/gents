@@ -1190,7 +1190,7 @@ pub async fn remove_account_in_txn(
             "query {{ OAuthCredential(filter: {filter}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}"
         ))
         .await?;
-    let row = oauth_credentials_from_response(&response)
+    oauth_credentials_from_response(&response)
         .into_iter()
         .next()
         .ok_or_else(|| account_not_found(credential_id))??;
@@ -1200,20 +1200,7 @@ pub async fn remove_account_in_txn(
         ))
         .await?;
     ensure_matched(&response, "delete_OAuthCredential", credential_id)?;
-    let doc_id = row
-        .doc_id
-        .as_deref()
-        .context("stored OAuthCredential has no _docID")?;
-    let keys: Vec<_> = row
-        .provider_account_key
-        .iter()
-        .cloned()
-        .chain([crate::usage_observation::fallback_key(
-            row.account_ref.as_deref(),
-            doc_id,
-        )])
-        .collect();
-    crate::usage_observation::delete_usage_in_txn(txn, node_did, &row.provider, &keys).await
+    Ok(())
 }
 
 fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<()> {

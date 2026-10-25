@@ -203,6 +203,7 @@ impl DocumentResolveContext {
 
 #[derive(Clone)]
 pub struct Gents {
+    usage_cache: Arc<crate::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<Arc<ResolvedAgent>>,
@@ -290,6 +291,7 @@ impl Gents {
             crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
 
         Ok(Self {
+            usage_cache: Arc::default(),
             node,
             runtime_node,
             agents,
@@ -344,17 +346,22 @@ impl Gents {
         &self.runtime_node.node_did
     }
 
+    pub fn usage_cache(&self) -> &Arc<crate::usage_observation::UsageCache> {
+        &self.usage_cache
+    }
+
     pub async fn read_usage(
         &self,
         trigger: crate::usage_observation::UsageTrigger,
         provider: Option<&str>,
     ) -> anyhow::Result<Vec<crate::usage_observation::AccountUsageRead>> {
         crate::usage_observation::read_node_usage(
+            &self.usage_cache,
             self.node.clone(),
             self.node_did(),
             trigger,
             provider,
-            &Default::default(),
+            self.usage_cache.endpoints(),
             chrono::Utc::now(),
         )
         .await
@@ -526,6 +533,7 @@ pub(crate) fn agent_config_from_documents(
     let backend = inference.backend.backend_fields();
     let resolved_max_turns = inference.max_turns()?;
     Ok(ResolvedAgent {
+        profile_id: Some(inference.profile.profile_id.clone()),
         agent_id: agent_config.agent_id.clone(),
         node: principal,
         backend_id: backend.backend_id,

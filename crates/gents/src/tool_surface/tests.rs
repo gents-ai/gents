@@ -3257,3 +3257,23 @@ fn application_write_is_exactly_granted_and_narrowed_by_the_existing_endpoint_me
         .application_write_collections_for_runtime(&grant.application_write_collections)
         .is_empty());
 }
+
+#[test]
+fn provider_limits_is_available_under_an_agent_self_config_grant() {
+    let config = AgentToolSurfaceConfig::from_selection(
+        "reporter",
+        ResolvedToolSelection {
+            enable_self_config: true,
+            self_config_categories: Some(vec!["agent".to_string()]),
+            ..Default::default()
+        },
+        &ToolCeiling::readwrite(temp_root("provider-limits-grant")),
+        Vec::new(),
+    )
+    .unwrap();
+    let explanation = config.explain_with_runtime(false, "did:key:limits", &Default::default());
+    assert!(explanation
+        .tool_names
+        .iter()
+        .any(|name| name == "provider_limits"));
+}

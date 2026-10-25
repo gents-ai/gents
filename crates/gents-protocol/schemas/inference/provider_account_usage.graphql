@@ -1,9 +1,0 @@
-type ProviderAccountUsage @index(fields: ["node_did", "provider", "usage_key"], unique: true) {
-    node_did: String @index @immutable
-    provider: String
-    usage_key: String
-    report: JSON
-    observed_at: DateTime
-    read_at: DateTime
-    read_error: String
-}

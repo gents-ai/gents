@@ -1,6 +1,4 @@
-//! The process that hosts the embedded node and runs the provider clients is
-//! the only writer, so writes take the node rather than a `ConfigAccess`.
-//! Usage is an observation: it picks no account and gates nothing.
+//! Runtime-owned observations of provider limits. No usage observation is persisted.
 
 use std::sync::Arc;
 
@@ -9,26 +7,23 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
-    usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW, REWRITE_AFTER,
+    usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,
 };
-use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::backend_provider::BackendProviderOauthExt;
 use crate::config::ResolvedAgent;
 use crate::config_client::ConfigAccess;
 use crate::document_config::{BackendAuth, InferenceBackend};
-use crate::graphql::escape_graphql_string;
 use crate::oauth_credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };
 
-/// The provider account usage belongs to, per agent. Provider clients bind
-/// the credential's physical row, so replacement sign-ins cannot inherit
-/// late responses. Its provider key is resolved on each write, allowing key
-/// backfill on the same row. Inventory reads resolve the current account.
+/// Provider clients bind a physical credential row or a keyed backend
+/// connection identity. Inventory reads resolve the currently configured
+/// account, so a late response cannot populate a replacement's observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UsageAccount {
     Credential {
@@ -41,6 +36,7 @@ pub enum UsageAccount {
         node_did: String,
         provider: String,
         backend_id: String,
+        connection: String,
     },
 }
 
@@ -59,10 +55,11 @@ impl UsageAccount {
             node_did: agent.node_did().to_string(),
             provider: agent.backend_provider_kind.as_str().to_string(),
             backend_id: agent.backend_id.clone()?,
+            connection: crate::completion_factory::agent_connection_fingerprint(agent),
         })
     }
 
-    fn for_backend(node_did: &str, backend: &InferenceBackend) -> Self {
+    pub fn for_backend(node_did: &str, backend: &InferenceBackend) -> Self {
         match (backend.provider_kind.oauth_provider(), &backend.auth) {
             (Some(provider), BackendAuth::NodeOAuth { account_ref }) => Self::Credential {
                 doc_id: None,
@@ -74,28 +71,31 @@ impl UsageAccount {
                 node_did: node_did.to_string(),
                 provider: backend.provider_kind.as_str().to_string(),
                 backend_id: backend.backend_id.clone(),
+                connection: crate::admission::backend_connection_fingerprint(
+                    &backend.backend_fields(),
+                ),
             },
         }
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct StoredUsage {
+pub struct UsageObservation {
     pub report: UsageReport,
     pub observed_at: Option<DateTime<Utc>>,
     pub read_at: Option<DateTime<Utc>>,
     pub read_error: Option<String>,
 }
 
-impl StoredUsage {
-    fn merge(self, other: StoredUsage) -> StoredUsage {
+impl UsageObservation {
+    fn merge(self, other: UsageObservation) -> UsageObservation {
         let (read_at, read_error) = if other.read_at > self.read_at {
             (other.read_at, other.read_error)
         } else {
             (self.read_at, self.read_error)
         };
         let report = self.report.merge(other.report);
-        StoredUsage {
+        UsageObservation {
             observed_at: report.observed_at(),
             report,
             read_at,
@@ -104,16 +104,16 @@ impl StoredUsage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageView {
     pub windows: Vec<WindowView>,
     pub plan: Option<String>,
-    pub note: Option<&'static str>,
+    pub note: Option<String>,
     pub read_at: Option<DateTime<Utc>>,
     pub read_error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowView {
     pub label: String,
     pub window_minutes: Option<i64>,
@@ -127,12 +127,12 @@ pub struct WindowView {
 }
 
 pub fn usage_view(
-    stored: Option<&StoredUsage>,
+    stored: Option<&UsageObservation>,
     kind: crate::BackendProviderKind,
     now: DateTime<Utc>,
 ) -> UsageView {
     use crate::BackendProviderKind as Kind;
-    let empty = StoredUsage::default();
+    let empty = UsageObservation::default();
     let stored = stored.unwrap_or(&empty);
     let visible = account_usage::visible_windows(&stored.report, now);
     let windows: Vec<_> = visible
@@ -163,18 +163,68 @@ pub fn usage_view(
     UsageView {
         windows,
         plan: stored.report.plan.as_ref().map(|plan| plan.name.clone()),
-        note,
+        note: note.map(str::to_owned),
         read_at: stored.read_at,
         read_error: stored.read_error.clone(),
     }
 }
 
-struct Target {
-    credential_doc_id: Option<String>,
+/// One cache belongs to one runtime and is shared with its clients and local views.
+/// Keys include the physical credential or the existing keyed connection fingerprint;
+/// a late response from a replaced sign-in or edited backend cannot populate its successor.
+#[derive(Debug, Default)]
+pub struct UsageCache {
+    endpoints: UsageEndpoints,
+    entries: tokio::sync::Mutex<rapidhash::RapidHashMap<CacheKey, UsageObservation>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CacheKey {
     node_did: String,
     provider: String,
-    key: String,
-    reference: Option<String>,
+    binding: String,
+}
+
+impl UsageCache {
+    pub fn with_endpoints(endpoints: UsageEndpoints) -> Self {
+        Self {
+            endpoints,
+            ..Default::default()
+        }
+    }
+
+    pub fn endpoints(&self) -> &UsageEndpoints {
+        &self.endpoints
+    }
+
+    async fn load(&self, target: &Target) -> Option<UsageObservation> {
+        self.entries.lock().await.get(&target.key).cloned()
+    }
+
+    async fn record(
+        &self,
+        target: &Target,
+        report: UsageReport,
+        read: Option<(DateTime<Utc>, Option<String>)>,
+    ) {
+        if report.is_empty() && read.is_none() {
+            return;
+        }
+        let observation = UsageObservation {
+            observed_at: report.observed_at(),
+            report,
+            read_at: read.as_ref().map(|(at, _)| *at),
+            read_error: read.and_then(|(_, error)| error),
+        };
+        let mut entries = self.entries.lock().await;
+        let previous = entries.remove(&target.key).unwrap_or_default();
+        entries.insert(target.key.clone(), previous.merge(observation));
+    }
+}
+
+struct Target {
+    credential_doc_id: Option<String>,
+    key: CacheKey,
     plan: Option<UsagePlan>,
 }
 
@@ -183,13 +233,15 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
         UsageAccount::Backend {
             node_did,
             provider,
-            backend_id,
+            connection,
+            ..
         } => Ok(Some(Target {
             credential_doc_id: None,
-            node_did: node_did.clone(),
-            provider: provider.clone(),
-            key: backend_id.clone(),
-            reference: None,
+            key: CacheKey {
+                node_did: node_did.clone(),
+                provider: provider.clone(),
+                binding: connection.clone(),
+            },
             plan: None,
         })),
         UsageAccount::Credential {
@@ -203,13 +255,7 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             else {
                 return Ok(None);
             };
-            credential_target(
-                node_did,
-                provider,
-                account_ref.as_deref(),
-                doc_id.as_deref(),
-                row,
-            )
+            credential_target(node_did, provider, doc_id.as_deref(), row)
         }
     }
 }
@@ -217,25 +263,20 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
 fn credential_target(
     node_did: &str,
     provider: &str,
-    account_ref: Option<&str>,
     doc_id: Option<&str>,
     row: OAuthCredential,
 ) -> Result<Option<Target>> {
     if doc_id.is_some_and(|expected| row.doc_id.as_deref() != Some(expected)) {
         return Ok(None);
     }
-    let reference = fallback_key(
-        account_ref,
-        row.doc_id.as_deref().context("sign-in without _docID")?,
-    );
+    let binding = row.doc_id.clone().context("sign-in without _docID")?;
     Ok(Some(Target {
         credential_doc_id: row.doc_id.clone(),
-        node_did: node_did.to_string(),
-        provider: provider.to_string(),
-        key: row
-            .provider_account_key
-            .unwrap_or_else(|| reference.clone()),
-        reference: Some(reference),
+        key: CacheKey {
+            node_did: node_did.to_string(),
+            provider: provider.to_string(),
+            binding,
+        },
         plan: row.chatgpt_plan_type.map(|name| UsagePlan {
             name,
             observed_at: row.last_refresh.unwrap_or_default(),
@@ -243,188 +284,41 @@ fn credential_target(
     }))
 }
 
-pub(crate) fn fallback_key(account_ref: Option<&str>, doc_id: &str) -> String {
-    format!("ref:{}:{doc_id}", account_ref.unwrap_or("original"))
-}
-
-/// Deletes `node_did`'s `provider` usage rows under `keys` in the caller's
-/// transaction, for an account's remove. Safe to race the runtime-only
-/// writer: a delete creates nothing, and a racing runtime write either
-/// lands before it (deleted) or after it (a row no enabled account
-/// resolves to).
-pub(crate) async fn delete_usage_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    provider: &str,
-    keys: &[String],
-) -> Result<()> {
-    let response = txn
-        .execute(&format!(
-            r#"mutation {{ delete_{COLLECTION}(filter: {{ node_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _in: {} }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(provider),
-            crate::graphql::graphql_string_list_literal(keys.iter().map(String::as_str)),
-        ))
-        .await?;
-    anyhow::ensure!(
-        response.get("errors").is_none_or(Value::is_null),
-        "deleting provider usage failed: {}",
-        response["errors"]
-    );
-    Ok(())
-}
-
-fn row_query(target: &Target, key: &str) -> String {
-    format!(
-        r#"{{ {COLLECTION}(filter: {{ node_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _eq: "{}" }} }}, limit: 1) {{ _docID report read_at read_error }} }}"#,
-        escape_graphql_string(&target.node_did),
-        escape_graphql_string(&target.provider),
-        escape_graphql_string(key),
-    )
-}
-
-fn stored_row(response: &Value) -> Result<Option<(String, StoredUsage)>> {
-    let Some(row) = response["data"][COLLECTION]
-        .as_array()
-        .and_then(|rows| rows.first())
-    else {
-        return Ok(None);
-    };
-    let doc_id = row["_docID"].as_str().context("usage row without _docID")?;
-    let report: UsageReport = serde_json::from_value(row["report"].clone()).unwrap_or_default();
-    let read_at = row["read_at"]
-        .as_str()
-        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
-        .map(|at| at.with_timezone(&Utc));
-    Ok(Some((
-        doc_id.to_string(),
-        StoredUsage {
-            observed_at: report.observed_at(),
-            report,
-            read_at,
-            read_error: row["read_error"].as_str().map(str::to_string),
-        },
-    )))
-}
-
-async fn load(access: &ConfigAccess, target: &Target) -> Result<Option<StoredUsage>> {
-    let mut keys = vec![target.key.as_str()];
-    keys.extend(target.reference.as_deref().filter(|key| *key != target.key));
-    let mut loaded: Option<StoredUsage> = None;
-    for key in keys {
-        let response = access.execute(&row_query(target, key)).await?;
-        let Some((_, stored)) = stored_row(&response)? else {
-            continue;
-        };
-        loaded = Some(match loaded {
-            Some(loaded) => loaded.merge(stored),
-            None => stored,
-        });
-    }
-    Ok(loaded.filter(|stored| !stored.report.is_empty() || stored.read_at.is_some()))
-}
-
 pub async fn load_usage(
+    cache: &UsageCache,
     access: &ConfigAccess,
     account: &UsageAccount,
-) -> Result<Option<StoredUsage>> {
+) -> Result<Option<UsageObservation>> {
     match target(access, account).await? {
-        Some(target) => load(access, &target).await,
+        Some(target) => Ok(cache.load(&target).await),
         None => Ok(None),
     }
 }
 
 pub async fn record_usage(
+    cache: &UsageCache,
     node: &Arc<EmbeddedNode>,
     account: &UsageAccount,
     report: UsageReport,
 ) -> Result<()> {
-    write(node, account, report, None).await
+    write(cache, node, account, report, None).await
 }
 
 async fn write(
+    cache: &UsageCache,
     node: &Arc<EmbeddedNode>,
     account: &UsageAccount,
     report: UsageReport,
     read: Option<(DateTime<Utc>, Option<String>)>,
 ) -> Result<()> {
-    if report.is_empty() && read.is_none() {
-        return Ok(());
+    if let Some(target) = target(&ConfigAccess::local(node.clone()), account).await? {
+        cache.record(&target, report, read).await;
     }
-    let access = ConfigAccess::local(node.clone());
-    access
-        .transact_write("usage_observation.record", |txn| {
-            let (report, read, access) = (report.clone(), read.clone(), &access);
-            Box::pin(async move {
-                let target = match account {
-                    UsageAccount::Credential { doc_id, node_did, provider, account_ref } => {
-                        let Some(row) = crate::oauth_credential::resolve_oauth_credential_in_txn(
-                            txn, node_did, provider, AccountPick::Reference(account_ref.as_deref()),
-                        ).await? else { return Ok(()); };
-                        credential_target(node_did, provider, account_ref.as_deref(), doc_id.as_deref(), row)?
-                    }
-                    UsageAccount::Backend { .. } => target(access, account).await?,
-                };
-                let Some(target) = target else { return Ok(()); };
-                let query = row_query(&target, &target.key);
-                let (doc_id, stored) = match stored_row(&txn.execute(&query).await?)? {
-                    Some((doc_id, stored)) => (Some(doc_id), stored),
-                    None => (None, StoredUsage::default()),
-                };
-                let merged = stored.report.clone().merge(report.clone());
-                let recent = report
-                    .observed_at()
-                    .zip(stored.observed_at)
-                    .is_some_and(|(new, old)| new - old < REWRITE_AFTER);
-                if read.is_none() && recent && merged.same_values(&stored.report) {
-                    return Ok(());
-                }
-                let mut input = json!({ "report": merged });
-                if let Some(observed_at) = merged.observed_at() {
-                    input["observed_at"] = json!(observed_at);
-                }
-                if let Some((read_at, read_error)) = read
-                    .filter(|(read_at, _)| stored.read_at.is_none_or(|stored_at| *read_at >= stored_at))
-                {
-                    input["read_at"] = json!(read_at);
-                    input["read_error"] = json!(read_error);
-                }
-                let response = match doc_id {
-                    Some(doc_id) => {
-                        txn.execute_with_variables(
-                            &format!(
-                                r#"mutation($input: {COLLECTION}MutationInputArg!) {{ update_{COLLECTION}(docID: "{}", input: $input) {{ _docID }} }}"#,
-                                escape_graphql_string(&doc_id)
-                            ),
-                            &json!({ "input": input }),
-                        )
-                        .await?
-                    }
-                    None => {
-                        input["node_did"] = json!(target.node_did);
-                        input["provider"] = json!(target.provider);
-                        input["usage_key"] = json!(target.key);
-                        txn.execute_with_variables(
-                            &format!(
-                                "mutation($input: {COLLECTION}MutationInputArg!) {{ create_{COLLECTION}(input: $input) {{ _docID }} }}"
-                            ),
-                            &json!({ "input": input }),
-                        )
-                        .await?
-                    }
-                };
-                anyhow::ensure!(
-                    response.get("errors").is_none_or(Value::is_null),
-                    "writing provider usage failed: {}",
-                    response["errors"]
-                );
-                Ok(())
-            })
-        })
-        .await
+    Ok(())
 }
 
 pub struct UsageReporter {
+    cache: Arc<UsageCache>,
     node: Arc<EmbeddedNode>,
     pub(crate) account: UsageAccount,
 }
@@ -436,13 +330,19 @@ impl std::fmt::Debug for UsageReporter {
 }
 
 impl UsageReporter {
-    pub(crate) fn new(node: Arc<EmbeddedNode>, account: UsageAccount) -> Arc<Self> {
-        Arc::new(Self { node, account })
+    pub(crate) fn new(
+        cache: Arc<UsageCache>,
+        node: Arc<EmbeddedNode>,
+        account: UsageAccount,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            cache,
+            node,
+            account,
+        })
     }
 
-    /// Parses now and writes in its own task, so a response never waits on
-    /// the node's write gate. The spawned task does not inherit the caller's
-    /// transaction (a task-local), so the write is never nested in it.
+    /// The response never waits on credential resolution; cache writes cannot affect admission.
     pub(crate) fn observe(self: &Arc<Self>, headers: &HeaderMap, source: UsageSource) {
         let headers = headers
             .iter()
@@ -453,7 +353,9 @@ impl UsageReporter {
         }
         let reporter = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = record_usage(&reporter.node, &reporter.account, report).await {
+            if let Err(error) =
+                record_usage(&reporter.cache, &reporter.node, &reporter.account, report).await
+            {
                 tracing::warn!(error = %error, "recording provider usage failed");
             }
         });
@@ -463,6 +365,7 @@ impl UsageReporter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageTrigger {
+    Cached,
     Open,
     Refresh,
 }
@@ -499,7 +402,16 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 type UsageParser = fn(&Value, DateTime<Utc>) -> Option<UsageReport>;
 
+fn should_read(trigger: UsageTrigger, now: DateTime<Utc>, previous: Option<DateTime<Utc>>) -> bool {
+    match trigger {
+        UsageTrigger::Cached => false,
+        UsageTrigger::Refresh => true,
+        UsageTrigger::Open => previous.is_none_or(|previous| now - previous >= READ_SKIP_WINDOW),
+    }
+}
+
 pub async fn read_account_usage(
+    cache: &UsageCache,
     node: Arc<EmbeddedNode>,
     node_did: &str,
     backend: &InferenceBackend,
@@ -530,12 +442,8 @@ pub async fn read_account_usage(
     if let UsageAccount::Credential { doc_id, .. } = &mut account {
         *doc_id = target.credential_doc_id.clone();
     }
-    let last_read = load(&access, &target)
-        .await?
-        .and_then(|stored| stored.read_at);
-    if trigger == UsageTrigger::Open
-        && last_read.is_some_and(|read_at| now - read_at < READ_SKIP_WINDOW)
-    {
+    let last_read = cache.load(&target).await.and_then(|stored| stored.read_at);
+    if !should_read(trigger, now, last_read) {
         return Ok(UsageRead::SkippedRecent);
     }
 
@@ -609,11 +517,12 @@ pub async fn read_account_usage(
     };
     match outcome {
         Ok(report) => {
-            write(&node, &account, report, Some((now, None))).await?;
+            write(cache, &node, &account, report, Some((now, None))).await?;
             Ok(UsageRead::Read)
         }
         Err(error) => {
             write(
+                cache,
                 &node,
                 &account,
                 UsageReport::default(),
@@ -625,15 +534,33 @@ pub async fn read_account_usage(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountUsageRead {
+    pub label: String,
     pub provider: String,
     pub account_ref: Option<String>,
     pub backend_id: Option<String>,
     pub outcome: UsageRead,
+    pub usage: Option<UsageView>,
+}
+
+impl AccountUsageRead {
+    pub fn matches_backend(&self, backend: &InferenceBackend) -> bool {
+        match &self.backend_id {
+            Some(id) => *id == backend.backend_id,
+            None => backend
+                .provider_kind
+                .oauth_provider()
+                .is_some_and(|provider| {
+                    provider == self.provider
+                        && backend.auth.oauth_account_ref() == self.account_ref.as_deref()
+                }),
+        }
+    }
 }
 
 pub async fn read_node_usage(
+    cache: &UsageCache,
     node: Arc<EmbeddedNode>,
     node_did: &str,
     trigger: UsageTrigger,
@@ -665,13 +592,20 @@ pub async fn read_node_usage(
                     }
                     (account_entry(account), account.enabled)
                 }
-                None if provider.is_some() => continue,
+                None if provider.is_some_and(|provider| {
+                    !provider.eq_ignore_ascii_case(backend.provider_kind.as_str())
+                }) =>
+                {
+                    continue
+                }
                 None => {
                     let entry = AccountUsageRead {
+                        label: backend.name.clone(),
                         provider: backend.provider_kind.as_str().to_string(),
                         account_ref: None,
                         backend_id: Some(backend.backend_id.clone()),
                         outcome: UsageRead::Disabled,
+                        usage: None,
                     };
                     (entry, true)
                 }
@@ -698,10 +632,26 @@ pub async fn read_node_usage(
             if !account_enabled {
                 return entry;
             }
-            let outcome = read_account_usage(node, node_did, &backend, trigger, endpoints, now)
+            let outcome = read_account_usage(
+                cache,
+                node.clone(),
+                node_did,
+                &backend,
+                trigger,
+                endpoints,
+                now,
+            )
+            .await
+            .unwrap_or_else(|_| unavailable("account unavailable"));
+            let stored = usage_for_backend(cache, &ConfigAccess::local(node), node_did, &backend)
                 .await
-                .unwrap_or_else(|_| unavailable("store error"));
-            AccountUsageRead { outcome, ..entry }
+                .ok()
+                .flatten();
+            AccountUsageRead {
+                outcome,
+                usage: Some(usage_view(stored.as_ref(), backend.provider_kind, now)),
+                ..entry
+            }
         }
     });
     Ok(futures::future::join_all(reads).await)
@@ -709,10 +659,12 @@ pub async fn read_node_usage(
 
 fn account_entry(account: &crate::oauth_credential::AccountSummary) -> AccountUsageRead {
     AccountUsageRead {
+        label: account.label.clone(),
         provider: account.provider.clone(),
         account_ref: account.account_ref.clone(),
         backend_id: None,
         outcome: UsageRead::Disabled,
+        usage: None,
     }
 }
 
@@ -729,20 +681,73 @@ fn codex_usage_url(endpoint: &str) -> String {
 }
 
 pub async fn usage_for_backend(
+    cache: &UsageCache,
     access: &ConfigAccess,
     node_did: &str,
     backend: &InferenceBackend,
-) -> Result<Option<StoredUsage>> {
+) -> Result<Option<UsageObservation>> {
     let account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(access, &account).await? else {
         return Ok(None);
     };
-    let mut stored = load(access, &target).await?;
+    let mut stored = cache.load(&target).await;
     if let Some(plan) = target.plan {
-        let stored = stored.get_or_insert_with(StoredUsage::default);
+        let stored = stored.get_or_insert_with(UsageObservation::default);
         stored.report.plan.get_or_insert(plan);
     }
     Ok(stored)
+}
+
+pub(crate) struct ProviderLimitsTool {
+    pub node: Arc<EmbeddedNode>,
+    pub node_did: String,
+    pub cache: Arc<UsageCache>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProviderLimitsArgs {}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct ProviderLimitsError(#[from] anyhow::Error);
+
+impl crate::llm::tool::Tool for ProviderLimitsTool {
+    const NAME: &'static str = "provider_limits";
+    type Error = ProviderLimitsError;
+    type Args = ProviderLimitsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> crate::llm::tool::ToolDefinition {
+        crate::llm::tool::ToolDefinition {
+            name: Self::NAME.into(),
+            description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account.".into(),
+            parameters: serde_json::json!({"type":"object", "properties":{}, "additionalProperties":false}),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<String, Self::Error> {
+        let reads = read_node_usage(
+            &self.cache,
+            self.node.clone(),
+            &self.node_did,
+            UsageTrigger::Open,
+            None,
+            self.cache.endpoints(),
+            Utc::now(),
+        )
+        .await?;
+        let accounts: Vec<_> = reads
+            .into_iter()
+            .map(|read| {
+                serde_json::json!({
+                    "label": read.label, "provider": read.provider, "limits": read.usage, "read": read.outcome,
+                })
+            })
+            .collect();
+        serde_json::to_string(&serde_json::json!({"accounts": accounts}))
+            .map_err(|error| ProviderLimitsError(error.into()))
+    }
 }
 
 #[cfg(test)]

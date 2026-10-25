@@ -316,7 +316,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             what: "an inference endpoint and its model catalog (backend grant).",
             commands: &[
                 "backend list",
-                "backend accounts  each account and account-free backend: state, profiles using it, last stored usage; read-only",
+                "backend accounts  each account and account-free backend: state, profiles using it, current limits; read-only, contacts usage endpoints when due",
                 "backend [preview] create BACKEND_ID  options: endpoint; optional name, wire-api (chat_completions|responses)",
                 "backend discover BACKEND_ID",
                 "backend get [BACKEND_ID]",

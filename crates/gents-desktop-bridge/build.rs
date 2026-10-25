@@ -110,6 +110,8 @@ const COMMANDS: &[&str] = &[
     "desktop_provider_account_rename",
     "desktop_provider_account_remove",
     "desktop_provider_usage_read",
+    "desktop_provider_recovery_plan",
+    "desktop_provider_recovery_apply",
     "desktop_task_save",
     "desktop_schedule_save",
     "desktop_schedule_run",

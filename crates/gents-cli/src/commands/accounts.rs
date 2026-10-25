@@ -4,9 +4,7 @@ use anyhow::{Context, Result};
 use gents::backend_provider::BackendProviderOauthExt;
 use gents::document_config::InferenceProfile;
 use gents::oauth_credential::{backend_account, AccountSummary};
-use gents::usage_observation::{
-    load_usage, usage_view, AccountUsageRead, UsageAccount, UsageRead, UsageTrigger, UsageView,
-};
+use gents::usage_observation::{usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView};
 use gents::{BackendProviderKind, InferenceBackend};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -68,6 +66,7 @@ impl UsageReadCommand {
 
     pub(crate) fn signing_payload(&self) -> Vec<u8> {
         let trigger = match self.trigger {
+            UsageTrigger::Cached => "cached",
             UsageTrigger::Open => "open",
             UsageTrigger::Refresh => "refresh",
         };
@@ -100,7 +99,7 @@ impl UsageReadCommand {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct UsageReads {
     pub node_did: String,
     pub reads: Vec<AccountUsageRead>,
@@ -293,19 +292,6 @@ fn provider_kind_name(backend: &InferenceBackend) -> String {
         .unwrap_or_default()
 }
 
-async fn stored_view(
-    access: &ConfigAccess,
-    account: &UsageAccount,
-    kind: BackendProviderKind,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<UsageView> {
-    Ok(usage_view(
-        load_usage(access, account).await?.as_ref(),
-        kind,
-        now,
-    ))
-}
-
 pub(crate) async fn account_rows(
     access: &ConfigAccess,
     node_did: &str,
@@ -322,18 +308,9 @@ pub(crate) async fn account_rows(
         let kind = BackendProviderKind::ALL
             .into_iter()
             .find(|kind| kind.oauth_provider() == Some(account.provider.as_str()));
-        let usage = match kind {
-            Some(kind) if account.enabled => {
-                let usage_account = UsageAccount::Credential {
-                    doc_id: None,
-                    node_did: node_did.to_owned(),
-                    provider: account.provider.clone(),
-                    account_ref: account.account_ref.clone(),
-                };
-                Some(stored_view(access, &usage_account, kind, now).await?)
-            }
-            _ => None,
-        };
+        let usage = kind
+            .filter(|_| account.enabled)
+            .map(|kind| usage_view(None, kind, now));
         rows.push(AccountRow {
             provider: account.provider.clone(),
             label: account.label.clone(),
@@ -365,12 +342,7 @@ pub(crate) async fn account_rows(
             None => "disabled",
         };
         let usage = if status == "enabled" {
-            let usage_account = UsageAccount::Backend {
-                node_did: node_did.to_owned(),
-                provider: backend.provider_kind.as_str().to_owned(),
-                backend_id: backend.backend_id.clone(),
-            };
-            Some(stored_view(access, &usage_account, backend.provider_kind, now).await?)
+            Some(usage_view(None, backend.provider_kind, now))
         } else {
             None
         };
@@ -442,6 +414,7 @@ pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did
         });
         if let Some(row) = row {
             row.read = Some(read.outcome.clone());
+            row.usage = read.usage.clone();
         }
     }
 }
@@ -518,7 +491,7 @@ fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
     if usage.windows.is_empty() {
         return vec![[
             dash(),
-            usage.note.unwrap_or("unknown").to_owned(),
+            usage.note.as_deref().unwrap_or("unknown").to_owned(),
             dash(),
             reason.unwrap_or_else(dash),
             dash(),

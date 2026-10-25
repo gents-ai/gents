@@ -7,7 +7,6 @@ use crate::provider_limit::{epoch_seconds, parse_rfc3339};
 pub const STALE_AFTER: Duration = Duration::minutes(15);
 pub const LAST_KNOWN_FOR: Duration = Duration::minutes(60);
 pub const READ_SKIP_WINDOW: Duration = Duration::minutes(5);
-pub const REWRITE_AFTER: Duration = Duration::seconds(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -135,6 +134,10 @@ pub fn visible_windows(report: &UsageReport, now: DateTime<Utc>) -> Vec<(&UsageW
         .collect()
 }
 
+/// Anthropic API-key bucket reset headers are RFC 3339 timestamps
+/// (<https://platform.claude.com/docs/en/api/rate-limits>); OpenRouter's
+/// unqualified X-RateLimit-Reset is epoch milliseconds
+/// (<https://openrouter.ai/docs/api_reference/limits>).
 pub fn usage_from_headers<'a>(
     headers: impl IntoIterator<Item = (&'a str, &'a str)>,
     source: UsageSource,
@@ -224,6 +227,37 @@ pub fn usage_from_headers<'a>(
         report
             .windows
             .push(window(kind.to_string(), used, None, reset));
+    }
+
+    for kind in ["requests", "tokens", "input-tokens", "output-tokens"] {
+        let number = |suffix: &str| {
+            get(&format!("anthropic-ratelimit-{kind}-{suffix}"))
+                .and_then(|value| value.parse::<f64>().ok())
+        };
+        if let (Some(limit), Some(remaining)) = (number("limit"), number("remaining")) {
+            if limit > 0.0 {
+                if let Some(used) = percent((limit - remaining) / limit * 100.0) {
+                    let reset =
+                        get(&format!("anthropic-ratelimit-{kind}-reset")).and_then(parse_rfc3339);
+                    report.windows.push(window(kind.into(), used, None, reset));
+                }
+            }
+        }
+    }
+    if let (Some(limit), Some(remaining)) = (
+        get("x-ratelimit-limit").and_then(|value| value.parse::<f64>().ok()),
+        get("x-ratelimit-remaining").and_then(|value| value.parse::<f64>().ok()),
+    ) {
+        if limit > 0.0 {
+            if let Some(used) = percent((limit - remaining) / limit * 100.0) {
+                let reset = get("x-ratelimit-reset")
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .and_then(DateTime::from_timestamp_millis);
+                report
+                    .windows
+                    .push(window("requests".into(), used, None, reset));
+            }
+        }
     }
     report
 }

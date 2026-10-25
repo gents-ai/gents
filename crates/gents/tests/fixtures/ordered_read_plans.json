@@ -121,7 +121,7 @@
     "read": {
       "path": "crates/gents-cli/src/http/prometheus.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { call_kind: { _eq: \"inference\" }, call_state: { _in: [\"completed\", \"failed\", \"cancelled\"] }, ended_at: { _ge: \"$GENTS_ended_after$\" } }, order: [{ ended_at: DESC }, { call_id: DESC }], limit: $GENTS_limit$, offset: $GENTS_offset$"
+      "arguments": "filter: { call_kind: { _in: [\"inference\", \"compaction\", \"scheduled\", \"oneoff\"] }, call_state: { _in: [\"completed\", \"failed\", \"cancelled\"] }, ended_at: { _ge: \"$GENTS_ended_after$\" } }, order: [{ ended_at: DESC }, { call_id: DESC }], limit: $GENTS_limit$, offset: $GENTS_offset$"
     },
     "bindings": [
       {
@@ -395,11 +395,12 @@
     "read": {
       "path": "crates/gents/src/blocked_turn.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { request_id: { _eq: \"$GENTS_request_id$\" }, call_state: { _eq: \"failed\" } }, order: [{ ended_at: DESC }, { attempt: DESC }], limit: 1"
+      "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" }, request_id: { _eq: \"$GENTS_request_id$\" }, call_state: { _eq: \"failed\" } }, order: [{ ended_at: DESC }, { attempt: DESC }], limit: 1"
     },
     "bindings": [
       {
-        "request_id": "probe"
+        "request_id": "probe",
+        "node_did": "probe"
       }
     ]
   },
