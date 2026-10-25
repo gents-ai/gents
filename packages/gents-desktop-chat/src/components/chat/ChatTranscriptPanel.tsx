@@ -147,7 +147,8 @@ export function ChatTranscriptPanel({
         (item.kind === "pendingUserTurn" &&
           item.requestId === optimisticPendingTurn.requestId) ||
         (item.kind === "userMessage" &&
-          item.requestId === optimisticPendingTurn.requestId),
+          (item.inputRequestId ?? (item.ownsTurn ? item.requestId : null)) ===
+            optimisticPendingTurn.requestId),
     );
     if (hasOwner) {
       return durable;
