@@ -165,6 +165,11 @@ async fn a_routine_decision_cannot_be_carried_to_another_workspace() {
 #[tokio::test]
 async fn unavailable_review_uses_the_same_question_for_human_consent() {
     let fixture = Fixture::new();
+    let listener_home = fixture.home.clone();
+    tokio::task::spawn_blocking(move || approval::mark_listening(&listener_home))
+        .await
+        .unwrap()
+        .unwrap();
     let observed = Arc::new(Mutex::new(None));
     let reviewer: Reviewer = Arc::new({
         let observed = observed.clone();
@@ -180,7 +185,8 @@ async fn unavailable_review_uses_the_same_question_for_human_consent() {
             true,
             None,
         ));
-        assert!(futures::poll!(consent.as_mut()).is_pending());
+        let observed_consent = futures::poll!(consent.as_mut());
+        assert!(observed_consent.is_pending(), "{observed_consent:?}");
         let questions = approval::pending(&fixture.home).unwrap();
         assert_eq!(questions.len(), 1);
         assert_eq!(Some(&questions[0].id), observed.lock().unwrap().as_ref());
