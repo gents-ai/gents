@@ -94,7 +94,6 @@ pub(crate) async fn next_request_sequence(node: &EmbeddedNode, request_doc_id: &
 /// Seed one physical tool row through a matching canonical ToolCall admission
 /// and, for terminal lifecycle states, one exact ToolDelivery observation.
 #[allow(clippy::too_many_arguments)]
-
 pub(crate) async fn seed_canonical_tool_call(
     node: &Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequestRow,
@@ -368,7 +367,6 @@ pub(crate) async fn seed_canonical_tool_call(
 
 /// Publish the background receipt an accepted background row carries before
 /// its terminal, in the shape `publish_background_receipt_in_txn` writes.
-
 pub(crate) async fn seed_background_receipt(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
@@ -446,9 +444,6 @@ pub(crate) async fn seed_background_receipt(
     )
     .await;
 }
-
-/// Complete an already-admitted ordinary tool through its canonical output
-/// and ToolDelivery owners, then publish the terminal lifecycle marker.
 
 pub(crate) async fn seed_job_row(
     node: &Arc<EmbeddedNode>,
@@ -551,7 +546,6 @@ pub(crate) async fn seed_job_row(
 /// A pending `local-self` request authored through the production request
 /// builder and signed by `node_did`'s registered identity, so readers that
 /// verify the owning request's admission accept the rows seeded under it.
-
 async fn seed_signed_request(
     node: &EmbeddedNode,
     node_did: &str,

@@ -258,6 +258,8 @@ pub(super) async fn seed_canonical_assistant_message(
         .to_string()
 }
 
+/// Complete an already-admitted ordinary tool through its canonical output
+/// and ToolDelivery owners, then publish the terminal lifecycle marker.
 pub(super) async fn complete_canonical_tool_call(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
