@@ -60,6 +60,8 @@ export function createBridgeHttpAdapter(
     fetchSessionGoal: unsupported("fetchSessionGoal"),
     steerPendingMessage: unsupported("steerPendingMessage"),
     controlGoal: unsupported("controlGoal"),
+    recoverChatSubmission: unsupported("recoverChatSubmission"),
+    acknowledgeChatSubmission: unsupported("acknowledgeChatSubmission"),
     explainToolSurface: unsupported("explainToolSurface"),
     fetchNetworkStatus: unsupported("fetchNetworkStatus"),
     listMailbox: unsupported("listMailbox"),

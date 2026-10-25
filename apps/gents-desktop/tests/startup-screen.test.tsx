@@ -41,6 +41,7 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
     },
     client: running
       ? {
+          clientDid: "did:key:startup-fixture",
           localPeerId: "local-peer",
           listenAddresses: ["127.0.0.1:9191"],
           p2pHealth: {

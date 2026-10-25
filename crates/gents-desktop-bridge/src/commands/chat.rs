@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
@@ -84,6 +84,22 @@ pub async fn send_chat_message(
     if node_did.is_empty() {
         bail!("node_did is required");
     }
+    let caller_intent = super::chat_submission::intent(core, &request)?;
+    if let Some(intent) = caller_intent.as_ref() {
+        match core.recover_caller_submission(intent).await {
+            Ok(None) => {}
+            recovered => {
+                return super::chat_submission::sent(
+                    core,
+                    intent,
+                    recovered.and_then(|receipt| {
+                        receipt.context("retained submission reply omitted its result")
+                    }),
+                )
+                .await;
+            }
+        }
+    }
     if let Some(request_id) = super::chat_resolve::resolve_target(&request) {
         return super::chat_resolve::resolve_chat_submission(core, &node_did, &request, request_id)
             .await;
@@ -152,6 +168,7 @@ pub async fn send_chat_message(
             &content,
             agent_id.as_deref(),
             SubmitRequestOptions {
+                caller_intent: caller_intent.clone(),
                 caused_by_source_doc_id: request.caused_by_source_doc_id,
                 input,
                 ..SubmitRequestOptions::default()
@@ -159,7 +176,10 @@ pub async fn send_chat_message(
         )
         .await;
 
-    super::chat_resolve::sent(submitted)
+    match caller_intent.as_ref() {
+        Some(intent) => super::chat_submission::sent(core, intent, submitted).await,
+        None => super::chat_resolve::sent(submitted),
+    }
 }
 
 pub async fn retry_request(
@@ -187,12 +207,82 @@ pub async fn fork_session_before_message(
     request: crate::types::SessionForkBeforeRequest,
 ) -> Result<crate::types::SessionForkResult> {
     let outcome = core
-        .fork_session_before_message(&request.node_did, &request.session_id, &request.message_key)
+        .fork_session_before_message(
+            &request.node_did,
+            &request.session_id,
+            &request.message_key,
+            &request.client_did,
+            &request.child_session_id,
+        )
         .await?;
     Ok(crate::types::SessionForkResult {
         node_did: request.node_did.trim().to_owned(),
-        session_id: outcome.session_id,
+        session_id: outcome,
     })
+}
+
+#[cfg(test)]
+mod edit_fork_tests {
+    use super::*;
+    use gents::config_client::ConfigAccess;
+
+    #[test]
+    fn fork_wire_requires_the_retained_client_and_destination() {
+        let mut request = serde_json::json!({ "nodeDid": "node", "sessionId": "source", "messageKey": "canonical-message" });
+        assert!(
+            serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request.clone())
+                .is_err()
+        );
+        request["clientDid"] = "client".into();
+        assert!(
+            serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request.clone())
+                .is_err()
+        );
+        request["childSessionId"] = "child".into();
+        let decoded =
+            serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request).unwrap();
+        assert_eq!(decoded.child_session_id, "child");
+        assert_eq!(decoded.client_did, "client");
+    }
+
+    #[tokio::test]
+    async fn fork_refuses_foreign_clients_and_changed_destination_bytes_before_routing(
+    ) -> Result<()> {
+        let (core, _home) = crate::tests::support::boot_core().await;
+        let result = async {
+            let mut request = crate::types::SessionForkBeforeRequest {
+                node_did: "unrouted-node".into(),
+                session_id: "source".into(),
+                message_key: "message".into(),
+                client_did: "foreign-client".into(),
+                child_session_id: "child".into(),
+            };
+            let error = fork_session_before_message(&core, request.clone())
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("another native client"),
+                "{error}"
+            );
+            request.client_did = core.node_identity().did().to_owned();
+            request.child_session_id = " child ".into();
+            let error = fork_session_before_message(&core, request)
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("exact canonical identity"),
+                "{error}"
+            );
+            let sessions = ConfigAccess::local(core.node_arc())
+                .execute("{ AgentSession { session_id } }")
+                .await?;
+            assert_eq!(sessions["data"]["AgentSession"], serde_json::json!([]));
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        core.shutdown().await?;
+        result
+    }
 }
 
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {

@@ -55,6 +55,8 @@ identifier = "chat-write"
 description = "Chat submission, branching, and rename"
 permissions = [
   "allow-desktop-chat-send",
+  "allow-desktop-chat-submission-recover",
+  "allow-desktop-chat-submission-acknowledge",
   "allow-desktop-pending-queue-edit",
   "allow-desktop-pending-message-steer",
   "allow-desktop-goal-control",

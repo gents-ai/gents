@@ -538,7 +538,14 @@ async fn open_or_create_client_store_key(
             let record =
                 StoreEncryption::prepare(choice, paths.store_key_path(), paths.node_data_dir())?;
             write_client_store_record(paths, &record)?;
-            record
+            return match &options.store_key_provider {
+                Some(provider) => {
+                    provider
+                        .create(&record, paths.store_key_path(), paths.node_data_dir())
+                        .await
+                }
+                None => record.initialize(paths.store_key_path(), paths.node_data_dir()),
+            };
         }
     };
     client_store_key(
@@ -583,6 +590,66 @@ fn write_client_store_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct RecordingKeyProvider {
+        created: std::sync::atomic::AtomicUsize,
+        loaded: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl super::super::ClientStoreKeyProvider for RecordingKeyProvider {
+        async fn create(
+            &self,
+            record: &gents::store_key::StoreEncryption,
+            key_file: &std::path::Path,
+            data_path: &std::path::Path,
+        ) -> Result<gents::store_key::StoreKey> {
+            self.created
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            record.initialize(key_file, data_path)
+        }
+        async fn load(
+            &self,
+            record: &gents::store_key::StoreEncryption,
+            key_file: &std::path::Path,
+            data_path: &std::path::Path,
+        ) -> Result<gents::store_key::StoreKey> {
+            self.loaded
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            record.initialize(key_file, data_path)
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_new_store_uses_credential_creation_and_reopening_uses_retained_custody() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path().join("client"));
+        paths.ensure_root_dirs().await.unwrap();
+        let _lock = gents::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+        let provider = Arc::new(RecordingKeyProvider::default());
+        let options = ClientCoreOptions {
+            store_key_provider: Some(provider.clone()),
+            ..ClientCoreOptions::local_only()
+        };
+        let first = open_or_create_client_store_key(&paths, &options, &mut |_| {})
+            .await
+            .unwrap();
+        let metadata = std::fs::read(paths.store_encryption_path()).unwrap();
+        let reopened = open_or_create_client_store_key(&paths, &options, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(
+            provider.created.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(provider.loaded.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read(paths.store_encryption_path()).unwrap(),
+            metadata
+        );
+        first.with_secret(|left| reopened.with_secret(|right| assert!(left == right)));
+    }
 
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {

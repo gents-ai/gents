@@ -103,6 +103,9 @@ export type {
 } from "./types/requests.js";
 export type {
   ChatSendResult,
+  ChatSubmissionReceipt,
+  ChatSubmissionRecovery,
+  ChatSubmissionQuery,
   CommandDenialView,
   DesktopSessionSnapshot,
   SessionHydrationView,

@@ -69,10 +69,10 @@ async fn serve_inventory(
         return store.commit_inventory(row, &prior).await;
     }
     let admission = store.inventory_admission(demand).await?;
-    if matches!(
-        decide_hydration(&demand.admission.request, &admission.catalog),
-        HydrationVerdict::Reject(_)
-    ) {
+    if let HydrationVerdict::Reject(reason) =
+        decide_hydration(&demand.admission.request, &admission.catalog)
+    {
+        tracing::debug!(request_key = %row.request_key, attempt_id = %demand.attempt_id, ?demand.cursor, reason, "file inventory admission refused");
         return store
             .commit_inventory(
                 row,
@@ -89,7 +89,7 @@ async fn serve_inventory(
             let snapshot = match FileInventorySnapshot::load(&store.node, &demand.admission).await {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    tracing::warn!(%error, "file inventory snapshot is unavailable");
+                    tracing::warn!(%error, attempt_id = %demand.attempt_id, ?demand.cursor, "file inventory snapshot is unavailable");
                     return store
                         .commit_inventory(
                             row,
@@ -118,7 +118,7 @@ async fn serve_inventory(
             {
                 Ok(signed) => signed,
                 Err(error) => {
-                    tracing::warn!(%error, "file inventory issuance did not retain authority");
+                    tracing::warn!(%error, attempt_id = %demand.attempt_id, ?demand.cursor, "file inventory issuance did not retain authority");
                     return store
                         .commit_inventory(
                             row,
@@ -176,11 +176,22 @@ impl GraphqlHydrationStore {
         fence: &EnrollmentAuthorizationFence,
     ) -> Result<bool> {
         let current = self.inventory_admission(demand).await?;
-        Ok(current.authorization.as_ref() == Some(fence)
-            && matches!(
-                decide_hydration(&demand.admission.request, &current.catalog),
-                HydrationVerdict::Admit(_)
-            ))
+        let verdict = decide_hydration(&demand.admission.request, &current.catalog);
+        let same_authorization = current.authorization.as_ref() == Some(fence);
+        let authorized = same_authorization && matches!(verdict, HydrationVerdict::Admit(_));
+        if !authorized {
+            tracing::debug!(
+                attempt_id = %demand.attempt_id,
+                same_authorization,
+                before_sequence = fence.authorization_sequence,
+                after_sequence = ?current.authorization.as_ref().map(|value| value.authorization_sequence),
+                same_enrollment = current.authorization.as_ref().is_some_and(|value| value.request_id == fence.request_id),
+                same_peer_binding = current.authorization.as_ref().is_some_and(|value| value.member_peer == fence.member_peer && value.member_ticket == fence.member_ticket),
+                ?verdict,
+                "file inventory authorization changed"
+            );
+        }
+        Ok(authorized)
     }
 
     async fn commit_inventory(

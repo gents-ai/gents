@@ -635,6 +635,8 @@ mod tests {
             fixture.desktop_core().as_ref(),
             ChatSendRequest {
                 node_did: node_did.clone(),
+                client_did: None,
+                request_id: None,
                 agent_id: Some(agent_id.clone()),
                 session_id: None,
                 content: HELD_PROMPT.to_string(),
@@ -677,6 +679,8 @@ mod tests {
             fixture.desktop_core().as_ref(),
             ChatSendRequest {
                 node_did: node_did.clone(),
+                client_did: None,
+                request_id: None,
                 agent_id: Some(agent_id.clone()),
                 session_id: Some(initial.session_id.clone()),
                 content: format!("/{skill_id}\n{task}"),

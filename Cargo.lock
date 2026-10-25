@@ -4823,6 +4823,7 @@ dependencies = [
  "futures",
  "futures-util",
  "gents",
+ "gents-cli",
  "gents-desktop-bridge",
  "gents-desktop-core",
  "gents-protocol",

@@ -1,5 +1,6 @@
 #![cfg(target_os = "macos")]
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -13,9 +14,9 @@ use tokio::process::Command;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 #[tokio::test]
-async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
+async fn a_retained_editor_cache_miss_stops_before_identity_or_store_startup() {
     let directory = tempfile::tempdir().unwrap();
-    let paths = DesktopPaths::from_root(directory.path().join("editor client"));
+    let paths = retained_history(directory.path().join("editor client")).await;
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
@@ -121,7 +122,7 @@ async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
 #[tokio::test]
 async fn terminating_an_editor_attachment_releases_its_unready_installation() {
     let directory = tempfile::tempdir().unwrap();
-    let paths = DesktopPaths::from_root(directory.path().join("cancelled editor"));
+    let paths = retained_history(directory.path().join("cancelled editor")).await;
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
@@ -177,7 +178,7 @@ async fn closing_editor_input_releases_an_unready_installation() {
     use tokio::io::AsyncReadExt;
 
     let directory = tempfile::tempdir().unwrap();
-    let paths = DesktopPaths::from_root(directory.path().join("closed editor"));
+    let paths = retained_history(directory.path().join("closed editor")).await;
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
@@ -231,4 +232,24 @@ async fn closing_editor_input_releases_an_unready_installation() {
     .expect("input EOF retained the client store lock");
     assert!(!paths.identity_key_path().exists());
     assert!(!paths.node_data_dir().join("MANIFEST").exists());
+}
+
+async fn retained_history(root: PathBuf) -> DesktopPaths {
+    let paths = DesktopPaths::from_root(root);
+    paths.ensure_root_dirs().await.unwrap();
+    {
+        let _store = gents::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+        let record = gents::store_key::StoreEncryption::prepare(
+            gents::store_key::StoreKeyCustodyChoice::Keychain,
+            paths.store_key_path(),
+            paths.node_data_dir(),
+        )
+        .unwrap();
+        std::fs::write(
+            paths.store_encryption_path(),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+    }
+    paths
 }

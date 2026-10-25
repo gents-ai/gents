@@ -420,6 +420,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_edit_anchors_select_exact_canonical_user_messages",
         },
         ConformanceConsumer::RustTest {
+            id: "session::fork::tests::generated_edit_fork_bindings_control_destination_reuse",
+            package: "gents",
+            source_path: "crates/gents/src/session/fork.rs",
+            module_path: "session::fork::tests",
+            function: "generated_edit_fork_bindings_control_destination_reuse",
+        },
+        ConformanceConsumer::RustTest {
             id: "completion_factory::tests::generated_service_tier_cases_drive_loop_config",
             package: "gents",
             source_path: "crates/gents/src/completion_factory/tests.rs",

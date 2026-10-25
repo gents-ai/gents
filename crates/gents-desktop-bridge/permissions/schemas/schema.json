@@ -439,6 +439,30 @@
           "markdownDescription": "Denies the desktop_chat_send command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_chat_submission_acknowledge command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-chat-submission-acknowledge",
+          "markdownDescription": "Enables the desktop_chat_submission_acknowledge command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_chat_submission_acknowledge command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-chat-submission-acknowledge",
+          "markdownDescription": "Denies the desktop_chat_submission_acknowledge command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_chat_submission_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-chat-submission-recover",
+          "markdownDescription": "Enables the desktop_chat_submission_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_chat_submission_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-chat-submission-recover",
+          "markdownDescription": "Denies the desktop_chat_submission_recover command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_claude_login command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-claude-login",
@@ -1861,10 +1885,10 @@
           "markdownDescription": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`"
         },
         {
-          "description": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`",
+          "description": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`",
           "type": "string",
           "const": "chat-write",
-          "markdownDescription": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`"
+          "markdownDescription": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`"
         },
         {
           "description": "Owner-scoped mailbox envelope reads\n#### This permission set includes:\n\n- `allow-desktop-mailbox-list`",

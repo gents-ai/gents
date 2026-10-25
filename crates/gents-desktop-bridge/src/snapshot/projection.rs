@@ -255,6 +255,7 @@ mod tests {
                 }],
             },
             client: Some(DesktopRuntimeSnapshot {
+                client_did: "did:fixture:client".into(),
                 local_peer_id: "local".into(),
                 listen_addresses: vec!["/ip4/0.0.0.0/tcp/1".into()],
                 p2p_health: P2PHealthView {

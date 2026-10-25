@@ -259,9 +259,34 @@ pub fn run_contract_generator(proofs_dir: &Path) -> Result<String> {
     with_proofs_dir_lock(proofs_dir, || run_contract_generator_unlocked(proofs_dir))
 }
 
+/// Preparation and execution share the aggregate loader's cross-process lock:
+/// Lake configuration and imported oleans are mutable across direct targets.
+pub fn run_prepared_generator(proofs_dir: &Path, target: &str, file: &str) -> Result<String> {
+    with_proofs_dir_lock(proofs_dir, || {
+        let mut command = Command::new("lake");
+        command
+            .args(["build", target])
+            .current_dir(proofs_dir)
+            .stdin(Stdio::null());
+        let output = run_with_visible_output(&mut command, io::stderr(), io::stderr())
+            .with_context(|| format!("failed to prepare Lean target {target}"))?;
+        anyhow::ensure!(
+            output.status.success(),
+            "Lean target preparation failed\n  target: {target}\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
+            proofs_dir.display(), output.status,
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)
+        );
+        run_generator_unlocked(proofs_dir, file)
+    })
+}
+
 fn run_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
+    run_generator_unlocked(proofs_dir, CONTRACT_RUN_FILE)
+}
+
+fn run_generator_unlocked(proofs_dir: &Path, file: &str) -> Result<String> {
     let output = Command::new("lake")
-        .args(["env", "lean", "--run", CONTRACT_RUN_FILE])
+        .args(["env", "lean", "--run", file])
         .current_dir(proofs_dir)
         .output()
         .with_context(|| {
@@ -481,6 +506,61 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn direct_generators_prepare_cold_imports_under_the_shared_lock() -> Result<()> {
+        let root = unique_temp_dir("direct-cold");
+        let result = (|| {
+            std::fs::copy(
+                proofs_dir()?.join("lean-toolchain"),
+                root.join("lean-toolchain"),
+            )?;
+            std::fs::write(
+                root.join("lakefile.lean"),
+                "import Lake\nopen Lake DSL\npackage fixture\nlean_lib Fixture\n",
+            )?;
+            std::fs::create_dir(root.join("Fixture"))?;
+            std::fs::write(
+                root.join("Fixture/Input.lean"),
+                "def fixtureValue : Nat := 21\n",
+            )?;
+            for name in ["Receipt", "Voice"] {
+                std::fs::write(
+                    root.join(format!("Fixture/{name}.lean")),
+                    "import Fixture.Input\ndef main : IO Unit := IO.println fixtureValue\n",
+                )?;
+            }
+            std::thread::scope(|scope| -> Result<()> {
+                let handles: Vec<_> = ["Receipt", "Voice"]
+                    .into_iter()
+                    .map(|name| {
+                        let root = &root;
+                        scope.spawn(move || {
+                            run_prepared_generator(
+                                root,
+                                &format!("Fixture.{name}:olean"),
+                                &format!("Fixture/{name}.lean"),
+                            )
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    assert_eq!(handle.join().expect("generator thread")?.trim(), "21");
+                }
+                Ok(())
+            })?;
+            let failure =
+                run_prepared_generator(&root, "Fixture.Missing:olean", "Fixture/Missing.lean")
+                    .expect_err("missing target must fail during preparation");
+            let message = format!("{failure:#}");
+            assert!(message.contains("Fixture.Missing:olean"));
+            assert!(message.contains("exclusive Lean contract load lock"));
+            assert!(message.contains("stderr:"));
+            Ok(())
+        })();
+        std::fs::remove_dir_all(root)?;
+        result
     }
 
     #[test]

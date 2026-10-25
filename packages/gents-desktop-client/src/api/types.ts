@@ -42,6 +42,9 @@ import type {
   AgentSaveRequest,
   ChatSendRequest,
   ChatSendResult,
+  ChatSubmissionReceipt,
+  ChatSubmissionRecovery,
+  ChatSubmissionQuery,
   CodexLoginResult,
   ClaudeLoginResult,
   GrokLoginResult,
@@ -222,6 +225,10 @@ export type DesktopApiAdapter = {
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
+  recoverChatSubmission: (
+    query: ChatSubmissionQuery,
+  ) => Promise<ChatSubmissionRecovery>;
+  acknowledgeChatSubmission: (receipt: ChatSubmissionReceipt) => Promise<void>;
   steerPendingMessage: (
     request: PendingMessageSteerRequest,
   ) => Promise<PendingQueueEditResult>;

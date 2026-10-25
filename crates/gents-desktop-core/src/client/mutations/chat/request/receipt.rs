@@ -17,7 +17,24 @@ use serde_json::Value;
 
 use super::SubmittedRequest;
 
+pub(crate) mod correlated;
+pub(crate) mod delivery;
 pub(crate) mod journal;
+
+/// Confirmed rejection of the original caller-bound signed preparation.
+/// The original identity remains recoverable until the caller acknowledges it.
+#[derive(Debug)]
+pub struct SubmissionNotDelivered {
+    pub request: SubmittedRequest,
+}
+
+impl std::fmt::Display for SubmissionNotDelivered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "request {} was not delivered", self.request.request_id)
+    }
+}
+
+impl std::error::Error for SubmissionNotDelivered {}
 
 /// A prepared owner submission whose commit outcome could not be determined.
 ///
@@ -98,6 +115,21 @@ impl std::error::Error for DeliveryUnconfirmed {}
 const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
 
 impl UnresolvedSubmission {
+    fn validate_binding(&self, request_id: &str) -> Result<()> {
+        ensure!(
+            self.request_id == request_id
+                && self.request_id == self.create.request_id
+                && self.node_did == self.create.node_did
+                && self.session_id == self.create.session_id
+                && self.result.request_id == self.request_id
+                && self.result.node_did == self.node_did
+                && self.result.session_id == self.session_id
+                && self.mutation == self.create.graphql_mutation().map_err(anyhow::Error::msg)?,
+            "retained submission is inconsistent with its signed request"
+        );
+        Ok(())
+    }
+
     pub(crate) fn accepts_composer_content(&self, content: &str) -> bool {
         if content.trim().is_empty() {
             return true;
