@@ -1134,12 +1134,12 @@ impl PackInstaller {
         {
             return Ok(None);
         }
-        crate::graph_package::load_installed_package_plan(
+        Ok(crate::graph_package::load_installed_package_plan(
             &access,
             &manifest.name,
             self.core.node_did(),
         )
-        .await
+        .await?)
     }
 
     async fn installation_status(
@@ -2056,7 +2056,8 @@ impl Tool for RunGraphTool {
             }
         };
         let plan = crate::graph_package::select_run_plan(&access, self.core.node_did(), &selector)
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .with_context(|| match selector {
                 crate::graph_package::GraphRunSelector::Package { name, .. } => format!(
                     "package {name:?} is not installed; run config pack install {name} first"

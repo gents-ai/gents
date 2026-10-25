@@ -1,15 +1,91 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
+use super::provenance::ProvenanceError;
 use super::{
     inference_slot_reference, PackInferenceBindings, PackInferenceSlot, PackManifest,
     INFERENCE_SLOT_REFERENCE_PREFIX,
 };
-use crate::config_client::ConfigAccess;
-use crate::document_config::{InferenceBackend, InferenceProfile, PackConfig};
+use crate::config_client::{ConfigAccess, ConfigClientError, TransactionFailure};
+use crate::document_config::{DocumentConfigError, InferenceBackend, InferenceProfile, PackConfig};
 use crate::Collection;
+
+type Result<T, E = InferenceError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceError {
+    #[error(transparent)]
+    ConfigClient(#[from] ConfigClientError),
+    #[error(transparent)]
+    DocumentConfig(Box<DocumentConfigError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Provenance(#[from] ProvenanceError),
+    #[error("pack owner DID must not be blank")]
+    NodeDidBlank,
+    #[error("pack {pack} has no inference slot {slot:?}")]
+    UnknownSlot { pack: String, slot: String },
+    #[error(
+        "inference slot {slot:?} references unknown profile {profile_id:?} for node {node_did}"
+    )]
+    UnknownProfile {
+        slot: String,
+        profile_id: String,
+        node_did: String,
+    },
+    #[error("inference slot {slot:?} profile {profile_id:?} is unavailable: {reason}")]
+    ProfileUnavailable {
+        slot: String,
+        profile_id: String,
+        reason: String,
+    },
+    #[error("pack owner node is missing or disabled")]
+    NodeDisabled,
+    #[error(
+        "pack {pack} requires configured inference, but node {node_did} has no usable profile; finish Setup or use the existing inference configuration tools first"
+    )]
+    NoUsableProfile { pack: String, node_did: String },
+    #[error(
+        "pack {pack} requires explicit inference slot bindings for: {missing}; inspect the preview and bind each slot to an existing profile"
+    )]
+    MissingBindings { pack: String, missing: String },
+    #[error("pack agent does not reference an inference slot")]
+    AgentNotSlotReference,
+    #[error("inference slot {slot:?} is unbound")]
+    UnboundSlot { slot: String },
+    #[error("inference slot binding map does not exactly match the pack declaration")]
+    BindingMapMismatch,
+    #[error(
+        "pack {pack} must bind existing inference profiles and cannot author inference configuration"
+    )]
+    AuthoredInference { pack: String },
+    #[error("pack {pack} must assign every agent to exactly one inference slot")]
+    AgentSlotCount { pack: String },
+    #[error("agent {agent_id:?} is missing from inference slots")]
+    AgentMissingSlot { agent_id: String },
+    #[error("agent {agent_id:?} must reference inference slot {slot:?}")]
+    AgentSlotReference { agent_id: String, slot: String },
+}
+
+impl From<DocumentConfigError> for InferenceError {
+    fn from(error: DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
+}
+
+impl TransactionFailure for InferenceError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::DocumentConfig(error) => error.config_client_error(),
+            Self::Provenance(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -38,12 +114,11 @@ pub async fn inspect_pack_inference_bindings(
     manifest: &PackManifest,
     node_did: &str,
     requested: &PackInferenceBindings,
-) -> Result<PackInferenceBindingPreview> {
+) -> anyhow::Result<PackInferenceBindingPreview> {
     super::validate_pack_manifest(manifest)?;
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "pack owner DID must not be blank"
-    );
+    if node_did.trim().is_empty() {
+        return Err(InferenceError::NodeDidBlank.into());
+    }
 
     let options = inference_profile_options(access, node_did).await?;
 
@@ -53,29 +128,35 @@ pub async fn inspect_pack_inference_bindings(
         .map(|slot| slot.name.as_str())
         .collect::<BTreeSet<_>>();
     for slot in requested.keys() {
-        anyhow::ensure!(
-            slot_names.contains(slot.as_str()),
-            "pack {} has no inference slot {slot:?}",
-            manifest.name
-        );
+        if !slot_names.contains(slot.as_str()) {
+            return Err(InferenceError::UnknownSlot {
+                pack: manifest.name.clone(),
+                slot: slot.clone(),
+            }
+            .into());
+        }
     }
     for (slot, profile_id) in requested {
         let profile = options
             .iter()
             .find(|profile| profile.profile_id == *profile_id)
-            .with_context(|| {
-                format!(
-                    "inference slot {slot:?} references unknown profile {profile_id:?} for node {node_did}"
-                )
+            .ok_or_else(|| InferenceError::UnknownProfile {
+                slot: slot.clone(),
+                profile_id: profile_id.clone(),
+                node_did: node_did.to_owned(),
             })?;
-        anyhow::ensure!(
-            profile.usable,
-            "inference slot {slot:?} profile {profile_id:?} is unavailable: {}",
-            profile
-                .unavailable_reason
-                .as_deref()
-                .unwrap_or("unknown reason")
-        );
+        if !profile.usable {
+            return Err(InferenceError::ProfileUnavailable {
+                slot: slot.clone(),
+                profile_id: profile_id.clone(),
+                reason: profile
+                    .unavailable_reason
+                    .as_deref()
+                    .unwrap_or("unknown reason")
+                    .to_owned(),
+            }
+            .into());
+        }
     }
 
     Ok(PackInferenceBindingPreview {
@@ -114,11 +195,13 @@ pub async fn inference_profile_options(
                         Ok(serde_json::from_value::<InferenceBackend>(value.clone())?)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok::<_, anyhow::Error>((node_enabled, profiles, backends))
+                Ok::<_, InferenceError>((node_enabled, profiles, backends))
             })
         })
         .await?;
-    anyhow::ensure!(node_enabled, "pack owner node is missing or disabled");
+    if !node_enabled {
+        return Err(InferenceError::NodeDisabled);
+    }
 
     let backend_by_id: BTreeMap<_, _> = backends
         .iter()
@@ -157,7 +240,7 @@ pub async fn preview_pack_inference_bindings(
     manifest: &PackManifest,
     node_did: &str,
     requested: &PackInferenceBindings,
-) -> Result<PackInferenceBindingPreview> {
+) -> anyhow::Result<PackInferenceBindingPreview> {
     let mut preview =
         inspect_pack_inference_bindings(access, manifest, node_did, requested).await?;
     use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
@@ -193,11 +276,13 @@ pub async fn preview_pack_inference_bindings(
         .iter()
         .filter(|profile| profile.usable)
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        !usable.is_empty(),
-        "pack {} requires configured inference, but node {node_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
-        manifest.name
-    );
+    if usable.is_empty() {
+        return Err(InferenceError::NoUsableProfile {
+            pack: manifest.name.clone(),
+            node_did: node_did.to_owned(),
+        }
+        .into());
+    }
     if requested.is_empty() && required.len() == 1 && usable.len() == 1 {
         let slot = required[0].name.clone();
         preview.bindings.insert(slot, usable[0].profile_id.clone());
@@ -209,12 +294,13 @@ pub async fn preview_pack_inference_bindings(
         .filter(|slot| !requested.contains_key(&slot.name))
         .map(|slot| slot.name.clone())
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        missing.is_empty(),
-        "pack {} requires explicit inference slot bindings for: {}; inspect the preview and bind each slot to an existing profile",
-        manifest.name,
-        missing.join(", ")
-    );
+    if !missing.is_empty() {
+        return Err(InferenceError::MissingBindings {
+            pack: manifest.name.clone(),
+            missing: missing.join(", "),
+        }
+        .into());
+    }
     Ok(preview)
 }
 
@@ -229,28 +315,30 @@ pub fn bind_pack_install_config(
         let slot = agent
             .inference_profile_id
             .strip_prefix(INFERENCE_SLOT_REFERENCE_PREFIX)
-            .context("pack agent does not reference an inference slot")?;
+            .ok_or(InferenceError::AgentNotSlotReference)?;
         agent.inference_profile_id = bindings
             .get(slot)
-            .with_context(|| format!("inference slot {slot:?} is unbound"))?
+            .ok_or_else(|| InferenceError::UnboundSlot {
+                slot: slot.to_owned(),
+            })?
             .clone();
     }
-    anyhow::ensure!(
-        manifest
-            .metadata
-            .inference_slots
-            .iter()
-            .all(|slot| slot.optional || bindings.contains_key(&slot.name))
-            && bindings.keys().all(|name| {
-                manifest
-                    .metadata
-                    .inference_slots
-                    .iter()
-                    .any(|slot| slot.name == *name)
-            }),
-        "inference slot binding map does not exactly match the pack declaration"
-    );
-    super::provenance::stamp_pack_origin(manifest, &bound)
+    let bindings_match = manifest
+        .metadata
+        .inference_slots
+        .iter()
+        .all(|slot| slot.optional || bindings.contains_key(&slot.name))
+        && bindings.keys().all(|name| {
+            manifest
+                .metadata
+                .inference_slots
+                .iter()
+                .any(|slot| slot.name == *name)
+        });
+    if !bindings_match {
+        return Err(InferenceError::BindingMapMismatch);
+    }
+    Ok(super::provenance::stamp_pack_origin(manifest, &bound)?)
 }
 
 pub async fn install_pack_documents(
@@ -259,7 +347,7 @@ pub async fn install_pack_documents(
     pack: &super::PackIdentity,
     config: &PackConfig,
     policy: super::DriftPolicy,
-) -> Result<super::InstallReport> {
+) -> anyhow::Result<super::InstallReport> {
     install_pack_documents_with_expectations(access, owner, pack, config, policy, Vec::new()).await
 }
 
@@ -272,7 +360,7 @@ pub async fn install_pack_documents_with_expectations(
     config: &PackConfig,
     policy: super::DriftPolicy,
     expected: Vec<crate::config_client::DesiredStateExpectation>,
-) -> Result<super::InstallReport> {
+) -> anyhow::Result<super::InstallReport> {
     super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected).await
 }
 
@@ -280,15 +368,16 @@ pub(super) fn validate_pack_inference_authoring(
     manifest: &PackManifest,
     config: &PackConfig,
 ) -> Result<()> {
-    anyhow::ensure!(
-        config.inference_backends.is_empty()
-            && config.inference_profiles.is_empty()
-            && config.inference_sampling.is_empty()
-            && config.inference_execution.is_empty()
-            && config.inference_retry_policies.is_empty(),
-        "pack {} must bind existing inference profiles and cannot author inference configuration",
-        manifest.name
-    );
+    if !(config.inference_backends.is_empty()
+        && config.inference_profiles.is_empty()
+        && config.inference_sampling.is_empty()
+        && config.inference_execution.is_empty()
+        && config.inference_retry_policies.is_empty())
+    {
+        return Err(InferenceError::AuthoredInference {
+            pack: manifest.name.clone(),
+        });
+    }
     let declared = manifest
         .metadata
         .inference_slots
@@ -299,21 +388,23 @@ pub(super) fn validate_pack_inference_authoring(
                 .map(move |agent_id| (agent_id.as_str(), slot.name.as_str()))
         })
         .collect::<BTreeMap<_, _>>();
-    anyhow::ensure!(
-        declared.len() == config.agents.len(),
-        "pack {} must assign every agent to exactly one inference slot",
-        manifest.name
-    );
+    if declared.len() != config.agents.len() {
+        return Err(InferenceError::AgentSlotCount {
+            pack: manifest.name.clone(),
+        });
+    }
     for agent in &config.agents {
-        let slot = declared.get(agent.agent_id.as_str()).with_context(|| {
-            format!("agent {:?} is missing from inference slots", agent.agent_id)
+        let slot = declared.get(agent.agent_id.as_str()).ok_or_else(|| {
+            InferenceError::AgentMissingSlot {
+                agent_id: agent.agent_id.clone(),
+            }
         })?;
-        anyhow::ensure!(
-            agent.inference_profile_id == inference_slot_reference(slot),
-            "agent {:?} must reference inference slot {:?}",
-            agent.agent_id,
-            slot
-        );
+        if agent.inference_profile_id != inference_slot_reference(slot) {
+            return Err(InferenceError::AgentSlotReference {
+                agent_id: agent.agent_id.clone(),
+                slot: slot.to_string(),
+            });
+        }
     }
     Ok(())
 }

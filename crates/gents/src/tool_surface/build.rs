@@ -1,8 +1,8 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::path::{Path, PathBuf};
 
+use super::root_admission::RootAdmissionError;
 use super::ToolSurfaceError;
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 
@@ -15,6 +15,36 @@ use super::modes::{BashMode, FileToolMode, ToolCeiling};
 use super::policy::{meet_execution_mode, meet_network_mode, EndpointScope, ToolPolicyBash};
 use super::selection::CommandOutputLimits;
 use super::timeouts::{effective_bash_foreground, effective_cli_timeout_secs, ToolTimeouts};
+
+type Result<T, E = BuildError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BuildError {
+    #[error(transparent)]
+    ToolSurface(#[from] ToolSurfaceError),
+    #[error(transparent)]
+    RootAdmission(#[from] RootAdmissionError),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error("resolving agent {agent_name} file tool root {}", selection_root.display())]
+    AgentFileToolRoot {
+        agent_name: String,
+        selection_root: std::path::PathBuf,
+        #[source]
+        source: Box<RootAdmissionError>,
+    },
+}
+
+impl crate::config_client::TransactionFailure for BuildError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::RootAdmission(error) => error.config_client_error(),
+            Self::AgentFileToolRoot { source, .. } => source.config_client_error(),
+            Self::ToolSurface(_) => None,
+        }
+    }
+}
 
 pub(super) fn downgrade_file_tools(
     agent_name: &str,
@@ -281,11 +311,10 @@ pub fn resolve_effective_tool_root(
         (Some(selection_root), Some(ceiling_root)) => {
             let decision =
                 super::root_admission::resolve_admitted_tool_root(selection_root, [ceiling_root])
-                    .with_context(|| {
-                    format!(
-                        "resolving agent {agent_name} file tool root {}",
-                        selection_root.display()
-                    )
+                    .map_err(|source| BuildError::AgentFileToolRoot {
+                    agent_name: agent_name.to_owned(),
+                    selection_root: selection_root.to_path_buf(),
+                    source: Box::new(source),
                 })?;
             match decision {
                 super::root_admission::RootAdmission::Admitted(root) => Ok(Some(root)),
@@ -309,6 +338,7 @@ pub fn resolve_effective_tool_root(
                             );
                             super::root_admission::resolve_configured_tool_root(ceiling_root)
                                 .map(Some)
+                                .map_err(BuildError::RootAdmission)
                         }
                         None => Err(ToolSurfaceError::FileToolRootEscapes {
                             agent_name: agent_name.to_owned(),
@@ -326,16 +356,17 @@ pub fn resolve_effective_tool_root(
         }
         (Some(selection_root), None) => {
             super::root_admission::resolve_configured_tool_root(selection_root)
-                .with_context(|| {
-                    format!(
-                        "resolving agent {agent_name} file tool root {}",
-                        selection_root.display()
-                    )
+                .map_err(|source| BuildError::AgentFileToolRoot {
+                    agent_name: agent_name.to_owned(),
+                    selection_root: selection_root.to_path_buf(),
+                    source: Box::new(source),
                 })
                 .map(Some)
         }
         (None, Some(ceiling_root)) => {
-            super::root_admission::resolve_configured_tool_root(ceiling_root).map(Some)
+            super::root_admission::resolve_configured_tool_root(ceiling_root)
+                .map(Some)
+                .map_err(BuildError::RootAdmission)
         }
         (None, None) => Ok(None),
     }
@@ -380,7 +411,7 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
 pub(super) async fn enabled_mcp_service_ids(
     node: &EmbeddedNode,
     node_did: &str,
-) -> Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     Ok(crate::registry::configured_mcp_services(node, node_did)
         .await?
         .into_iter()
@@ -392,7 +423,7 @@ pub(super) async fn enabled_mcp_service_ids(
 pub(crate) async fn measured_available_mcp_service_ids(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-) -> Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     let services = crate::registry::configured_mcp_services(node, node_did).await?;
     if services.is_empty() {
         return Ok(Vec::new());
@@ -411,7 +442,12 @@ pub(crate) async fn measured_available_mcp_service_ids(
     let hostname = hostname::get()
         .ok()
         .and_then(|value| value.into_string().ok());
-    project_measured_mcp_services(node_did, &services, &response, hostname.as_deref())
+    Ok(project_measured_mcp_services(
+        node_did,
+        &services,
+        &response,
+        hostname.as_deref(),
+    )?)
 }
 
 /// A remote server's loopback endpoint is never inferred from the CLI host.

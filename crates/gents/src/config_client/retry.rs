@@ -87,6 +87,14 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::session::SessionOutputError>(cause))
         .or_else(|| wrapped::<crate::session::HistoryError>(cause))
         .or_else(|| wrapped::<crate::callback::CallbackError>(cause))
+        .or_else(|| wrapped::<crate::goal::GoalHistoryError>(cause))
+        .or_else(|| wrapped::<crate::pack::InstallationError>(cause))
+        .or_else(|| wrapped::<crate::pack::ProvenanceError>(cause))
+        .or_else(|| wrapped::<crate::pack::InferenceError>(cause))
+        .or_else(|| wrapped::<crate::graph_package::GraphPackageInstallError>(cause))
+        .or_else(|| wrapped::<crate::graph_package::EntryError>(cause))
+        .or_else(|| wrapped::<crate::tool_surface::RootAdmissionError>(cause))
+        .or_else(|| wrapped::<crate::tool_surface::BuildError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

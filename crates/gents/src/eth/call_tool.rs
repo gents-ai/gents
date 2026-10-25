@@ -635,6 +635,10 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
 enum SigningKeyError {
     #[error("write tool has no chain key binding")]
     NoBinding,
+    #[error(transparent)]
+    ToolDocument(serde_json::Error),
+    #[error(transparent)]
+    BindingDocument(serde_json::Error),
     #[error("EthTool {tool_id:?} no longer exists")]
     ToolMissing { tool_id: String },
     #[error("chain key binding {binding_id:?} does not exist")]
@@ -679,41 +683,41 @@ async fn load_signing_key_with_store(
         .binding_id
         .as_deref()
         .ok_or(SigningKeyError::NoBinding)?;
-    let (tool, binding): (EthToolDocument, ChainKeyBindingDocument) =
-        crate::config_client::ConfigAccess::transact_local_write(
-            node,
-            None,
-            "eth.signing_config.read",
-            |txn| {
-                Box::pin(async move {
-                    let tool = crate::config_client::read_desired_state_document_in_txn(
-                        txn,
-                        crate::Collection::EthTool,
-                        &resolved.principal_did,
-                        &resolved.eth_tool_id,
-                    )
-                    .await?
-                    .ok_or_else(|| SigningKeyError::ToolMissing {
-                        tool_id: resolved.eth_tool_id.clone(),
-                    })?;
-                    let binding = crate::config_client::read_desired_state_document_in_txn(
-                        txn,
-                        crate::Collection::ChainKeyBinding,
-                        &resolved.principal_did,
-                        binding_id,
-                    )
-                    .await?
-                    .ok_or_else(|| SigningKeyError::BindingMissing {
-                        binding_id: binding_id.to_owned(),
-                    })?;
-                    Ok::<_, anyhow::Error>((
-                        serde_json::from_value(tool)?,
-                        serde_json::from_value(binding)?,
-                    ))
-                })
-            },
-        )
-        .await?;
+    let (tool, binding) = crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "eth.signing_config.read",
+        |txn| {
+            Box::pin(async move {
+                let tool = crate::config_client::read_desired_state_document_in_txn(
+                    txn,
+                    crate::Collection::EthTool,
+                    &resolved.principal_did,
+                    &resolved.eth_tool_id,
+                )
+                .await?;
+                let binding = crate::config_client::read_desired_state_document_in_txn(
+                    txn,
+                    crate::Collection::ChainKeyBinding,
+                    &resolved.principal_did,
+                    binding_id,
+                )
+                .await?;
+                Ok::<_, crate::config_client::DesiredStateError>((tool, binding))
+            })
+        },
+    )
+    .await?;
+    let tool = tool.ok_or_else(|| SigningKeyError::ToolMissing {
+        tool_id: resolved.eth_tool_id.clone(),
+    })?;
+    let binding = binding.ok_or_else(|| SigningKeyError::BindingMissing {
+        binding_id: binding_id.to_owned(),
+    })?;
+    let tool: EthToolDocument =
+        serde_json::from_value(tool).map_err(SigningKeyError::ToolDocument)?;
+    let binding: ChainKeyBindingDocument =
+        serde_json::from_value(binding).map_err(SigningKeyError::BindingDocument)?;
     if !tool.enabled {
         return Err(SigningKeyError::ToolDisabled {
             tool_id: resolved.eth_tool_id.clone(),

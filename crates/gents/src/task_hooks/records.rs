@@ -317,7 +317,7 @@ async fn recover_record(
         tracing::error!(
             request_id = %record.request_id,
             cwd = %record.cwd.display(),
-            error = %ErrorChain(error.as_ref()),
+            error = %ErrorChain(&error),
             "refusing recovered task cleanup outside an admitted root"
         );
         for hook in &remaining {

@@ -25,22 +25,25 @@ pub use home_install::{
 pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
     install_pack_documents, install_pack_documents_with_expectations,
-    preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
+    preview_pack_inference_bindings, InferenceError, PackInferenceBindingPreview,
+    PackInferenceProfileOption,
 };
 pub use installation::{
     document_pack_schema_paths, install_prepared_document_pack, installed_pack_documents,
     installed_packs, list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
     read_installed_pack, record_plugin_store_change, record_plugin_store_change_as,
-    referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledPack,
-    InstalledPackPlugin, PackIdentity, PreparedDependency, PreparedDocumentPackInstall,
-    RemoveReport, Retained,
+    referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstallationError,
+    InstalledPack, InstalledPackPlugin, PackIdentity, PreparedDependency,
+    PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
 };
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
-pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
+pub use provenance::{
+    pack_document_digests, pack_origin_from_tags, pack_origin_tag, ProvenanceError,
+};
 
 #[path = "pack_asset_path.rs"]
 mod asset_path;

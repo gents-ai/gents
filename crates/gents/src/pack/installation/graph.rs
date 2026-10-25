@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
+use super::InstallationError;
 
 use crate::config_client::{ConfigApplyTxn, DesiredStateApplyDocument};
 use crate::graph_pipeline::{graph_artifact_is_reserved, revision_artifact_ids, GraphPlan};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 
 use super::{key, PackIdentity, Record, RecordedDocument, Retained};
+
+type Result<T, E = InstallationError> = std::result::Result<T, E>;
 
 const UNFINISHED_RUN_REPORT_LIMIT: usize = 8;
 
@@ -41,7 +43,7 @@ pub(crate) async fn observe_graph_install_in_txn(
         .map(|document| {
             let id = document.add[document.collection.unique_field()]
                 .as_str()
-                .context("package document is missing its logical ID")?;
+                .ok_or(InstallationError::PackageMissingLogicalId)?;
             Ok((document.collection, id))
         })
         .collect::<Result<_>>()?;
@@ -50,7 +52,7 @@ pub(crate) async fn observe_graph_install_in_txn(
     for document in desired {
         let id = document.add[document.collection.unique_field()]
             .as_str()
-            .context("package document is missing its logical ID")?;
+            .ok_or(InstallationError::PackageMissingLogicalId)?;
         if desired_live.contains_key(&(document.collection, id.to_owned())) {
             preexisting.insert(key(document.collection.graphql_type(), id));
         }
@@ -68,12 +70,12 @@ pub(crate) async fn observe_graph_install_in_txn(
         .await?;
     let preexisting_revision_digests = response["data"]["GraphRevision"]
         .as_array()
-        .context("reading the graph's existing revisions")?
+        .ok_or(InstallationError::ReadExistingRevisions)?
         .iter()
         .map(|row| {
             row["digest"]
                 .as_str()
-                .context("graph revision is missing digest")
+                .ok_or(InstallationError::GraphRevisionMissingDigest)
                 .map(str::to_owned)
         })
         .collect::<Result<BTreeSet<String>>>()?;
@@ -113,14 +115,14 @@ pub(crate) async fn record_graph_install_in_txn(
         .await?;
     let rows = response["data"]["GraphRevision"]
         .as_array()
-        .context("reading the graph's revisions")?
+        .ok_or(InstallationError::ReadGraphRevisions)?
         .clone();
     for row in &rows {
         let plan_json = row["plan_json"]
             .as_str()
-            .context("graph revision is missing plan_json")?;
+            .ok_or(InstallationError::GraphRevisionMissingPlan)?;
         let plan: GraphPlan =
-            serde_json::from_str(plan_json).context("graph revision plan is not valid JSON")?;
+            serde_json::from_str(plan_json).map_err(InstallationError::GraphRevisionPlanInvalid)?;
         let Some(package) = plan.package.as_ref() else {
             continue;
         };
@@ -129,7 +131,7 @@ pub(crate) async fn record_graph_install_in_txn(
         }
         let digest = row["digest"]
             .as_str()
-            .context("graph revision is missing digest")?
+            .ok_or(InstallationError::GraphRevisionMissingDigest)?
             .to_owned();
         let revision_name = key("GraphRevision", &digest);
         let revision_created = documents
@@ -183,7 +185,7 @@ pub(crate) async fn record_graph_install_in_txn(
         .map(|document| {
             let id = document.add[document.collection.unique_field()]
                 .as_str()
-                .context("package document is missing its logical ID")?;
+                .ok_or(InstallationError::PackageMissingLogicalId)?;
             Ok((document.collection, id))
         })
         .collect::<Result<_>>()?;
@@ -192,7 +194,7 @@ pub(crate) async fn record_graph_install_in_txn(
     for document in desired {
         let id = document.add[document.collection.unique_field()]
             .as_str()
-            .context("package document is missing its logical ID")?;
+            .ok_or(InstallationError::PackageMissingLogicalId)?;
         let name = key(document.collection.graphql_type(), id);
         let created = documents
             .get(&name)
@@ -246,7 +248,7 @@ pub(super) async fn ensure_no_unfinished_runs_in_txn(
         .await?;
     let rows = response["data"]["GraphRun"]
         .as_array()
-        .context("reading graph runs")?;
+        .ok_or(InstallationError::ReadGraphRuns)?;
     if rows.is_empty() {
         return Ok(());
     }
@@ -265,7 +267,9 @@ pub(super) async fn ensure_no_unfinished_runs_in_txn(
     if rows.len() > UNFINISHED_RUN_REPORT_LIMIT {
         names.push("(and possibly more)".to_owned());
     }
-    anyhow::bail!("{}; retry after cancelling", names.join("; "))
+    Err(InstallationError::UnfinishedRuns {
+        details: names.join("; "),
+    })
 }
 
 pub(super) async fn delete_revisions_in_txn(
@@ -285,19 +289,23 @@ pub(super) async fn delete_revisions_in_txn(
         .await?;
     let rows = response["data"]["GraphRevision"]
         .as_array()
-        .context("reading graph revisions to remove")?
+        .ok_or(InstallationError::ReadRevisionsToRemove)?
         .clone();
     let mut removed = Vec::new();
     let mut retained_schemas = BTreeSet::new();
     let mut doc_ids = Vec::new();
     for row in &rows {
-        let digest = row["digest"].as_str().context("revision missing digest")?;
-        let doc_id = row["_docID"].as_str().context("revision missing _docID")?;
+        let digest = row["digest"]
+            .as_str()
+            .ok_or(InstallationError::RevisionMissingDigest)?;
+        let doc_id = row["_docID"]
+            .as_str()
+            .ok_or(InstallationError::RevisionMissingDocId)?;
         let plan_json = row["plan_json"]
             .as_str()
-            .context("revision missing plan_json")?;
+            .ok_or(InstallationError::RevisionMissingPlan)?;
         let plan: GraphPlan =
-            serde_json::from_str(plan_json).context("revision plan is not valid JSON")?;
+            serde_json::from_str(plan_json).map_err(InstallationError::RevisionPlanInvalid)?;
         if let Some(package) = plan.package.as_ref() {
             for schema in &package.required_schema_digests {
                 retained_schemas.extend(schema.collection_contract_digests.keys().cloned());
@@ -331,9 +339,11 @@ pub(super) async fn delete_revisions_in_txn(
         .await?;
     let run_rows = runs["data"]["GraphRun"]
         .as_array()
-        .context("reading graph runs pinned to a removed revision")?;
+        .ok_or(InstallationError::ReadRetainedRuns)?;
     for run in run_rows.iter().take(RETAINED_RUN_REPORT_LIMIT) {
-        let run_id = run["run_id"].as_str().context("run missing run_id")?;
+        let run_id = run["run_id"]
+            .as_str()
+            .ok_or(InstallationError::RunMissingRunId)?;
         retained.push(Retained {
             item: format!("run {run_id}"),
             reason: "result view needs the graph reinstalled".to_owned(),

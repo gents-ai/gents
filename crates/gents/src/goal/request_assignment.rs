@@ -1,3 +1,4 @@
+use super::history::GoalHistoryError;
 use super::GoalDocument;
 use crate::request_admission::verify_request_receipt_signature;
 use gents_protocol::row::AgentRequestRow;
@@ -126,22 +127,6 @@ fn supersedes_assignment(left: &super::GoalVersion, right: &super::GoalVersion) 
         && (left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
             || left.goal.assignment_root_request_doc_id.is_none()
                 && right.goal.assignment_root_request_doc_id.is_some())
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum GoalHistoryError {
-    #[error("Goal history has an invalid native revision or status")]
-    InvalidRevision,
-    #[error("Goal history contains a duplicate native revision")]
-    DuplicateRevision,
-    #[error("Goal history is incomplete at revision {commit_cid}")]
-    IncompleteRevision { commit_cid: String },
-    #[error("Goal history has a cyclic or invalid native parent")]
-    InvalidParent,
-    #[error(
-        "Goal assignment has concurrent native revisions; refresh before observing its outcome"
-    )]
-    ConcurrentRevisions,
 }
 
 pub(crate) fn latest_assignment_goals(

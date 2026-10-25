@@ -12,9 +12,9 @@ mod timeouts;
 
 pub use behavior_config::AgentToolSurfaceConfig;
 pub(crate) use build::measured_available_mcp_service_ids;
-pub use build::measured_mcp_services_for_access;
 #[doc(hidden)]
 pub use build::resolve_effective_tool_root;
+pub use build::{measured_mcp_services_for_access, BuildError};
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub(crate) use output_budget::configured_output_budget;
@@ -25,8 +25,8 @@ pub use policy::{
 #[doc(hidden)]
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, load_workspace_root_policy,
-    project_workspace_root_policy, resolve_configured_tool_root, WorkspaceRootDocument,
-    WorkspaceRootPolicy,
+    project_workspace_root_policy, resolve_configured_tool_root, RootAdmissionError,
+    WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, resolve_admitted_tool_root, RootExecutionGuard,

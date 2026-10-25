@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use super::*;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 const OWNER: &str = "did:key:zPackInstallOwner";
 
 async fn access() -> ConfigAccess {
@@ -44,8 +46,11 @@ async fn install(
     version: &str,
     config: &PackConfig,
     policy: DriftPolicy,
-) -> Result<InstallReport> {
-    super::super::install_pack_documents(access, OWNER, &identity(version), config, policy).await
+) -> TestResult<InstallReport> {
+    Ok(
+        super::super::install_pack_documents(access, OWNER, &identity(version), config, policy)
+            .await?,
+    )
 }
 
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
@@ -472,9 +477,9 @@ async fn list_installed_packs_fails_loudly_on_a_malformed_record() {
 
     let error = list_installed_packs(&access, OWNER).await.unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("malformed version field"),
+        format!("{}", ErrorChain(&error)).contains("malformed version field"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -496,9 +501,9 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
         .await
         .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("malformed digest field"),
+        format!("{}", ErrorChain(&error)).contains("malformed digest field"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -535,9 +540,9 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
         .await
         .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("has more than one installation record"),
+        format!("{}", ErrorChain(&error)).contains("has more than one installation record"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -1004,7 +1009,7 @@ fn install_fixture_plugins_into(
     home: &Path,
     sdl: &str,
     edit: impl FnOnce(&mut serde_json::Value),
-) -> Result<Vec<crate::plugin::store::InstalledPlugin>> {
+) -> TestResult<Vec<crate::plugin::store::InstalledPlugin>> {
     let (_guard, root) = crate::test_support::fixture_pack_copy("job_plugin_fixture", &json!({}));
     std::fs::write(root.join("schemas/fixture_note.graphql"), sdl).unwrap();
     let path = root.join("manifest.json");
@@ -1014,13 +1019,13 @@ fn install_fixture_plugins_into(
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
     let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
-    crate::plugin::install::install_pack_plugins(
+    Ok(crate::plugin::install::install_pack_plugins(
         home,
         archive.manifest(),
         archive.digest(),
         |path| Ok(archive.asset(path)?),
         false,
-    )
+    )?)
 }
 
 /// Installs the job fixture pack's plugins into a fresh plugin home.
@@ -1029,14 +1034,14 @@ fn install_fixture_plugins(
     edit: impl FnOnce(&mut serde_json::Value),
 ) -> (
     tempfile::TempDir,
-    Result<Vec<crate::plugin::store::InstalledPlugin>>,
+    TestResult<Vec<crate::plugin::store::InstalledPlugin>>,
 ) {
     let home = tempfile::tempdir().unwrap();
     let installed = install_fixture_plugins_into(home.path(), sdl, edit);
     (home, installed)
 }
 
-fn refusal(result: Result<Vec<crate::plugin::store::InstalledPlugin>>) -> String {
+fn refusal(result: TestResult<Vec<crate::plugin::store::InstalledPlugin>>) -> String {
     format!(
         "{}",
         ErrorChain(result.expect_err("the install must be refused").as_ref())
@@ -1402,7 +1407,7 @@ fn shipping(targets: &[&str]) -> PackConfig {
     .unwrap()
 }
 
-fn engine_admission(job: serde_json::Value, via: crate::pack::InstalledVia) -> Result<()> {
+fn engine_admission(job: serde_json::Value, via: crate::pack::InstalledVia) -> TestResult<()> {
     let mut metadata = documents_archive().manifest().metadata.clone();
     metadata.dependencies = vec!["acme/base".into()];
     let own = shipping(&["wf-run"]);
@@ -1669,7 +1674,7 @@ async fn try_install_dependent_with_dependee(
     dependee: &crate::pack_archive::PackArchive,
     dependent: &crate::pack_archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
-) -> Result<InstallReport> {
+) -> TestResult<InstallReport> {
     let authored = crate::pack::load_pack_config(
         dependent.manifest(),
         &crate::pack::PackInstallOptions {
@@ -1692,7 +1697,7 @@ async fn try_install_dependent_with_dependee(
     )
     .await
     .unwrap();
-    install_prepared_document_pack(
+    Ok(install_prepared_document_pack(
         access,
         OWNER,
         dependent,
@@ -1703,7 +1708,7 @@ async fn try_install_dependent_with_dependee(
         crate::pack::InstalledVia::Operator,
         DriftPolicy::Refuse,
     )
-    .await
+    .await?)
 }
 
 #[tokio::test]

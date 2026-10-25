@@ -1,18 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use identity::Did;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+    read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn, ConfigClientError,
+    DesiredStateApplyDocument, DesiredStateApplyPlan, DesiredStateError, TransactionFailure,
 };
 use crate::document_config::PackConfig;
 use crate::graphql::escape_graphql_string;
 use crate::Collection;
+
+use super::provenance::ProvenanceError;
 
 mod dependencies;
 mod documents;
@@ -23,6 +24,115 @@ pub use documents::{
 mod graph;
 
 pub(crate) use graph::{observe_graph_install_in_txn, record_graph_install_in_txn};
+
+type Result<T, E = InstallationError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum InstallationError {
+    #[error(transparent)]
+    ConfigClient(#[from] ConfigClientError),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    Provenance(#[from] ProvenanceError),
+    #[error(transparent)]
+    GraphPipeline(#[from] crate::graph_pipeline::GraphPipelineError),
+    #[error("installation record names unknown collection {name:?}")]
+    UnknownCollection { name: String },
+    #[error("reading the pack installation record")]
+    RecordRowsMissing,
+    #[error("reading the pack installation records")]
+    RecordsRowsMissing,
+    #[error("{coordinate} has more than one installation record for {owner}")]
+    DuplicateRecord { coordinate: String, owner: String },
+    #[error("{coordinate} has more than one installation record for its owner")]
+    DuplicateOwnerRecord { coordinate: String },
+    #[error("installation record {coordinate:?} for {owner:?} has a malformed {field} field")]
+    MalformedRecordField {
+        coordinate: String,
+        owner: String,
+        field: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("installation record {doc_id} has a missing or malformed {field} field")]
+    RecordFieldMissing { doc_id: String, field: String },
+    #[error("writing the installation record failed: {errors}")]
+    RecordWriteFailed { errors: Value },
+    #[error("updating a dependency's required_by failed: {errors}")]
+    RequiredByUpdateFailed { errors: Value },
+    #[error("record missing coordinate")]
+    RecordMissingCoordinate,
+    #[error("record missing _docID")]
+    RecordMissingDocId,
+    #[error("pack document is missing its logical ID")]
+    MissingLogicalId,
+    #[error("package document is missing its logical ID")]
+    PackageMissingLogicalId,
+    #[error("{coordinate} is not installed for {owner}")]
+    NotInstalled { coordinate: String, owner: String },
+    #[error(
+        "{coordinate} is not installed as a pack for {owner}: only its plugins are, through gents plugin install; remove them with gents plugin remove"
+    )]
+    PluginStoreRecord { coordinate: String, owner: String },
+    #[error("{coordinate} is required by {dependents}; remove {noun} first")]
+    RequiredBy {
+        coordinate: String,
+        dependents: String,
+        noun: &'static str,
+    },
+    #[error(
+        "{} of {coordinate}'s documents were edited since it was installed: {}; choose --overwrite to replace them or --keep to leave them",
+        .edited.len(),
+        .edited.join(", ")
+    )]
+    Edited {
+        coordinate: String,
+        edited: Vec<String>,
+    },
+    #[error("{name} is missing after install")]
+    MissingAfterInstall { name: String },
+    #[error("{details}; retry after cancelling")]
+    UnfinishedRuns { details: String },
+    #[error("reading graph runs")]
+    ReadGraphRuns,
+    #[error("reading graph revisions to remove")]
+    ReadRevisionsToRemove,
+    #[error("revision missing digest")]
+    RevisionMissingDigest,
+    #[error("revision missing _docID")]
+    RevisionMissingDocId,
+    #[error("revision missing plan_json")]
+    RevisionMissingPlan,
+    #[error("revision plan is not valid JSON")]
+    RevisionPlanInvalid(#[source] serde_json::Error),
+    #[error("reading graph runs pinned to a removed revision")]
+    ReadRetainedRuns,
+    #[error("run missing run_id")]
+    RunMissingRunId,
+    #[error("reading the graph's existing revisions")]
+    ReadExistingRevisions,
+    #[error("graph revision is missing digest")]
+    GraphRevisionMissingDigest,
+    #[error("reading the graph's revisions")]
+    ReadGraphRevisions,
+    #[error("graph revision is missing plan_json")]
+    GraphRevisionMissingPlan,
+    #[error("graph revision plan is not valid JSON")]
+    GraphRevisionPlanInvalid(#[source] serde_json::Error),
+}
+
+impl TransactionFailure for InstallationError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::Provenance(error) => error.config_client_error(),
+            Self::GraphPipeline(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
 
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
@@ -129,7 +239,9 @@ fn collection_named(name: &str) -> Result<Collection> {
         .iter()
         .copied()
         .find(|collection| collection.graphql_type() == name)
-        .with_context(|| format!("installation record names unknown collection {name:?}"))
+        .ok_or_else(|| InstallationError::UnknownCollection {
+            name: name.to_owned(),
+        })
 }
 
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
@@ -142,11 +254,13 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
         .await?;
     let rows = response["data"][RECORD]
         .as_array()
-        .context("reading the pack installation record")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "{coordinate} has more than one installation record for {owner}"
-    );
+        .ok_or(InstallationError::RecordRowsMissing)?;
+    if rows.len() > 1 {
+        return Err(InstallationError::DuplicateRecord {
+            coordinate: coordinate.to_owned(),
+            owner: owner.to_owned(),
+        });
+    }
     let Some(row) = rows.first() else {
         return Ok(Record::default());
     };
@@ -175,10 +289,13 @@ where
 {
     match row.get(field) {
         None | Some(Value::Null) => Ok(T::default()),
-        Some(value) => serde_json::from_value(value.clone()).with_context(|| {
-            format!(
-                "installation record {coordinate:?} for {owner:?} has a malformed {field} field"
-            )
+        Some(value) => serde_json::from_value(value.clone()).map_err(|source| {
+            InstallationError::MalformedRecordField {
+                coordinate: coordinate.to_owned(),
+                owner: owner.to_owned(),
+                field: field.to_owned(),
+                source,
+            }
         }),
     }
 }
@@ -220,13 +337,11 @@ async fn live_digests<'a>(
     Ok(out)
 }
 
-fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
-    anyhow::anyhow!(
-        "{} of {coordinate}'s documents were edited since it was installed: {}; \
-         choose --overwrite to replace them or --keep to leave them",
-        edited.len(),
-        edited.join(", ")
-    )
+fn edited_error(coordinate: &str, edited: &[String]) -> InstallationError {
+    InstallationError::Edited {
+        coordinate: coordinate.to_owned(),
+        edited: edited.to_vec(),
+    }
 }
 
 async fn write_record_in_txn(
@@ -294,11 +409,11 @@ async fn write_record_in_txn(
             .await?
         }
     };
-    anyhow::ensure!(
-        mutation.get("errors").is_none_or(Value::is_null),
-        "writing the installation record failed: {}",
-        mutation["errors"]
-    );
+    if !mutation.get("errors").is_none_or(Value::is_null) {
+        return Err(InstallationError::RecordWriteFailed {
+            errors: mutation["errors"].clone(),
+        });
+    }
     Ok(())
 }
 
@@ -308,7 +423,7 @@ pub(crate) async fn install_in_txn(
     pack: &PackIdentity,
     documents: Vec<DesiredStateApplyDocument>,
     policy: DriftPolicy,
-) -> Result<InstallReport> {
+) -> anyhow::Result<InstallReport> {
     let prior = read_record(txn, owner, &pack.coordinate).await?;
     let mut report = InstallReport::default();
     let mut recorded = BTreeMap::new();
@@ -320,7 +435,7 @@ pub(crate) async fn install_in_txn(
         .map(|document| {
             let id = document.add[document.collection.unique_field()]
                 .as_str()
-                .context("pack document is missing its logical ID")?;
+                .ok_or(InstallationError::MissingLogicalId)?;
             Ok((document.collection, id))
         })
         .collect::<Result<_>>()?;
@@ -330,7 +445,7 @@ pub(crate) async fn install_in_txn(
         let collection = document.collection.graphql_type();
         let id = document.add[document.collection.unique_field()]
             .as_str()
-            .context("pack document is missing its logical ID")?;
+            .ok_or(InstallationError::MissingLogicalId)?;
         let name = key(collection, id);
         let previous = prior.documents.get(&name);
         let live = live_before
@@ -408,7 +523,7 @@ pub(crate) async fn install_in_txn(
         }
     }
     if !edited.is_empty() {
-        return Err(edited_error(&pack.coordinate, &edited));
+        return Err(edited_error(&pack.coordinate, &edited).into());
     }
 
     let applied: Vec<_> = documents
@@ -445,7 +560,9 @@ pub(crate) async fn install_in_txn(
         document.digest = live_after
             .get(&(collection, document.id.clone()))
             .cloned()
-            .with_context(|| format!("{name} is missing after install"))?;
+            .ok_or_else(|| InstallationError::MissingAfterInstall {
+                name: name.to_owned(),
+            })?;
     }
 
     write_record_in_txn(
@@ -468,7 +585,7 @@ pub async fn record_plugin_store_change(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     record_plugin_store_change_as(access, owner, None, home, coordinate, installed).await
 }
 
@@ -480,7 +597,7 @@ pub async fn record_plugin_store_change_as(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     match access {
         ConfigAccess::Local(local) => {
             ConfigAccess::transact_local_write(
@@ -513,7 +630,7 @@ async fn write_plugin_record(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let current_home = super::read_home_install(home, coordinate)?;
     let current_identity = current_home.map(|record| PackIdentity {
         coordinate: record.coordinate,
@@ -533,7 +650,7 @@ async fn write_plugin_record(
     let own = prior.doc_id.is_none() || prior.plugin_store;
     match installed {
         Some(pack) if own => {
-            return write_record_in_txn(txn, owner, pack, &prior, documents, false, true).await
+            return Ok(write_record_in_txn(txn, owner, pack, &prior, documents, false, true).await?)
         }
         None if prior.doc_id.is_none() => return Ok(()),
         None if own && !retained => {
@@ -557,7 +674,7 @@ async fn write_plugin_record(
         explicit: prior.explicit,
     };
     let plugin_store = prior.plugin_store;
-    write_record_in_txn(
+    Ok(write_record_in_txn(
         txn,
         owner,
         &unchanged,
@@ -566,7 +683,7 @@ async fn write_plugin_record(
         false,
         plugin_store,
     )
-    .await
+    .await?)
 }
 
 fn is_plugin_store_row(row: &Value) -> bool {
@@ -579,11 +696,14 @@ async fn remove_record_in_txn(
     coordinate: &str,
     record: &Record,
     policy: DriftPolicy,
-) -> Result<RemoveReport> {
+) -> anyhow::Result<RemoveReport> {
     let doc_id = record
         .doc_id
         .clone()
-        .with_context(|| format!("{coordinate} is not installed for {owner}"))?;
+        .ok_or_else(|| InstallationError::NotInstalled {
+            coordinate: coordinate.to_owned(),
+            owner: owner.to_owned(),
+        })?;
 
     let graph_ids: BTreeSet<String> = record
         .documents
@@ -666,7 +786,7 @@ async fn remove_record_in_txn(
         removals.push((collection, owner.to_owned(), document.id.clone()));
     }
     if !edited.is_empty() {
-        return Err(edited_error(coordinate, &edited));
+        return Err(edited_error(coordinate, &edited).into());
     }
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
@@ -694,28 +814,34 @@ pub async fn remove_pack(
     owner: &str,
     coordinate: &str,
     policy: DriftPolicy,
-) -> Result<RemoveReport> {
+) -> anyhow::Result<RemoveReport> {
     access
         .transact_write("pack.remove", |txn| {
             Box::pin(async move {
                 let record = read_record(txn, owner, coordinate).await?;
-                anyhow::ensure!(
-                    record.doc_id.is_some(),
-                    "{coordinate} is not installed for {owner}"
-                );
-                anyhow::ensure!(
-                    !record.plugin_store,
-                    "{coordinate} is not installed as a pack for {owner}: only its plugins \
-                     are, through gents plugin install; remove them with gents plugin remove"
-                );
+                if record.doc_id.is_none() {
+                    return Err(InstallationError::NotInstalled {
+                        coordinate: coordinate.to_owned(),
+                        owner: owner.to_owned(),
+                    }
+                    .into());
+                }
+                if record.plugin_store {
+                    return Err(InstallationError::PluginStoreRecord {
+                        coordinate: coordinate.to_owned(),
+                        owner: owner.to_owned(),
+                    }
+                    .into());
+                }
                 if !record.required_by.is_empty() {
                     let dependents: Vec<&str> =
                         record.required_by.iter().map(String::as_str).collect();
-                    anyhow::bail!(
-                        "{coordinate} is required by {}; remove {} first",
-                        dependents.join(", "),
-                        if dependents.len() == 1 { "it" } else { "them" }
-                    );
+                    return Err(InstallationError::RequiredBy {
+                        coordinate: coordinate.to_owned(),
+                        dependents: dependents.join(", "),
+                        noun: if dependents.len() == 1 { "it" } else { "them" },
+                    }
+                    .into());
                 }
                 let mut report =
                     remove_record_in_txn(txn, owner, coordinate, &record, policy).await?;
@@ -746,7 +872,7 @@ pub async fn list_installed_packs(
         .await?;
     response["data"][RECORD]
         .as_array()
-        .context("reading the pack installation records")?
+        .ok_or(InstallationError::RecordsRowsMissing)?
         .iter()
         .filter(|row| !is_plugin_store_row(row))
         .map(|row| {
@@ -773,11 +899,12 @@ pub async fn read_installed_pack(
         .await?;
     let rows = response["data"][RECORD]
         .as_array()
-        .context("reading the pack installation records")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "{coordinate} has more than one installation record for its owner"
-    );
+        .ok_or(InstallationError::RecordsRowsMissing)?;
+    if rows.len() > 1 {
+        return Err(InstallationError::DuplicateOwnerRecord {
+            coordinate: coordinate.to_owned(),
+        });
+    }
     rows.first()
         .filter(|row| !is_plugin_store_row(row))
         .map(|row| {
@@ -807,11 +934,13 @@ pub async fn installed_pack_documents(
         .await?;
     let rows = response["data"][RECORD]
         .as_array()
-        .context("reading the pack installation record")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "{coordinate} has more than one installation record for {owner}"
-    );
+        .ok_or(InstallationError::RecordRowsMissing)?;
+    if rows.len() > 1 {
+        return Err(InstallationError::DuplicateRecord {
+            coordinate: coordinate.to_owned(),
+            owner: owner.to_owned(),
+        });
+    }
     let Some(row) = rows.first().filter(|row| !is_plugin_store_row(row)) else {
         return Ok(Vec::new());
     };
@@ -824,7 +953,7 @@ pub async fn installed_pack_documents(
 pub async fn installed_packs(
     home: Option<&Path>,
     node: Option<(&ConfigAccess, &str)>,
-) -> Result<Vec<InstalledPack>> {
+) -> anyhow::Result<Vec<InstalledPack>> {
     let mut packs = BTreeMap::new();
     if let Some(home) = home {
         for record in super::list_home_installs(home)? {
@@ -849,7 +978,7 @@ pub async fn installed_packs(
 pub async fn referenced_pack_digests(
     home: &Path,
     node: Option<&ConfigAccess>,
-) -> Result<BTreeSet<String>> {
+) -> anyhow::Result<BTreeSet<String>> {
     let mut digests = BTreeSet::new();
     for record in super::list_home_installs(home)? {
         digests.insert(record.digest);
@@ -860,7 +989,7 @@ pub async fn referenced_pack_digests(
             .await?;
         for row in response["data"][RECORD]
             .as_array()
-            .context("reading the pack installation records")?
+            .ok_or(InstallationError::RecordsRowsMissing)?
         {
             if let Some(digest) = row.get("digest").and_then(Value::as_str) {
                 digests.insert(digest.to_owned());
@@ -873,10 +1002,16 @@ pub async fn referenced_pack_digests(
 }
 
 fn required_record_field_str<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
-    row.get(field).and_then(Value::as_str).with_context(|| {
-        let doc_id = row.get("_docID").and_then(Value::as_str).unwrap_or("?");
-        format!("installation record {doc_id} has a missing or malformed {field} field")
-    })
+    row.get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| InstallationError::RecordFieldMissing {
+            doc_id: row
+                .get("_docID")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_owned(),
+            field: field.to_owned(),
+        })
 }
 
 pub(crate) fn installable_documents(config: &PackConfig) -> Result<Vec<DesiredStateApplyDocument>> {

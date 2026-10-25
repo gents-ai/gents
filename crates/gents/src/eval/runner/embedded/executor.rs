@@ -528,7 +528,7 @@ fn bind_inference_slots(
         .filter(|slot| !slot.optional)
         .map(|slot| (slot.name.clone(), profile_id.to_owned()))
         .collect();
-    bind_pack_install_config(manifest, config, &bindings)
+    Ok(bind_pack_install_config(manifest, config, &bindings)?)
 }
 
 fn root_host_tools(mut config: PackConfig, workspace: &Path) -> Result<PackConfig> {

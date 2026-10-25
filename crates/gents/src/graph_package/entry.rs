@@ -1,14 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result};
-use gents_protocol::graphql::graphql_input_literal;
+use gents_protocol::graphql::{graphql_input_literal, GraphqlError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError, TransactionFailure};
 use crate::graph_pipeline::{
-    admit_operator_input, EntryInputOrigin, GraphPlan, HostInput, PlannedEntry,
+    admit_operator_input, EntryInputOrigin, GraphPipelineError, GraphPlan, HostInput, PlannedEntry,
 };
 use crate::plugin::executor::PluginExecutor;
 
@@ -16,6 +15,72 @@ use super::catalog::GraphPackageError;
 
 const PREPARE_DOCUMENTS_BATCH_LIMIT: usize = 32;
 const PREPARE_DOCUMENTS_BATCH_BYTES: usize = 1024 * 1024;
+
+type Result<T, E = EntryError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum EntryError {
+    #[error(transparent)]
+    GraphPackage(#[from] GraphPackageError),
+    #[error(transparent)]
+    GraphPipeline(#[from] GraphPipelineError),
+    #[error(transparent)]
+    ConfigClient(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlError),
+    #[error("canonicalizing repository {}", path.display())]
+    CanonicalizeRepository {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not a Git work tree", path.display())]
+    NotWorkTree { path: PathBuf },
+    #[error("entry {entry_name:?} read_only_workspace requires an earlier git_diff")]
+    ReadOnlyWorkspaceNeedsDiff { entry_name: String },
+    #[error("persisting prepared entry documents")]
+    PersistDocuments(#[source] ConfigClientError),
+    #[error(
+        "prepare document batch silently dropped alias {key:?} ({position} of {batch_len} in this batch); the backend must reject a partial batched mutation, not accept it silently"
+    )]
+    PrepareBatchDropped {
+        key: String,
+        position: usize,
+        batch_len: usize,
+    },
+    #[error("entry {entry_name:?} prepare plugin is not pinned")]
+    PreparePluginNotPinned { entry_name: String },
+    #[error("{message}")]
+    PreparePluginFailed { message: String },
+    #[error("the {coordinate} plugin returned a malformed prepare result")]
+    PrepareOutputMalformed {
+        coordinate: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("the {coordinate} plugin's prepared entry input must be a JSON object")]
+    PrepareInputNotObject { coordinate: String },
+    #[error(
+        "the {coordinate} plugin wrote to {collection:?}, which entry {entry_name:?} does not declare in prepare.writes"
+    )]
+    PrepareUndeclaredWrite {
+        coordinate: String,
+        collection: String,
+        entry_name: String,
+    },
+    #[error("the {coordinate} plugin's document fields must be a JSON object")]
+    PrepareFieldsNotObject { coordinate: String },
+}
+
+impl TransactionFailure for EntryError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) | Self::PersistDocuments(error) => Some(error),
+            Self::GraphPipeline(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
 
 fn git_output_bytes(repo: &Path, arguments: &[&str]) -> Result<Vec<u8>, GraphPackageError> {
     let output = Command::new("git")
@@ -52,12 +117,18 @@ fn resolve_repository(
     base: &str,
     head: &str,
     process_root: Option<&Path>,
-) -> Result<(PathBuf, String, String)> {
-    let canonical = std::fs::canonicalize(repo)
-        .with_context(|| format!("canonicalizing repository {}", repo.display()))?;
+) -> anyhow::Result<(PathBuf, String, String)> {
+    let canonical =
+        std::fs::canonicalize(repo).map_err(|source| EntryError::CanonicalizeRepository {
+            path: repo.to_path_buf(),
+            source,
+        })?;
     crate::workspace::require_under_ceiling(&canonical, process_root)?;
     if git_output(&canonical, &["rev-parse", "--is-inside-work-tree"])? != "true" {
-        anyhow::bail!("{} is not a Git work tree", canonical.display());
+        return Err(EntryError::NotWorkTree {
+            path: canonical.clone(),
+        }
+        .into());
     }
     // Git discovers enclosing repositories. A permitted subdirectory must not
     // grant review access to the rest of a repository outside the ceiling.
@@ -101,7 +172,7 @@ fn collect_git_diff(
     unified_context_lines: u32,
     rename_similarity_percent: u8,
     host_root: Option<&Path>,
-) -> Result<GitDiffFacts> {
+) -> anyhow::Result<GitDiffFacts> {
     let (repository, base_sha, head_sha) = resolve_repository(repository, base, head, host_root)?;
     let name_status = git_output(
         &repository,
@@ -243,7 +314,7 @@ async fn collect_host_facts(
     admitted: &Map<String, Value>,
     host_steps: &[HostInput],
     host_root: Option<&Path>,
-) -> Result<Map<String, Value>> {
+) -> anyhow::Result<Map<String, Value>> {
     let mut host = Map::new();
     let mut git_diff: Option<GitDiffFacts> = None;
     for step in host_steps {
@@ -270,9 +341,12 @@ async fn collect_host_facts(
                 git_diff = Some(facts);
             }
             HostInput::ReadOnlyWorkspace => {
-                let facts = git_diff.as_ref().with_context(|| {
-                    format!("entry {entry_name:?} read_only_workspace requires an earlier git_diff")
-                })?;
+                let facts =
+                    git_diff
+                        .as_ref()
+                        .ok_or_else(|| EntryError::ReadOnlyWorkspaceNeedsDiff {
+                            entry_name: entry_name.to_owned(),
+                        })?;
                 let workspace = crate::workspace::provision_read_only_workspace(
                     access,
                     &facts.repository,
@@ -337,14 +411,16 @@ async fn persist_prepared_documents(
                     let response = txn
                         .execute(&mutation)
                         .await
-                        .context("persisting prepared entry documents")?;
+                        .map_err(EntryError::PersistDocuments)?;
                     for alias in 0..batch_len {
                         let key = format!("d{alias}");
-                        anyhow::ensure!(
-                            batch_alias_doc_id(&response, &key).is_some_and(|id| !id.is_empty()),
-                            "prepare document batch silently dropped alias {key:?} ({} of {batch_len} in this batch); the backend must reject a partial batched mutation, not accept it silently",
-                            alias + 1
-                        );
+                        if !batch_alias_doc_id(&response, &key).is_some_and(|id| !id.is_empty()) {
+                            return Err(EntryError::PrepareBatchDropped {
+                                key,
+                                position: alias + 1,
+                                batch_len,
+                            });
+                        }
                     }
                     start = end;
                 }
@@ -400,7 +476,7 @@ pub async fn prepare_entry_run(
     access: &ConfigAccess,
     principal_did: &str,
     request: EntryRunRequest<'_>,
-) -> Result<PreparedEntryRun> {
+) -> anyhow::Result<PreparedEntryRun> {
     let entry = select_entry(request.plan, request.entry)?;
     let admitted = admit_operator_input(entry, request.input)?;
     let Some(prepare) = entry.prepare.as_ref() else {
@@ -423,7 +499,9 @@ pub async fn prepare_entry_run(
     let digest = prepare
         .digest
         .as_deref()
-        .with_context(|| format!("entry {:?} prepare plugin is not pinned", entry.name))?;
+        .ok_or_else(|| EntryError::PreparePluginNotPinned {
+            entry_name: entry.name.clone(),
+        })?;
     let record = request.plugins.resolve(&prepare.plugin, Some(digest))?;
     let diff_bytes = host
         .get("git_diff")
@@ -434,42 +512,49 @@ pub async fn prepare_entry_run(
     let stdin = prepare_stdin(Value::Object(admitted), &nonce, Value::Object(host));
     let call = request.plugins.call(&record, stdin).await?;
     if call.outcome.verdict != crate::plugin::PluginVerdict::Success {
-        anyhow::bail!(describe_prepare_plugin_failure(
-            &call.coordinate,
-            &record.declaration,
-            call.outcome.verdict,
-            &call.outcome.diagnostics,
-            diff_bytes,
-        ));
+        return Err(EntryError::PreparePluginFailed {
+            message: describe_prepare_plugin_failure(
+                &call.coordinate,
+                &record.declaration,
+                call.outcome.verdict,
+                &call.outcome.diagnostics,
+                diff_bytes,
+            ),
+        }
+        .into());
     }
     let output: PreparePluginOutput =
-        serde_json::from_value(call.outcome.output).with_context(|| {
-            format!(
-                "the {} plugin returned a malformed prepare result",
-                call.coordinate
-            )
+        serde_json::from_value(call.outcome.output).map_err(|source| {
+            EntryError::PrepareOutputMalformed {
+                coordinate: call.coordinate.clone(),
+                source,
+            }
         })?;
-    anyhow::ensure!(
-        output.input.is_object(),
-        "the {} plugin's prepared entry input must be a JSON object",
-        call.coordinate
-    );
+    if !output.input.is_object() {
+        return Err(EntryError::PrepareInputNotObject {
+            coordinate: call.coordinate.clone(),
+        }
+        .into());
+    }
     for document in &output.documents {
-        anyhow::ensure!(
-            prepare
-                .writes
-                .iter()
-                .any(|write| write == &document.collection),
-            "the {} plugin wrote to {:?}, which entry {:?} does not declare in prepare.writes",
-            call.coordinate,
-            document.collection,
-            entry.name
-        );
-        anyhow::ensure!(
-            document.fields.is_object(),
-            "the {} plugin's document fields must be a JSON object",
-            call.coordinate
-        );
+        if !prepare
+            .writes
+            .iter()
+            .any(|write| write == &document.collection)
+        {
+            return Err(EntryError::PrepareUndeclaredWrite {
+                coordinate: call.coordinate.clone(),
+                collection: document.collection.clone(),
+                entry_name: entry.name.clone(),
+            }
+            .into());
+        }
+        if !document.fields.is_object() {
+            return Err(EntryError::PrepareFieldsNotObject {
+                coordinate: call.coordinate.clone(),
+            }
+            .into());
+        }
     }
     persist_prepared_documents(access, &output.documents).await?;
     Ok(PreparedEntryRun {

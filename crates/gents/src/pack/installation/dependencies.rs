@@ -1,12 +1,15 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 
-use super::{read_record, remove_record_in_txn, DriftPolicy, RemoveReport, RECORD};
+use super::{
+    read_record, remove_record_in_txn, DriftPolicy, InstallationError, RemoveReport, RECORD,
+};
+
+type Result<T, E = InstallationError> = std::result::Result<T, E>;
 
 async fn update_required_by(
     txn: &ConfigApplyTxn<'_>,
@@ -27,13 +30,14 @@ async fn update_required_by(
             &json!({ "input": { "required_by": value } }),
         )
         .await?;
-    anyhow::ensure!(
-        response
-            .get("errors")
-            .is_none_or(serde_json::Value::is_null),
-        "updating a dependency's required_by failed: {}",
-        response["errors"]
-    );
+    if !response
+        .get("errors")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        return Err(InstallationError::RequiredByUpdateFailed {
+            errors: response["errors"].clone(),
+        });
+    }
     Ok(())
 }
 
@@ -43,12 +47,15 @@ pub(super) async fn claim_in_txn(
     dependent: &str,
     dependencies: &[String],
     policy: DriftPolicy,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     for coordinate in dependencies {
         let record = read_record(txn, owner, coordinate).await?;
         let doc_id = record
             .doc_id
-            .with_context(|| format!("{coordinate} is not installed for {owner}"))?;
+            .ok_or_else(|| InstallationError::NotInstalled {
+                coordinate: coordinate.to_owned(),
+                owner: owner.to_owned(),
+            })?;
         let mut required_by = record.required_by;
         if required_by.insert(dependent.to_owned()) {
             update_required_by(txn, &doc_id, &required_by).await?;
@@ -62,12 +69,12 @@ pub(super) async fn claim_in_txn(
         .await?;
     for row in response["data"][RECORD]
         .as_array()
-        .context("reading the pack installation records")?
+        .ok_or(InstallationError::RecordsRowsMissing)?
         .clone()
     {
         let coordinate = row["coordinate"]
             .as_str()
-            .context("record missing coordinate")?
+            .ok_or(InstallationError::RecordMissingCoordinate)?
             .to_owned();
         if dependencies
             .iter()
@@ -88,7 +95,9 @@ pub(super) async fn claim_in_txn(
             let record = read_record(txn, owner, &coordinate).await?;
             remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?;
         } else {
-            let doc_id = row["_docID"].as_str().context("record missing _docID")?;
+            let doc_id = row["_docID"]
+                .as_str()
+                .ok_or(InstallationError::RecordMissingDocId)?;
             update_required_by(txn, doc_id, &required_by).await?;
         }
     }
@@ -100,7 +109,7 @@ pub(super) async fn release_in_txn(
     owner: &str,
     dependent: &str,
     policy: DriftPolicy,
-) -> Result<Vec<RemoveReport>> {
+) -> anyhow::Result<Vec<RemoveReport>> {
     let response = txn
         .execute(&format!(
             r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
@@ -109,13 +118,13 @@ pub(super) async fn release_in_txn(
         .await?;
     let rows = response["data"][RECORD]
         .as_array()
-        .context("reading the pack installation records")?
+        .ok_or(InstallationError::RecordsRowsMissing)?
         .clone();
     let mut released = Vec::new();
     for row in &rows {
         let coordinate = row["coordinate"]
             .as_str()
-            .context("record missing coordinate")?
+            .ok_or(InstallationError::RecordMissingCoordinate)?
             .to_owned();
         if coordinate == dependent {
             continue;
@@ -133,7 +142,9 @@ pub(super) async fn release_in_txn(
             let record = read_record(txn, owner, &coordinate).await?;
             released.push(remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?);
         } else {
-            let doc_id = row["_docID"].as_str().context("record missing _docID")?;
+            let doc_id = row["_docID"]
+                .as_str()
+                .ok_or(InstallationError::RecordMissingDocId)?;
             update_required_by(txn, doc_id, &required_by).await?;
         }
     }

@@ -1,19 +1,119 @@
 use super::catalog::GraphPackageError;
 use super::LoadedGraphPackage;
 use crate::config_client::{
-    apply_desired_state_plan, collection_schema_contract_digest, ConfigAccess,
-    DesiredStateApplyPlan,
+    apply_desired_state_plan, collection_schema_contract_digest, ConfigAccess, ConfigClientError,
+    DesiredStateApplyPlan, DesiredStateError, TransactionFailure,
 };
 use crate::graph_pipeline::{
-    bind_package_plan, compile_graph, BundledProvenance, CompilerPolicy, GraphIntent, GraphPlan,
-    PackagePlan, PlannedPackageArtifact, RequiredSchemaDigest,
+    bind_package_plan, compile_graph, BundledProvenance, CompilerPolicy, GraphIntent,
+    GraphPipelineError, GraphPlan, PackagePlan, PlannedPackageArtifact, RequiredSchemaDigest,
 };
 use crate::Collection;
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+
+type Result<T, E = GraphPackageInstallError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum GraphPackageInstallError {
+    #[error(transparent)]
+    ConfigClient(#[from] ConfigClientError),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    GraphPipeline(#[from] GraphPipelineError),
+    #[error(transparent)]
+    GraphPackage(#[from] GraphPackageError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Installation(Box<crate::pack::InstallationError>),
+    #[error("package owner DID must not be blank")]
+    OwnerDidBlank,
+    #[error("package owner node is missing")]
+    OwnerNodeMissing,
+    #[error("package owner node is disabled")]
+    OwnerNodeDisabled,
+    #[error("owned graph definition missing graph_id")]
+    GraphDefinitionMissingId,
+    #[error("multiple installed graphs belong to package {package_name:?}")]
+    MultipleInstalledGraphs { package_name: String },
+    #[error("active revision missing plan_json")]
+    ActiveRevisionMissingPlan,
+    #[error("active package revision is missing or ambiguous")]
+    ActiveRevisionAmbiguous,
+    #[error("active package revision failed immutable identity verification")]
+    ActiveRevisionUnverified,
+    #[error("active graph revision has no package attribution")]
+    NoPackageAttribution,
+    #[error(
+        "the active revision of graph {graph_id} belongs to package {package:?}, not {name:?}; list the installed graphs again"
+    )]
+    RevisionPackageMismatch {
+        graph_id: String,
+        package: String,
+        name: String,
+    },
+    #[error("{coordinate} has no installation record; install it again under that coordinate")]
+    NoInstallationRecord { coordinate: String },
+    #[error(
+        "the active revision of {coordinate} was built from {built} but the installed pack is {installed}; install {coordinate} again"
+    )]
+    RevisionDigestMismatch {
+        coordinate: String,
+        built: String,
+        installed: String,
+    },
+    #[error(
+        "graph {graph_id} is active at revision {active}, not {digest}; pass the active digest to run it"
+    )]
+    PinnedRevisionMismatch {
+        graph_id: String,
+        active: String,
+        digest: String,
+    },
+    #[error("graph owner differs from installation scope")]
+    GraphOwnerMismatch,
+    #[error("configuration logical ID missing")]
+    ConfigLogicalIdMissing,
+    #[error("package schema {path:?} declares no collection")]
+    SchemaWithoutCollection { path: String },
+    #[error("package schema repeats a collection")]
+    SchemaRepeatsCollection,
+    #[error(
+        "entry {entry:?} prepare.writes names {collection:?}, which package {package:?} does not declare in its schemas"
+    )]
+    EntryWritesUndeclared {
+        entry: String,
+        collection: String,
+        package: String,
+    },
+    #[error("identical package installation did not reproduce active revision")]
+    IdenticalInstallDiverged,
+    #[error("package install requires graph owner authority")]
+    ActorNotOwner,
+}
+
+impl From<crate::pack::InstallationError> for GraphPackageInstallError {
+    fn from(error: crate::pack::InstallationError) -> Self {
+        Self::Installation(Box::new(error))
+    }
+}
+
+impl TransactionFailure for GraphPackageInstallError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::GraphPipeline(error) => error.config_client_error(),
+            Self::Installation(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,10 +175,9 @@ fn selected_intent<'a>(
 }
 
 async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
-    anyhow::ensure!(
-        !owner.trim().is_empty(),
-        "package owner DID must not be blank"
-    );
+    if owner.trim().is_empty() {
+        return Err(GraphPackageInstallError::OwnerDidBlank);
+    }
     access
         .transact_readonly("graph_package.owner", |txn| {
             Box::pin(async move {
@@ -89,11 +188,10 @@ async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
                     owner,
                 )
                 .await?
-                .context("package owner node is missing")?;
-                anyhow::ensure!(
-                    principal["enabled"].as_bool() == Some(true),
-                    "package owner node is disabled"
-                );
+                .ok_or(GraphPackageInstallError::OwnerNodeMissing)?;
+                if principal["enabled"].as_bool() != Some(true) {
+                    return Err(GraphPackageInstallError::OwnerNodeDisabled);
+                }
                 Ok(())
             })
         })
@@ -105,7 +203,7 @@ pub async fn default_graph_package_install_bindings(
     package: &LoadedGraphPackage,
     owner_did: &str,
     requested: &crate::pack::PackInferenceBindings,
-) -> Result<GraphPackageInstallBindings> {
+) -> anyhow::Result<GraphPackageInstallBindings> {
     validate_owner(access, owner_did).await?;
     let preview = crate::pack::preview_pack_inference_bindings(
         access,
@@ -138,7 +236,7 @@ pub async fn load_installed_package_plan(
                 for definition in response_rows(&response, "GraphDefinition") {
                     let graph_id = definition["graph_id"]
                         .as_str()
-                        .context("owned graph definition missing graph_id")?;
+                        .ok_or(GraphPackageInstallError::GraphDefinitionMissingId)?;
                     let Some(plan) = crate::graph_pipeline::load_active_graph_plan_in_txn(
                         txn, owner_did, graph_id,
                     )
@@ -151,10 +249,11 @@ pub async fn load_installed_package_plan(
                         .as_ref()
                         .is_some_and(|package| package.name == package_name)
                     {
-                        anyhow::ensure!(
-                            selected.is_none(),
-                            "multiple installed graphs belong to package {package_name:?}"
-                        );
+                        if selected.is_some() {
+                            return Err(GraphPackageInstallError::MultipleInstalledGraphs {
+                                package_name: package_name.to_owned(),
+                            });
+                        }
                         selected = Some(plan);
                     }
                 }
@@ -189,25 +288,27 @@ pub async fn select_run_plan(
             let attribution = plan
                 .package
                 .as_ref()
-                .context("active graph revision has no package attribution")?;
-            anyhow::ensure!(
-                attribution.name == name,
-                "the active revision of graph {} belongs to package {:?}, not {name:?}; list the installed graphs again",
-                plan.graph_id,
-                attribution.name
-            );
+                .ok_or(GraphPackageInstallError::NoPackageAttribution)?;
+            if attribution.name != name {
+                return Err(GraphPackageInstallError::RevisionPackageMismatch {
+                    graph_id: plan.graph_id.clone(),
+                    package: attribution.name.clone(),
+                    name: name.to_owned(),
+                });
+            }
             if let Some(coordinate) = coordinate {
                 let record = crate::pack::read_installed_pack(access, owner_did, coordinate)
                     .await?
-                    .with_context(|| {
-                        format!("{coordinate} has no installation record; install it again under that coordinate")
+                    .ok_or_else(|| GraphPackageInstallError::NoInstallationRecord {
+                        coordinate: coordinate.to_owned(),
                     })?;
-                anyhow::ensure!(
-                    attribution.package_digest == record.digest,
-                    "the active revision of {coordinate} was built from {} but the installed pack is {}; install {coordinate} again",
-                    attribution.package_digest,
-                    record.digest
-                );
+                if attribution.package_digest != record.digest {
+                    return Err(GraphPackageInstallError::RevisionDigestMismatch {
+                        coordinate: coordinate.to_owned(),
+                        built: attribution.package_digest.clone(),
+                        installed: record.digest.clone(),
+                    });
+                }
             }
             Ok(Some(plan))
         }
@@ -219,11 +320,13 @@ pub async fn select_run_plan(
             else {
                 return Ok(None);
             };
-            anyhow::ensure!(
-                plan.digest == digest,
-                "graph {graph_id} is active at revision {}, not {digest}; pass the active digest to run it",
-                plan.digest
-            );
+            if plan.digest != digest {
+                return Err(GraphPackageInstallError::PinnedRevisionMismatch {
+                    graph_id: graph_id.to_owned(),
+                    active: plan.digest.clone(),
+                    digest: digest.to_owned(),
+                });
+            }
             Ok(Some(plan))
         }
     }
@@ -277,21 +380,20 @@ async fn active_revision_plan(
     let response = access.execute(&format!(r#"{{ GraphRevision(filter: {{ owner_did: {{ _eq: "{escaped_owner}" }}, graph_id: {{ _eq: "{}" }}, digest: {{ _eq: "{}" }} }}, limit: 2) {{ plan_json }} }}"#,
         crate::graphql::escape_graphql_string(graph_id), crate::graphql::escape_graphql_string(digest))).await?;
     let revisions = response_rows(&response, "GraphRevision");
-    anyhow::ensure!(
-        revisions.len() == 1,
-        "active package revision is missing or ambiguous"
-    );
+    if revisions.len() != 1 {
+        return Err(GraphPackageInstallError::ActiveRevisionAmbiguous);
+    }
     let plan: GraphPlan = serde_json::from_str(
         revisions[0]["plan_json"]
             .as_str()
-            .context("active revision missing plan_json")?,
+            .ok_or(GraphPackageInstallError::ActiveRevisionMissingPlan)?,
     )?;
-    anyhow::ensure!(
-        plan.graph_id == graph_id
-            && plan.digest == digest
-            && crate::graph_pipeline::verify_graph_plan_digest(&plan),
-        "active package revision failed immutable identity verification"
-    );
+    if !(plan.graph_id == graph_id
+        && plan.digest == digest
+        && crate::graph_pipeline::verify_graph_plan_digest(&plan))
+    {
+        return Err(GraphPackageInstallError::ActiveRevisionUnverified);
+    }
     Ok(Some(plan))
 }
 
@@ -317,7 +419,7 @@ pub(crate) async fn prepare_loaded_graph_package_install(
     access: &ConfigAccess,
     package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
-) -> Result<PreparedGraphPackageInstall> {
+) -> anyhow::Result<PreparedGraphPackageInstall> {
     prepare_package(access, package, options, None).await
 }
 
@@ -326,7 +428,7 @@ async fn prepare_package(
     package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
-) -> Result<PreparedGraphPackageInstall> {
+) -> anyhow::Result<PreparedGraphPackageInstall> {
     validate_owner(access, &options.node_did).await?;
     let preview = crate::pack::preview_pack_inference_bindings(
         access,
@@ -341,10 +443,9 @@ async fn prepare_package(
         &preview.bindings,
     )?;
     let intent = selected_intent(&config.graph_intents, graph_id)?;
-    anyhow::ensure!(
-        intent.node_did == options.node_did,
-        "graph owner differs from installation scope"
-    );
+    if intent.node_did != options.node_did {
+        return Err(GraphPackageInstallError::GraphOwnerMismatch.into());
+    }
     let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
     let desired_state = DesiredStateApplyPlan::new(
         bundle
@@ -369,7 +470,7 @@ async fn prepare_package(
             collection: document.collection,
             logical_id: document.add[document.collection.unique_field()]
                 .as_str()
-                .context("configuration logical ID missing")?
+                .ok_or(GraphPackageInstallError::ConfigLogicalIdMissing)?
                 .to_owned(),
             content_digest: crate::pack::pack_artifact_document_digest(&document.add)?,
         });
@@ -378,22 +479,23 @@ async fn prepare_package(
     let mut schema_digests = Vec::new();
     for path in &package.manifest.schemas {
         let collections = query::parse_sdl(package.asset_text(path)?)?;
-        anyhow::ensure!(
-            !collections.is_empty(),
-            "package schema {path:?} declares no collection"
-        );
+        if collections.is_empty() {
+            return Err(
+                GraphPackageInstallError::SchemaWithoutCollection { path: path.clone() }.into(),
+            );
+        }
         let mut collection_contract_digests = BTreeMap::new();
         for collection in collections {
             let name = collection.name.clone();
-            anyhow::ensure!(
-                collection_contract_digests
-                    .insert(
-                        name,
-                        collection_schema_contract_digest(&serde_json::to_value(collection)?)?
-                    )
-                    .is_none(),
-                "package schema repeats a collection"
-            );
+            if collection_contract_digests
+                .insert(
+                    name,
+                    collection_schema_contract_digest(&serde_json::to_value(collection)?)?,
+                )
+                .is_some()
+            {
+                return Err(GraphPackageInstallError::SchemaRepeatsCollection.into());
+            }
         }
         schema_digests.push(RequiredSchemaDigest {
             namespace: path.clone(),
@@ -407,14 +509,17 @@ async fn prepare_package(
             continue;
         };
         for collection in &prepare.writes {
-            anyhow::ensure!(
-                schema_digests
-                    .iter()
-                    .any(|schema| schema.collection_contract_digests.contains_key(collection)),
-                "entry {:?} prepare.writes names {collection:?}, which package {:?} does not declare in its schemas",
-                entry.name,
-                package.manifest.name
-            );
+            if !schema_digests
+                .iter()
+                .any(|schema| schema.collection_contract_digests.contains_key(collection))
+            {
+                return Err(GraphPackageInstallError::EntryWritesUndeclared {
+                    entry: entry.name.clone(),
+                    collection: collection.clone(),
+                    package: package.manifest.name.clone(),
+                }
+                .into());
+            }
         }
     }
     let mut package_plan = PackagePlan {
@@ -453,13 +558,13 @@ async fn prepare_package(
         }
     });
     let plan = bind_package_plan(base, package_plan);
-    anyhow::ensure!(
-        !same_active
-            || active
-                .as_ref()
-                .is_some_and(|active| active.digest == plan.digest),
-        "identical package installation did not reproduce active revision"
-    );
+    if same_active
+        && !active
+            .as_ref()
+            .is_some_and(|active| active.digest == plan.digest)
+    {
+        return Err(GraphPackageInstallError::IdenticalInstallDiverged.into());
+    }
     let desired = &desired_state;
     access
         .transact_readonly("graph_package.install_preflight", |txn| {
@@ -478,7 +583,10 @@ async fn prepare_package(
     })
 }
 
-async fn ensure_package_schemas(access: &ConfigAccess, package: &LoadedGraphPackage) -> Result<()> {
+async fn ensure_package_schemas(
+    access: &ConfigAccess,
+    package: &LoadedGraphPackage,
+) -> anyhow::Result<()> {
     let mut plans = Vec::new();
     for path in &package.manifest.schemas {
         let sdl = package.asset_text(path)?;
@@ -506,11 +614,10 @@ pub async fn install_loaded_graph_package(
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
     record: &GraphInstallRecord,
-) -> Result<GraphPackageInstallReceipt> {
-    anyhow::ensure!(
-        actor_did == options.node_did,
-        "package install requires graph owner authority"
-    );
+) -> anyhow::Result<GraphPackageInstallReceipt> {
+    if actor_did != options.node_did {
+        return Err(GraphPackageInstallError::ActorNotOwner.into());
+    }
     let prepared = prepare_package(access, package, options, graph_id).await?;
     commit_prepared_graph_package_install(access, &options.node_did, package, &prepared, record)
         .await
@@ -522,7 +629,7 @@ async fn commit_prepared_graph_package_install(
     package: &LoadedGraphPackage,
     prepared: &PreparedGraphPackageInstall,
     record: &GraphInstallRecord,
-) -> Result<GraphPackageInstallReceipt> {
+) -> anyhow::Result<GraphPackageInstallReceipt> {
     ensure_package_schemas(access, package).await?;
     let desired = &prepared.desired_state;
     let plan = &prepared.plan;

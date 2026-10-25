@@ -8,8 +8,66 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::ToolSurfaceError;
-use anyhow::{Context, Result};
+use crate::config_client::ConfigClientError;
 use serde::Deserialize;
+
+type Result<T, E = RootAdmissionError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RootAdmissionError {
+    #[error(transparent)]
+    ToolSurface(#[from] ToolSurfaceError),
+    #[error(transparent)]
+    ConfigClient(#[from] ConfigClientError),
+    #[error("resolving relative tool root {}", path.display())]
+    RelativeToolRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("resolving candidate tool root {}", path.display())]
+    CandidateToolRoot {
+        path: PathBuf,
+        #[source]
+        source: Box<RootAdmissionError>,
+    },
+    #[error("resolving allowed tool root {}", path.display())]
+    AllowedToolRoot {
+        path: PathBuf,
+        #[source]
+        source: Box<RootAdmissionError>,
+    },
+    #[error("canonicalizing tool root {}", path.display())]
+    CanonicalizeToolRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting tool root {}", path.display())]
+    InspectToolRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("WorkspaceRoot policy query omitted rows")]
+    WorkspaceRootRowsMissing,
+    #[error("decoding WorkspaceRoot policy rows")]
+    DecodeWorkspaceRoots(#[source] serde_json::Error),
+    #[error("querying WorkspaceRoot policy in configuration transaction")]
+    QueryWorkspaceRoots(#[source] ConfigClientError),
+}
+
+impl crate::config_client::TransactionFailure for RootAdmissionError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) | Self::QueryWorkspaceRoots(error) => Some(error),
+            Self::CandidateToolRoot { source, .. } | Self::AllowedToolRoot { source, .. } => {
+                source.config_client_error()
+            }
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WorkspaceRootDocument {
@@ -139,8 +197,8 @@ fn decode_workspace_root_rows(value: &serde_json::Value) -> Result<Vec<Workspace
         .get("data")
         .and_then(|data| data.get("WorkspaceRoot"))
         .cloned()
-        .context("WorkspaceRoot policy query omitted rows")?;
-    serde_json::from_value(rows).context("decoding WorkspaceRoot policy rows")
+        .ok_or(RootAdmissionError::WorkspaceRootRowsMissing)?;
+    serde_json::from_value(rows).map_err(RootAdmissionError::DecodeWorkspaceRoots)
 }
 
 pub(crate) async fn load_workspace_root_policy_in_txn(
@@ -150,7 +208,7 @@ pub(crate) async fn load_workspace_root_policy_in_txn(
     let response = txn
         .execute("{ WorkspaceRoot { root_path enabled } }")
         .await
-        .context("querying WorkspaceRoot policy in configuration transaction")?;
+        .map_err(RootAdmissionError::QueryWorkspaceRoots)?;
     Ok(project_workspace_root_policy(
         decode_workspace_root_rows(&response)?,
         ceiling_root,
@@ -226,7 +284,7 @@ pub fn canonicalize_tools_root(
     tools: &mut crate::document_config::Tools,
     policy: &WorkspaceRootPolicy,
     stored_root: Option<&str>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let selection = crate::tool_surface::ResolvedToolSelection::from_document(tools)?;
     let requires_root = selection.requires_filesystem_root();
     let authored_root = tools
@@ -324,7 +382,10 @@ fn resolve_tool_root(path: &Path) -> Result<ResolvedToolRoot> {
         path.to_path_buf()
     } else {
         std::env::current_dir()
-            .with_context(|| format!("resolving relative tool root {}", path.display()))?
+            .map_err(|source| RootAdmissionError::RelativeToolRoot {
+                path: path.to_path_buf(),
+                source,
+            })?
             .join(path)
     };
 
@@ -335,19 +396,24 @@ pub(crate) fn resolve_admitted_tool_root<'a>(
     candidate: &Path,
     allowed_roots: impl IntoIterator<Item = &'a Path>,
 ) -> Result<RootAdmission> {
-    let candidate = resolve_tool_root(candidate)
-        .with_context(|| format!("resolving candidate tool root {}", candidate.display()))?;
+    let candidate =
+        resolve_tool_root(candidate).map_err(|source| RootAdmissionError::CandidateToolRoot {
+            path: candidate.to_path_buf(),
+            source: Box::new(source),
+        })?;
 
     let mut resolved_allowed = Vec::new();
     for allowed in allowed_roots {
-        let allowed = match resolve_tool_root(allowed)
-            .with_context(|| format!("resolving allowed tool root {}", allowed.display()))
-        {
-            Ok(allowed) => allowed,
-            // A malformed catalog row is not authoritative: publication drops
-            // it so a bad sibling row cannot become a candidate error.
-            Err(_) => continue,
-        };
+        let allowed =
+            match resolve_tool_root(allowed).map_err(|source| RootAdmissionError::AllowedToolRoot {
+                path: allowed.to_path_buf(),
+                source: Box::new(source),
+            }) {
+                Ok(allowed) => allowed,
+                // A malformed catalog row is not authoritative: publication drops
+                // it so a bad sibling row cannot become a candidate error.
+                Err(_) => continue,
+            };
         if candidate.path.starts_with(&allowed.path) {
             return Ok(RootAdmission::Admitted(candidate.path));
         }
@@ -412,17 +478,21 @@ fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
                         if metadata.file_type().is_symlink() {
                             observed_symlinks.push(candidate.clone());
                         }
-                        resolved = std::fs::canonicalize(&candidate).with_context(|| {
-                            format!("canonicalizing tool root {}", candidate.display())
+                        resolved = std::fs::canonicalize(&candidate).map_err(|source| {
+                            RootAdmissionError::CanonicalizeToolRoot {
+                                path: candidate.clone(),
+                                source,
+                            }
                         })?;
                     }
                     Err(error) if error.kind() == ErrorKind::NotFound => {
                         missing_tail = true;
                         resolved.push(name);
                     }
-                    Err(error) => {
-                        return Err(error).with_context(|| {
-                            format!("inspecting tool root {}", candidate.display())
+                    Err(source) => {
+                        return Err(RootAdmissionError::InspectToolRoot {
+                            path: candidate.clone(),
+                            source,
                         });
                     }
                 }
@@ -667,7 +737,7 @@ mod tests {
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -736,7 +806,7 @@ mod tests {
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 

@@ -1,11 +1,72 @@
-use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 
 use super::{PackError, PackManifest};
-use crate::config_client::ConfigAccess;
+use crate::config_client::{
+    config_projection, desired_state_document_digest, read_desired_state_record_in_txn,
+    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    DesiredStateError,
+};
 use crate::document_config::PackConfig;
 use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProvenanceError {
+    #[error(transparent)]
+    Pack(#[from] PackError),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("pack document is missing owner")]
+    MissingOwner,
+    #[error("pack document is missing logical ID")]
+    MissingLogicalId,
+    #[error("immutable package resource {collection} {owner:?}/{id:?} drifted")]
+    ImmutableDrift {
+        collection: String,
+        owner: String,
+        id: String,
+    },
+    #[error("pack document must be an object")]
+    DocumentNotObject,
+    #[error("pack document tags must be an array")]
+    TagsNotArray,
+    #[error("pack document tag must be a string")]
+    TagNotString,
+    #[error("prepared pack document is missing its origin tag")]
+    MissingOriginTag,
+    #[error("live document tag must be a string")]
+    LiveTagNotString,
+    #[error("configuration document belongs to pack {live_origin:?}, not {desired_origin:?}")]
+    OriginMismatch {
+        live_origin: String,
+        desired_origin: String,
+    },
+    #[error("configuration logical ID missing")]
+    ConfigLogicalIdMissing,
+    #[error("pack config must be an object")]
+    ConfigNotObject,
+    #[error("{field} pack document must be an object")]
+    StampedDocumentNotObject { field: String },
+    #[error("pack {pack} document carries origin for another pack {authored_origin:?}")]
+    ForeignOrigin {
+        pack: String,
+        authored_origin: String,
+    },
+    #[error("decoding provenance-stamped pack configuration")]
+    DecodeStamped(#[source] serde_json::Error),
+}
+
+impl crate::config_client::TransactionFailure for ProvenanceError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::DesiredState(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
 
 pub fn pack_origin_tag(pack_name: &str) -> Result<String, PackError> {
     if !super::is_valid_pack_name(pack_name) {
@@ -39,10 +100,9 @@ pub(super) async fn apply_pack_documents(
     config: &PackConfig,
     policy: super::installation::DriftPolicy,
     expected: Vec<crate::config_client::DesiredStateExpectation>,
-) -> Result<super::installation::InstallReport> {
+) -> anyhow::Result<super::installation::InstallReport> {
     let documents = super::installation::installable_documents(config)?;
-    let guard =
-        crate::config_client::DesiredStateApplyPlan::new(Vec::new())?.with_expected(expected)?;
+    let guard = DesiredStateApplyPlan::new(Vec::new())?.with_expected(expected)?;
     access
         .transact_write("pack.documents.install", |txn| {
             let documents = documents.clone();
@@ -56,52 +116,49 @@ pub(super) async fn apply_pack_documents(
 }
 
 pub(crate) async fn prepare_pack_plan_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    documents: &[crate::config_client::DesiredStateApplyDocument],
+    txn: &ConfigApplyTxn<'_>,
+    documents: &[DesiredStateApplyDocument],
     immutable: bool,
-) -> Result<crate::config_client::DesiredStateApplyPlan> {
+) -> Result<DesiredStateApplyPlan, ProvenanceError> {
     let mut prepared = Vec::with_capacity(documents.len());
     for authored in documents {
         let mut document = authored.clone();
         let owner = document.add["node_did"]
             .as_str()
-            .context("pack document is missing owner")?;
+            .ok_or(ProvenanceError::MissingOwner)?;
         let id = document.add[document.collection.unique_field()]
             .as_str()
-            .context("pack document is missing logical ID")?;
-        if let Some((_, live)) = crate::config_client::read_desired_state_record_in_txn(
-            txn,
-            document.collection,
-            owner,
-            id,
-        )
-        .await?
+            .ok_or(ProvenanceError::MissingLogicalId)?;
+        if let Some((_, live)) =
+            read_desired_state_record_in_txn(txn, document.collection, owner, id).await?
         {
-            if immutable {
-                anyhow::ensure!(
-                    pack_artifact_document_digest(&document.add)?
-                        == pack_artifact_document_digest(&live)?,
-                    "immutable package resource {} {owner:?}/{id:?} drifted",
-                    document.collection.graphql_type()
-                );
+            if immutable
+                && pack_artifact_document_digest(&document.add)?
+                    != pack_artifact_document_digest(&live)?
+            {
+                return Err(ProvenanceError::ImmutableDrift {
+                    collection: document.collection.graphql_type().to_owned(),
+                    owner: owner.to_owned(),
+                    id: id.to_owned(),
+                });
             }
             merge_tags(&mut document.update, &live)?;
         }
         prepared.push(document);
     }
-    Ok(crate::config_client::DesiredStateApplyPlan::new(prepared)?)
+    Ok(DesiredStateApplyPlan::new(prepared)?)
 }
 
 pub fn pack_document_digests(
-    config: &crate::document_config::PackConfig,
-) -> Result<std::collections::BTreeMap<(String, String), String>> {
-    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    config: &PackConfig,
+) -> Result<BTreeMap<(String, String), String>, ProvenanceError> {
+    let plan = DesiredStateApplyPlan::from_pack_config(config)?;
     plan.documents()
         .iter()
         .map(|document| {
             let id = document.add[document.collection.unique_field()]
                 .as_str()
-                .context("configuration logical ID missing")?
+                .ok_or(ProvenanceError::ConfigLogicalIdMissing)?
                 .to_owned();
             Ok((
                 (document.collection.graphql_type().to_owned(), id),
@@ -111,35 +168,38 @@ pub fn pack_document_digests(
         .collect()
 }
 
-pub(crate) fn pack_artifact_document_digest(value: &serde_json::Value) -> Result<String> {
+pub(crate) fn pack_artifact_document_digest(
+    value: &serde_json::Value,
+) -> Result<String, ProvenanceError> {
     let mut canonical = value.clone();
     canonical
         .as_object_mut()
-        .context("pack document must be an object")?
+        .ok_or(ProvenanceError::DocumentNotObject)?
         .remove("tags");
-    Ok(crate::config_client::desired_state_document_digest(
-        &canonical,
-    )?)
+    Ok(desired_state_document_digest(&canonical)?)
 }
 
-fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Result<()> {
+fn merge_tags(
+    desired: &mut serde_json::Value,
+    live: &serde_json::Value,
+) -> Result<(), ProvenanceError> {
     let Some(desired_tags) = desired.get_mut("tags") else {
         return Ok(());
     };
     let mut merged = desired_tags
         .as_array()
-        .context("pack document tags must be an array")?
+        .ok_or(ProvenanceError::TagsNotArray)?
         .clone();
     let desired_strings = merged
         .iter()
         .map(|tag| {
             tag.as_str()
                 .map(ToOwned::to_owned)
-                .context("pack document tag must be a string")
+                .ok_or(ProvenanceError::TagNotString)
         })
-        .collect::<Result<Vec<_>>>()?;
-    let desired_origin = pack_origin_from_tags(&desired_strings)?
-        .context("prepared pack document is missing its origin tag")?;
+        .collect::<Result<Vec<_>, _>>()?;
+    let desired_origin =
+        pack_origin_from_tags(&desired_strings)?.ok_or(ProvenanceError::MissingOriginTag)?;
     let live_strings = live
         .get("tags")
         .and_then(serde_json::Value::as_array)
@@ -148,14 +208,16 @@ fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Resu
         .map(|tag| {
             tag.as_str()
                 .map(ToOwned::to_owned)
-                .context("live document tag must be a string")
+                .ok_or(ProvenanceError::LiveTagNotString)
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     if let Some(live_origin) = pack_origin_from_tags(&live_strings)? {
-        anyhow::ensure!(
-            live_origin == desired_origin,
-            "configuration document belongs to pack {live_origin:?}, not {desired_origin:?}"
-        );
+        if live_origin != desired_origin {
+            return Err(ProvenanceError::OriginMismatch {
+                live_origin: live_origin.to_owned(),
+                desired_origin: desired_origin.to_owned(),
+            });
+        }
     }
     for tag in live
         .get("tags")
@@ -175,12 +237,12 @@ fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Resu
 pub(super) fn stamp_pack_origin(
     manifest: &PackManifest,
     config: &PackConfig,
-) -> Result<PackConfig> {
+) -> Result<PackConfig, ProvenanceError> {
     let origin = pack_origin_tag(&manifest.name)?;
     let mut value = serde_json::to_value(config)?;
     let root = value
         .as_object_mut()
-        .context("pack config must be an object")?;
+        .ok_or(ProvenanceError::ConfigNotObject)?;
     for collection in Collection::ALL {
         if collection == Collection::Node
             || matches!(
@@ -197,7 +259,7 @@ pub(super) fn stamp_pack_origin(
         let Some(field) = collection.dir_name() else {
             continue;
         };
-        let (fields, _) = crate::config_client::config_projection(collection, None)?;
+        let (fields, _) = config_projection(collection, None)?;
         if !fields.contains(&"tags") {
             continue;
         }
@@ -207,9 +269,11 @@ pub(super) fn stamp_pack_origin(
             .into_iter()
             .flatten()
         {
-            let object = document
-                .as_object_mut()
-                .with_context(|| format!("{field} pack document must be an object"))?;
+            let object = document.as_object_mut().ok_or_else(|| {
+                ProvenanceError::StampedDocumentNotObject {
+                    field: field.to_owned(),
+                }
+            })?;
             let mut tags = object
                 .remove("tags")
                 .filter(|value| !value.is_null())
@@ -217,11 +281,12 @@ pub(super) fn stamp_pack_origin(
                 .transpose()?
                 .unwrap_or_default();
             if let Some(authored_origin) = pack_origin_from_tags(&tags)? {
-                anyhow::ensure!(
-                    authored_origin == manifest.name,
-                    "pack {} document carries origin for another pack {authored_origin:?}",
-                    manifest.name
-                );
+                if authored_origin != manifest.name {
+                    return Err(ProvenanceError::ForeignOrigin {
+                        pack: manifest.name.clone(),
+                        authored_origin: authored_origin.to_owned(),
+                    });
+                }
             }
             if !tags.iter().any(|tag| tag == &origin) {
                 tags.push(origin.clone());
@@ -231,5 +296,5 @@ pub(super) fn stamp_pack_origin(
             object.insert("tags".to_owned(), serde_json::to_value(tags)?);
         }
     }
-    serde_json::from_value(value).context("decoding provenance-stamped pack configuration")
+    serde_json::from_value(value).map_err(ProvenanceError::DecodeStamped)
 }

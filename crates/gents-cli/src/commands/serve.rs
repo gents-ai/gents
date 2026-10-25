@@ -842,7 +842,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                         format!(
                             "tool root {} does not resolve: {}",
                             root.display(),
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         )
                     })
             })

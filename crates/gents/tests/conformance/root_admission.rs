@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 
 use super::lean_contract_snapshot;
 
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+
 #[test]
 fn generated_root_admission_case_inventory_is_complete() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().root_admission_cases;
@@ -200,7 +202,8 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                         "conformance",
                         Some(selection),
                         Some(ceiling),
-                    ),
+                    )
+                    .map_err(BoxedError::from),
                     None => {
                         let mut tools = gents::document_config::Tools {
                             host: Some(gents::document_config::HostTools {
@@ -214,6 +217,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                             ..Default::default()
                         };
                         gents::tool_surface::canonicalize_tools_root(&mut tools, &policy, None)
+                            .map_err(BoxedError::from)
                             .and_then(|()| {
                                 let configured = tools
                                     .host
@@ -224,6 +228,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                                     configured.as_deref().map(std::path::Path::new),
                                     Some(ceiling),
                                 )
+                                .map_err(BoxedError::from)
                             })
                     }
                 };
