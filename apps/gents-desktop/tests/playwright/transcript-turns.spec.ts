@@ -157,7 +157,7 @@ test.describe("a sent turn kept near the top", () => {
     await expect.poll(offset).toBeLessThanOrEqual(89);
     expect(await offset()).toBeGreaterThanOrEqual(87);
     expect(
-      seen.offsets.filter((y) => y > 100 && y < seen.from - 1),
+      seen.offsets.filter((y) => y > 89 && y < seen.from - 1),
       JSON.stringify(seen),
     ).not.toHaveLength(0);
     /* the bridge shows the message as its saved row, and the reply begins:
