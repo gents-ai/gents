@@ -99,12 +99,16 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             ClientCoreOptions {
                 operator_identity_interaction:
                     gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
-                ..ClientCoreOptions::default()
+                ..ClientCoreOptions::local_only()
             },
         )
         .await
         .unwrap(),
     );
+    let custody: gents::store_key::StoreEncryption =
+        serde_json::from_slice(&std::fs::read(paths.store_encryption_path()).unwrap()).unwrap();
+    assert_eq!(custody.custody, gents::store_key::StoreKeyCustody::File);
+    assert!(paths.store_key_path().is_file());
     let listener = gents_desktop_bridge::host::local::LocalListener::bind(&paths)
         .await
         .unwrap();
