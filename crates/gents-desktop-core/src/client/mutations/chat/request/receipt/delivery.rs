@@ -32,7 +32,7 @@ pub(crate) async fn reconcile(
         .as_ref()
         .context("unresolved caller receipt omitted its signed preparation")?;
     let Some(access) = access else {
-        return Err(pending.outcome_unknown());
+        return Err(pending.outcome_unknown(None));
     };
     let delivered = resolve_unresolved_submission(access, pending).await;
     let outcome = match &delivered {
@@ -45,7 +45,7 @@ pub(crate) async fn reconcile(
         {
             Ok(settled) => settled,
             // A failed local outcome write cannot authorize a fresh preparation.
-            Err(_) => return Err(pending.outcome_unknown()),
+            Err(error) => return Err(pending.outcome_unknown(Some(error))),
         };
     match settled.result() {
         Decision::Settled(reference, Outcome::Accepted) => Ok(reference.request),
@@ -53,6 +53,6 @@ pub(crate) async fn reconcile(
             request: reference.request,
         }
         .into()),
-        _ => Err(pending.outcome_unknown()),
+        _ => Err(pending.outcome_unknown(None)),
     }
 }

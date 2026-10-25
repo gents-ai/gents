@@ -40,6 +40,8 @@ pub(crate) mod serve;
 pub(crate) mod session;
 pub(crate) mod status;
 pub(crate) mod task;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 pub(crate) mod tools;
 pub(crate) mod trace;
 pub(crate) mod ux;

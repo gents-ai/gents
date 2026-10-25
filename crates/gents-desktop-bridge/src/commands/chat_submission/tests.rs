@@ -143,6 +143,34 @@ async fn lost_send_reply_recovers_after_reopen_and_retains_its_result_after_ackn
             core.store().focused_request_id().as_deref(),
             Some("another-chat-turn")
         );
+        let payloads = ConfigAccess::local(core.node_arc())
+            .execute("{ PendingChatSubmission { payload } }")
+            .await?;
+        let payload: Value = serde_json::from_str(
+            payloads["data"]["PendingChatSubmission"][0]["payload"]
+                .as_str()
+                .context("retained caller payload")?,
+        )?;
+        let pending: gents_desktop_core::client::UnresolvedSubmission =
+            serde_json::from_value(payload["record"]["pending"].clone())?;
+        let unknown = gents_desktop_core::client::SubmissionOutcomeUnknown {
+            request_id: pending.request_id.clone(),
+            session_id: pending.session_id.clone(),
+            pending,
+            cause: Some(gents_protocol::database_error::StorageFull.into()),
+        };
+        let intent = intent(&core, &request)?.context("caller intent")?;
+        let uncertain = sent(&core, &intent, Err(unknown.into())).await?;
+        assert_eq!(uncertain.request_id, recovered.request_id);
+        assert_eq!(uncertain.session_id, recovered.session_id);
+        assert_eq!(
+            serde_json::to_value(&uncertain.submission_receipt)?,
+            serde_json::to_value(&recovered.submission_receipt)?
+        );
+        let uncertain = serde_json::to_value(uncertain)?;
+        assert_eq!(uncertain["outcome"], "deliveryUnknown");
+        assert_eq!(uncertain["deliveryError"]["code"], "storageFull");
+        assert_eq!(uncertain["deliveryError"]["retryable"], false);
         let receipt = recovered
             .submission_receipt
             .context("native caller receipt")?;
