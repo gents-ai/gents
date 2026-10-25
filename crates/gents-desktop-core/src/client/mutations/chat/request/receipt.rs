@@ -266,17 +266,16 @@ pub(super) async fn commit_signed_submission(
     let Err(error) = written else {
         return Ok(pending.result);
     };
+    reconcile_commit_failure(access, pending, error).await
+}
+
+async fn reconcile_commit_failure(
+    access: &ConfigAccess,
+    pending: UnresolvedSubmission,
+    error: anyhow::Error,
+) -> Result<SubmittedRequest> {
     if gents::graphql::is_storage_full(&error) {
         return Err(pending.outcome_unknown(Some(error)));
-    }
-    if !matches!(access, ConfigAccess::Graphql(_)) {
-        if owner_rejected(&error) && reports_existing_request(&error) {
-            return match owner_receipt(access, &pending.create).await {
-                Ok(true) => Ok(pending.result),
-                Ok(false) | Err(_) => Err(pending.outcome_unknown(Some(error))),
-            };
-        }
-        return Err(error);
     }
     let receipt_unreadable = error
         .chain()
@@ -808,6 +807,35 @@ mod tests {
         let mut different_signature = pending.create.clone();
         different_signature.admission.signature[0] ^= 1;
         assert!(owner_receipt(&access, &different_signature).await.is_err());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn local_non_graphql_failure_preserves_unknown_delivery() {
+        let home = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        let access = ConfigAccess::local(std::sync::Arc::clone(&node));
+        let pending = test_pending();
+
+        let error = reconcile_commit_failure(
+            &access,
+            pending.clone(),
+            anyhow::anyhow!("native operation abandoned after send"),
+        )
+        .await
+        .expect_err("a local post-send failure does not prove rejection");
+
+        let unknown = error
+            .downcast_ref::<SubmissionOutcomeUnknown>()
+            .expect("local non-GraphQL errors remain uncertain");
+        assert_eq!(unknown.request_id, pending.request_id);
+        assert_eq!(unknown.pending.mutation, pending.mutation);
         node.shutdown().await;
     }
 

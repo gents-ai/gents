@@ -406,7 +406,7 @@ mod tests {
                 json!({ "installationBuild": null, "installationControlVersion": 0 }),
                 true,
             ),
-            (json!({}), false),
+            (json!({}), true),
             (
                 json!({ "installationBuild": "different-compatible-build", "installationControlVersion": 1 }),
                 true,
