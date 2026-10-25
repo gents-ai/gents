@@ -1758,14 +1758,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await;
                     let receipt = match receipt {
                         Ok(receipt) => receipt,
-                        Err(error)
-                            if error
-                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
-                                .is_some() =>
-                        {
+                        Err(error) if error.append_rejection().is_some() => {
                             return native.observe(false).await;
                         }
-                        Err(error) => return Err(error),
+                        Err(error) => return Err(error.into()),
                     };
                     native.segment_ids.insert(receipt.segment_doc_id, record.id);
                     native.observe(true).await
@@ -1881,18 +1877,20 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await?
                     .context("accepted physical tool disappeared before dispatch")?;
                     match tool
-                        .start_running_at(native.fixture_time(*now)?, &symbolic_generation(*generation))
+                        .start_running_at(
+                            native.fixture_time(*now)?,
+                            &symbolic_generation(*generation),
+                        )
                         .await
                     {
                         Ok(()) => native.observe(true).await,
-                        Err(error)
-                            if error
-                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolDispatchRejection>()
-                                .is_some() =>
-                        {
+                        Err(error) if error.dispatch_rejection().is_some() => {
                             native.observe(false).await
                         }
-                        Err(error) => Err(error.context("native tool dispatch owner failed")),
+                        Err(error) => {
+                            Err(anyhow::Error::from(error)
+                                .context("native tool dispatch owner failed"))
+                        }
                     }
                 }
                 LeanCanonicalExecutionOperation::TerminalizeCompleted {
@@ -3122,16 +3120,14 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         .await
         .expect_err("invalid durable deadline cannot authorize a fresh append");
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("no accepted deadline"),
+            format!("{}", ErrorChain(&error)).contains("no accepted deadline"),
             "missing deadline must fail at the deadline integrity check: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(
-            error
-                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
-                .is_none(),
+            error.append_rejection().is_none(),
             "{label} deadline is an integrity error, not a modeled rejection: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let mut expected_unchanged = before.clone();
         expected_unchanged.accepted = false;

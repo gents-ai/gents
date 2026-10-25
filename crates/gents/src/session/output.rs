@@ -187,6 +187,21 @@ pub(crate) fn find_reconstruction_error<'a>(
                     _ => None,
                 },
             )
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::tool_call_lifecycle::delivery::DeliveryError>()
+                    .and_then(crate::tool_call_lifecycle::delivery::DeliveryError::reconstruction)
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::tool_call_lifecycle::ToolCallLifecycleError>()
+                    .and_then(crate::tool_call_lifecycle::ToolCallLifecycleError::reconstruction)
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::tool_call_lifecycle::TransitionError>()
+                    .and_then(crate::tool_call_lifecycle::TransitionError::reconstruction)
+            })
     })
 }
 

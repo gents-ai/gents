@@ -88,6 +88,20 @@ pub(in crate::commands::codex_shim) enum CodexShimProjectionError {
     TerminalToolCallUndelivered,
     #[error("cycle in Codex steering history ancestry at request {request_id}")]
     SteeringCycle { request_id: String },
+    #[error(transparent)]
+    Session(#[from] gents::session::SessionError),
+    #[error(transparent)]
+    Access(#[from] gents::config_client::ConfigClientError),
+}
+
+impl gents::config_client::TransactionFailure for CodexShimProjectionError {
+    fn config_client_error(&self) -> Option<&gents::config_client::ConfigClientError> {
+        match self {
+            Self::Session(error) => error.config_client_error(),
+            Self::Access(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 mod goal;

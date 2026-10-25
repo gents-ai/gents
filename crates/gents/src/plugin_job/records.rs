@@ -1,7 +1,6 @@
 //! The two job records on an `AgentToolCall` row: `job_pin` (written once)
 //! and `job_progress` (last writer wins under a revision compare-and-set).
 
-use anyhow::{Context, Result};
 use gents_protocol::job::{
     JobBudget, JobPauseReason, JobPin, JobProgress, JobResume, JobState, JOB_PROGRESS_MAX_BYTES,
     JOB_PROGRESS_TEXT_MAX_BYTES,
@@ -29,6 +28,46 @@ pub enum RecordError {
     #[error("job_progress is {bytes} bytes, over the {max} byte cap")]
     TooLarge { bytes: usize, max: usize },
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum JobRecordsError {
+    #[error(transparent)]
+    Refused(#[from] RecordError),
+    #[error("AgentToolCall query omitted rows for {row_doc_id}")]
+    RowsOmitted { row_doc_id: String },
+    #[error("job row {row_doc_id} does not exist")]
+    RowMissing { row_doc_id: String },
+    #[error("decoding {what}")]
+    Decode {
+        what: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+}
+
+impl JobRecordsError {
+    pub(crate) fn refusal(&self) -> Option<&RecordError> {
+        match self {
+            Self::Refused(refusal) => Some(refusal),
+            _ => None,
+        }
+    }
+}
+
+impl crate::config_client::TransactionFailure for JobRecordsError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = JobRecordsError> = std::result::Result<T, E>;
 
 /// Progress fields the host owns; the guest's values for them are overwritten.
 /// `revision` is not here: the compare-and-set assigns it.
@@ -66,10 +105,12 @@ where
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
-        .with_context(|| format!("AgentToolCall query omitted rows for {row_doc_id}"))?;
-    let row = rows
-        .first()
-        .with_context(|| format!("job row {row_doc_id} does not exist"))?;
+        .ok_or_else(|| JobRecordsError::RowsOmitted {
+            row_doc_id: row_doc_id.to_owned(),
+        })?;
+    let row = rows.first().ok_or_else(|| JobRecordsError::RowMissing {
+        row_doc_id: row_doc_id.to_owned(),
+    })?;
     Ok(row.get(field).filter(|value| !value.is_null()).cloned())
 }
 
@@ -93,7 +134,12 @@ where
     T: serde::de::DeserializeOwned,
 {
     value
-        .map(|value| serde_json::from_value(value).with_context(|| format!("decoding {what}")))
+        .map(|value| {
+            serde_json::from_value(value).map_err(|source| JobRecordsError::Decode {
+                what: what.to_owned(),
+                source,
+            })
+        })
         .transpose()
 }
 
@@ -315,11 +361,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(admission.path);
     }
 
-    async fn write_pin(
-        admission: &PublishedAdmission,
-        doc_id: &str,
-        pin: &JobPin,
-    ) -> anyhow::Result<()> {
+    async fn write_pin(admission: &PublishedAdmission, doc_id: &str, pin: &JobPin) -> Result<()> {
         ConfigAccess::transact_local_write(&admission.node, None, "test.records.pin", |txn| {
             Box::pin(async move { write_pin_in_txn(txn, doc_id, pin).await })
         })
@@ -332,7 +374,7 @@ mod tests {
         expected: u64,
         guest: JobProgress,
         host: HostProgressFacts,
-    ) -> anyhow::Result<JobProgress> {
+    ) -> Result<JobProgress> {
         ConfigAccess::transact_local_write(&admission.node, None, "test.records.progress", |txn| {
             let (guest, host) = (guest.clone(), host.clone());
             Box::pin(async move { write_progress_in_txn(txn, doc_id, expected, guest, host).await })
@@ -366,10 +408,7 @@ mod tests {
         let mut other = pin.clone();
         other.handle = "another-handle".to_owned();
         let error = write_pin(&admission, &doc_id, &other).await.unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<RecordError>(),
-            Some(RecordError::PinConflict(_))
-        ));
+        assert!(matches!(error.refusal(), Some(RecordError::PinConflict(_))));
         assert_eq!(
             read_pin(&access(&admission), &doc_id).await.unwrap(),
             Some(pin)
@@ -387,7 +426,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<RecordError>(),
+            error.refusal(),
             Some(RecordError::StaleRevision {
                 stored: 1,
                 expected: 0,
@@ -476,7 +515,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<RecordError>(),
+            error.refusal(),
             Some(RecordError::TooLarge { .. })
         ));
         assert_eq!(
@@ -512,7 +551,7 @@ mod tests {
         doc_id: &str,
         evidence: &PluginExecutionReceipt,
         resume: Option<&JobResume>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         ConfigAccess::transact_local_write(&admission.node, None, "test.records.step", |txn| {
             Box::pin(async move { write_step_state_in_txn(txn, doc_id, evidence, resume).await })
         })
@@ -545,7 +584,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(
-            error.downcast_ref::<RecordError>(),
+            error.refusal(),
             Some(&RecordError::ResumeConflict(doc_id.clone()))
         );
         assert_eq!(

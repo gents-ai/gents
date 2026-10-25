@@ -135,6 +135,20 @@ pub enum SessionError {
     DuplicateRequestRoot,
     #[error("incoming request does not match the session owner/session/requester/agent scope")]
     IncomingScopeMismatch,
+    #[error(
+        "session observation selection found duplicate request_id roots for session_id={session_id}"
+    )]
+    DuplicateRequestIdRoots { session_id: String },
+    #[error("incoming request row is missing from the scoped request facts")]
+    IncomingMissing,
+    #[error("advancing observation: session disappeared")]
+    ObservationSessionDisappeared,
+    #[error("session observation refresh found duplicate authoritative request rows")]
+    RefreshDuplicateRows,
+    #[error("invalid title update timestamp")]
+    InvalidTitleTimestamp(#[source] chrono::ParseError),
+    #[error("updating title: no AgentSession for session_id={session_id}")]
+    TitleSessionMissing { session_id: String },
 }
 
 impl TransactionFailure for SessionError {

@@ -70,7 +70,7 @@ async fn foreground_refuses_a_job_row() {
     let err = admission.tool.foreground().await.unwrap_err();
     assert!(
         matches!(
-            err.downcast_ref::<IllegalToolCallTransition>(),
+            err.illegal(),
             Some(IllegalToolCallTransition::PluginJobIsBackgroundOnly)
         ),
         "expected PluginJobIsBackgroundOnly, got: {err:?}"

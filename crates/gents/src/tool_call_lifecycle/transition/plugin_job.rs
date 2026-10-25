@@ -50,7 +50,7 @@ impl ToolCallLifecycle {
         output: &str,
         reason: Option<&str>,
         progress: Option<(JobState, Option<JobPauseReason>)>,
-    ) -> Result<bool> {
+    ) -> anyhow::Result<bool> {
         let terminal = ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
@@ -79,7 +79,7 @@ impl ToolCallLifecycle {
         inline: bool,
     ) -> Result<PluginJobTerminal> {
         if self.kind() != ToolRowKind::PluginJob {
-            return Err(TransitionError::PluginJobSettlementNotPinned.into());
+            return Err(TransitionError::PluginJobSettlementNotPinned);
         }
         self.ensure_state(&[ToolCallState::Running, state], "settle_plugin_job")?;
         let doc_id = self
@@ -147,7 +147,7 @@ impl ToolCallLifecycle {
     pub(crate) async fn finish_plugin_job_row(
         &mut self,
         terminal: PluginJobTerminal,
-    ) -> Result<bool> {
+    ) -> anyhow::Result<bool> {
         if !terminal.won {
             self.sync_after_lost_running_compare("settle_plugin_job")
                 .await?;

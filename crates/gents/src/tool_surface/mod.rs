@@ -153,6 +153,18 @@ pub enum ToolSurfaceError {
     PluginToolDuplicate { name: String },
     #[error(transparent)]
     DocumentConfig(Box<crate::document_config::DocumentConfigError>),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+}
+
+impl crate::config_client::TransactionFailure for ToolSurfaceError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::DocumentConfig(error) => error.config_client_error(),
+            Self::Access(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 impl From<crate::document_config::DocumentConfigError> for ToolSurfaceError {

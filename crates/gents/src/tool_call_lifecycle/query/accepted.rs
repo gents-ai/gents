@@ -1,4 +1,3 @@
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
@@ -8,6 +7,8 @@ use crate::session::canonical_rows::{decode_transcript_message_row, AGENT_MESSAG
 use crate::streaming::AcceptedToolCall;
 
 use super::{ToolCallLifecycle, ToolCallQueryError};
+
+type Result<T, E = ToolCallQueryError> = std::result::Result<T, E>;
 
 impl ToolCallLifecycle {
     #[cfg(test)]
@@ -51,11 +52,11 @@ impl ToolCallLifecycle {
                         .as_array()
                         .ok_or(ToolCallQueryError::DirectAdmissionOmittedToolRows)?;
                     if rows.len() != 1 {
-                        return Err(ToolCallQueryError::DirectAdmissionToolMissingOrAmbiguous.into());
+                        return Err(ToolCallQueryError::DirectAdmissionToolMissingOrAmbiguous);
                     }
                     let tool = &rows[0];
                     if !(tool["spawned_by_tool_call_doc_id"].is_null() && tool["plugin_parent_tool_call_doc_id"].is_null() && tool["plugin_effect_ordinal"].is_null()) {
-                        return Err(ToolCallQueryError::SpawnedProcessAdmissionNotDirect.into());
+                        return Err(ToolCallQueryError::SpawnedProcessAdmissionNotDirect);
                     }
                     let request_doc_id = tool["request_doc_id"]
                         .as_str()
@@ -87,7 +88,7 @@ impl ToolCallLifecycle {
                         .as_array()
                         .ok_or(ToolCallQueryError::DirectAdmissionOmittedHeaderRows)?;
                     if headers.len() != 1 {
-                        return Err(ToolCallQueryError::AcceptedHeaderMissingOrAmbiguous.into());
+                        return Err(ToolCallQueryError::AcceptedHeaderMissingOrAmbiguous);
                     }
                     let header = decode_transcript_message_row(&headers[0])?;
                     let (message, _) = crate::session::load_canonical_message_in_txn(
@@ -98,7 +99,7 @@ impl ToolCallLifecycle {
                     )
                     .await?;
                     if message.role != MessageRole::Assistant {
-                        return Err(ToolCallQueryError::DirectBindingNotAssistant.into());
+                        return Err(ToolCallQueryError::DirectBindingNotAssistant);
                     }
                     if !(message.outcome == OutputOutcome::Complete
                         || (!require_complete
@@ -107,13 +108,13 @@ impl ToolCallLifecycle {
                                 Some("completed" | "failed" | "timedOut" | "cancelled")
                             )))
                     {
-                        return Err(ToolCallQueryError::PartialDiagnosticNotTerminal.into());
+                        return Err(ToolCallQueryError::PartialDiagnosticNotTerminal);
                     }
                     let MessagePublication::RequestExecution {
                         execution_generation,
                     } = &message.publication
                     else {
-                        return Err(ToolCallQueryError::DirectDispatchNotExecution.into());
+                        return Err(ToolCallQueryError::DirectDispatchNotExecution);
                     };
                     let matches = message
                         .blocks
@@ -136,7 +137,7 @@ impl ToolCallLifecycle {
                         })
                         .collect::<Vec<_>>();
                     if matches.len() != 1 {
-                        return Err(ToolCallQueryError::AcceptedHeaderNotUniqueBinding.into());
+                        return Err(ToolCallQueryError::AcceptedHeaderNotUniqueBinding);
                     }
                     let (call_id, arguments) = matches[0];
                     Ok(AcceptedToolCall {

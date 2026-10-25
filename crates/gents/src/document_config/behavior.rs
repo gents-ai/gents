@@ -135,10 +135,7 @@ pub(crate) async fn list_agent_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn upsert_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
-    behavior: &Agent,
-) -> anyhow::Result<()> {
+pub async fn upsert_agent(node: &std::sync::Arc<EmbeddedNode>, behavior: &Agent) -> Result<()> {
     crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,

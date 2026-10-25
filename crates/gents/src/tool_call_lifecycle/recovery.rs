@@ -1207,7 +1207,7 @@ async fn recover_tool_call_row(
         return Ok(false);
     }
     let result = outcome.result_text(deadline_at);
-    match outcome {
+    let settled = match outcome {
         RecoveryOutcome::TimedOut => lifecycle.timeout().await,
         RecoveryOutcome::Cancelled
         | RecoveryOutcome::BackgroundInterrupted
@@ -1236,7 +1236,8 @@ async fn recover_tool_call_row(
                 lifecycle.fail_owned(&result, failure_class, None).await
             }
         }
-    }
+    };
+    Ok(settled?)
 }
 
 fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {

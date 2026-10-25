@@ -634,6 +634,12 @@ pub enum DocumentConfigError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("{collection} {id} not found for {owner}")]
+    OwnedDocumentNotFound {
+        collection: &'static str,
+        id: String,
+        owner: String,
+    },
     #[error(transparent)]
     DocumentView(Box<crate::agent::document_view::DocumentViewError>),
     #[error(transparent)]
@@ -644,6 +650,12 @@ pub enum DocumentConfigError {
     Callback(Box<crate::callback::CallbackError>),
     #[error(transparent)]
     CallbackPlugin(Box<crate::callback::plugin::CallbackPluginError>),
+}
+
+impl From<crate::config_client::DesiredStateError> for DocumentConfigError {
+    fn from(error: crate::config_client::DesiredStateError) -> Self {
+        Self::DesiredState(Box::new(error))
+    }
 }
 
 impl From<crate::agent::document_view::DocumentViewError> for DocumentConfigError {
@@ -680,6 +692,9 @@ impl crate::config_client::TransactionFailure for DocumentConfigError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         match self {
             Self::ConfigClient(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::BackendRegistry(error) => error.config_client_error(),
+            Self::Callback(error) => error.config_client_error(),
             _ => None,
         }
     }

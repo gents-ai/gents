@@ -25,7 +25,7 @@ pub(crate) async fn configured_output_budget(
                 node_did,
                 agent_id,
                 tool_name,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "output budget uses the default: agent tools did not resolve"
             );
             crate::toolset::DEFAULT_MAX_COMMAND_CHARS
@@ -37,7 +37,7 @@ async fn load_command_output_limits(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
-) -> anyhow::Result<CommandOutputLimits> {
+) -> Result<CommandOutputLimits, super::ToolSurfaceError> {
     let owner = node_did.to_owned();
     let agent_id = agent_id.to_owned();
     crate::config_client::ConfigAccess::transact_local_readonly(

@@ -4,7 +4,7 @@ use super::sessions::{
     SESSION_SCOPE_FIELDS,
 };
 use super::*;
-use anyhow::{Context, Result};
+type Result<T, E = SessionError> = std::result::Result<T, E>;
 use std::collections::BTreeMap;
 
 const REQUEST_FACT_SESSION_BATCH_SIZE: usize =
@@ -39,21 +39,20 @@ fn incoming_is_canonical_latest(
     rows: &[SessionRequestFact],
     incoming: &SessionRequestFact,
 ) -> Result<bool> {
-    anyhow::ensure!(
-        rows.len()
-            == rows
-                .iter()
-                .map(|row| row.observed.request_id.as_str())
-                .collect::<std::collections::BTreeSet<_>>()
-                .len(),
-        "session observation selection found duplicate request_id roots for \
-         session_id={}",
-        session.session_id
-    );
-    anyhow::ensure!(
-        rows.contains(incoming),
-        "incoming request row is missing from the scoped request facts"
-    );
+    if rows.len()
+        != rows
+            .iter()
+            .map(|row| row.observed.request_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    {
+        return Err(SessionError::DuplicateRequestIdRoots {
+            session_id: session.session_id.clone(),
+        });
+    }
+    if !rows.contains(incoming) {
+        return Err(SessionError::IncomingMissing);
+    }
     Ok(rows
         .iter()
         .all(|row| *row == *incoming || !request_fact_newer(row, incoming)))
@@ -414,7 +413,7 @@ async fn advance_observation_in_txn(
             incoming.requester_did.as_deref(),
         )
         .await?
-        .context("advancing observation: session disappeared")?;
+        .ok_or(SessionError::ObservationSessionDisappeared)?;
         validate_agent_session(&session.session)?;
         validate_incoming_scope(&session.session, incoming)?;
         let rows = load_scoped_request_facts_in_txn(txn, &session.session, false).await?;
@@ -502,10 +501,9 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
     );
     let response = txn.execute_local_response(&query).await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "session observation refresh found duplicate authoritative request rows"
-    );
+    if rows.len() > 1 {
+        return Err(SessionError::RefreshDuplicateRows);
+    }
     let Some(row) = rows.first() else {
         return Ok(false);
     };
@@ -513,17 +511,19 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
         request_doc_id: row
             .get("_docID")
             .and_then(serde_json::Value::as_str)
-            .context("request row omitted _docID")?
+            .ok_or(SessionError::RequestRowOmitted { field: "_docID" })?
             .to_string(),
         request_id: row
             .get("request_id")
             .and_then(serde_json::Value::as_str)
-            .context("request row omitted request_id")?
+            .ok_or(SessionError::RequestRowOmitted {
+                field: "request_id",
+            })?
             .to_string(),
         lifecycle_state: serde_json::from_value(
             row.get("lifecycle_state").cloned().unwrap_or_default(),
         )
-        .context("decoding request lifecycle_state")?,
+        .map_err(SessionError::DecodeLifecycleState)?,
     };
     let scope_ok = row.get("node_did").and_then(serde_json::Value::as_str)
         == Some(session.session.node_did.as_str())
@@ -561,7 +561,7 @@ pub(crate) async fn update_session_title_with_source(
     source: gents_protocol::session::SessionTitleSource,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    chrono::DateTime::parse_from_rfc3339(&now).context("invalid title update timestamp")?;
+    chrono::DateTime::parse_from_rfc3339(&now).map_err(SessionError::InvalidTitleTimestamp)?;
     crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
@@ -580,7 +580,7 @@ pub(crate) async fn update_session_title_with_source(
                     &now,
                 )
                 .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, SessionError>(())
             })
         },
     )
@@ -596,10 +596,12 @@ pub async fn apply_title_in_txn(
     source: gents_protocol::session::SessionTitleSource,
     now: &str,
 ) -> Result<()> {
-    chrono::DateTime::parse_from_rfc3339(now).context("invalid title update timestamp")?;
+    chrono::DateTime::parse_from_rfc3339(now).map_err(SessionError::InvalidTitleTimestamp)?;
     let Some(row) = load_agent_session_row_in_txn(txn, node_did, session_id, requester_did).await?
     else {
-        anyhow::bail!("updating title: no AgentSession for session_id={session_id}");
+        return Err(SessionError::TitleSessionMissing {
+            session_id: session_id.to_owned(),
+        });
     };
     let session = &row.session;
     let applies = matches!(
@@ -776,7 +778,7 @@ mod observation_refresh_tests {
                 let exact = load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:requester"))).await?.unwrap();
                 assert_eq!(exact, all);
                 assert!(load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:absent"))).await?.is_none());
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, SessionError>(())
             }),
         ).await.unwrap();
     }
@@ -874,7 +876,7 @@ mod observation_refresh_tests {
                     )
                     .await?;
                     assert_eq!(exact_requester[&session_ids[0]].observed.request_id, "remote-head");
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, SessionError>(())
                 })
             },
         )
@@ -973,7 +975,7 @@ mod observation_refresh_tests {
                     .and_then(|rows| rows.first())
                     .and_then(|row| row.get("_docID"))
                     .and_then(serde_json::Value::as_str)
-                    .context("foreign request omitted _docID")?;
+                    .ok_or(SessionError::RequestRowOmitted { field: "_docID" })?;
                 patch_session_in_txn(txn, &owner.doc_id, serde_json::json!({
                     "observation": {
                         "last_activity_at": "2030-01-01T00:00:03Z",
@@ -994,7 +996,7 @@ mod observation_refresh_tests {
                 ).await?.unwrap().session;
                 assert_eq!(session.observation.unwrap().latest_request.unwrap().lifecycle_state,
                     RequestLifecycleState::Completed);
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, SessionError>(())
             }),
         ).await.unwrap();
     }

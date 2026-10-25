@@ -948,7 +948,7 @@ pub async fn load_agent_tools_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
-) -> anyhow::Result<Option<Tools>> {
+) -> Result<Option<Tools>, DocumentConfigError> {
     Ok(load_agent_context_and_tools_in_txn(txn, owner, agent_id)
         .await?
         .1)
@@ -961,14 +961,18 @@ pub async fn load_agent_context_and_tools_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
-) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
+) -> Result<(Option<super::AgentContext>, Option<Tools>), DocumentConfigError> {
     use crate::collection::Collection;
     use crate::config_client::read_desired_state_document_in_txn as read;
-    use anyhow::Context as _;
+    let missing = |collection: &'static str, id: &str| DocumentConfigError::OwnedDocumentNotFound {
+        collection,
+        id: id.to_owned(),
+        owner: owner.to_owned(),
+    };
     let agent: super::Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_id)
             .await?
-            .with_context(|| format!("Agent {agent_id} not found for {owner}"))?,
+            .ok_or_else(|| missing("Agent", agent_id))?,
     )?;
     let Some(context_id) = agent.context_id else {
         return Ok((None, None));
@@ -976,7 +980,7 @@ pub async fn load_agent_context_and_tools_in_txn(
     let context: super::AgentContext = serde_json::from_value(
         read(txn, Collection::AgentContext, owner, &context_id)
             .await?
-            .with_context(|| format!("AgentContext {context_id} not found for {owner}"))?,
+            .ok_or_else(|| missing("AgentContext", &context_id))?,
     )?;
     let Some(tools_id) = context.tools_id.as_deref() else {
         return Ok((Some(context), None));
@@ -984,7 +988,7 @@ pub async fn load_agent_context_and_tools_in_txn(
     let tools = serde_json::from_value(
         read(txn, Collection::Tools, owner, tools_id)
             .await?
-            .with_context(|| format!("Tools {tools_id} not found for {owner}"))?,
+            .ok_or_else(|| missing("Tools", tools_id))?,
     )?;
     Ok((Some(context), Some(tools)))
 }

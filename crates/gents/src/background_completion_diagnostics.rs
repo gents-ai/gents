@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -8,6 +7,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackgroundCompletionDiagnosticsError {
+    #[error("background completion diagnostics has no data")]
+    NoData,
+    #[error("diagnostics omitted wakes")]
+    WakesOmitted,
+    #[error("decoding background completion wakes")]
+    DecodeWakes(#[source] serde_json::Error),
+    #[error("background completion diagnostics has no notification data")]
+    NoNotificationData,
+    #[error("diagnostics omitted notifications")]
+    NotificationsOmitted,
+    #[error("decoding background completion notifications")]
+    DecodeNotifications(#[source] serde_json::Error),
+    #[error("background completion wake {request_id} has no session_id")]
+    WakeWithoutSession { request_id: String },
+    #[error(transparent)]
+    Session(#[from] crate::session::SessionError),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+}
+
+impl crate::config_client::TransactionFailure for BackgroundCompletionDiagnosticsError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Session(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = BackgroundCompletionDiagnosticsError> = std::result::Result<T, E>;
 
 const WAKE_SCAN_LIMIT: usize = 1024;
 const NOTIFICATION_SCAN_LIMIT: usize = 4096;
@@ -90,60 +123,58 @@ async fn load_background_completion_diagnostics_scoped(
                 let response = txn.execute(query).await?;
                 let data = response
                     .get("data")
-                    .context("background completion diagnostics has no data")?;
+                    .ok_or(BackgroundCompletionDiagnosticsError::NoData)?;
                 let wakes: Vec<AgentRequestRow> = serde_json::from_value(
                     data.get("wakes")
                         .cloned()
-                        .context("diagnostics omitted wakes")?,
+                        .ok_or(BackgroundCompletionDiagnosticsError::WakesOmitted)?,
                 )
-                .context("decoding background completion wakes")?;
-                let notifications: Vec<NotificationRow> = if session_id.is_some() {
-                    let wake_doc_ids = wakes
-                        .iter()
-                        .filter(|wake| {
-                            wake.input
-                                .as_ref()
-                                .is_some_and(crate::lifecycle::is_background_completion_request)
-                        })
-                        .filter_map(|wake| wake.doc_id.as_deref())
-                        .collect::<BTreeSet<_>>();
-                    if wake_doc_ids.is_empty() {
-                        Vec::new()
+                .map_err(BackgroundCompletionDiagnosticsError::DecodeWakes)?;
+                let notifications: Vec<NotificationRow> =
+                    if session_id.is_some() {
+                        let wake_doc_ids = wakes
+                            .iter()
+                            .filter(|wake| {
+                                wake.input
+                                    .as_ref()
+                                    .is_some_and(crate::lifecycle::is_background_completion_request)
+                            })
+                            .filter_map(|wake| wake.doc_id.as_deref())
+                            .collect::<BTreeSet<_>>();
+                        if wake_doc_ids.is_empty() {
+                            Vec::new()
+                        } else {
+                            let notifications_query = notification_query(
+                                node_did,
+                                wake_doc_ids.into_iter().collect::<Vec<_>>().as_slice(),
+                            );
+                            let response = txn.execute(&notifications_query).await?;
+                            let data = response
+                                .get("data")
+                                .ok_or(BackgroundCompletionDiagnosticsError::NoNotificationData)?;
+                            serde_json::from_value(data.get("notifications").cloned().ok_or(
+                                BackgroundCompletionDiagnosticsError::NotificationsOmitted,
+                            )?)
+                            .map_err(BackgroundCompletionDiagnosticsError::DecodeNotifications)?
+                        }
                     } else {
-                        let notifications_query = notification_query(
-                            node_did,
-                            wake_doc_ids.into_iter().collect::<Vec<_>>().as_slice(),
-                        );
-                        let response = txn.execute(&notifications_query).await?;
-                        let data = response.get("data").context(
-                            "background completion diagnostics has no notification data",
-                        )?;
                         serde_json::from_value(
-                            data.get("notifications")
-                                .cloned()
-                                .context("diagnostics omitted notifications")?,
+                            data.get("notifications").cloned().ok_or(
+                                BackgroundCompletionDiagnosticsError::NotificationsOmitted,
+                            )?,
                         )
-                        .context("decoding background completion notifications")?
-                    }
-                } else {
-                    serde_json::from_value(
-                        data.get("notifications")
-                            .cloned()
-                            .context("diagnostics omitted notifications")?,
-                    )
-                    .context("decoding background completion notifications")?
-                };
+                        .map_err(BackgroundCompletionDiagnosticsError::DecodeNotifications)?
+                    };
                 let mut sessions = BTreeSet::new();
                 for wake in &wakes {
                     let session_id = wake
                         .session_id
                         .as_deref()
                         .filter(|id| !id.trim().is_empty())
-                        .with_context(|| {
-                            format!(
-                                "background completion wake {} has no session_id",
-                                wake.request_id
-                            )
+                        .ok_or_else(|| {
+                            BackgroundCompletionDiagnosticsError::WakeWithoutSession {
+                                request_id: wake.request_id.clone(),
+                            }
                         })?;
                     if wake
                         .input
@@ -513,6 +544,8 @@ fn non_empty(value: Option<String>) -> Option<String> {
 mod tests {
     use super::*;
 
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     fn input() -> gents_protocol::request_input::RequestInput {
         serde_json::from_value(serde_json::json!({"queue":{"source":"background_completion","policy":"coalesce","key":"parent-1","queued_after_request_id":"parent-1","background_completion_wake_version":1}})).unwrap()
     }
@@ -781,7 +814,7 @@ mod tests {
 
     #[tokio::test]
     async fn diagnostics_reads_actual_scoped_head_across_requesters_without_session_cache(
-    ) -> Result<()> {
+    ) -> TestResult {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await?);
         node.add_schema(gents_protocol::schemas::AGENT_REQUEST)
             .await?;
@@ -821,7 +854,7 @@ mod tests {
         }
         access.write("test.diagnostic.notification", &format!("mutation {{ create_AgentMessage(input:{}){{_docID}} }}", gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "node_did":owner,"session_id":"shared-session","message_key":"background-completion-notification:child:agent",
-            "request_doc_id":wake_doc_id.context("wake not created")?,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
+            "request_doc_id":wake_doc_id.ok_or("wake not created")?,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
         }))?)).await?;
         let diagnostics = load_background_completion_diagnostics(&access, owner).await?;
         assert_eq!(diagnostics.epochs.len(), 1);

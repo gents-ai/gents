@@ -23,7 +23,7 @@ pub(crate) mod persistence;
 mod tests;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum HookError {
+pub enum HookError {
     #[error("duplicate accepted tool binding for internal call {internal_call_id}")]
     DuplicateAcceptedToolBinding { internal_call_id: String },
     #[error("active request changed while resolving document provenance")]
@@ -60,6 +60,41 @@ pub(crate) enum HookError {
     AcceptedBindingMismatch,
     #[error(transparent)]
     ToolCallLifecycle(#[from] crate::tool_call_lifecycle::ToolCallLifecycleError),
+    #[error("query live backgrounded tool count for request document {request_doc_id} failed")]
+    CountBackgrounded {
+        request_doc_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("background row count omitted AgentToolCall rows")]
+    BackgroundRowsOmitted,
+    #[error(transparent)]
+    Capacity(#[from] persistence::BackgroundCapacityExceeded),
+    #[error("background admission request lookup omitted rows")]
+    AdmissionRowsOmitted,
+    #[error("background admission request {request_doc_id} is missing")]
+    AdmissionRequestMissing { request_doc_id: String },
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+}
+
+impl HookError {
+    pub(crate) fn background_capacity(&self) -> Option<&persistence::BackgroundCapacityExceeded> {
+        match self {
+            Self::Capacity(capacity) => Some(capacity),
+            _ => None,
+        }
+    }
+}
+
+impl crate::config_client::TransactionFailure for HookError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) | Self::CountBackgrounded { source: error, .. } => Some(error),
+            Self::ToolCallLifecycle(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1030,7 +1065,7 @@ impl DefraSessionHook {
         };
 
         let mut cancelled = 0;
-        let mut first_error = None;
+        let mut first_error: Option<anyhow::Error> = None;
         for mut lifecycle in lifecycles {
             let applied = match lifecycle.interrupt_disposition() {
                 InterruptDisposition::Cancel if lifecycle.is_running() => lifecycle
@@ -1040,7 +1075,7 @@ impl DefraSessionHook {
                 InterruptDisposition::Cancel | InterruptDisposition::Retain => Ok(()),
             };
             if let Err(error) = applied {
-                first_error.get_or_insert(error);
+                first_error.get_or_insert(error.into());
             }
         }
         let effects = self
@@ -1158,9 +1193,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         let mut child = parent
             .admit_plugin_effect(ordinal, tool_name, arguments)
             .await
-            .map_err(|error| {
-                format!("cannot admit plugin effect: {}", ErrorChain(error.as_ref()))
-            })?;
+            .map_err(|error| format!("cannot admit plugin effect: {}", ErrorChain(&error)))?;
         let internal_id = child.plugin_effect_internal_id().to_owned();
         if !crate::plugin::tool_calls::supported(
             tool_name,
@@ -1182,7 +1215,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                 .map_err(|error| {
                     format!(
                         "cannot persist plugin effect refusal: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     )
                 })?;
             return Err(reason);

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::{
     reconstruction::{reconstruct_stream, ObservedSegment},
@@ -14,6 +13,8 @@ use crate::session::canonical_rows::{
 };
 
 use super::{ToolCallLifecycle, ToolCallLifecycleError, ToolCallState};
+
+type Result<T, E = ToolCallLifecycleError> = std::result::Result<T, E>;
 use crate::plugin::tool_calls::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 
 #[derive(Clone)]
@@ -53,13 +54,13 @@ impl ToolCallLifecycle {
             || self.plugin_effect.is_some()
             || self.spawned_by_tool_call_doc_id.is_some()
         {
-            return Err(ToolCallLifecycleError::PluginEffectRequiresRunningDirectParent.into());
+            return Err(ToolCallLifecycleError::PluginEffectRequiresRunningDirectParent);
         }
         if !((1..=MAX_EFFECTS).contains(&ordinal)
             && !name.trim().is_empty()
             && arguments.len() <= MAX_PAYLOAD_BYTES)
         {
-            return Err(ToolCallLifecycleError::PluginEffectExceedsInvocationBounds.into());
+            return Err(ToolCallLifecycleError::PluginEffectExceedsInvocationBounds);
         }
         let _: serde_json::Map<String, serde_json::Value> = serde_json::from_str(arguments)
             .map_err(|source| ToolCallLifecycleError::PluginEffectArgumentsNotObject { source })?;
@@ -97,7 +98,7 @@ impl ToolCallLifecycle {
                         deadline_at spawned_by_tool_call_doc_id }} }}"#)).await?;
                     let rows = result["data"]["AgentToolCall"].as_array().ok_or(ToolCallLifecycleError::PluginEffectLookupOmittedRows)?;
                     if rows.len() > 1 {
-                        return Err(anyhow::Error::from(ToolCallLifecycleError::PluginEffectConflictingIdentities));
+                        return Err(ToolCallLifecycleError::PluginEffectConflictingIdentities);
                     }
                     if let Some(row) = rows.first() {
                         let child = row["_docID"].as_str().ok_or(ToolCallLifecycleError::PluginEffectLacksPhysicalIdentity)?;
@@ -111,11 +112,11 @@ impl ToolCallLifecycle {
                             && DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap_or(""))?
                                 .with_timezone(&Utc) == deadline;
                         if !immutable {
-                            return Err(ToolCallLifecycleError::PluginEffectReplayChangedAdmission.into());
+                            return Err(ToolCallLifecycleError::PluginEffectReplayChangedAdmission);
                         }
                         let (_, stored) = arguments_in_txn(txn, &binding, child, &generation, &internal_id, &name).await?;
                         if stored != arguments {
-                            return Err(ToolCallLifecycleError::PluginEffectReplayChangedArguments.into());
+                            return Err(ToolCallLifecycleError::PluginEffectReplayChangedArguments);
                         }
                         return Ok(child.to_owned());
                     }
@@ -158,7 +159,6 @@ impl ToolCallLifecycle {
         )
         .await?
         .ok_or(ToolCallLifecycleError::PluginEffectAdmittedDisappeared)
-        .map_err(anyhow::Error::from)
     }
 
     fn plugin_effect_parent_binding(
@@ -231,7 +231,7 @@ impl ToolCallLifecycle {
                     escape_graphql_string(&deadline.to_rfc3339_opts(SecondsFormat::Nanos, true)),
                     escape_graphql_string(&now.to_rfc3339_opts(SecondsFormat::Nanos, true)))).await?;
                 if !result["data"]["update_AgentToolCall"].as_array().is_some_and(|rows| rows.len() == 1) {
-                    return Err(anyhow::Error::from(ToolCallLifecycleError::PluginEffectNoLongerPending));
+                    return Err(ToolCallLifecycleError::PluginEffectNoLongerPending);
                 }
                 Ok(now)
             })
@@ -271,7 +271,7 @@ pub(super) async fn validate_parent(
         .as_array()
         .ok_or(ToolCallLifecycleError::PluginParentLookupOmittedRows)?;
     if rows.len() != 1 {
-        return Err(ToolCallLifecycleError::PluginParentMissingOrAmbiguous.into());
+        return Err(ToolCallLifecycleError::PluginParentMissingOrAmbiguous);
     }
     let parent = &rows[0];
     let parent_deadline = DateTime::parse_from_rfc3339(
@@ -281,7 +281,7 @@ pub(super) async fn validate_parent(
     )?
     .with_timezone(&Utc);
     if !(deadline <= parent_deadline && (!require_live || deadline > Utc::now())) {
-        return Err(ToolCallLifecycleError::PluginEffectDeadlineExceedsParent.into());
+        return Err(ToolCallLifecycleError::PluginEffectDeadlineExceedsParent);
     }
     let exact_parent = parent["spawned_by_tool_call_doc_id"].is_null()
         && parent["plugin_parent_tool_call_doc_id"].is_null() && parent["plugin_effect_ordinal"].is_null()
@@ -297,7 +297,7 @@ pub(super) async fn validate_parent(
             if tool_call_doc_id == &binding.tool_call_doc_id && Some(id.as_str()) == parent["tool_call_id"].as_str()
                 && Some(name.as_str()) == parent["tool_name"].as_str()));
     if !exact_parent {
-        return Err(ToolCallLifecycleError::PluginEffectNoExactAcceptedParent.into());
+        return Err(ToolCallLifecycleError::PluginEffectNoExactAcceptedParent);
     }
     let rows = txn
         .execute(&format!(
@@ -311,7 +311,7 @@ pub(super) async fn validate_parent(
         .as_array()
         .ok_or(ToolCallLifecycleError::PluginRequestLookupOmittedRows)?;
     if rows.len() != 1 {
-        return Err(ToolCallLifecycleError::PluginRequestMissingOrAmbiguous.into());
+        return Err(ToolCallLifecycleError::PluginRequestMissingOrAmbiguous);
     }
     let request = &rows[0];
     if require_live {
@@ -324,7 +324,7 @@ pub(super) async fn validate_parent(
             .with_timezone(&Utc)
                 > Utc::now();
         if !live {
-            return Err(ToolCallLifecycleError::PluginEffectLostRequestAuthority.into());
+            return Err(ToolCallLifecycleError::PluginEffectLostRequestAuthority);
         }
     }
     request["request_id"]
@@ -332,7 +332,6 @@ pub(super) async fn validate_parent(
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
         .ok_or(ToolCallLifecycleError::PluginRequestLacksLogicalIdentity)
-        .map_err(anyhow::Error::from)
 }
 
 pub(super) async fn arguments_in_txn(

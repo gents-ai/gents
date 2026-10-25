@@ -1,4 +1,4 @@
-use anyhow::Result;
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
 use gents_protocol::error_chain::ErrorChain;
 
 use super::error::DocumentConfigError;
@@ -264,9 +264,7 @@ pub(crate) async fn update_trigger_runtime_fields(
                     .cloned()
                     .unwrap_or_default();
                 if rows.len() > 1 {
-                    return Err(anyhow::Error::from(
-                        DocumentConfigError::TriggerObservationAmbiguous,
-                    ));
+                    return Err(DocumentConfigError::TriggerObservationAmbiguous);
                 }
                 let Some(row) = rows.first() else {
                     tracing::info!(

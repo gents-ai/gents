@@ -1504,7 +1504,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
                 .to_string()
                 .contains("tool owner request is missing or ambiguous"),
             "{name}: unexpected missing-owner guard: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let registry = crate::BackgroundExecutionRegistry::default();
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(

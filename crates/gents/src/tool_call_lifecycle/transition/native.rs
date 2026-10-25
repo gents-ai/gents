@@ -35,11 +35,11 @@ impl ToolCallLifecycle {
     ) -> Result<()> {
         if let Some(expected) = expected_generation {
             if self.execution_generation.as_deref() != Some(expected) {
-                return Err(TransitionError::DispatchGenerationDiffers.into());
+                return Err(TransitionError::DispatchGenerationDiffers);
             }
         }
         if self.state == ToolCallState::Running {
-            return Err(TransitionError::StartRunningAlreadyRunning.into());
+            return Err(TransitionError::StartRunningAlreadyRunning);
         }
         if self.state.is_terminal() {
             return Err(
@@ -49,12 +49,12 @@ impl ToolCallLifecycle {
         }
         self.ensure_state(&[ToolCallState::Pending], "start_running")?;
         if self.plugin_effect.is_some() {
-            return self.start_running_plugin_effect().await;
+            return Ok(self.start_running_plugin_effect().await?);
         }
         if self.is_spawned_background() {
-            return self.start_running_spawned_with_time(fixture_now).await;
+            return Ok(self.start_running_spawned_with_time(fixture_now).await?);
         }
-        self.start_running_canonical_with_time(fixture_now).await
+        Ok(self.start_running_canonical_with_time(fixture_now).await?)
     }
 
     pub async fn complete(&mut self, result: &str) -> Result<()> {
@@ -313,8 +313,7 @@ impl ToolCallLifecycle {
         if !failed {
             return Err(TransitionError::SpawnFailedLostCompare {
                 tool_call_id: self.tool_call_id.clone(),
-            }
-            .into());
+            });
         }
         Ok(())
     }

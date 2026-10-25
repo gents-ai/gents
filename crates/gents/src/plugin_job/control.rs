@@ -372,7 +372,7 @@ pub async fn control(
     let mut lifecycle =
         ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
             .await
-            .map_err(unavailable)?
+            .map_err(|error| unavailable(error.into()))?
             .ok_or(JobReadError::NotYetObservable)?;
     if !scope.authorizes(
         lifecycle.session_id(),

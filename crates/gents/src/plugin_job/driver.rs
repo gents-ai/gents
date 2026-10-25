@@ -222,7 +222,7 @@ pub(crate) async fn settle_plugin_job_in_txn(
     let Some((terminal, output)) = terminal_text(lifecycle, settlement) else {
         return Ok(None);
     };
-    lifecycle
+    Ok(lifecycle
         .settle_plugin_job_row_in_txn(
             txn,
             terminal.state,
@@ -232,7 +232,7 @@ pub(crate) async fn settle_plugin_job_in_txn(
             inline,
         )
         .await
-        .map(Some)
+        .map(Some)?)
 }
 
 /// What one `run_step` did.
@@ -453,7 +453,7 @@ async fn step_on(
         Ok(stepped) => stepped,
         Err(error) => {
             if matches!(
-                error.downcast_ref::<RecordError>(),
+                record_refusal(&error),
                 Some(RecordError::StaleRevision { .. })
             ) {
                 return Ok(StepOutcome::Stale);
@@ -498,6 +498,22 @@ static STEP_TRANSACTION_RUNS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The step transaction: it re-reads every fact it admits against, so a
 /// conflict re-runs it whole and writes nothing in memory.
 #[allow(clippy::too_many_arguments)]
+fn record_refusal(error: &anyhow::Error) -> Option<&RecordError> {
+    error
+        .downcast_ref::<crate::plugin_job::records::JobRecordsError>()
+        .and_then(crate::plugin_job::records::JobRecordsError::refusal)
+        .or_else(|| {
+            error
+                .downcast_ref::<crate::tool_call_lifecycle::TransitionError>()
+                .and_then(crate::tool_call_lifecycle::TransitionError::record_refusal)
+        })
+        .or_else(|| {
+            error
+                .downcast_ref::<crate::tool_call_lifecycle::delivery::DeliveryError>()
+                .and_then(crate::tool_call_lifecycle::delivery::DeliveryError::record_refusal)
+        })
+}
+
 async fn step_transaction(
     txn: &ConfigApplyTxn<'_>,
     runtime: &JobRuntime,

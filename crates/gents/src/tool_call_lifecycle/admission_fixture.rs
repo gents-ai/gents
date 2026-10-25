@@ -774,7 +774,7 @@ mod lifecycle_tests {
         let (node, path, mut tool) = published_spawn_parent("native-terminal").await;
         tool.complete("done").await.unwrap();
         let error = tool.fail("late", FailureClass::External).await.unwrap_err();
-        assert!(ErrorChain(error.as_ref())
+        assert!(ErrorChain(&error)
             .to_string()
             .contains("illegal tool call transition"));
         teardown(node, path).await;
@@ -784,7 +784,7 @@ mod lifecycle_tests {
     async fn admitted_native_rejects_duplicate_dispatch_without_duplicate_row() {
         let (node, path, mut tool) = published_spawn_parent("native-duplicate").await;
         let error = tool.start_running().await.unwrap_err();
-        assert!(ErrorChain(error.as_ref())
+        assert!(ErrorChain(&error)
             .to_string()
             .contains("cannot re-dispatch"));
         assert_eq!(

@@ -192,7 +192,7 @@ impl DefraSessionHook {
         let mut lifecycle = match admission {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
-                if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
+                if let Some(capacity) = error.background_capacity() {
                     return complete_spawn_process_failure(
                         self,
                         &mut parent_lifecycle,
@@ -202,7 +202,7 @@ impl DefraSessionHook {
                     )
                     .await;
                 }
-                return Err(error);
+                return Err(error.into());
             }
         };
         anyhow::ensure!(

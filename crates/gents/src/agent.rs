@@ -624,6 +624,6 @@ fn positive_duration_secs_or_default(
 
 pub(crate) fn tool_selection_from_document(
     selection: &crate::document_config::Tools,
-) -> anyhow::Result<ResolvedToolSelection> {
+) -> Result<ResolvedToolSelection, crate::tool_surface::ToolSurfaceError> {
     ResolvedToolSelection::from_document(selection)
 }

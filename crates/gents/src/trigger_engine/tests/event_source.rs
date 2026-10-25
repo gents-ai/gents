@@ -1537,7 +1537,7 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
             Err(error) => assert!(
                 crate::config_client::is_classified_transaction_conflict(&error),
                 "only bounded conflict exhaustion may refuse a concurrent update: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             ),
         }
     }

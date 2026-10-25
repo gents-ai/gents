@@ -125,7 +125,7 @@ pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
 pub use task::{Task, TaskHook, TaskHookPhase};
 pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
 
-use anyhow::Result;
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
 use defra_node::EmbeddedNode;
 
 pub fn default_agent_id_for_node(node_did: &str) -> String {
@@ -151,7 +151,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
                     owner,
                 )
                 .await?
-                .map(|(_, value)| serde_json::from_value(value).map_err(anyhow::Error::from))
+                .map(|(_, value)| serde_json::from_value(value).map_err(DocumentConfigError::from))
                 .transpose()
             })
         })

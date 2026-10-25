@@ -533,7 +533,7 @@ mod tests {
         };
         assert!(format!(
             "{}",
-            ErrorChain(upsert_agent(&node, &agent).await.unwrap_err().as_ref())
+            ErrorChain(&upsert_agent(&node, &agent).await.unwrap_err())
         )
         .contains("missing-profile"));
         let response = node

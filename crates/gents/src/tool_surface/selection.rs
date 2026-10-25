@@ -227,7 +227,9 @@ impl ResolvedToolSelection {
             || self.enable_lsp
     }
 
-    pub(crate) fn from_document(tools: &crate::document_config::Tools) -> anyhow::Result<Self> {
+    pub(crate) fn from_document(
+        tools: &crate::document_config::Tools,
+    ) -> Result<Self, super::ToolSurfaceError> {
         tools.validate()?;
         let host = tools.host.as_ref();
         let files = host.and_then(|host| host.files.as_ref());
@@ -432,7 +434,7 @@ pub fn resolve_goal_capabilities(
 fn command_policy_from_document(
     bash_group: Option<&crate::document_config::BashTools>,
     bash: BashMode,
-) -> anyhow::Result<Option<CommandExecutionPolicy>> {
+) -> Result<Option<CommandExecutionPolicy>, super::ToolSurfaceError> {
     let execution_mode = bash_group.and_then(|bash| bash.execution_mode);
     let network_mode = bash_group.and_then(|bash| bash.network_mode);
     let allowed = bash_group

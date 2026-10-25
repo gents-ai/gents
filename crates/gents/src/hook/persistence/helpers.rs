@@ -1,10 +1,9 @@
 use super::*;
 use crate::hook::HookError;
-use anyhow::Context;
 
 #[derive(Debug, thiserror::Error)]
 #[error("background tool budget exceeded ({0} admitted)")]
-pub(crate) struct BackgroundCapacityExceeded(pub(crate) usize);
+pub struct BackgroundCapacityExceeded(pub(crate) usize);
 
 #[derive(Debug, Deserialize)]
 struct BackgroundedRow {
@@ -28,7 +27,7 @@ fn decode_live_backgrounded_rows(value: serde_json::Value) -> Result<usize, Hook
 pub(crate) async fn count_live_backgrounded_rows_in<R>(
     reader: &R,
     request_doc_id: &str,
-) -> anyhow::Result<usize>
+) -> Result<usize, HookError>
 where
     R: crate::config_client::ConfigRead,
 {
@@ -46,16 +45,19 @@ where
             }}
         }}"#
     );
-    let response = reader.execute_read(&query).await.map_err(|error| {
-        anyhow::Error::from(error).context(format!(
-            "query live backgrounded tool count for request document {request_doc_id} failed"
-        ))
-    })?;
+    let response =
+        reader
+            .execute_read(&query)
+            .await
+            .map_err(|source| HookError::CountBackgrounded {
+                request_doc_id: request_doc_id.to_owned(),
+                source,
+            })?;
     let value = response
         .pointer("/data/AgentToolCall")
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("background row count omitted AgentToolCall rows"))?;
-    Ok(decode_live_backgrounded_rows(value)?)
+        .ok_or(HookError::BackgroundRowsOmitted)?;
+    decode_live_backgrounded_rows(value)
 }
 
 /// How an admission's own row stands in the live count it checks.
@@ -82,7 +84,7 @@ pub(crate) async fn reserve_background_slot_in_txn(
     request_doc_id: &str,
     slot: BackgroundSlot,
     request_fields: &str,
-) -> anyhow::Result<serde_json::Value> {
+) -> Result<serde_json::Value, HookError> {
     txn.contend_with_request_siblings();
     if slot != BackgroundSlot::Admitted {
         let live = count_live_backgrounded_rows_in(txn, request_doc_id).await?;
@@ -105,11 +107,12 @@ pub(crate) async fn reserve_background_slot_in_txn(
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
         .cloned()
-        .context("background admission request lookup omitted rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "background admission request {request_doc_id} is missing"
-    );
+        .ok_or(HookError::AdmissionRowsOmitted)?;
+    if rows.len() != 1 {
+        return Err(HookError::AdmissionRequestMissing {
+            request_doc_id: request_doc_id.to_owned(),
+        });
+    }
     let row = rows.remove(0);
     let next = row["background_admission_sequence"].as_u64().unwrap_or(0) + 1;
     txn.execute(&format!(

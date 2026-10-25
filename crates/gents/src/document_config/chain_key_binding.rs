@@ -1,6 +1,6 @@
 // Key material is not stored here.
 
-use anyhow::Result;
+type Result<T, E = DocumentConfigError> = std::result::Result<T, E>;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 

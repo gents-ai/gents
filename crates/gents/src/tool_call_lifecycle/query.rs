@@ -11,7 +11,7 @@ pub(crate) use result::{
 
 use std::sync::Arc;
 
-use anyhow::Result;
+type Result<T, E = ToolCallQueryError> = std::result::Result<T, E>;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -22,7 +22,7 @@ use super::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ToolCallQueryError {
+pub enum ToolCallQueryError {
     #[error(
         "AgentToolCall selected tool identity must contain both non-empty selected_service_id and selected_tool_name"
     )]
@@ -89,6 +89,28 @@ pub(crate) enum ToolCallQueryError {
     DirectDispatchNotExecution,
     #[error("accepted header does not uniquely bind this physical tool")]
     AcceptedHeaderNotUniqueBinding,
+    #[error(transparent)]
+    Lifecycle(#[from] super::ToolCallLifecycleError),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+}
+
+impl crate::config_client::TransactionFailure for ToolCallQueryError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Graphql(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 fn decode_selected_tool_identity(
@@ -207,11 +229,11 @@ impl ToolCallLifecycle {
             .and_then(|data| data.get("AgentToolCall"))
             .is_none()
         {
-            return Err(ToolCallQueryError::LifecycleQueryOmittedRows.into());
+            return Err(ToolCallQueryError::LifecycleQueryOmittedRows);
         }
         let mut rows: Vec<ToolCallRow> = crate::graphql::rows(&resp, "AgentToolCall")?;
         if rows.len() > 1 {
-            return Err(ToolCallQueryError::AmbiguousLifecycleIdentity.into());
+            return Err(ToolCallQueryError::AmbiguousLifecycleIdentity);
         }
         let Some(row) = rows.pop() else {
             return Ok(None);
@@ -253,7 +275,7 @@ impl ToolCallLifecycle {
                 && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
                 && row.message_sequence == accepted.message_sequence)
             {
-                return Err(ToolCallQueryError::PluginEffectIncoherentParent.into());
+                return Err(ToolCallQueryError::PluginEffectIncoherentParent);
             }
         } else if let Some(parent_doc_id) = spawned_by_tool_call_doc_id.as_deref() {
             if !(parent_doc_id != row.doc_id
@@ -261,14 +283,14 @@ impl ToolCallLifecycle {
                 && row.message_sequence == accepted.message_sequence
                 && accepted.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME)
             {
-                return Err(ToolCallQueryError::SpawnedIncoherentParent.into());
+                return Err(ToolCallQueryError::SpawnedIncoherentParent);
             }
         } else if !(row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
             && row.message_sequence == accepted.message_sequence
             && row.tool_call_id == accepted.id
             && row.tool_name == accepted.tool_name)
         {
-            return Err(ToolCallQueryError::ChangedWhileResolving.into());
+            return Err(ToolCallQueryError::ChangedWhileResolving);
         }
 
         let state = row
@@ -307,10 +329,10 @@ impl ToolCallLifecycle {
             .ok_or(ToolCallQueryError::MissingAwaitMode)?;
 
         if spawned_by_tool_call_doc_id.is_some() && await_mode != AwaitMode::Background {
-            return Err(ToolCallQueryError::SpawnedNotBackground.into());
+            return Err(ToolCallQueryError::SpawnedNotBackground);
         }
         if plugin_effect.is_some() && await_mode != AwaitMode::Foreground {
-            return Err(ToolCallQueryError::PluginEffectNotForeground.into());
+            return Err(ToolCallQueryError::PluginEffectNotForeground);
         }
         let arguments = if plugin_effect.is_some() {
             let binding = super::delivery::ToolOutputBinding {
@@ -389,7 +411,7 @@ impl ToolCallLifecycle {
             .and_then(serde_json::Value::as_array)
             .ok_or(ToolCallQueryError::RequestLookupOmittedRows)?;
         if requests.len() != 1 {
-            return Err(ToolCallQueryError::RequestMissingOrAmbiguous.into());
+            return Err(ToolCallQueryError::RequestMissingOrAmbiguous);
         }
         let request_id = requests[0]["request_id"]
             .as_str()
@@ -397,7 +419,7 @@ impl ToolCallLifecycle {
             .ok_or(ToolCallQueryError::RequestMissingLogicalId)?
             .to_owned();
         if !row.request_id.as_deref().is_none_or(|id| id == request_id) {
-            return Err(ToolCallQueryError::LogicalRequestIdConflict.into());
+            return Err(ToolCallQueryError::LogicalRequestIdConflict);
         }
         let node_did = row
             .node_did

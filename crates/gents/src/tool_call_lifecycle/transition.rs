@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
-
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::toolset::CommandPolicyDenial;
 
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
+
+type Result<T, E = TransitionError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IllegalToolCallTransition {
@@ -28,7 +28,7 @@ pub enum IllegalToolCallTransition {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum TransitionError {
+pub enum TransitionError {
     #[error(transparent)]
     Illegal(#[from] IllegalToolCallTransition),
     #[error("lost compare lifecycle missing physical identity")]
@@ -88,6 +88,94 @@ pub(crate) enum TransitionError {
     ForegroundBeforeStart,
     #[error("foreground called without started_at set")]
     ForegroundWithoutStartedAt,
+    #[error(transparent)]
+    Query(#[from] super::query::ToolCallQueryError),
+    #[error(transparent)]
+    Delivery(#[from] super::delivery::DeliveryError),
+    #[error(transparent)]
+    Lifecycle(#[from] super::ToolCallLifecycleError),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    DispatchRejected(#[from] super::delivery::ToolDispatchRejection),
+    #[error(transparent)]
+    Hook(Box<crate::hook::HookError>),
+    #[error("foreground mutation")]
+    ForegroundMutation(#[source] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    JobRecords(#[from] crate::plugin_job::records::JobRecordsError),
+}
+
+impl TransitionError {
+    #[cfg(test)]
+    pub(crate) fn illegal(&self) -> Option<&IllegalToolCallTransition> {
+        match self {
+            Self::Illegal(error) => Some(error),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dispatch_rejection(&self) -> Option<&super::delivery::ToolDispatchRejection> {
+        match self {
+            Self::DispatchRejected(rejection) => Some(rejection),
+            Self::Delivery(super::delivery::DeliveryError::DispatchRejected(rejection)) => {
+                Some(rejection)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn background_capacity(
+        &self,
+    ) -> Option<&crate::hook::persistence::BackgroundCapacityExceeded> {
+        match self {
+            Self::Delivery(error) => error.background_capacity(),
+            Self::Hook(error) => error.background_capacity(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn reconstruction(&self) -> Option<&gents_protocol::output::ReconstructionError> {
+        match self {
+            Self::Delivery(error) => error.reconstruction(),
+            Self::Lifecycle(error) => error.reconstruction(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn record_refusal(&self) -> Option<&crate::plugin_job::records::RecordError> {
+        match self {
+            Self::Delivery(error) => error.record_refusal(),
+            Self::JobRecords(error) => error.refusal(),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::hook::HookError> for TransitionError {
+    fn from(error: crate::hook::HookError) -> Self {
+        Self::Hook(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for TransitionError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Query(error) => error.config_client_error(),
+            Self::Delivery(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::Access(error) => Some(error),
+            Self::Graphql(error) => error.config_client_error(),
+            Self::Hook(error) => error.config_client_error(),
+            Self::ForegroundMutation(error) => Some(error),
+            Self::JobRecords(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 impl ToolCallLifecycle {
@@ -113,8 +201,7 @@ impl ToolCallLifecycle {
                 method,
                 session_id: self.session_id.clone(),
                 tool_call_id: self.tool_call_id.clone(),
-            }
-            .into());
+            });
         }
 
         self.doc_id = current.doc_id;
@@ -156,8 +243,7 @@ impl ToolCallLifecycle {
                 await_mode: current.await_mode,
                 session_id: self.session_id.clone(),
                 tool_call_id: self.tool_call_id.clone(),
-            }
-            .into());
+            });
         }
 
         self.doc_id = current.doc_id;

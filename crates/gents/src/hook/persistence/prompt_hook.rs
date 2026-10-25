@@ -309,8 +309,8 @@ impl DefraSessionHook {
                 )
                 .await?;
             match denial {
-                Some(denial) => lc.spawn_failed_with_command_denial(text, denial).await,
-                None => lc.spawn_failed(*class, text).await,
+                Some(denial) => Ok(lc.spawn_failed_with_command_denial(text, denial).await?),
+                None => Ok(lc.spawn_failed(*class, text).await?),
             }
         }
         .instrument(tracing::info_span!(

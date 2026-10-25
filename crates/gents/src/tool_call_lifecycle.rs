@@ -186,9 +186,10 @@ pub use recovery::{
 pub use transition::CausedRequestTerminal;
 pub use transition::IllegalToolCallTransition;
 pub(crate) use transition::PluginJobTerminal;
+pub use transition::TransitionError;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ToolCallLifecycleError {
+pub enum ToolCallLifecycleError {
     #[error("invalid plugin effect provenance")]
     InvalidPluginEffectProvenance,
     #[error("dispatch await mode conflicts with the accepted background publication")]
@@ -260,6 +261,58 @@ pub(crate) enum ToolCallLifecycleError {
     CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
     #[error(transparent)]
     Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    Timestamp(#[from] chrono::ParseError),
+    #[error(transparent)]
+    SegmentBytes(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Query(Box<query::ToolCallQueryError>),
+    #[error(transparent)]
+    Delivery(Box<delivery::DeliveryError>),
+}
+
+impl From<delivery::DeliveryError> for ToolCallLifecycleError {
+    fn from(error: delivery::DeliveryError) -> Self {
+        Self::Delivery(Box::new(error))
+    }
+}
+
+impl ToolCallLifecycleError {
+    pub(crate) fn reconstruction(&self) -> Option<&gents_protocol::output::ReconstructionError> {
+        match self {
+            Self::Reconstruction(error) => Some(error),
+            Self::SessionOutput(error) => error.reconstruction(),
+            Self::Delivery(error) => error.reconstruction(),
+            _ => None,
+        }
+    }
+}
+
+impl From<query::ToolCallQueryError> for ToolCallLifecycleError {
+    fn from(error: query::ToolCallQueryError) -> Self {
+        Self::Query(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for ToolCallLifecycleError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Graphql(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::Query(error) => error.config_client_error(),
+            Self::Delivery(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 /// Which owner terminates a tool-call row. A [`Self::SessionMessage`] row

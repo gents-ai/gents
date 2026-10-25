@@ -2935,7 +2935,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
             .to_string()
             .contains("terminal raw tool result is not an exact extension of persisted raw output"),
         "unexpected late-completion failure: {}",
-        ErrorChain(late_error.as_ref())
+        ErrorChain(&late_error)
     );
     let outer_after = fetch_tool_call_row(&node, &session_id, "native-tool").await;
     assert_eq!(

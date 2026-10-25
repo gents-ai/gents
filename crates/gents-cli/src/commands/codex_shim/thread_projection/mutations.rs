@@ -65,7 +65,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
             .await?
             .ok_or(CodexShimProjectionError::ThreadSessionVanished)?;
             if row.session.agent_id != state.agent_id.as_ref() {
-                return Err(CodexShimProjectionError::ThreadAgentChanged.into());
+                return Err(CodexShimProjectionError::ThreadAgentChanged);
             }
             gents::session::apply_title_in_txn(
                 txn,
@@ -76,7 +76,8 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
                 gents_protocol::session::SessionTitleSource::User,
                 &now,
             )
-            .await
+            .await?;
+            Ok(())
         })
     })
     .await?;

@@ -122,7 +122,10 @@ impl DefraSessionHook {
                             let admitted = if in_flight.contains_key(&internal_id)
                                 && !parent_token.is_cancelled()
                             {
-                                lifecycle.background_with_receipt(&receipt).await
+                                lifecycle
+                                    .background_with_receipt(&receipt)
+                                    .await
+                                    .map_err(anyhow::Error::from)
                             } else {
                                 Err(anyhow::anyhow!("foreground request already stopped"))
                             };

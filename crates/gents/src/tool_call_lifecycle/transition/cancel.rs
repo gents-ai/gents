@@ -1,6 +1,6 @@
-use anyhow::Result;
+use super::{CancelCause, ToolCallState, TransitionError};
 
-use super::{CancelCause, ToolCallState};
+type Result<T, E = TransitionError> = std::result::Result<T, E>;
 
 impl super::ToolCallLifecycle {
     pub const CANCEL_DURING_RUN_OUTPUT: &'static str = "tool call cancelled";

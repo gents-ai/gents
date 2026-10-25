@@ -30,7 +30,7 @@ impl ToolCallLifecycle {
     pub(crate) async fn background_with_receipt(&mut self, receipt: &str) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         if !(self.await_mode == AwaitMode::Foreground && self.plugin_effect.is_none()) {
-            return Err(TransitionError::NotDirectForegroundForBackground.into());
+            return Err(TransitionError::NotDirectForegroundForBackground);
         }
         let mut adopted = self.clone();
         adopted.await_mode = AwaitMode::Background;
@@ -54,7 +54,7 @@ impl ToolCallLifecycle {
                         let existing = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key}" }} }}, limit: 2) {{ _docID }} }}"#)).await?;
                         if !existing.pointer("/data/AgentMessage").and_then(serde_json::Value::as_array)
                             .is_some_and(|rows| rows.len() == 1) {
-                            return Err(TransitionError::ForegroundChangedBeforeHandoff.into());
+                            return Err(TransitionError::ForegroundChangedBeforeHandoff);
                         }
                         crate::tool_call_lifecycle::delivery::publish_background_receipt_in_txn(txn, &binding, &receipt).await?;
                         return Ok(());
@@ -71,7 +71,7 @@ impl ToolCallLifecycle {
     pub async fn background(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         if self.plugin_effect.is_some() {
-            return Err(TransitionError::PluginEffectDetach.into());
+            return Err(TransitionError::PluginEffectDetach);
         }
         if self.await_mode == AwaitMode::Background {
             return Err(IllegalToolCallTransition::ModeAlreadyBackground.into());
@@ -117,7 +117,7 @@ impl ToolCallLifecycle {
     ) -> Result<Option<Self>> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         if !(self.plugin_effect.is_none() && self.await_mode == AwaitMode::Foreground) {
-            return Err(TransitionError::NotForegroundForBackground.into());
+            return Err(TransitionError::NotForegroundForBackground);
         }
         let doc_id = self
             .doc_id
@@ -226,7 +226,7 @@ impl ToolCallLifecycle {
             &mutation,
         )
         .await
-        .context("foreground mutation")?;
+        .map_err(TransitionError::ForegroundMutation)?;
         if !response
             .data
             .as_ref()

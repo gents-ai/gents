@@ -1649,11 +1649,11 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         (Ok(_), Ok(_)) => unreachable!("exactly one handle wins, asserted above"),
     };
     assert!(
-        ErrorChain(loser_error.as_ref())
+        ErrorChain(&loser_error)
             .to_string()
             .contains("no longer pending"),
         "the losing handle must be rejected by the physical pending-row fence: {}",
-        ErrorChain(loser_error.as_ref())
+        ErrorChain(&loser_error)
     );
     let dispatched = crate::graphql::graphql_with_transaction_retry(
         &node,

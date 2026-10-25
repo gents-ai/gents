@@ -161,7 +161,7 @@ pub async fn cancel_background_tool_call(
             %error,
             "failed to persist background cancellation after stopping live execution",
         );
-        return Err(error);
+        return Err(error.into());
     }
 
     if lifecycle.is_cancelled() {

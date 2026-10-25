@@ -55,7 +55,7 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         if !(self.kind() == ToolRowKind::SessionMessage && self.await_mode == AwaitMode::Background)
         {
-            return Err(TransitionError::SessionMessageSettlementNotBackground.into());
+            return Err(TransitionError::SessionMessageSettlementNotBackground);
         }
         let state = terminal.tool_state();
         self.ensure_state(&[ToolCallState::Running, state], "settle_session_message")?;
