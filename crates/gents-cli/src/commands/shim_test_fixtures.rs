@@ -1004,9 +1004,9 @@ pub(crate) async fn seed_job_row(
     )
     .await;
     pin.chain_root_doc_id = doc_id.clone();
-    let doc_id = gents::graphql::escape_graphql_string(&doc_id);
+    let escaped_doc_id = gents::graphql::escape_graphql_string(&doc_id);
     let mutation = format!(
-        r#"mutation($job_pin: JSON, $job_progress: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{
+        r#"mutation($job_pin: JSON, $job_progress: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, input: {{
             await_mode: "background", status: "{lifecycle}", deadline_at: "2126-06-01T10:00:00Z", {ended}
             job_pin: $job_pin, job_progress: $job_progress
         }}) {{ _docID }} }}"#
