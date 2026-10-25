@@ -14,7 +14,7 @@ use crate::oauth_credential::{
     backend_account, enabled_accounts_note, list_accounts, no_switch_candidate_note, provider_name,
     serving_account, AccountState, AccountSummary, ServingAccount,
 };
-use crate::usage_observation::{usage_for_backend, usage_view, UsageView};
+use crate::usage_observation::{usage_view, UsageView};
 use crate::{Collection, InferenceBackend};
 
 /// What a move costs, shown with every plan and receipt.
@@ -59,6 +59,7 @@ pub async fn switch_candidates(
     profile_id: &str,
     plugin_slots: &[String],
     now: DateTime<Utc>,
+    observations: &[crate::usage_observation::AccountUsageRead],
 ) -> Result<SwitchPlan> {
     let accounts = list_accounts(access, node_did).await?;
     let snapshot = access
@@ -84,12 +85,15 @@ pub async fn switch_candidates(
                 Ok(None) => "not read yet",
                 Err(_) => continue,
             };
-        let stored = usage_for_backend(access, node_did, backend).await?;
         candidates.push(SwitchCandidate {
             label: serving.label,
             backend_id: backend.backend_id.clone(),
             models,
-            usage: usage_view(stored.as_ref(), backend.provider_kind, now),
+            usage: observations
+                .iter()
+                .find(|read| read.matches_backend(backend))
+                .and_then(|read| read.usage.clone())
+                .unwrap_or_else(|| usage_view(None, backend.provider_kind, now)),
         });
     }
     anyhow::ensure!(

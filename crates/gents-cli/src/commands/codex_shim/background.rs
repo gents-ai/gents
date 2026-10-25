@@ -435,6 +435,7 @@ mod tests {
         poll_interval: Duration,
     ) -> ShimState {
         ShimState {
+            usage_cache: Arc::default(),
             codex_home: tempdir.path().join("codex-home"),
             trace_path: tempdir
                 .path()

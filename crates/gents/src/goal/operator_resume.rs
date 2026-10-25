@@ -181,7 +181,7 @@ pub struct GoalResumeOnReceipt {
 /// the profile already on the target and returns the same continuation.
 /// `plugin_slots` gives the plugins bound to the moved profile on the host.
 #[allow(clippy::too_many_arguments)]
-pub async fn resume_goal_on_account(
+pub async fn resume_goal_on_account<F>(
     access: &crate::ConfigAccess,
     identity: &dyn NodeIdentity,
     node_did: &str,
@@ -189,8 +189,11 @@ pub async fn resume_goal_on_account(
     from_request_id: &str,
     target_backend_id: &str,
     move_companions: bool,
-    plugin_slots: &dyn Fn(&str) -> Result<Vec<String>>,
-) -> Result<GoalResumeOnReceipt> {
+    plugin_slots: &F,
+) -> Result<GoalResumeOnReceipt>
+where
+    F: Fn(&str) -> Result<Vec<String>> + Sync + ?Sized,
+{
     use crate::blocked_turn::{blocked_turn_from, stopped_request, BlockedReason, FailedCall};
     anyhow::ensure!(
         identity.did() == node_did,
@@ -309,7 +312,7 @@ async fn stage_resume_inner(
     if let Some(target_backend_id) = required_backend {
         let references =
             crate::document_config::ConfigReferences::load_in_txn(txn, node_did).await?;
-        let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, from_request_id)
+        let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, node_did, from_request_id)
             .await?
             .context("resume predecessor has no failed call")?;
         call.backend_id = Some(target_backend_id.to_owned());

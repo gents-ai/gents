@@ -155,9 +155,14 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     let node = test_node().await;
-    let err = ClaudeSubscriptionClient::build(node, "did:key:z6MkNobody", None)
-        .await
-        .expect_err("missing");
+    let err = ClaudeSubscriptionClient::build(
+        std::sync::Arc::default(),
+        node,
+        "did:key:z6MkNobody",
+        None,
+    )
+    .await
+    .expect_err("missing");
     assert!(
         err.to_string()
             .contains("gents claude-login --node-did did:key:z6MkNobody"),
@@ -175,12 +180,22 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
         chrono::Utc::now() + chrono::Duration::hours(8),
     )
     .await;
-    let client = ClaudeSubscriptionClient::build(node.clone(), "did:key:z6MkSeeded", None)
-        .await
-        .expect("client");
-    let again = ClaudeSubscriptionClient::build(node, "did:key:z6MkSeeded", None)
-        .await
-        .expect("client");
+    let client = ClaudeSubscriptionClient::build(
+        std::sync::Arc::default(),
+        node.clone(),
+        "did:key:z6MkSeeded",
+        None,
+    )
+    .await
+    .expect("client");
+    let again = ClaudeSubscriptionClient::build(
+        std::sync::Arc::default(),
+        node,
+        "did:key:z6MkSeeded",
+        None,
+    )
+    .await
+    .expect("client");
     assert!(
         Arc::ptr_eq(&client.bearer, &again.bearer),
         "one bearer per credential id"
@@ -213,9 +228,14 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
-    let client = ClaudeSubscriptionClient::build(node, "did:key:z6MkStaleRefresh", None)
-        .await
-        .expect("client");
+    let client = ClaudeSubscriptionClient::build(
+        std::sync::Arc::default(),
+        node,
+        "did:key:z6MkStaleRefresh",
+        None,
+    )
+    .await
+    .expect("client");
     let bearer = client.bearer.current_bearer().await;
     std::env::remove_var(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     assert_eq!(bearer.expect("token"), "access-NEW");
@@ -306,9 +326,10 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
         .await
         .unwrap();
 
-    let client = ClaudeSubscriptionClient::build(node, did, Some("acct-ref-2"))
-        .await
-        .expect("client");
+    let client =
+        ClaudeSubscriptionClient::build(std::sync::Arc::default(), node, did, Some("acct-ref-2"))
+            .await
+            .expect("client");
 
     assert_eq!(
         client

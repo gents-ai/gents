@@ -38,6 +38,7 @@ import { sentTurnKey } from "../stream-reveal";
 import { TranscriptPanel, type TranscriptOwner } from "../Transcript";
 import { type WorkerActions } from "../WorkerActions";
 import { useSessionProvenance, useWorkers } from "../workers";
+import { ProviderRecovery } from "./ProviderRecovery";
 import { OpenSessionComposer } from "./OpenSessionComposer";
 
 export function OpenSession() {
@@ -252,6 +253,14 @@ export function OpenSession() {
               </div>
 
               <div ref={headerEnd} aria-hidden="true" />
+              {session?.nodeDid && session.latestRequestId && (
+                <ProviderRecovery
+                  nodeDid={session.nodeDid}
+                  sessionId={session.sessionId}
+                  requestId={session.latestRequestId}
+                  turnState={session.turnState}
+                />
+              )}
               <SelectedTranscript
                 inFlight={inFlight}
                 stopping={stopping}

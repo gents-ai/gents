@@ -56,6 +56,13 @@ where
         admission,
         agent_connection_fingerprint(agent_config),
         &agent_config.model_name,
+        agent_config.profile_id.as_deref(),
+        agent_config.openai_wire_api == OpenAiWireApi::ChatCompletions
+            && (agent_config.backend_provider_kind == BackendProviderKind::XaiGrokOAuth
+                || (agent_config.backend_provider_kind == BackendProviderKind::OpenAiCompatible
+                    && crate::inference_setup::is_xai_api_endpoint(
+                        &agent_config.backend_endpoint,
+                    ))),
     )
 }
 
@@ -438,6 +445,7 @@ mod tests;
 
 /// The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
+    cache: std::sync::Arc<crate::usage_observation::UsageCache>,
     node: std::sync::Arc<EmbeddedNode>,
     agent_config: &ResolvedAgent,
     admission: AdmissionRegistry,
@@ -486,6 +494,7 @@ pub(crate) async fn build_compaction_engine(
     summary.backend_endpoint = backend.backend_endpoint;
     summary.backend_auth = backend.backend_auth;
     summary.model_name = inference.profile.model_name.clone();
+    summary.profile_id = Some(inference.profile.profile_id.clone());
     summary.service_tier = inference.profile.service_tier;
     summary.resolved_reasoning_efforts = inference.resolved_reasoning_efforts();
     summary.context_window = inference.context_window()?;
@@ -497,9 +506,14 @@ pub(crate) async fn build_compaction_engine(
         crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
         _ => summary.completion_client_api_key()?,
     };
-    let client =
-        crate::llm::backend_client::build_backend_client(node, &summary, &api_key, build_timeout)
-            .await?;
+    let client = crate::llm::backend_client::build_backend_client(
+        cache,
+        node,
+        &summary,
+        &api_key,
+        build_timeout,
+    )
+    .await?;
     let provider_family = client.provider_family().to_owned();
     let source_counter = std::sync::Arc::new(crate::provider_input::ProviderInputCounter::new(
         agent_config.backend_provider_kind,

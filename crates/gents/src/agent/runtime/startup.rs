@@ -405,7 +405,8 @@ async fn run_agent_owned(
         agent.node_did().to_string(),
         Some(agent.runtime_node_arc().identity.clone()),
     )
-    .with_plugins(agent.plugins().clone());
+    .with_plugins(agent.plugins().clone())
+    .with_usage_cache(agent.usage_cache().clone());
     backend_registry::probe_and_promote_enabled_backends(&agent.node).await;
 
     // Subscribe before reading startup configuration so racing commits remain pending.

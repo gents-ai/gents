@@ -5,6 +5,10 @@ export function createProviderAccountCommands(
   invokeDesktop: ReturnType<typeof createDesktopInvoker>,
 ): Partial<DesktopApiAdapter> {
   return {
+    fetchProviderRecovery: (request) =>
+      invokeDesktop("desktop_provider_recovery_plan", { request }),
+    applyProviderRecovery: (request) =>
+      invokeDesktop("desktop_provider_recovery_apply", { request }),
     listProviderAccounts: (nodeDid) =>
       invokeDesktop("desktop_provider_accounts_list", {
         request: { nodeDid },

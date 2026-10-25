@@ -9,11 +9,7 @@ use super::controller::InferenceCallRecord;
 use crate::graphql::escape_graphql_string;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ProviderCallUsage {
-    pub(crate) input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) cached_input_tokens: u64,
-}
+pub(crate) struct ProviderCallUsage(pub(crate) gents_protocol::usage::TokenUsage);
 
 pub(super) fn completion_persistence_error(error: anyhow::Error) -> AdmissionError {
     AdmissionError(format!("persisting InferenceCall failed: {error:#}"))
@@ -42,7 +38,7 @@ pub(super) async fn persist_call_queued(
     call: &InferenceCallRecord,
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
-    let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
+    let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None)?;
     let resp = crate::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_call_queued",
@@ -57,7 +53,8 @@ pub(super) async fn persist_call_started(
     call: &InferenceCallRecord,
 ) -> Result<String, AdmissionError> {
     let now = chrono::Utc::now().to_rfc3339();
-    let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
+    let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None)
+        .map_err(completion_persistence_error)?;
     let resp = crate::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_call_started",
@@ -114,7 +111,7 @@ pub(super) async fn persist_terminal_call(
         None,
         Some(&now),
         usage,
-    );
+    )?;
     crate::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_terminal_call",
@@ -145,7 +142,7 @@ pub(super) async fn persist_existing_call_terminal(
     let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
     let (prompt_tokens, completion_tokens, cached_input_tokens) =
-        usage_fields(usage, cache_observation);
+        usage_fields(usage, cache_observation)?;
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
             docID: "{doc_id}",
@@ -208,20 +205,25 @@ fn add_call_mutation(
     started_at: Option<&str>,
     ended_at: Option<&str>,
     usage: Option<ProviderCallUsage>,
-) -> String {
+) -> Result<String> {
     let queued_at = optional_graphql_string("queued_at", queued_at);
     let started_at = optional_graphql_string("started_at", started_at);
     let ended_at = optional_graphql_string("ended_at", ended_at);
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
+    let model_name = optional_graphql_string("model_name", call.model_name.as_deref());
+    let profile_id = optional_graphql_string("profile_id", call.profile_id.as_deref());
     let (prompt_tokens, completion_tokens, cached_input_tokens) =
-        usage_fields(usage, CachedInputTokensObservation::NotAvailable);
-    format!(
+        usage_fields(usage, CachedInputTokensObservation::NotAvailable)?;
+    Ok(format!(
         r#"mutation {{
             add_InferenceCall(input: {{
                 call_id: "{call_id}",
                 runtime_instance_id: "{runtime_instance_id}",
                 request_id: "{request_id}",
                 request_doc_id: "{request_doc_id}",
+                session_id: "{session_id}",
+                {model_name}
+                {profile_id}
                 call_seq: {call_seq},
                 backend_id: "{backend_id}",
                 agent_id: "{agent_id}",
@@ -246,6 +248,7 @@ fn add_call_mutation(
         runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
         request_id = escape_graphql_string(&call.request_id),
         request_doc_id = escape_graphql_string(&call.request_doc_id),
+        session_id = escape_graphql_string(&call.session_id),
         call_seq = call.call_seq,
         backend_id = escape_graphql_string(&call.backend_id),
         agent_id = escape_graphql_string(&call.agent_id),
@@ -263,7 +266,7 @@ fn add_call_mutation(
         prompt_tokens = prompt_tokens,
         completion_tokens = completion_tokens,
         cached_input_tokens = cached_input_tokens,
-    )
+    ))
 }
 
 fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
@@ -275,22 +278,43 @@ fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
 fn usage_fields(
     usage: Option<ProviderCallUsage>,
     cache_observation: CachedInputTokensObservation,
-) -> (String, String, String) {
-    match usage {
-        Some(usage) => {
-            let cached_input_tokens = match cache_observation {
-                CachedInputTokensObservation::NotAvailable => Some(usage.cached_input_tokens),
-                CachedInputTokensObservation::Unreported => None,
-                CachedInputTokensObservation::Reported(tokens) => Some(tokens),
-            };
-            (
-                format!("prompt_tokens: {},", usage.input_tokens),
-                format!("completion_tokens: {},", usage.output_tokens),
-                cached_input_tokens
-                    .map(|tokens| format!("cached_input_tokens: {tokens},"))
-                    .unwrap_or_default(),
-            )
+) -> Result<(String, String, String)> {
+    use gents_protocol::usage::UsageCompleteness;
+    let mut observed = usage.map(|usage| usage.0).unwrap_or_default();
+    match cache_observation {
+        CachedInputTokensObservation::NotAvailable => {}
+        CachedInputTokensObservation::Unreported => observed.cached_input_tokens = None,
+        CachedInputTokensObservation::Reported(tokens) => {
+            observed.cached_input_tokens = Some(tokens)
         }
-        None => (String::new(), String::new(), String::new()),
     }
+    if let Err(error) = observed.validate() {
+        tracing::warn!(%error, ?observed, "provider usage is invalid; retaining incomplete evidence");
+    }
+    let observed = observed.for_storage();
+    let field = |name: &str, value: Option<u64>| {
+        value
+            .map(|value| format!("{name}: {value},"))
+            .unwrap_or_default()
+    };
+    let completeness = match observed.completeness() {
+        UsageCompleteness::Missing => "missing",
+        UsageCompleteness::Partial => "partial",
+        UsageCompleteness::Complete => "complete",
+    };
+    let details = format!(
+        "{} {} {} {} usage_completeness: \"{completeness}\",",
+        field("cached_input_tokens", observed.cached_input_tokens),
+        field(
+            "cache_creation_input_tokens",
+            observed.cache_creation_input_tokens
+        ),
+        field("reasoning_output_tokens", observed.reasoning_output_tokens),
+        field("provider_total_tokens", observed.provider_total_tokens),
+    );
+    Ok((
+        field("prompt_tokens", observed.input_tokens),
+        field("completion_tokens", observed.output_tokens),
+        details,
+    ))
 }

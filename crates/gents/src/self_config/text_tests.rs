@@ -35,6 +35,7 @@ async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, 
     let mut grants = config(categories);
     grants.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -220,6 +221,7 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     let mut unguarded = grants.clone();
     unguarded.no_lockout = false;
     let setup_tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity.clone()),
@@ -227,6 +229,7 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
         std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
     );
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -494,6 +497,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     grants.agent_id = "setup".into();
     grants.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity.clone()),
@@ -1303,6 +1307,7 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
         let mut grants = config(categories);
         grants.preview = false;
         let tools = build_self_config_tools(
+            std::sync::Arc::default(),
             node.clone(),
             owner.clone(),
             Some(identity.clone()),

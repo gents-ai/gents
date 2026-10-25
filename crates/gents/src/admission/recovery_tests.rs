@@ -117,6 +117,9 @@ async fn stale_queued_recovery_cannot_cancel_a_running_call() {
 
 fn pending_call(call_id: &str) -> super::super::controller::PendingCallMetadata {
     super::super::controller::PendingCallMetadata {
+        session_id: "session-test".to_string(),
+        model_name: None,
+        profile_id: None,
         call_id: call_id.into(),
         runtime_instance_id: "recovery-cas-runtime".into(),
         request_id: "recovery-cas-request".into(),
@@ -529,11 +532,13 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     metadata.request_doc_id = request.doc_id.clone();
     metadata.node_did = request.node_did.clone();
     let call = super::super::controller::InferenceCallRecord::without_controller(metadata);
-    let usage = super::super::ProviderCallUsage {
-        input_tokens: 17,
-        output_tokens: 9,
-        cached_input_tokens: 3,
-    };
+    let usage = super::super::ProviderCallUsage(gents_protocol::usage::TokenUsage {
+        input_tokens: Some(17),
+        output_tokens: Some(9),
+        cached_input_tokens: Some(3),
+        final_response: true,
+        ..Default::default()
+    });
     super::super::persistence::persist_existing_call_terminal(
         node.clone(),
         &call,

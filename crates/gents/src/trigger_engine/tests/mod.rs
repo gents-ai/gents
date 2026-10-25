@@ -570,6 +570,7 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
         enabled: true,
     });
     Arc::new(ResolvedAgent {
+        profile_id: None,
         skills: Vec::new(),
         agent_id: behavior_name.to_string(),
         node: principal,

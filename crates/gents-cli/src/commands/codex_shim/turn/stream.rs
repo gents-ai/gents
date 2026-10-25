@@ -1126,6 +1126,10 @@ async fn send_thread_token_usage_update(
             .context("committed request missing agent")?,
     )
     .await?;
+    let Some(token_usage) = thread_token_usage(total_usage, last_usage, model_context_window)
+    else {
+        return Ok(());
+    };
     send_notification(
         outbound,
         state,
@@ -1133,7 +1137,7 @@ async fn send_thread_token_usage_update(
             codex::ThreadTokenUsageUpdatedNotification {
                 thread_id: projection.thread_id.to_string(),
                 turn_id: projection.turn_id.to_string(),
-                token_usage: thread_token_usage(total_usage, last_usage, model_context_window),
+                token_usage,
             },
         ),
     )
@@ -1386,6 +1390,7 @@ mod tests {
                 .expect("embedded node"),
         );
         let state = ShimState {
+            usage_cache: Arc::default(),
             codex_home: temp.path().to_path_buf(),
             trace_path: temp.path().join("reasoning.jsonl"),
             cwd: temp.path().to_path_buf(),

@@ -575,6 +575,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
     .unwrap()
     .with_reviewer(reviewer.callback.clone());
     let tools = crate::self_config::build_self_config_tools(
+        std::sync::Arc::default(),
         fixture.node.clone(),
         fixture.parent.node_did.clone(),
         Some(fixture.identity.clone()),
@@ -1198,6 +1199,7 @@ impl TitleFixture {
             enabled: true,
         });
         let agent_config = Arc::new(ResolvedAgent {
+            profile_id: None,
             agent_id: "general".into(),
             node: principal,
             backend_id: Some("general:backend".into()),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
-use gents_loop::account_usage::{UsageCredits, UsagePlan, UsageReport, UsageSource, UsageWindow};
+use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
 use super::*;
@@ -84,657 +84,13 @@ fn backend(node_did: &str, provider_kind: &str, backend_id: &str, auth: Value) -
     .expect("backend")
 }
 
-fn api_key_account(node_did: &str) -> UsageAccount {
-    UsageAccount::Backend {
-        node_did: node_did.to_string(),
-        provider: "OpenAiCompatible".to_string(),
-        backend_id: "backend-usage-a".to_string(),
-    }
-}
-
-async fn rows(node: &Arc<EmbeddedNode>) -> Vec<(String, String, String)> {
-    let response = node
-        .execute("{ ProviderAccountUsage { node_did provider usage_key } }")
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.expect("data");
-    let mut rows: Vec<_> = data["ProviderAccountUsage"]
-        .as_array()
-        .expect("rows")
-        .iter()
-        .map(|row| {
-            let field = |name: &str| row[name].as_str().unwrap_or_default().to_string();
-            (field("node_did"), field("provider"), field("usage_key"))
-        })
-        .collect();
-    rows.sort();
-    rows
-}
-
-fn used(stored: &StoredUsage, label: &str) -> Option<f64> {
+fn used(stored: &UsageObservation, label: &str) -> Option<f64> {
     stored
         .report
         .windows
         .iter()
         .find(|window| window.label == label)
         .map(|window| window.used_pct)
-}
-
-#[tokio::test]
-async fn store_records_and_loads_a_credential_account() {
-    let node = node().await;
-    let row = credential(A, None, Some("acct-key-a"));
-    seed(&node, &row).await;
-    let account = UsageAccount::for_credential(&row);
-    let now = Utc::now();
-
-    record_usage(&node, &account, report(vec![window("primary", 12.0, now)]))
-        .await
-        .expect("record");
-
-    let stored = load_usage(&local(&node), &account)
-        .await
-        .expect("load")
-        .expect("stored usage");
-    assert_eq!(used(&stored, "primary"), Some(12.0));
-    assert_eq!(stored.observed_at, Some(now));
-    assert_eq!(
-        rows(&node).await,
-        vec![(A.into(), CODEX.into(), "acct-key-a".into())]
-    );
-}
-
-#[tokio::test]
-async fn store_two_nodes_same_key_keep_separate_rows() {
-    let node = node().await;
-    let (row_a, row_b) = (
-        credential(A, None, Some("acct-key-a")),
-        credential(B, None, Some("acct-key-a")),
-    );
-    seed(&node, &row_a).await;
-    seed(&node, &row_b).await;
-    let now = Utc::now();
-    let (account_a, account_b) = (
-        UsageAccount::for_credential(&row_a),
-        UsageAccount::for_credential(&row_b),
-    );
-    record_usage(
-        &node,
-        &account_a,
-        report(vec![window("primary", 10.0, now)]),
-    )
-    .await
-    .unwrap();
-    record_usage(
-        &node,
-        &account_b,
-        report(vec![window("primary", 90.0, now)]),
-    )
-    .await
-    .unwrap();
-    record_usage(
-        &node,
-        &api_key_account(A),
-        report(vec![window("requests", 1.0, now)]),
-    )
-    .await
-    .unwrap();
-    record_usage(
-        &node,
-        &api_key_account(B),
-        report(vec![window("requests", 2.0, now)]),
-    )
-    .await
-    .unwrap();
-
-    let access = local(&node);
-    let load = |account| {
-        let access = &access;
-        async move { load_usage(access, &account).await.unwrap().expect("stored") }
-    };
-    assert_eq!(used(&load(account_a).await, "primary"), Some(10.0));
-    assert_eq!(used(&load(account_b).await, "primary"), Some(90.0));
-    assert_eq!(used(&load(api_key_account(A)).await, "requests"), Some(1.0));
-    assert_eq!(used(&load(api_key_account(B)).await, "requests"), Some(2.0));
-    assert_eq!(rows(&node).await.len(), 4);
-}
-
-#[tokio::test]
-async fn store_older_report_does_not_replace_newer_windows() {
-    let node = node().await;
-    let row = credential(A, None, Some("acct-key-a"));
-    seed(&node, &row).await;
-    let account = UsageAccount::for_credential(&row);
-    let now = Utc::now();
-    record_usage(&node, &account, report(vec![window("primary", 50.0, now)]))
-        .await
-        .unwrap();
-    record_usage(
-        &node,
-        &account,
-        report(vec![
-            window("primary", 10.0, now - Duration::minutes(1)),
-            window("secondary", 5.0, now - Duration::minutes(1)),
-        ]),
-    )
-    .await
-    .unwrap();
-
-    let stored = load_usage(&local(&node), &account).await.unwrap().unwrap();
-    assert_eq!(used(&stored, "primary"), Some(50.0));
-    assert_eq!(used(&stored, "secondary"), Some(5.0));
-    assert_eq!(stored.observed_at, Some(now));
-}
-
-#[tokio::test]
-async fn store_key_falls_back_to_the_account_reference() {
-    let node = node().await;
-    let original = credential(A, None, None);
-    let second = credential(A, Some("acct-ref-2"), None);
-    let original_doc = seed(&node, &original).await;
-    let second_doc = seed(&node, &second).await;
-    let now = Utc::now();
-    for row in [&original, &second] {
-        record_usage(
-            &node,
-            &UsageAccount::for_credential(row),
-            report(vec![window("primary", 1.0, now)]),
-        )
-        .await
-        .unwrap();
-    }
-
-    let keys: Vec<String> = rows(&node).await.into_iter().map(|row| row.2).collect();
-    assert_eq!(
-        keys,
-        vec![
-            format!("ref:acct-ref-2:{second_doc}"),
-            format!("ref:original:{original_doc}")
-        ]
-    );
-    assert!(keys.iter().all(|key| !key.contains("did:")));
-}
-
-#[tokio::test]
-async fn store_key_is_read_when_the_write_happens() {
-    let node = node().await;
-    let mut row = credential(A, None, None);
-    let doc = seed(&node, &row).await;
-    row.doc_id = Some(doc.clone());
-    let account = UsageAccount::for_credential(&row);
-    let now = Utc::now();
-    record_usage(
-        &node,
-        &account,
-        report(vec![window("primary", 10.0, now - Duration::minutes(1))]),
-    )
-    .await
-    .unwrap();
-
-    row.provider_account_key = Some("acct-key-a".into());
-    seed(&node, &row).await;
-    record_usage(
-        &node,
-        &account,
-        report(vec![window("secondary", 20.0, now)]),
-    )
-    .await
-    .unwrap();
-
-    let keys: Vec<String> = rows(&node).await.into_iter().map(|row| row.2).collect();
-    assert_eq!(
-        keys,
-        vec!["acct-key-a".to_string(), format!("ref:original:{doc}")]
-    );
-    let stored = load_usage(&local(&node), &account).await.unwrap().unwrap();
-    assert_eq!(used(&stored, "primary"), Some(10.0));
-    assert_eq!(used(&stored, "secondary"), Some(20.0));
-}
-
-#[tokio::test]
-async fn store_new_first_account_never_shows_the_removed_accounts_usage() {
-    let node = node().await;
-    let now = Utc::now();
-    let mut removed = credential(A, None, None);
-    removed.connected_at = Some(now - Duration::minutes(30));
-    let doc_id = seed(&node, &removed).await;
-    let account = UsageAccount::for_credential(&removed);
-    let old = now - Duration::minutes(20);
-    let mut old_report = report(vec![window("primary", 70.0, old)]);
-    old_report.credits = Some(UsageCredits {
-        has_credits: Some(true),
-        unlimited: Some(false),
-        balance: Some("1.00".into()),
-        observed_at: old,
-    });
-    old_report.plan = Some(UsagePlan {
-        name: "plus".into(),
-        observed_at: old,
-    });
-    write(&node, &account, old_report, Some((old, None)))
-        .await
-        .unwrap();
-    assert!(load_usage(&local(&node), &account).await.unwrap().is_some());
-
-    let deleted = node
-        .execute(&format!(
-            r#"mutation {{ delete_OAuthCredential(docID: "{doc_id}") {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(!deleted.has_errors(), "{:?}", deleted.errors);
-    let mut fresh = credential(A, None, None);
-    fresh.connected_at = Some(now - Duration::minutes(5));
-    fresh.access_token = "access-TEST-2".into();
-    seed(&node, &fresh).await;
-
-    let access = local(&node);
-    let stored = load_usage(&access, &account).await.unwrap();
-    assert_eq!(
-        stored, None,
-        "the removed account's usage shows: {stored:?}"
-    );
-    let for_backend = usage_for_backend(
-        &access,
-        A,
-        &backend(
-            A,
-            "ChatGptCodex",
-            "backend-usage-a",
-            json!({ "kind": "node_oauth" }),
-        ),
-    )
-    .await
-    .unwrap();
-    assert_eq!(for_backend, None);
-}
-
-#[tokio::test]
-async fn store_next_original_account_never_shows_the_removed_accounts_usage() {
-    let node = node().await;
-    let access = local(&node);
-    let removed = crate::oauth_credential::store_sign_in(&access, credential(A, None, None), None)
-        .await
-        .unwrap()
-        .credential;
-    let account = UsageAccount::for_credential(&removed);
-    record_usage(
-        &node,
-        &account,
-        report(vec![window("primary", 70.0, Utc::now())]),
-    )
-    .await
-    .unwrap();
-    assert!(load_usage(&access, &account).await.unwrap().is_some());
-
-    let credential_id = removed.credential_id.as_str();
-    access
-        .transact_write("test.remove_account", |txn| {
-            Box::pin(async move {
-                crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
-            })
-        })
-        .await
-        .unwrap();
-    let mut next = credential(A, None, None);
-    next.access_token = "access-TEST-2".into();
-    crate::oauth_credential::store_sign_in(&access, next, None)
-        .await
-        .unwrap();
-
-    let stored = load_usage(&access, &account).await.unwrap();
-    assert_eq!(
-        stored, None,
-        "the removed account's usage shows: {stored:?}"
-    );
-}
-
-#[tokio::test]
-async fn late_response_from_removed_account_does_not_populate_replacement_usage() {
-    let node = node().await;
-    let access = local(&node);
-    let removed = crate::oauth_credential::store_sign_in(&access, credential(A, None, None), None)
-        .await
-        .unwrap()
-        .credential;
-    let old_client_account = UsageAccount::for_credential(&removed);
-    let credential_id = removed.credential_id.as_str();
-    access
-        .transact_write("test.remove_account", |txn| {
-            Box::pin(async move {
-                crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
-            })
-        })
-        .await
-        .unwrap();
-    let mut replacement = credential(A, None, Some("replacement-provider-key"));
-    replacement.access_token = "access-TEST-2".into();
-    let replacement = crate::oauth_credential::store_sign_in(&access, replacement, None)
-        .await
-        .unwrap()
-        .credential;
-    assert_ne!(removed.doc_id, replacement.doc_id);
-    record_usage(
-        &node,
-        &old_client_account,
-        report(vec![window("primary", 70.0, Utc::now())]),
-    )
-    .await
-    .unwrap();
-    let observed = load_usage(&access, &UsageAccount::for_credential(&replacement))
-        .await
-        .unwrap();
-    assert_eq!(
-        observed, None,
-        "late old-account response populated replacement usage"
-    );
-}
-
-#[tokio::test]
-async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
-    for remove in [false, true] {
-        let node = node().await;
-        let access = local(&node);
-        let original = crate::oauth_credential::store_sign_in(
-            &access,
-            credential(A, None, Some("shared-provider-key")),
-            None,
-        )
-        .await
-        .unwrap()
-        .credential;
-        let account = UsageAccount::for_credential(&original);
-        let queued = Arc::new(tokio::sync::Notify::new());
-        let acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (writer, fillers) = access
-            .transact_write("test.hold_usage_gate", |txn| {
-                let node = node.clone();
-                let account = account.clone();
-                let original = original.clone();
-                let queued = queued.clone();
-                let acquired = acquired.clone();
-                Box::pin(async move {
-                    let gate_node = Arc::clone(&node);
-                    let fillers = tokio::spawn(async move {
-                        crate::config_client::ConfigApplyTxn::fill_mutation_write_gate_for_test(
-                            gate_node.as_ref(),
-                        )
-                        .await
-                    })
-                    .await?;
-                    let writing_queued = queued.clone();
-                    let writing_acquired = acquired.clone();
-                    let writer = tokio::spawn(async move {
-                        crate::config_client::ConfigApplyTxn::with_write_gate_observation(
-                            writing_queued,
-                            writing_acquired,
-                            record_usage(
-                                &node,
-                                &account,
-                                report(vec![window("primary", 70.0, Utc::now())]),
-                            ),
-                        )
-                        .await
-                    });
-                    tokio::time::timeout(std::time::Duration::from_secs(10), queued.notified())
-                        .await?;
-                    assert!(!acquired.load(std::sync::atomic::Ordering::Acquire));
-                    if remove {
-                        crate::oauth_credential::remove_account_in_txn(
-                            txn,
-                            A,
-                            &original.credential_id,
-                        )
-                        .await?;
-                        let mut replacement = credential(A, None, Some("shared-provider-key"));
-                        replacement.access_token = "replacement-access-TEST".to_string();
-                        txn.execute(&crate::oauth_credential::oauth_credential_upsert_mutation(
-                            &replacement,
-                        ))
-                        .await?;
-                    } else {
-                        let mut disabled = original;
-                        disabled.enabled = false;
-                        txn.execute(&crate::oauth_credential::oauth_credential_upsert_mutation(
-                            &disabled,
-                        ))
-                        .await?;
-                    }
-                    Ok((writer, fillers))
-                })
-            })
-            .await
-            .unwrap();
-        drop(fillers);
-        tokio::time::timeout(std::time::Duration::from_secs(10), writer)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(acquired.load(std::sync::atomic::Ordering::Acquire));
-        let current = resolve_oauth_credential(&access, A, CODEX, AccountPick::Reference(None))
-            .await
-            .unwrap();
-        if remove {
-            let replacement = current.expect("replacement account must exist");
-            assert_ne!(replacement.doc_id, original.doc_id);
-            assert_eq!(
-                replacement.provider_account_key.as_deref(),
-                Some("shared-provider-key")
-            );
-        } else {
-            assert!(current.is_none(), "the disabled account must not resolve");
-        }
-        assert!(
-            rows(&node).await.is_empty(),
-            "queued old response recreated usage after account mutation"
-        );
-    }
-}
-
-#[tokio::test]
-async fn older_read_completing_last_keeps_latest_read_metadata_and_window() {
-    let node = node().await;
-    let row = credential(A, None, Some("acct-key-read-order"));
-    seed(&node, &row).await;
-    let account = UsageAccount::for_credential(&row);
-    let newer = Utc::now();
-    let older = newer - Duration::seconds(1);
-    write(
-        &node,
-        &account,
-        report(vec![window("primary", 40.0, newer)]),
-        Some((newer, None)),
-    )
-    .await
-    .unwrap();
-    write(
-        &node,
-        &account,
-        report(vec![window("primary", 70.0, older)]),
-        Some((older, Some("unreachable".to_string()))),
-    )
-    .await
-    .unwrap();
-    let stored = load_usage(&local(&node), &account).await.unwrap().unwrap();
-    assert_eq!(stored.read_at, Some(newer));
-    assert_eq!(stored.read_error, None);
-    assert_eq!(used(&stored, "primary"), Some(40.0));
-}
-
-#[tokio::test]
-async fn store_disabled_account_writes_and_loads_nothing() {
-    let node = node().await;
-    let mut row = credential(A, None, Some("acct-key-a"));
-    row.enabled = false;
-    seed(&node, &row).await;
-    let account = UsageAccount::for_credential(&row);
-
-    record_usage(
-        &node,
-        &account,
-        report(vec![window("primary", 1.0, Utc::now())]),
-    )
-    .await
-    .unwrap();
-
-    assert!(rows(&node).await.is_empty());
-    let access = local(&node);
-    assert_eq!(load_usage(&access, &account).await.unwrap(), None);
-    let for_backend = usage_for_backend(
-        &access,
-        A,
-        &backend(
-            A,
-            "ChatGptCodex",
-            "backend-usage-a",
-            json!({ "kind": "node_oauth" }),
-        ),
-    )
-    .await
-    .unwrap();
-    assert_eq!(for_backend, None);
-}
-
-#[tokio::test]
-async fn store_unchanged_report_within_a_minute_is_not_rewritten() {
-    let node = node().await;
-    let row = credential(A, None, Some("acct-key-a"));
-    seed(&node, &row).await;
-    let account = UsageAccount::for_credential(&row);
-    let access = local(&node);
-    let first = Utc::now() - Duration::minutes(5);
-    record_usage(
-        &node,
-        &account,
-        report(vec![window("primary", 10.0, first)]),
-    )
-    .await
-    .unwrap();
-    let observed_at = |stored: Option<StoredUsage>| stored.unwrap().observed_at;
-
-    let ten = first + Duration::seconds(10);
-    record_usage(&node, &account, report(vec![window("primary", 10.0, ten)]))
-        .await
-        .unwrap();
-    assert_eq!(
-        observed_at(load_usage(&access, &account).await.unwrap()),
-        Some(first),
-        "unchanged values 10 s later are not rewritten"
-    );
-
-    let late = first + Duration::seconds(61);
-    record_usage(&node, &account, report(vec![window("primary", 10.0, late)]))
-        .await
-        .unwrap();
-    assert_eq!(
-        observed_at(load_usage(&access, &account).await.unwrap()),
-        Some(late)
-    );
-
-    let changed = late + Duration::seconds(10);
-    record_usage(
-        &node,
-        &account,
-        report(vec![window("primary", 11.0, changed)]),
-    )
-    .await
-    .unwrap();
-    let stored = load_usage(&access, &account).await.unwrap().unwrap();
-    assert_eq!(stored.observed_at, Some(changed));
-    assert_eq!(used(&stored, "primary"), Some(11.0));
-}
-
-#[tokio::test]
-async fn store_api_key_backend_uses_the_backend_id() {
-    let node = node().await;
-    let now = Utc::now();
-    record_usage(
-        &node,
-        &api_key_account(A),
-        report(vec![window("tokens", 3.0, now)]),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows(&node).await,
-        vec![(
-            A.into(),
-            "OpenAiCompatible".into(),
-            "backend-usage-a".into()
-        )]
-    );
-    let stored = usage_for_backend(
-        &local(&node),
-        A,
-        &backend(
-            A,
-            "OpenAiCompatible",
-            "backend-usage-a",
-            json!({ "kind": "api_key", "key": "sk-TEST" }),
-        ),
-    )
-    .await
-    .unwrap()
-    .expect("stored");
-    assert_eq!(used(&stored, "tokens"), Some(3.0));
-}
-
-#[tokio::test]
-async fn store_usage_for_backend_resolves_the_account_and_plan() {
-    let node = node().await;
-    seed(&node, &credential(A, None, Some("acct-key-a"))).await;
-    let mut second = credential(A, Some("acct-ref-2"), Some("acct-key-b"));
-    second.chatgpt_plan_type = Some("plus".into());
-    seed(&node, &second).await;
-    let now = Utc::now();
-    record_usage(
-        &node,
-        &UsageAccount::for_credential(&second),
-        report(vec![window("primary", 42.0, now)]),
-    )
-    .await
-    .unwrap();
-
-    let stored = usage_for_backend(
-        &local(&node),
-        A,
-        &backend(
-            A,
-            "ChatGptCodex",
-            "backend-usage-a",
-            json!({ "kind": "node_oauth", "account_ref": "acct-ref-2" }),
-        ),
-    )
-    .await
-    .unwrap()
-    .expect("the referenced account's usage");
-    assert_eq!(used(&stored, "primary"), Some(42.0));
-    assert_eq!(
-        stored.report.plan.map(|plan| plan.name),
-        Some("plus".into())
-    );
-}
-
-#[tokio::test]
-async fn store_never_writes_the_credential_row() {
-    let node = node().await;
-    let row = credential(A, None, None);
-    seed(&node, &row).await;
-    let access = local(&node);
-    let read = || resolve_oauth_credential(&access, A, CODEX, AccountPick::Reference(None));
-    let before = read().await.unwrap().expect("row");
-
-    record_usage(
-        &node,
-        &UsageAccount::for_credential(&row),
-        report(vec![window("primary", 5.0, Utc::now())]),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(rows(&node).await.len(), 1);
-    assert_eq!(read().await.unwrap().expect("row"), before);
 }
 
 const CODEX_USAGE_BODY: &str = r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000,"reset_at":4102444800}}}"#;
@@ -778,15 +134,8 @@ fn api_key_backend(endpoint: String, backend_id: &str, auth: Value) -> Inference
     backend
 }
 
-fn openrouter_account(backend_id: &str) -> UsageAccount {
-    UsageAccount::Backend {
-        node_did: A.to_string(),
-        provider: "OpenRouter".to_string(),
-        backend_id: backend_id.to_string(),
-    }
-}
-
 async fn read(
+    cache: &UsageCache,
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     backend: &InferenceBackend,
@@ -794,9 +143,17 @@ async fn read(
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> UsageRead {
-    read_account_usage(node.clone(), node_did, backend, trigger, endpoints, now)
-        .await
-        .expect("read")
+    read_account_usage(
+        cache,
+        node.clone(),
+        node_did,
+        backend,
+        trigger,
+        endpoints,
+        now,
+    )
+    .await
+    .expect("read")
 }
 
 async fn never_called(handle: tokio::task::JoinHandle<String>) {
@@ -808,6 +165,7 @@ async fn never_called(handle: tokio::task::JoinHandle<String>) {
 
 #[tokio::test]
 async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint_windows() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadCodex";
     let node = node().await;
     sign_in(
@@ -831,6 +189,7 @@ async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint
         let at = now + Duration::minutes(6 * step);
         assert_eq!(
             read(
+                &cache,
                 &node,
                 did,
                 &codex,
@@ -852,7 +211,7 @@ async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint
         );
     }
 
-    let stored = usage_for_backend(&local(&node), did, &codex)
+    let stored = usage_for_backend(&cache, &local(&node), did, &codex)
         .await
         .unwrap()
         .expect("stored");
@@ -868,6 +227,7 @@ async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint
 
 #[tokio::test]
 async fn read_grok_sends_identity_headers_and_credits_query() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadGrok";
     let node = node().await;
     let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
@@ -890,6 +250,7 @@ async fn read_grok_sends_identity_headers_and_credits_query() {
 
     assert_eq!(
         read(
+            &cache,
             &node,
             did,
             &grok,
@@ -918,7 +279,7 @@ async fn read_grok_sends_identity_headers_and_credits_query() {
         UsageEndpoints::default().grok_billing,
         "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
     );
-    let stored = usage_for_backend(&local(&node), did, &grok)
+    let stored = usage_for_backend(&cache, &local(&node), did, &grok)
         .await
         .unwrap()
         .unwrap();
@@ -927,6 +288,7 @@ async fn read_grok_sends_identity_headers_and_credits_query() {
 
 #[tokio::test]
 async fn read_openrouter_uses_the_backend_key_and_endpoint() {
+    let cache = UsageCache::default();
     let node = node().await;
     let (url, handle) = test_support::one_shot_token_server(200, OPENROUTER_KEY_BODY).await;
     let openrouter = api_key_backend(
@@ -937,6 +299,7 @@ async fn read_openrouter_uses_the_backend_key_and_endpoint() {
 
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -955,7 +318,7 @@ async fn read_openrouter_uses_the_backend_key_and_endpoint() {
             .contains("authorization: bearer sk-or-test"),
         "{request}"
     );
-    let stored = usage_for_backend(&local(&node), A, &openrouter)
+    let stored = usage_for_backend(&cache, &local(&node), A, &openrouter)
         .await
         .unwrap()
         .unwrap();
@@ -965,6 +328,7 @@ async fn read_openrouter_uses_the_backend_key_and_endpoint() {
 
 #[tokio::test]
 async fn read_claude_on_open_then_skips_a_recent_read() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadClaudeOpen";
     let node = node().await;
     let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
@@ -987,7 +351,16 @@ async fn read_claude_on_open_then_skips_a_recent_read() {
     );
 
     assert_eq!(
-        read(&node, did, &claude, UsageTrigger::Open, &endpoints, now).await,
+        read(
+            &cache,
+            &node,
+            did,
+            &claude,
+            UsageTrigger::Open,
+            &endpoints,
+            now
+        )
+        .await,
         UsageRead::Read
     );
     assert_eq!(
@@ -996,6 +369,7 @@ async fn read_claude_on_open_then_skips_a_recent_read() {
     );
     assert_eq!(
         read(
+            &cache,
             &node,
             did,
             &claude,
@@ -1010,6 +384,7 @@ async fn read_claude_on_open_then_skips_a_recent_read() {
 
 #[tokio::test]
 async fn read_claude_on_refresh_sends_the_oauth_beta() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadClaude";
     let node = node().await;
     let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
@@ -1032,6 +407,7 @@ async fn read_claude_on_refresh_sends_the_oauth_beta() {
 
     assert_eq!(
         read(
+            &cache,
             &node,
             did,
             &claude,
@@ -1051,7 +427,7 @@ async fn read_claude_on_refresh_sends_the_oauth_beta() {
         )),
         "{request}"
     );
-    let stored = usage_for_backend(&local(&node), did, &claude)
+    let stored = usage_for_backend(&cache, &local(&node), did, &claude)
         .await
         .unwrap()
         .unwrap();
@@ -1061,6 +437,7 @@ async fn read_claude_on_refresh_sends_the_oauth_beta() {
 
 #[tokio::test]
 async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadRefresh";
     let node = node().await;
     sign_in(&node, did, CODEX, Utc::now() - Duration::hours(1), None).await;
@@ -1085,6 +462,7 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
     codex.endpoint = format!("{}/codex", origin(&usage_url));
 
     let result = read(
+        &cache,
         &node,
         did,
         &codex,
@@ -1100,7 +478,7 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
     let request = usage_handle.await.unwrap();
     assert_eq!(first_line(&request), "GET /wham/usage HTTP/1.1");
     assert!(request.contains(&format!("Bearer {token}")), "{request}");
-    let stored = usage_for_backend(&local(&node), did, &codex)
+    let stored = usage_for_backend(&cache, &local(&node), did, &codex)
         .await
         .unwrap()
         .unwrap();
@@ -1109,6 +487,7 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
 
 #[tokio::test]
 async fn read_api_key_without_a_source_is_not_reported() {
+    let cache = UsageCache::default();
     let node = node().await;
     let openai = backend(
         A,
@@ -1118,6 +497,7 @@ async fn read_api_key_without_a_source_is_not_reported() {
     );
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openai,
@@ -1134,35 +514,27 @@ const REFRESH_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERR
 
 #[tokio::test]
 async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
+    let cache = UsageCache::default();
     let node = node().await;
     let now = Utc::now();
-    let (url, handle) = test_support::one_shot_token_server(429, "{}").await;
-    let openrouter = api_key_backend(
-        format!("{}/api/v1", origin(&url)),
-        "backend-usage-recent",
-        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
-    );
-    assert_eq!(
-        read(
-            &node,
-            A,
-            &openrouter,
-            UsageTrigger::Open,
-            &UsageEndpoints::default(),
-            now
-        )
-        .await,
-        UsageRead::Unavailable("throttled".into())
-    );
-    handle.await.unwrap();
     let (url, handle) = test_support::one_shot_token_server(200, OPENROUTER_KEY_BODY).await;
     let openrouter = api_key_backend(
         format!("{}/api/v1", origin(&url)),
         "backend-usage-recent",
-        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+        json!({"kind":"api_key", "key":"sk-or-TEST"}),
     );
+    write(
+        &cache,
+        &node,
+        &UsageAccount::for_backend(A, &openrouter),
+        UsageReport::default(),
+        Some((now, None)),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -1175,6 +547,7 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
     );
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -1198,9 +571,15 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
         provider: CODEX.to_string(),
         account_ref: None,
     };
-    write(&node, &account, UsageReport::default(), Some((now, None)))
-        .await
-        .unwrap();
+    write(
+        &cache,
+        &node,
+        &account,
+        UsageReport::default(),
+        Some((now, None)),
+    )
+    .await
+    .unwrap();
     let _env = test_support::TOKEN_URL_ENV.lock().await;
     let (token_url, token_handle) = test_support::one_shot_token_server(200, "{}").await;
     std::env::set_var(REFRESH_ENV, &token_url);
@@ -1211,6 +590,7 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
         json!({ "kind": "node_oauth" }),
     );
     let result = read(
+        &cache,
         &node,
         did,
         &codex,
@@ -1226,15 +606,9 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
 
 #[tokio::test]
 async fn read_guard_throttled_is_unavailable_not_exhausted() {
+    let cache = UsageCache::default();
     let node = node().await;
     let now = Utc::now();
-    record_usage(
-        &node,
-        &openrouter_account("backend-usage-throttled"),
-        report(vec![window("daily", 40.0, now - Duration::minutes(10))]),
-    )
-    .await
-    .unwrap();
     let (url, handle) =
         test_support::one_shot_token_server(429, r#"{"error":"rate limited"}"#).await;
     let openrouter = api_key_backend(
@@ -1242,9 +616,18 @@ async fn read_guard_throttled_is_unavailable_not_exhausted() {
         "backend-usage-throttled",
         json!({ "kind": "api_key", "key": "sk-or-TEST" }),
     );
+    record_usage(
+        &cache,
+        &node,
+        &UsageAccount::for_backend(A, &openrouter),
+        report(vec![window("daily", 40.0, now - Duration::minutes(10))]),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -1257,8 +640,9 @@ async fn read_guard_throttled_is_unavailable_not_exhausted() {
     );
     handle.await.unwrap();
     let stored = load_usage(
+        &cache,
         &local(&node),
-        &openrouter_account("backend-usage-throttled"),
+        &UsageAccount::for_backend(A, &openrouter),
     )
     .await
     .unwrap()
@@ -1270,6 +654,7 @@ async fn read_guard_throttled_is_unavailable_not_exhausted() {
 
 #[tokio::test]
 async fn read_guard_malformed_stores_nothing_invented() {
+    let cache = UsageCache::default();
     let node = node().await;
     let (url, handle) = test_support::one_shot_token_server(200, r#"{"error":"x"}"#).await;
     let openrouter = api_key_backend(
@@ -1280,6 +665,7 @@ async fn read_guard_malformed_stores_nothing_invented() {
 
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -1292,8 +678,9 @@ async fn read_guard_malformed_stores_nothing_invented() {
     );
     handle.await.unwrap();
     let stored = load_usage(
+        &cache,
         &local(&node),
-        &openrouter_account("backend-usage-malformed"),
+        &UsageAccount::for_backend(A, &openrouter),
     )
     .await
     .unwrap()
@@ -1304,6 +691,7 @@ async fn read_guard_malformed_stores_nothing_invented() {
 
 #[tokio::test]
 async fn read_guard_refresh_failure_is_sign_in_expired() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadRefreshFail";
     let node = node().await;
     sign_in(&node, did, CODEX, Utc::now() - Duration::hours(1), None).await;
@@ -1322,6 +710,7 @@ async fn read_guard_refresh_failure_is_sign_in_expired() {
     codex.endpoint = format!("{}/codex", origin(&usage_url));
 
     let result = read(
+        &cache,
         &node,
         did,
         &codex,
@@ -1335,11 +724,12 @@ async fn read_guard_refresh_failure_is_sign_in_expired() {
     assert_eq!(result, UsageRead::Unavailable("sign-in expired".into()));
     token_handle.await.unwrap();
     never_called(usage_handle).await;
-    assert!(rows(&node).await.is_empty());
+    assert!(cache.entries.lock().await.is_empty());
 }
 
 #[tokio::test]
 async fn read_guard_disabled_account_is_not_read() {
+    let cache = UsageCache::default();
     let node = node().await;
     let mut openrouter = api_key_backend(
         "http://127.0.0.1:9/api/v1".to_string(),
@@ -1349,6 +739,7 @@ async fn read_guard_disabled_account_is_not_read() {
     openrouter.enabled = false;
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -1371,6 +762,7 @@ async fn read_guard_disabled_account_is_not_read() {
     );
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &codex,
@@ -1381,11 +773,12 @@ async fn read_guard_disabled_account_is_not_read() {
         .await,
         UsageRead::Unavailable("no enabled account".into())
     );
-    assert!(rows(&node).await.is_empty());
+    assert!(cache.entries.lock().await.is_empty());
 }
 
 #[tokio::test]
 async fn read_guard_unreachable_is_unavailable() {
+    let cache = UsageCache::default();
     let node = node().await;
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -1399,6 +792,7 @@ async fn read_guard_unreachable_is_unavailable() {
     );
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -1413,6 +807,7 @@ async fn read_guard_unreachable_is_unavailable() {
 
 #[tokio::test]
 async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
+    let cache = UsageCache::default();
     let node = node().await;
     let (url, handle) = test_support::one_shot_token_server(200, OPENROUTER_KEY_BODY).await;
     let openrouter = api_key_backend(
@@ -1422,6 +817,7 @@ async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
     );
     assert_eq!(
         read(
+            &cache,
             &node,
             A,
             &openrouter,
@@ -1490,6 +886,7 @@ fn grok_endpoints(url: &str) -> UsageEndpoints {
 }
 
 async fn node_read(
+    cache: &UsageCache,
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     trigger: UsageTrigger,
@@ -1497,6 +894,7 @@ async fn node_read(
     endpoints: &UsageEndpoints,
 ) -> Vec<AccountUsageRead> {
     read_node_usage(
+        cache,
         node.clone(),
         node_did,
         trigger,
@@ -1519,6 +917,7 @@ fn outcome<'a>(reads: &'a [AccountUsageRead], account_ref: Option<&str>) -> &'a 
 
 #[tokio::test]
 async fn node_read_skips_disabled_accounts_without_a_request() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageSurfDisabled";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1539,7 +938,15 @@ async fn node_read_skips_disabled_accounts_without_a_request() {
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(
+        &cache,
+        &node,
+        did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
 
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1553,6 +960,7 @@ async fn node_read_skips_disabled_accounts_without_a_request() {
 
 #[tokio::test]
 async fn node_read_open_reads_claude_once_within_the_window() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageSurfClaude";
     let node = node().await;
     sign_in(&node, did, CLAUDE, Utc::now() + Duration::hours(1), None).await;
@@ -1577,18 +985,19 @@ async fn node_read_open_reads_claude_once_within_the_window() {
         ..UsageEndpoints::default()
     };
 
-    let open = node_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
+    let open = node_read(&cache, &node, did, UsageTrigger::Open, None, &endpoints).await;
     assert_eq!(outcome(&open, None), &UsageRead::Read);
     assert_eq!(
         first_line(&handle.await.unwrap()),
         "GET /api/oauth/usage HTTP/1.1"
     );
-    let again = node_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
+    let again = node_read(&cache, &node, did, UsageTrigger::Open, None, &endpoints).await;
     assert_eq!(outcome(&again, None), &UsageRead::SkippedRecent);
 }
 
 #[tokio::test]
 async fn node_read_reads_each_account_once() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageSurfOnce";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1602,7 +1011,15 @@ async fn node_read_reads_each_account_once() {
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(
+        &cache,
+        &node,
+        did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
 
     assert_eq!(reads.len(), 1, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1611,6 +1028,7 @@ async fn node_read_reads_each_account_once() {
 
 #[tokio::test]
 async fn node_read_disabled_backend_does_not_hide_the_account() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageSurfSharedBackend";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1632,7 +1050,15 @@ async fn node_read_disabled_backend_does_not_hide_the_account() {
     .await;
     let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
 
-    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(
+        &cache,
+        &node,
+        did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
 
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1641,6 +1067,7 @@ async fn node_read_disabled_backend_does_not_hide_the_account() {
 
 #[tokio::test]
 async fn node_read_reads_an_enabled_account_no_backend_names() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageSurfNoBackend";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1658,7 +1085,15 @@ async fn node_read_reads_an_enabled_account_no_backend_names() {
     .await;
     let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
 
-    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(
+        &cache,
+        &node,
+        did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
 
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1679,6 +1114,7 @@ fn usage_account_for_backend_follows_node_oauth() {
             node_did: A.to_string(),
             provider: "XaiGrokOAuth".to_string(),
             backend_id: "backend-usage-a".to_string(),
+            connection: crate::admission::backend_connection_fingerprint(&api_key.backend_fields()),
         }
     );
     let oauth = oauth_backend(
@@ -1701,6 +1137,7 @@ fn usage_account_for_backend_follows_node_oauth() {
 
 #[tokio::test]
 async fn node_read_skips_accounts_not_on_this_node_and_filters_by_provider() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageSurfFilter";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1729,7 +1166,15 @@ async fn node_read_skips_accounts_not_on_this_node_and_filters_by_provider() {
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(
+        &cache,
+        &node,
+        did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
     let chat = reads
@@ -1743,6 +1188,7 @@ async fn node_read_skips_accounts_not_on_this_node_and_filters_by_provider() {
     handle.await.unwrap();
 
     let claude_only = node_read(
+        &cache,
         &node,
         did,
         UsageTrigger::Open,
@@ -1755,6 +1201,7 @@ async fn node_read_skips_accounts_not_on_this_node_and_filters_by_provider() {
 
 #[tokio::test]
 async fn node_read_outcomes_hold_no_secrets() {
+    let cache = UsageCache::default();
     let did = "did:key:z6MkUsageSurfSecrets";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1771,7 +1218,15 @@ async fn node_read_outcomes_hold_no_secrets() {
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(
+        &cache,
+        &node,
+        did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
 
     assert_eq!(reads.len(), 1, "{reads:?}");
     handle.await.unwrap();
@@ -1780,89 +1235,185 @@ async fn node_read_outcomes_hold_no_secrets() {
     assert!(!json.contains("did:"), "{json}");
 }
 
-async fn seed_remove_fixture(node: &Arc<EmbeddedNode>) -> (OAuthCredential, String) {
-    let mut first = credential(A, Some("acct-a"), None);
-    first.connected_at = Some(Utc::now());
-    let doc_id = seed(node, &first).await;
-    let account = UsageAccount::for_credential(&first);
-    let now = Utc::now();
-    record_usage(node, &account, report(vec![window("primary", 10.0, now)]))
-        .await
-        .unwrap();
-    let keyed = OAuthCredential {
-        provider_account_key: Some("acct-key-a".into()),
-        ..first
-    };
-    seed(node, &keyed).await;
-    record_usage(
-        node,
-        &account,
-        report(vec![window("primary", 20.0, now + Duration::minutes(2))]),
-    )
-    .await
-    .unwrap();
-    let mut other = credential(A, Some("acct-b"), Some("acct-key-b"));
-    other.connected_at = Some(Utc::now());
-    seed(node, &other).await;
-    record_usage(
-        node,
-        &UsageAccount::for_credential(&other),
-        report(vec![window("primary", 30.0, now)]),
-    )
-    .await
-    .unwrap();
-    record_usage(
-        node,
-        &api_key_account(A),
-        report(vec![window("requests", 5.0, now)]),
-    )
-    .await
-    .unwrap();
-    let fallback = format!("ref:acct-a:{doc_id}");
-    let keys: Vec<_> = rows(node).await.into_iter().map(|row| row.2).collect();
-    for key in [
-        fallback.as_str(),
-        "acct-key-a",
-        "acct-key-b",
-        "backend-usage-a",
-    ] {
-        assert!(keys.iter().any(|stored| stored == key), "{key}: {keys:?}");
+#[test]
+fn cached_open_and_refresh_follow_the_executable_model() {
+    let snapshot: Value =
+        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+    for case in snapshot["provider_limit_read_cases"].as_array().unwrap() {
+        let trigger: UsageTrigger = serde_json::from_value(case["trigger"].clone()).unwrap();
+        let now = DateTime::from_timestamp(case["now"].as_i64().unwrap(), 0).unwrap();
+        let previous = case["previous"]
+            .as_i64()
+            .map(|time| DateTime::from_timestamp(time, 0).unwrap());
+        assert_eq!(
+            should_read(trigger, now, previous),
+            case["should_read"].as_bool().unwrap(),
+            "{case}"
+        );
     }
-    (keyed, fallback)
 }
 
-async fn remove(node: &Arc<EmbeddedNode>, credential_id: &str) {
-    local(node)
-        .transact_write("test.remove_account", |txn| {
+#[tokio::test]
+async fn cache_is_runtime_local_and_replacement_sign_ins_reject_late_responses() {
+    let node = node().await;
+    let cache = UsageCache::default();
+    let row = credential(A, None, Some("same-provider-account"));
+    seed(&node, &row).await;
+    let access = local(&node);
+    let original = resolve_oauth_credential(&access, A, CODEX, AccountPick::Reference(None))
+        .await
+        .unwrap()
+        .unwrap();
+    let account = UsageAccount::for_credential(&original);
+    let now = Utc::now();
+    record_usage(
+        &cache,
+        &node,
+        &account,
+        report(vec![window("primary", 12.0, now)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        used(
+            &load_usage(&cache, &access, &account)
+                .await
+                .unwrap()
+                .unwrap(),
+            "primary"
+        ),
+        Some(12.0)
+    );
+    assert!(load_usage(&UsageCache::default(), &access, &account)
+        .await
+        .unwrap()
+        .is_none());
+    access
+        .transact_write("test.remove", |txn| {
+            let credential_id = row.credential_id.clone();
             Box::pin(async move {
-                crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
+                crate::oauth_credential::remove_account_in_txn(txn, A, &credential_id).await
             })
         })
         .await
         .unwrap();
+    let replacement = crate::oauth_credential::store_sign_in(
+        &access,
+        credential(A, None, Some("same-provider-account")),
+        Some("replacement"),
+    )
+    .await
+    .unwrap()
+    .credential;
+    record_usage(
+        &cache,
+        &node,
+        &account,
+        report(vec![window("primary", 90.0, now)]),
+    )
+    .await
+    .unwrap();
+    assert!(
+        load_usage(&cache, &access, &UsageAccount::for_credential(&replacement))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
-async fn remove_deletes_the_accounts_usage_rows() {
+async fn newer_observations_win_and_backend_edits_get_an_empty_cache() {
     let node = node().await;
-    let (removed, _) = seed_remove_fixture(&node).await;
-
-    remove(&node, &removed.credential_id).await;
-
-    let keys: Vec<_> = rows(&node).await.into_iter().map(|row| row.2).collect();
-    assert_eq!(keys, ["backend-usage-a", "acct-key-b"]);
+    let cache = UsageCache::default();
+    let mut backend = backend(
+        A,
+        "OpenRouter",
+        "account",
+        json!({"kind":"api_key", "key":"first"}),
+    );
+    let old = UsageAccount::for_backend(A, &backend);
+    let now = Utc::now();
+    record_usage(
+        &cache,
+        &node,
+        &old,
+        report(vec![window("requests", 50.0, now)]),
+    )
+    .await
+    .unwrap();
+    record_usage(
+        &cache,
+        &node,
+        &old,
+        report(vec![window("requests", 5.0, now - Duration::seconds(1))]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        used(
+            &load_usage(&cache, &local(&node), &old)
+                .await
+                .unwrap()
+                .unwrap(),
+            "requests"
+        ),
+        Some(50.0)
+    );
+    let other_node = UsageAccount::for_backend(B, &backend);
+    assert!(load_usage(&cache, &local(&node), &other_node)
+        .await
+        .unwrap()
+        .is_none());
+    backend.endpoint.push_str("/changed");
+    assert!(usage_for_backend(&cache, &local(&node), A, &backend)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
-async fn remove_of_a_disabled_account_deletes_its_usage_rows() {
+async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credentials() {
+    use crate::llm::tool::Tool;
     let node = node().await;
-    let (removed, _) = seed_remove_fixture(&node).await;
-    crate::oauth_credential::set_account_enabled(&local(&node), A, &removed.credential_id, false)
+    let cache = Arc::new(UsageCache::default());
+    let row = credential(A, None, Some("provider-key-SECRET"));
+    seed(&node, &row).await;
+    record_usage(
+        &cache,
+        &node,
+        &UsageAccount::for_credential(&row),
+        report(vec![window("primary", 12.0, Utc::now())]),
+    )
+    .await
+    .unwrap();
+    let (url, received) = test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
+    let mut backend = backend(A, "ChatGptCodex", "runtime", json!({"kind":"node_oauth"}));
+    backend.endpoint = origin(&url);
+    crate::config_client::write_inference_backend_document(&local(&node), &backend)
         .await
         .unwrap();
-
-    remove(&node, &removed.credential_id).await;
-
-    let keys: Vec<_> = rows(&node).await.into_iter().map(|row| row.2).collect();
-    assert_eq!(keys, ["backend-usage-a", "acct-key-b"]);
+    let tool = ProviderLimitsTool {
+        node,
+        node_did: A.into(),
+        cache,
+    };
+    let output = tool.call(ProviderLimitsArgs {}).await.unwrap();
+    received.await.unwrap();
+    let cached = tool.call(ProviderLimitsArgs {}).await.unwrap();
+    let cached: Value = serde_json::from_str(&cached).unwrap();
+    assert_eq!(cached["accounts"][0]["read"]["outcome"], "skipped_recent");
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(
+        value["accounts"][0]["limits"]["windows"][0]["used_pct"],
+        12.0
+    );
+    for secret in [
+        "SECRET",
+        "account_ref",
+        "credential_id",
+        "access_token",
+        "provider_account_key",
+    ] {
+        assert!(!output.contains(secret), "{output}");
+    }
 }

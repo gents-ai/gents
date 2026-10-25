@@ -249,6 +249,7 @@ fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'
 
 #[derive(Clone)]
 pub struct ConfigCommandTool {
+    pub(super) usage_cache: Arc<crate::usage_observation::UsageCache>,
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) node_did: String,
     pub(super) identity: Option<Arc<dyn NodeIdentity>>,
@@ -938,12 +939,12 @@ impl ConfigCommandTool {
     }
 
     async fn backend(&self, argv: &[String]) -> Result<String> {
-        self.ensure_resource("backend")?;
         let verb = argv
             .first()
             .map(String::as_str)
             .context("backend command is required; see [\"help\",\"backend\"]")?;
         if verb == "list" {
+            self.ensure_resource("backend")?;
             let parsed = ParsedArgs::parse(&argv[1..])?;
             parsed.reject_mutation_flags()?;
             return self
@@ -958,6 +959,7 @@ impl ConfigCommandTool {
             ParsedArgs::parse(&argv[1..])?.reject_mutation_flags()?;
             return self.account_inventory().await;
         }
+        self.ensure_resource("backend")?;
         let create_args = match verb {
             "create" => Some(&argv[1..]),
             "preview" if argv.get(1).map(String::as_str) == Some("create") => Some(&argv[2..]),
@@ -1963,12 +1965,11 @@ impl ConfigCommandTool {
         ordered! {"resource": target.collection_name(), "document": document}.pretty()
     }
 
-    /// Store reads only: never contacts a provider or renews a sign-in, and
-    /// shows no token, sign-in identity, credential id or account reference.
+    /// Usage endpoint reads select no account and expose no credential identity.
     async fn account_inventory(&self) -> Result<String> {
         use crate::backend_provider::BackendProviderOauthExt;
         use crate::oauth_credential::backend_account;
-        use crate::usage_observation::{load_usage, usage_view, UsageAccount};
+        use crate::usage_observation::{read_node_usage, UsageTrigger};
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
         let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
@@ -1994,6 +1995,16 @@ impl ConfigCommandTool {
                 .collect::<Vec<_>>()
         };
         let now = chrono::Utc::now();
+        let reads = read_node_usage(
+            &self.usage_cache,
+            self.node.clone(),
+            node_did,
+            UsageTrigger::Open,
+            None,
+            self.usage_cache.endpoints(),
+            now,
+        )
+        .await?;
         let mut items = Vec::new();
         for account in &accounts {
             let serving: Vec<_> = backends
@@ -2009,19 +2020,16 @@ impl ConfigCommandTool {
             let kind = crate::BackendProviderKind::ALL
                 .into_iter()
                 .find(|kind| kind.oauth_provider() == Some(account.provider.as_str()));
-            let usage = match kind {
-                Some(kind) if account.enabled => {
-                    let usage_account = UsageAccount::Credential {
-                        doc_id: None,
-                        node_did: node_did.to_string(),
-                        provider: account.provider.clone(),
-                        account_ref: account.account_ref.clone(),
-                    };
-                    let stored = load_usage(&access, &usage_account).await?;
-                    Some(usage_view(stored.as_ref(), kind, now))
-                }
-                _ => None,
-            };
+            let usage = kind.filter(|_| account.enabled).and_then(|_| {
+                reads
+                    .iter()
+                    .find(|read| {
+                        read.backend_id.is_none()
+                            && read.provider == account.provider
+                            && read.account_ref == account.account_ref
+                    })
+                    .and_then(|read| read.usage.clone())
+            });
             items.push(json!({
                 "provider": account.provider,
                 "label": account.label,
@@ -2037,17 +2045,14 @@ impl ConfigCommandTool {
                 None if backend.enabled => "enabled",
                 None => "disabled",
             };
-            let usage = if state == "enabled" {
-                let usage_account = UsageAccount::Backend {
-                    node_did: node_did.to_string(),
-                    provider: backend.provider_kind.as_str().to_string(),
-                    backend_id: backend.backend_id.clone(),
-                };
-                let stored = load_usage(&access, &usage_account).await?;
-                Some(usage_view(stored.as_ref(), backend.provider_kind, now))
-            } else {
-                None
-            };
+            let usage = (state == "enabled")
+                .then(|| {
+                    reads
+                        .iter()
+                        .find(|read| read.matches_backend(backend))
+                        .and_then(|read| read.usage.clone())
+                })
+                .flatten();
             items.push(json!({
                 "provider": backend.provider_kind.as_str(),
                 "label": backend.name,
@@ -2059,7 +2064,7 @@ impl ConfigCommandTool {
         ordered! {
             "resource": "accounts",
             "items": items,
-            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage is the last stored observation; this view contacts no provider.",
+            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation.",
         }
         .pretty()
     }
