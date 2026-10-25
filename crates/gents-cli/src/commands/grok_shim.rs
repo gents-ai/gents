@@ -16,14 +16,14 @@ mod session_record;
 mod sessions;
 mod task_control;
 #[cfg(test)]
-pub(crate) use super::shim_test_fixtures as test_fixtures;
+pub(crate) use super::test_shim_fixtures as test_fixtures;
 pub(crate) mod turn;
 mod usage;
 mod workflow_catalog;
 mod workflow_command;
 
 #[cfg(test)]
-use super::shim_test_fixtures::seed_test_agent_configuration;
+use super::test_shim_fixtures::seed_test_agent_configuration;
 
 use crate::commands::grok_shim::projection::resolve_bound_model_context;
 use crate::commands::grok_shim::server::{

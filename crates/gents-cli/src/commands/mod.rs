@@ -49,4 +49,4 @@ pub(crate) mod write;
 pub(crate) mod desktop;
 
 #[cfg(test)]
-pub(crate) mod shim_test_fixtures;
+pub(crate) mod test_shim_fixtures;
