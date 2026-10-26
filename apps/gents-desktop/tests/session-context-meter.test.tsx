@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { createContextDetailsCache } from "../src/hooks/sessionContextDetails";
@@ -90,15 +91,19 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-meter")).toHaveTextContent("0.4%");
     expect(screen.getByTestId("context-meter")).not.toHaveTextContent("500k");
     fireEvent.click(screen.getByTestId("context-meter"));
-    expect(screen.getByTestId("next-context-settings")).toHaveTextContent(
-      "500,000 tokens",
+    const next = screen.getByTestId("next-context-settings");
+    expect(next).toHaveTextContent("Next call: 500k window · compacts at 400k");
+    expect(next).toHaveAttribute(
+      "title",
+      "Next model call: 500,000-token window, compaction at 400,000 tokens",
     );
-    expect(screen.getByTestId("next-context-settings")).toHaveTextContent(
-      "400,000 tokens",
+    const usage = screen.getByTestId("context-usage");
+    expect(usage).toHaveTextContent("420 / 102k · 0.4%");
+    expect(usage).toHaveAttribute(
+      "title",
+      "0.4% of compaction threshold; 420 of 102,400 estimated tokens",
     );
-    expect(screen.getByTestId("context-details")).toHaveTextContent(
-      "420 / 102,400 estimated tokens",
-    );
+    expect(screen.getByTestId("context-footer")).toHaveTextContent("128k window");
   });
 
   it("shows input as a share of the compaction threshold and omits history estimates", () => {
@@ -129,12 +134,27 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-ring")).toHaveAttribute("data-share", "0.10");
     fireEvent.click(screen.getByTestId("context-meter"));
     const details = screen.getByTestId("context-details");
-    expect(details).toHaveTextContent("78,520 / 786,432 estimated tokens");
-    expect(details).toHaveTextContent("10%of compaction threshold");
-    expect(details).toHaveTextContent("No compaction needed for this model call");
-    expect(details).toHaveTextContent("Messages & instructions63,736");
-    expect(details).toHaveTextContent("Tool definitions14,733");
-    expect(details).toHaveTextContent("Request settings51");
+    expect(screen.getByTestId("context-usage")).toHaveTextContent("78.5k / 786k · 10%");
+    expect(screen.getByTestId("last-context-dispatch")).toHaveTextContent(
+      "No compaction needed for this model call",
+    );
+    const table = screen.getByRole("table", { name: "Input token estimates" });
+    expect(
+      within(table)
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => row.textContent),
+    ).toEqual([
+      "Tool definitions14,73318.8%",
+      "Messages & instructions63,73681.2%",
+      "Request settings510.1%",
+    ]);
+    const footer = screen.getByTestId("context-footer");
+    expect(footer).toHaveTextContent(/^1M window$/);
+    expect(within(footer).getByText("1M window")).toHaveAttribute(
+      "title",
+      "Model context window: 1,048,576 tokens",
+    );
     expect(details).not.toHaveTextContent("6,047");
     expect(details).not.toHaveTextContent("13,983");
     expect(screen.queryByTestId("next-context-settings")).not.toBeInTheDocument();
@@ -230,6 +250,11 @@ describe("session context meter (#1618)", () => {
     const details = screen.getByTestId("context-details");
     expect(details).toHaveTextContent("Model-input estimate unavailable");
     expect(details).not.toHaveTextContent("1,000");
+    expect(screen.getByTestId("context-usage")).toHaveTextContent("—");
+    expect(screen.queryByTestId("context-bar")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "About model input" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("context-meter")).toHaveTextContent("—");
     expect(screen.queryByTestId("last-context-dispatch")).not.toBeInTheDocument();
   });
@@ -248,6 +273,9 @@ describe("session context meter (#1618)", () => {
     expect(meter).toHaveTextContent("—");
     fireEvent.click(meter);
     expect(screen.getByRole("alert")).toHaveTextContent("exceeds model");
+    expect(screen.getByTestId("context-footer")).toHaveTextContent(
+      "Window unavailable",
+    );
     expect(meter).not.toHaveTextContent("128k");
   });
 
@@ -266,10 +294,10 @@ describe("session context meter (#1618)", () => {
 
     const dispatch = screen.getByTestId("last-context-dispatch");
     expect(dispatch).toHaveTextContent("Input compacted before this model call");
-    expect(dispatch).toHaveTextContent("480 → 420 tokens");
-    expect(screen.getByTestId("context-details")).toHaveTextContent(
-      "420 / 400,000 estimated tokens",
+    expect(dispatch).toHaveTextContent(
+      "Input compacted before this model call · 480 → 420 tokens",
     );
+    expect(screen.getByTestId("context-usage")).toHaveTextContent("420 / 400k · 0.1%");
   });
 
   it("shows durable session compaction estimates and leaves absent evidence unclaimed", () => {
@@ -292,13 +320,204 @@ describe("session context meter (#1618)", () => {
     );
     fireEvent.click(screen.getByTestId("context-meter"));
 
-    const compactions = screen.getByTestId("session-compactions");
-    expect(compactions).toHaveTextContent("Session compactions");
+    const compactions = screen.getByRole("list", {
+      name: "Recent session compactions",
+    });
+    expect(screen.getByTestId("context-footer")).toHaveTextContent(
+      "500k window · 1 compaction",
+    );
     expect(compactions).toHaveTextContent("12 messages");
     expect(compactions).toHaveTextContent("900 → 300");
     expect(screen.getByTestId("context-meter")).toHaveTextContent("1 compaction");
     expect(screen.queryByTestId("last-context-dispatch")).not.toBeInTheDocument();
   });
+  it("draws one bar over the window with a segment and legend row per part", () => {
+    render(
+      <SessionContext
+        context={context({
+          contextWindow: 1_000_000,
+          compactionThresholdTokens: 750_000,
+          sessionCompactionCount: 0,
+          lastRequest: lastRequest({
+            estimatedInputTokens: 20_486,
+            contextWindow: 1_000_000,
+            compactionThresholdTokens: 750_000,
+            components: {
+              messages: 12_000,
+              toolSchemas: 8_000,
+              documents: 400,
+              additionalParameters: 50,
+              outputSchema: 36,
+            },
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("context-meter")).toHaveTextContent("2.7%");
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const usage = screen.getByTestId("context-usage");
+    expect(usage).toHaveTextContent("20.5k / 750k · 2.7%");
+    expect(usage).toHaveAttribute(
+      "title",
+      "2.7% of compaction threshold; 20,486 of 750,000 estimated tokens",
+    );
+    const bar = screen.getByRole("img", {
+      name: "Model input by part: Tool definitions 8,000, Messages & instructions 12,000, Attached documents 400, Output schema 36, Request settings 50. 1,000,000-token context window; compaction threshold at 750,000 tokens",
+    });
+    const segments = within(bar).getAllByTestId("context-segment");
+    expect(
+      segments.map((segment) => [segment.getAttribute("title"), segment.dataset.share]),
+    ).toEqual([
+      ["Tool definitions: 8,000 tokens", "0.0080"],
+      ["Messages & instructions: 12,000 tokens", "0.0120"],
+      ["Attached documents: 400 tokens", "0.0004"],
+      ["Output schema: 36 tokens", "0.0000"],
+      ["Request settings: 50 tokens", "0.0001"],
+    ]);
+    for (const segment of segments) expect(segment).toHaveClass("min-w-[3px]");
+    const rows = within(
+      screen.getByRole("table", { name: "Input token estimates" }),
+    ).getAllByRole("row");
+    expect(rows.slice(1).map((row) => row.textContent)).toEqual([
+      "Tool definitions8,00039.1%",
+      "Messages & instructions12,00058.6%",
+      "Attached documents4002%",
+      "Output schema360.2%",
+      "Request settings500.2%",
+    ]);
+    rows.slice(1).forEach((row, index) => {
+      const dot = row.querySelector("[aria-hidden='true']");
+      expect(dot?.className).toContain(segments[index].className.split(" ").at(-1));
+    });
+    const tick = within(bar).getByTestId("compaction-threshold");
+    expect(tick).toHaveAttribute("data-position", "0.7500");
+    expect(tick).toHaveAttribute("title", "Compaction threshold: 750,000 tokens");
+    expect(screen.getByTestId("context-footer")).toHaveTextContent(/^1M window$/);
+  });
+
+  it("keeps the explanatory notes in the info tooltip", async () => {
+    render(<SessionContext context={context({ lastRequest: lastRequest() })} />);
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const details = screen.getByTestId("context-details");
+    expect(details).not.toHaveTextContent("Latest assembled model input");
+    expect(details).not.toHaveTextContent("detailed message breakdown is unavailable");
+    await userEvent.hover(screen.getByRole("button", { name: "About model input" }));
+    const tip = await screen.findByText(/Latest assembled model input/);
+    expect(tip).toHaveTextContent(
+      "Latest assembled model input. Compaction is checked before each model call. The next call may differ. A detailed message breakdown is unavailable for this model call.",
+    );
+  });
+
+  it("shows the loading breakdown, then splits the message segment into its parts", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof loadDetails>>) => void;
+    const loadDetails = vi.fn(
+      () =>
+        new Promise<{
+          systemPromptTokens: number;
+          messageTokens: number;
+          userInputTokens: number;
+          assistantTokens: number;
+          toolCallTokens: number;
+          toolResultTokens: number;
+          otherMessageTokens: number;
+          messageCount: number;
+          toolDefinitionsCount: number;
+          toolCallCount: number;
+        } | null>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(
+      <SessionContext
+        loadDetails={loadDetails}
+        context={context({ lastRequest: lastRequest() })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("context-meter"));
+    expect(screen.getByText("Loading message breakdown…")).toBeInTheDocument();
+    expect(screen.getAllByTestId("context-segment")).toHaveLength(2);
+    await act(async () => {
+      finish({
+        systemPromptTokens: 100,
+        messageTokens: 300,
+        userInputTokens: 200,
+        assistantTokens: 100,
+        toolCallTokens: 0,
+        toolResultTokens: 0,
+        otherMessageTokens: 0,
+        messageCount: 2,
+        toolDefinitionsCount: 1,
+        toolCallCount: 0,
+      });
+    });
+    expect(screen.queryByText("Loading message breakdown…")).not.toBeInTheDocument();
+    expect(
+      screen.getAllByTestId("context-segment").map((segment) => segment.title),
+    ).toEqual([
+      "Tool definitions: 20 tokens",
+      "Instructions & context: 100 tokens",
+      "User messages: 200 tokens",
+      "Assistant messages: 100 tokens",
+    ]);
+  });
+
+  it("places the threshold tick after the segments below it and fills an over-window input", () => {
+    render(
+      <SessionContext
+        context={context({
+          lastRequest: lastRequest({
+            estimatedInputTokens: 600,
+            contextWindow: 1_000,
+            compactionThresholdTokens: 800,
+            components: {
+              messages: 500,
+              toolSchemas: 100,
+              documents: 0,
+              additionalParameters: 0,
+              outputSchema: 0,
+            },
+          }),
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const bar = screen.getByTestId("context-bar");
+    const tick = within(bar).getByTestId("compaction-threshold");
+    expect(tick).toHaveAttribute("data-position", "0.8000");
+    expect(tick.getAttribute("style")).toMatch(/calc\(4px \+ 0\.8 \* \(100% - 4px\)\)/);
+    expect(bar.lastElementChild?.previousElementSibling).toHaveClass("flex-1");
+  });
+
+  it("omits the empty remainder when the input fills the window", () => {
+    render(
+      <SessionContext
+        context={context({
+          lastRequest: lastRequest({
+            estimatedInputTokens: 1_200,
+            contextWindow: 1_000,
+            compactionThresholdTokens: 800,
+            compactionReason: "compactor_unavailable",
+            components: {
+              messages: 1_200,
+              toolSchemas: 0,
+              documents: 0,
+              additionalParameters: 0,
+              outputSchema: 0,
+            },
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("context-meter")).toHaveTextContent("150%");
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const bar = screen.getByTestId("context-bar");
+    expect(bar.querySelector(".flex-1")).toBeNull();
+    expect(within(bar).getAllByTestId("context-segment")).toHaveLength(1);
+    expect(screen.getByTestId("last-context-dispatch")).toHaveTextContent(
+      "Automatic compaction unavailable for this model call",
+    );
+  });
+
   it("loads only on expansion, caches the exact call, and ignores stale responses", async () => {
     const details = {
       systemPromptTokens: 0,

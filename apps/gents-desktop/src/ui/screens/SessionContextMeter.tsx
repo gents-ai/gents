@@ -8,85 +8,189 @@ import { Button } from "@gents/ui/components/button";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
+import { InfoTip } from "./InfoTip";
+
+type LastRequest = NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>;
 
 function formatPercent(value: number) {
   return `${value.toFixed(1).replace(/\.0$/, "")}%`;
 }
 
-function InputBreakdown({
-  input,
-  details,
-  loading,
-}: {
-  input: NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>;
-  details: SessionContextDetails | null;
-  loading: boolean;
-}) {
+function trimFixed(value: number, digits: number) {
+  return value.toFixed(digits).replace(/\.0$/, "");
+}
+
+function compactTokens(tokens: number) {
+  if (tokens < 1000) return tokens.toLocaleString();
+  const thousands = tokens / 1000;
+  if (thousands < 999.5) return `${trimFixed(thousands, thousands < 99.95 ? 1 : 0)}k`;
+  return `${trimFixed(tokens / 1_000_000, 1)}M`;
+}
+
+type InputPart = { label: string; tokens: number; color: string };
+
+/* Tool definitions, the message family (one ordinal green ramp) and the other
+   request layers (a gray ramp); the brand palette has no categorical chart hues. */
+function inputParts(input: LastRequest, details: SessionContextDetails | null) {
   const { components } = input;
-  const rows: [string, number][] = details
-    ? [
-        ["Instructions & context", details.systemPromptTokens],
-        ["User messages", details.userInputTokens],
-        ["Assistant messages", details.assistantTokens],
-        ["Tool calls", details.toolCallTokens],
-        ["Tool results", details.toolResultTokens],
-        ["Other message data", details.otherMessageTokens],
-      ]
-    : [["Messages & instructions", components.messages]];
-  rows.push(
-    ["Tool definitions", components.toolSchemas],
-    ["Attached documents", components.documents],
-    ["Request settings", components.additionalParameters],
-    ["Output schema", components.outputSchema],
-  );
+  const parts: InputPart[] = [
+    { label: "Tool definitions", tokens: components.toolSchemas, color: "bg-purple" },
+    ...(details
+      ? [
+          {
+            label: "Instructions & context",
+            tokens: details.systemPromptTokens,
+            color: "bg-green-800 dark:bg-green-600",
+          },
+          {
+            label: "User messages",
+            tokens: details.userInputTokens,
+            color: "bg-green-700 dark:bg-green-500",
+          },
+          {
+            label: "Assistant messages",
+            tokens: details.assistantTokens,
+            color: "bg-green-600 dark:bg-green-400",
+          },
+          {
+            label: "Tool calls",
+            tokens: details.toolCallTokens,
+            color: "bg-green-500 dark:bg-green-300",
+          },
+          {
+            label: "Tool results",
+            tokens: details.toolResultTokens,
+            color: "bg-green-400 dark:bg-green-200",
+          },
+          {
+            label: "Other message data",
+            tokens: details.otherMessageTokens,
+            color: "bg-green-300 dark:bg-green-100",
+          },
+        ]
+      : [
+          {
+            label: "Messages & instructions",
+            tokens: components.messages,
+            color: "bg-green-700 dark:bg-green-300",
+          },
+        ]),
+    {
+      label: "Attached documents",
+      tokens: components.documents,
+      color: "bg-gray-400 dark:bg-gray-300",
+    },
+    {
+      label: "Output schema",
+      tokens: components.outputSchema,
+      color: "bg-gray-500 dark:bg-gray-400",
+    },
+    {
+      label: "Request settings",
+      tokens: components.additionalParameters,
+      color: "bg-gray-600 dark:bg-gray-500",
+    },
+  ];
+  return parts.filter((part) => part.tokens > 0);
+}
+
+const SEGMENT_GAP_PX = 2;
+
+function InputBar({
+  parts,
+  window,
+  threshold,
+}: {
+  parts: InputPart[];
+  window: number;
+  threshold: number;
+}) {
+  const used = parts.reduce((sum, part) => sum + part.tokens, 0);
+  const remainder = used < window;
+  /* shares are laid out over the width left after the gaps, so the tick at the
+     threshold lines up with the segments around it */
+  const gaps = (parts.length + (remainder ? 1 : 0) - 1) * SEGMENT_GAP_PX;
+  const thresholdShare = Math.min(1, threshold / window);
+  let cumulative = 0;
+  let gapsBeforeThreshold = 0;
+  for (const part of parts) {
+    cumulative += part.tokens / window;
+    if (cumulative <= thresholdShare) gapsBeforeThreshold += 1;
+  }
+  const summary = parts
+    .map((part) => `${part.label} ${part.tokens.toLocaleString()}`)
+    .join(", ");
   return (
-    <section className="mt-4 border-t border-border pt-3" data-testid="input-breakdown">
-      <p className="text-sm font-medium text-heading">Input breakdown</p>
-      <div
-        className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-2 text-sm"
-        role="table"
-        aria-label="Input token estimates"
-      >
-        <div className="contents text-xs text-muted-foreground" role="row">
-          <span role="columnheader">Category</span>
-          <span role="columnheader" className="text-right">
-            Tokens
+    <div
+      role="img"
+      aria-label={`Model input by part: ${summary || "none"}. ${window.toLocaleString()}-token context window; compaction threshold at ${threshold.toLocaleString()} tokens`}
+      className="relative flex h-2 gap-0.5"
+      data-testid="context-bar"
+    >
+      {parts.map((part) => (
+        <span
+          key={part.label}
+          className={`min-w-[3px] rounded-full ${part.color}`}
+          style={{
+            flex: `0 1 calc((100% - ${gaps}px) * ${part.tokens / window})`,
+          }}
+          title={`${part.label}: ${part.tokens.toLocaleString()} tokens`}
+          data-testid="context-segment"
+          data-share={(part.tokens / window).toFixed(4)}
+        />
+      ))}
+      {remainder && (
+        <span className="min-w-0 flex-1 rounded-full bg-muted-foreground/20" />
+      )}
+      {threshold > 0 && (
+        <span
+          className="absolute inset-y-[-3px] w-0 border-l border-dashed border-foreground/70"
+          style={{
+            left: `calc((100% - ${gaps}px) * ${thresholdShare} + ${gapsBeforeThreshold * SEGMENT_GAP_PX}px)`,
+          }}
+          title={`Compaction threshold: ${threshold.toLocaleString()} tokens`}
+          data-testid="compaction-threshold"
+          data-position={thresholdShare.toFixed(4)}
+        />
+      )}
+    </div>
+  );
+}
+
+function InputLegend({ parts, total }: { parts: InputPart[]; total: number }) {
+  return (
+    <div
+      className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-1 text-xs"
+      role="table"
+      aria-label="Input token estimates"
+      data-testid="input-breakdown"
+    >
+      <div className="sr-only" role="row">
+        <span role="columnheader">Category</span>
+        <span role="columnheader">Tokens</span>
+        <span role="columnheader">Share</span>
+      </div>
+      {parts.map((part) => (
+        <div className="contents" role="row" key={part.label}>
+          <span
+            className="flex min-w-0 items-center gap-2 text-muted-foreground"
+            role="rowheader"
+          >
+            <span
+              aria-hidden="true"
+              className={`size-2 shrink-0 rounded-full ${part.color}`}
+            />
+            <span className="truncate">{part.label}</span>
           </span>
-          <span role="columnheader" className="text-right">
-            Share
+          <span className="text-right tabular-nums" role="cell">
+            {part.tokens.toLocaleString()}
+          </span>
+          <span className="text-right tabular-nums text-muted-foreground" role="cell">
+            {formatPercent(total > 0 ? (part.tokens / total) * 100 : 0)}
           </span>
         </div>
-        {rows
-          .filter(([, tokens]) => tokens > 0)
-          .map(([label, tokens]) => (
-            <div className="contents" role="row" key={label}>
-              <span className="text-muted-foreground" role="rowheader">
-                {label}
-              </span>
-              <span className="text-right font-mono text-xs" role="cell">
-                {tokens.toLocaleString()}
-              </span>
-              <span
-                className="text-right text-xs tabular-nums text-muted-foreground"
-                role="cell"
-              >
-                {formatPercent(
-                  input.estimatedInputTokens > 0
-                    ? (tokens / input.estimatedInputTokens) * 100
-                    : 0,
-                )}
-              </span>
-            </div>
-          ))}
-      </div>
-      {!details && (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {loading
-            ? "Loading message breakdown…"
-            : "A detailed message breakdown is unavailable for this model call."}
-        </p>
-      )}
-    </section>
+      ))}
+    </div>
   );
 }
 
@@ -149,9 +253,7 @@ export function SessionContext({
 }: {
   context: DesktopSessionSnapshot["context"];
   compact?: boolean;
-  loadDetails?: (
-    input: NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>,
-  ) => Promise<SessionContextDetails | null>;
+  loadDetails?: (input: LastRequest) => Promise<SessionContextDetails | null>;
 }) {
   const popover = useExclusivePopover();
   const lastRequest = context.lastRequest;
@@ -232,6 +334,14 @@ export function SessionContext({
     if (!next) pinned.current = false;
     popover.onOpenChange(next);
   };
+  const parts = lastRequest ? inputParts(lastRequest, details) : [];
+  const loadingDetails = pendingKey === callKey && details === null;
+  const notes = [
+    "Latest assembled model input. Compaction is checked before each model call. The next call may differ.",
+    ...(lastRequest && !details && !loadingDetails
+      ? ["A detailed message breakdown is unavailable for this model call."]
+      : []),
+  ].join(" ");
   return (
     <Popover
       open={popover.open}
@@ -280,117 +390,119 @@ export function SessionContext({
         ref={popover.popupRef}
         aria-label="Session context details"
         align="start"
-        className="max-h-[min(40rem,80dvh)] w-96 max-w-[calc(100vw-2rem)] overflow-y-auto"
+        className="max-h-[min(40rem,80dvh)] w-80 max-w-[calc(100vw-2rem)] gap-2.5 overflow-y-auto p-3"
         data-testid="context-details"
         onMouseEnter={hoverOpen}
         onMouseLeave={hoverClose}
       >
-        <div className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="font-heading text-sm font-medium text-heading">Model input</p>
-            <p className="mt-1 text-2xl font-medium tabular-nums text-heading">
-              {percentageLabel}
-              <span className="ml-2 text-sm font-normal text-muted-foreground">
-                of compaction threshold
-              </span>
-            </p>
-            {used != null && (
-              <p className="mt-1 text-sm text-muted-foreground">
-                {used.toLocaleString()} / {threshold.toLocaleString()} estimated tokens
-              </p>
+        <div className="flex items-center gap-1.5">
+          <p className="font-heading text-sm font-medium text-heading">Model input</p>
+          {lastRequest && <InfoTip about="model input">{notes}</InfoTip>}
+          <span
+            className="ml-auto text-xs tabular-nums text-muted-foreground"
+            title={contextLabel}
+            data-testid="context-usage"
+          >
+            {used == null ? (
+              percentageLabel
+            ) : (
+              <>
+                {compactTokens(used)} / {compactTokens(threshold)} ·{" "}
+                <span className="text-heading">{percentageLabel}</span>
+              </>
             )}
-            {windowError && (
-              <p role="alert" className="mt-1 text-sm text-destructive">
-                The configured context window can’t be used: {windowError}
-              </p>
-            )}
-          </div>
+          </span>
           <Button
             variant="ghost"
             size="icon-xs"
+            className="-my-1 -mr-1"
             aria-label="Close context details"
             onClick={() => onOpenChange(false)}
           >
             <X />
           </Button>
         </div>
+        {windowError && (
+          <p role="alert" className="text-xs text-destructive">
+            The configured context window can’t be used: {windowError}
+          </p>
+        )}
         {lastRequest ? (
           <>
-            <section className="mt-3 text-sm" data-testid="last-context-dispatch">
-              <p className="text-muted-foreground">
-                {compactionReason(lastRequest.compactionReason)}
+            <InputBar parts={parts} window={window} threshold={threshold} />
+            <InputLegend parts={parts} total={lastRequest.estimatedInputTokens} />
+            {loadingDetails && (
+              <p className="text-xs text-muted-foreground">
+                Loading message breakdown…
               </p>
-              {lastRequest.preCompactionInputTokens != null && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Before → after compaction:{" "}
-                  {lastRequest.preCompactionInputTokens.toLocaleString()} →{" "}
-                  {lastRequest.estimatedInputTokens.toLocaleString()} tokens
-                </p>
-              )}
-            </section>
-            <InputBreakdown
-              input={lastRequest}
-              details={details}
-              loading={pendingKey === callKey && details === null}
-            />
-            <p className="mt-3 text-xs text-muted-foreground">
-              Latest assembled model input. Compaction is checked before each model
-              call. The next call may differ.
+            )}
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="last-context-dispatch"
+            >
+              {compactionReason(lastRequest.compactionReason)}
+              {lastRequest.preCompactionInputTokens != null &&
+                ` · ${lastRequest.preCompactionInputTokens.toLocaleString()} → ${lastRequest.estimatedInputTokens.toLocaleString()} tokens`}
             </p>
           </>
         ) : (
-          <p className="mt-3 text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Model-input estimate unavailable.
           </p>
         )}
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 border-t border-border pt-3 text-sm">
-          <dt className="text-muted-foreground">Model context window</dt>
-          <dd className="text-right font-mono text-xs">
-            {windowError ? "Unavailable" : window.toLocaleString()}
-          </dd>
-          <dt className="text-muted-foreground">Session compactions</dt>
-          <dd className="text-right font-mono text-xs">
-            {sessionCompactionCount ?? "Unavailable"}
-          </dd>
-        </dl>
-        {nextRequestSettingsChanged && (
-          <section
-            className="mt-3 border-t border-border pt-3"
-            data-testid="next-context-settings"
-          >
-            <p className="text-sm font-medium text-heading">Next model call</p>
-            {context.contextWindowError ? (
-              <p role="alert" className="mt-1 text-sm text-destructive">
-                The configured context window can’t be used:{" "}
+        <div
+          className="space-y-1 border-t border-border pt-2 text-xs text-muted-foreground"
+          data-testid="context-footer"
+        >
+          <p>
+            <span
+              title={
+                windowError
+                  ? undefined
+                  : `Model context window: ${window.toLocaleString()} tokens`
+              }
+            >
+              {windowError ? "Window unavailable" : `${compactTokens(window)} window`}
+            </span>
+            {!!sessionCompactionCount &&
+              ` · ${sessionCompactionCount} ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`}
+          </p>
+          {nextRequestSettingsChanged &&
+            (context.contextWindowError ? (
+              <p
+                role="alert"
+                className="text-destructive"
+                data-testid="next-context-settings"
+              >
+                Next call: the configured context window can’t be used:{" "}
                 {context.contextWindowError}
               </p>
             ) : (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Window: {context.contextWindow.toLocaleString()} tokens. Compaction
-                threshold: {context.compactionThresholdTokens.toLocaleString()} tokens.
+              <p
+                data-testid="next-context-settings"
+                title={`Next model call: ${context.contextWindow.toLocaleString()}-token window, compaction at ${context.compactionThresholdTokens.toLocaleString()} tokens`}
+              >
+                Next call: {compactTokens(context.contextWindow)} window · compacts at{" "}
+                {compactTokens(context.compactionThresholdTokens)}
               </p>
-            )}
-          </section>
-        )}
-        {context.compactions.length > 0 && (
-          <section
-            className="mt-4 border-t border-border pt-3"
-            data-testid="session-compactions"
-          >
-            <p className="text-sm font-medium text-heading">Session compactions</p>
-            <ul className="mt-2 space-y-2 text-sm">
+            ))}
+          {context.compactions.length > 0 && (
+            <ul
+              aria-label="Recent session compactions"
+              data-testid="session-compactions"
+            >
               {context.compactions
                 .slice(-5)
                 .reverse()
                 .map((entry) => (
                   <li key={entry.compactionKey} className="flex justify-between gap-3">
-                    <span className="text-muted-foreground">
+                    <span>
                       {entry.createdAt ? `${entry.createdAt} · ` : ""}
                       {entry.messagesCompacted == null
                         ? "Message count unavailable"
                         : `${entry.messagesCompacted.toLocaleString()} messages`}
                     </span>
-                    <span className="text-right font-mono text-xs">
+                    <span className="text-right tabular-nums">
                       {entry.originalTokens == null || entry.compactedTokens == null
                         ? "Token estimates unavailable"
                         : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
@@ -398,8 +510,8 @@ export function SessionContext({
                   </li>
                 ))}
             </ul>
-          </section>
-        )}
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );
