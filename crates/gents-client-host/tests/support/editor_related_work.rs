@@ -69,7 +69,7 @@ impl Provider {
                     let script = format!("{begin}i=0; while [ \"$i\" -lt 8 ]; do printf 'ACTIVITY-{index}:%s:%s\\n' \"$i\" '{payload}'; sleep 0.1; i=$((i+1)); done{end}");
                     return Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
                         &call,
-                        "bash",
+                        "bash_unrestricted",
                         &json!({"command":"/bin/sh", "args":["-c", script], "timeout_secs":60})
                             .to_string(),
                     )));
@@ -274,7 +274,7 @@ pub async fn verify(
                 "command profile reused or lost an invocation"
             );
             ensure!(
-                call["tool_name"] == "bash"
+                call["tool_name"] == "bash_unrestricted"
                     && call["lifecycle_state"] == "completed"
                     && !call["terminal_output"].is_null(),
                 "command profile failed to retain completed output: {call}"
