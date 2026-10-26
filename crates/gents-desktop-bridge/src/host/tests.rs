@@ -499,6 +499,25 @@ fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection
 }
 
 #[test]
+fn forgetting_commands_is_scoped_and_drains_the_native_write() {
+    let request = json!({
+        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
+        "expectedRevision":"2","expectedWorkspacePath":"/project"
+    });
+    let decode = |request: Value| {
+        serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name":"client_workspace_permissions_forget_commands","args":{"request":request}
+        }))
+    };
+    assert!(!decode(request.clone()).unwrap().is_cancellable());
+    for field in ["requesterDid", "home", "mode", "taskId"] {
+        let mut invalid = request.clone();
+        invalid[field] = "untrusted".into();
+        assert!(decode(invalid).is_err(), "accepted {field}");
+    }
+}
+
+#[test]
 fn workspace_permission_saves_are_strict_and_finish_submitted_mutations() {
     let request = json!({
         "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
