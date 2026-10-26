@@ -6,13 +6,14 @@ impl ConfigCommandTool {
         let preview = argv.first().is_some_and(|arg| arg == "preview");
         let argv = if preview { &argv[1..] } else { argv };
         if argv.first().is_some_and(|arg| arg == "get") && !preview {
-            anyhow::ensure!(argv.len() == 2, "skill get requires SKILL_ID");
+            if argv.len() != 2 {
+                return Err(CommandError::SkillGetRequiresId.into());
+            }
             return self.exact_read(SelfConfigTarget::Skill, &argv[1]).await;
         }
-        anyhow::ensure!(
-            argv.len() == 3 && argv[0] == "import",
-            "use config skill [preview] import SKILL_ID PATH; PATH is a directory or SKILL.md file"
-        );
+        if !(argv.len() == 3 && argv[0] == "import") {
+            return Err(CommandError::SkillImportUsage.into());
+        }
         let effective = self
             .core
             .read_effective_config(&BTreeSet::new(), false, false)
@@ -23,14 +24,13 @@ impl ConfigCommandTool {
             .map(crate::tool_surface::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
-        anyhow::ensure!(
-            mode != crate::tool_surface::FileToolMode::Off,
-            "skill import requires effective file read permission on the invoking agent"
-        );
+        if mode == crate::tool_surface::FileToolMode::Off {
+            return Err(CommandError::SkillFileReadOff.into());
+        }
         let root = effective
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
-            .context("skill import requires an effective tool root")?;
+            .ok_or(CommandError::SkillToolRoot)?;
         let context = crate::toolset::ToolContext::new(root.into(), false)?;
         let document = crate::skills::import::load_skill_source(
             std::path::Path::new(&argv[2]),
@@ -38,7 +38,7 @@ impl ConfigCommandTool {
             &self.node_did,
             |path| {
                 context
-                    .resolve_path(path.to_str().context("skill path must be UTF-8")?)
+                    .resolve_path(path.to_str().ok_or(CommandError::SkillPathUtf8)?)
                     .map_err(anyhow::Error::from)
             },
         )?;

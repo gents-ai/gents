@@ -209,6 +209,326 @@ pub(super) enum CommandError {
     PackFilesOff { operation: String },
     #[error("pack {operation} may write inside the tool root (scaffold writes the template files), so it requires readwrite file tools, not the current read-only mode")]
     PackFilesReadOnly { operation: String },
+    #[error("agent command is required; see [\"help\",\"agent\"]")]
+    AgentCommandRequired,
+    #[error("agent context get accepts only --agent AGENT_ID")]
+    AgentContextGetArgs,
+    #[error("agent/context configuration is not granted")]
+    AgentContextNotGranted,
+    #[error("agent context {verb} takes no positional argument {word:?}; name the agent in options.agent and the fields in set: {{\"argv\":[\"agent\",\"context\",\"{verb}\"],\"options\":{{\"agent\":\"AGENT_ID\"}},\"set\":{{\"FIELD\":VALUE}}}}")]
+    AgentContextPositional { verb: String, word: String },
+    #[error("agent context requires get, preview, or edit")]
+    AgentContextVerbRequired,
+    #[error("agent default accepts exactly one AGENT_ID")]
+    AgentDefaultArgs,
+    #[error("agent default requires AGENT_ID")]
+    AgentDefaultRequiresId,
+    #[error("agent update requires target_id and fields in set or clear")]
+    AgentEditTarget,
+    #[error("agent get accepts only an optional agent_id; see [\"help\",\"agent\"]")]
+    AgentGetArgs,
+    #[error("agent get accepts at most one agent_id")]
+    AgentGetPositionals,
+    #[error("agent {operation} takes no id: it derives agent_id \"<DID>:<slug of display-name>\" and returns it; remove options.id")]
+    AgentIdNotAccepted { operation: String },
+    #[error("agent preview default accepts exactly one AGENT_ID")]
+    AgentPreviewDefaultArgs,
+    #[error("agent preview default requires AGENT_ID")]
+    AgentPreviewDefaultId,
+    #[error("agent preview update requires target_id and fields in set or clear")]
+    AgentPreviewEditTarget,
+    #[error("agent preview requires create|edit|clone|disable|default")]
+    AgentPreviewVerbRequired,
+    #[error("selected agent does not reference a {collection}; inspect config agent get {agent_id} to see its exact reference chain")]
+    AgentReferenceMissing {
+        collection: String,
+        agent_id: String,
+    },
+    #[error("agent writes require the exact local node signer; reads remain available")]
+    AgentSignerRequired,
+    #[error("allow-drop applies only to tools")]
+    AllowDropNotTools,
+    #[error("{resource} has no apply verb; use {form}")]
+    ApplyRefusal {
+        resource: String,
+        form: &'static str,
+    },
+    #[error("automation command is required; see [\"help\",\"automation\"]")]
+    AutomationCommandRequired,
+    #[error("filter must be a string holding a GraphQL object literal with unquoted keys, e.g. \"{{kind: {{_eq: \\\"review\\\"}}}}\", not a JSON object; see [\"help\",\"automation\"]")]
+    AutomationFilterLiteral,
+    #[error("automation get accepts KIND, ID, and --agent AGENT_ID")]
+    AutomationGetArgs,
+    #[error("automation requires KIND")]
+    AutomationKindRequired,
+    #[error("automation list requires task, trigger, schedule or event-source")]
+    AutomationListKind,
+    #[error("no {collection} {id:?} is reachable from selected agent {agent_id:?}; use options.agent to select its owning agent, then get to read its automation IDs")]
+    AutomationNotReachable {
+        collection: String,
+        id: String,
+        agent_id: String,
+    },
+    #[error("backend command is required; see [\"help\",\"backend\"]")]
+    BackendCommandRequired,
+    #[error("backend create requires --endpoint URL")]
+    BackendCreateEndpoint,
+    #[error("backend create requires exactly one BACKEND_ID")]
+    BackendCreateId,
+    #[error("backend create accepts no switches")]
+    BackendCreateSwitches,
+    #[error("backend discover requires one BACKEND_ID")]
+    BackendDiscoverArgs,
+    #[error("backend document has no backend_id")]
+    BackendDocumentBackendId,
+    #[error("backend document has no provider_kind")]
+    BackendDocumentProviderKind,
+    #[error("no unique enabled backend with ID {backend_id:?}; inspect config backend list")]
+    BackendNotUnique { backend_id: String },
+    #[error("decoding backend observation")]
+    BackendObservationDecode(#[source] serde_json::Error),
+    #[error("decoding backend provider_kind")]
+    BackendProviderKindDecode(#[source] serde_json::Error),
+    #[error("backend row must be an object")]
+    BackendRowObject,
+    #[error("backend row has no provider_kind")]
+    BackendRowProviderKind,
+    #[error("batch requires 1..64 operations")]
+    BatchCount,
+    #[error("batch item {index}; no operations ran")]
+    BatchItemArgv {
+        index: usize,
+        #[source]
+        source: Box<CommandError>,
+    },
+    #[error("batch item {index}: nested batches are not supported; no operations ran")]
+    BatchNested { index: usize },
+    #[error("options.operations must be an array of config calls with argv, target_id, set, clear and options")]
+    BatchOperationsJson(#[source] serde_json::Error),
+    #[error("batch requires options.operations: an array of config calls")]
+    BatchOperationsMissing,
+    #[error("batch accepts only options.operations: an array of config calls")]
+    BatchOptions,
+    #[error("batch is limited to 128 KiB")]
+    BatchTooLarge,
+    #[error("allow-drop applies only to tools; see [\"help\",\"tools\"]")]
+    BoundAllowDropNotTools,
+    #[error("{resource} command is required; see [\"help\",\"{resource}\"]")]
+    BoundCommandRequired { resource: String },
+    #[error("{resource} get accepts at most one ID and --agent AGENT_ID")]
+    BoundGetArgs { resource: String },
+    #[error("{resource} has no list: each agent has one; read it with {{\"argv\":[\"{resource}\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}} and find agents with [\"agent\",\"list\"]")]
+    BoundNoList { resource: String },
+    #[error("cleanup accepts only repeated --target RESOURCE=ID")]
+    CleanupArgs,
+    #[error("{resource} cleanup requires the agent catalog grant (category node)")]
+    CleanupCatalogRequired { resource: String },
+    #[error("cleanup target content changed: preview authorized {expected:?}, current plan is {current:?}; preview again")]
+    CleanupDigestChanged { expected: String, current: String },
+    #[error("cleanup did not remove {collection} {id:?}")]
+    CleanupNotRemoved { collection: String, id: String },
+    #[error("cleanup preview does not accept --digest; it returns the digest to authorize remove")]
+    CleanupPreviewDigest,
+    #[error("cleanup preview is not granted for this agent")]
+    CleanupPreviewNotGranted,
+    #[error("cleanup remove requires --digest from cleanup preview")]
+    CleanupRemoveDigest,
+    #[error("duplicate cleanup target {resource}={id}")]
+    CleanupTargetDuplicate { resource: String, id: String },
+    #[error("cleanup target {resource:?} requires a non-empty ID")]
+    CleanupTargetEmpty { resource: String },
+    #[error("--target must be RESOURCE=ID")]
+    CleanupTargetFormat,
+    #[error("cleanup requires at least one --target RESOURCE=ID")]
+    CleanupTargetRequired,
+    #[error("cleanup requires preview or remove; see [\"help\",\"cleanup\"]")]
+    CleanupVerbRequired,
+    #[error(transparent)]
+    Mailbox(#[from] crate::mailbox::MailboxError),
+    #[error("{body}")]
+    ConfigFailure { body: String },
+    #[error("{resource} create requires a new document ID in target_id or after create in argv; fields go in set")]
+    CreateNeedsId { resource: String },
+    #[error("datastore get accepts only SURFACE_ID")]
+    DatastoreGetArgs,
+    #[error("surface IDs are listed in an agent's Tools: read {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}}, then [\"datastore\",\"get\",SURFACE_ID] for one of its datastore.datastore_tool_surface_ids")]
+    DatastoreListing,
+    #[error("see [\"help\",\"datastore\"]")]
+    DatastoreSeeHelp,
+    #[error("see [\"help\",\"datastore\"]; expected create or edit")]
+    DatastoreVerb,
+    #[error(
+        "configuration discovery requires effective file read permission on the invoking agent"
+    )]
+    DiscoveryFileReadOff,
+    #[error("serializing sanitized configuration discovery inventory")]
+    DiscoveryInventory(#[source] serde_json::Error),
+    #[error("configuration discovery requires at least one explicit --source")]
+    DiscoveryNoSources,
+    #[error("discovery source ID must contain only ASCII letters, digits, '.', '_', or '-' and be at most 96 bytes")]
+    DiscoverySourceId,
+    #[error("unsupported discovery source kind {kind:?}; expected claude, codex, or grok")]
+    DiscoverySourceKind { kind: String },
+    #[error("configuration discovery accepts at most {max} explicit sources")]
+    DiscoverySourceLimit { max: usize },
+    #[error("discovery source path must be non-empty and at most {max} bytes")]
+    DiscoverySourcePath { max: usize },
+    #[error("unsupported discovery source scope {scope:?}; expected user or project")]
+    DiscoverySourceScope { scope: String },
+    #[error(
+        "each discovery source must be --source SOURCE_ID claude|codex|grok user|project PATH"
+    )]
+    DiscoverySourceUsage,
+    #[error("configuration discovery requires an effective tool root")]
+    DiscoveryToolRoot,
+    #[error("use config discovery scan --source SOURCE_ID claude|codex|grok user|project PATH")]
+    DiscoveryUsage,
+    #[error("document binding changed; get the agent again before updating {id:?}")]
+    DocumentBindingChanged { id: String },
+    #[error(
+        "document {id:?} was selected during this call; retry the update against its current agent"
+    )]
+    DocumentSelectedDuringCall { id: String },
+    #[error("target agent {id:?} is the protected Engineer configurator and cannot be removed")]
+    EngineerProtected { id: String },
+    #[error(
+        "{resource} with an exact ID does not accept options.agent; the ID identifies the document"
+    )]
+    ExactIdAgentOption { resource: String },
+    #[error("exact-ID context/tools operations require the agent catalog grant; use options.agent to edit your selected configuration")]
+    ExactIdCatalogRequired,
+    #[error("execution row must be an object")]
+    ExecutionRowObject,
+    #[error("get is read-only; omit preview")]
+    GetPreview,
+    #[error("{resource} get requires target_id or one document ID after get in argv; use {resource} list to discover IDs")]
+    GetRequiresId { resource: String },
+    #[error("--limit must be between 1 and 50")]
+    InventoryLimit,
+    #[error("inventory query returned no rows array")]
+    InventoryRowsMissing,
+    #[error("{resource} list accepts only options.limit and options.cursor")]
+    ListOptions { resource: String },
+    #[error("list is read-only; omit preview")]
+    ListPreview,
+    #[error("--mailbox requires a notification policy JSON object")]
+    MailboxPolicyJson(#[source] serde_json::Error),
+    #[error("mcp-service command is required; see [\"help\",\"mcp-service\"]")]
+    McpServiceCommandRequired,
+    #[error("mcp-service get accepts one SERVICE_ID")]
+    McpServiceGetId,
+    #[error("missing config command; see [\"help\"]")]
+    MissingConfigCommand,
+    #[error("missing owner")]
+    MissingOwner,
+    #[error("no owned {collection} with ID {id:?}; list or inspect exact IDs before cleanup")]
+    OwnedDocumentMissing { collection: String, id: String },
+    #[error("pack command is required; see [\"help\",\"pack\"]")]
+    PackCommandRequired,
+    #[error("pack get requires exactly one PACKAGE")]
+    PackGetArgs,
+    #[error("pack installation is not granted")]
+    PackNotGranted,
+    #[error("pack preview supports install and update")]
+    PackPreviewOperation,
+    #[error("pack preview requires install or update")]
+    PackPreviewOperationRequired,
+    #[error("pack remove requires exactly one PACKAGE")]
+    PackRemoveArgs,
+    #[error("pack search takes an optional query and options.page; see [\"help\",\"pack\"]")]
+    PackSearchArgs,
+    #[error("pack search options.page must be a positive integer")]
+    PackSearchPage(#[source] std::num::ParseIntError),
+    #[error("pack search options.page starts at 1")]
+    PackSearchPageStart,
+    #[error("supply the search query in argv or options.query, not both")]
+    PackSearchQueryConflict,
+    #[error("this runtime has no plugin home")]
+    PluginHomeMissing,
+    #[error("plugin list accepts options.limit and options.cursor only")]
+    PluginListOptions,
+    #[error("plugin inspection requires the pack or tools grant")]
+    PluginNotGranted,
+    #[error("plugin supports list and get; call [\"help\",\"plugin\"]")]
+    PluginUnsupported,
+    #[error("preview is not granted for this agent")]
+    PreviewNotGranted,
+    #[error("profile command is required; see [\"help\",\"profile\"]")]
+    ProfileCommandRequired,
+    #[error("profile create requires --set backend_id=JSON and --set model_name=JSON")]
+    ProfileCreateFields,
+    #[error("profile create requires target_id plus set.backend_id and set.model_name")]
+    ProfileCreateTargetId,
+    #[error("profile get accepts one PROFILE_ID")]
+    ProfileGetId,
+    #[error("profile get accepts at most one target")]
+    ProfileGetTarget,
+    #[error("profile {verb} needs options.agent because this node has several agents: {agents}. Name the agent whose profile to change; use {own:?} for your own")]
+    ProfileOwnerAmbiguous {
+        verb: String,
+        agents: String,
+        own: String,
+    },
+    #[error("reference query missing rows")]
+    ReferenceRowsMissing,
+    #[error("referring agent ID missing")]
+    ReferringAgentMissing,
+    #[error("referring context ID missing")]
+    ReferringContextMissing,
+    #[error("Schema management uses the separate schema tool. Call schema with argv:[\"help\"]. Enable it through Tools.built_ins.enable_schema_tool; config grants do not imply schema access")]
+    SchemaTool,
+    #[error("targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration")]
+    SharedTargetConfiguration,
+    #[error("skill import requires effective file read permission on the invoking agent")]
+    SkillFileReadOff,
+    #[error("skill get requires SKILL_ID")]
+    SkillGetRequiresId,
+    #[error(
+        "use config skill [preview] import SKILL_ID PATH; PATH is a directory or SKILL.md file"
+    )]
+    SkillImportUsage,
+    #[error("skill path must be UTF-8")]
+    SkillPathUtf8,
+    #[error("skill import requires an effective tool root")]
+    SkillToolRoot,
+    #[error("{collection} field {field:?} holds a JSON string; send a native JSON object or array in set, not a string. ({error})")]
+    StringifiedField {
+        collection: &'static str,
+        field: String,
+        error: String,
+    },
+    #[error("tools are created with their agent (agent create); change an agent's tools with {{\"argv\":[\"tools\",\"edit\"],\"options\":{{\"agent\":\"AGENT_ID\"}},\"set\":{{\"GROUP\":VALUE}}}}")]
+    ToolsCreateWithAgent,
+    #[error("unknown agent command {verb:?}; see [\"help\",\"agent\"]")]
+    UnknownAgentCommand { verb: String },
+    #[error("unknown agent context command {verb:?}; accepted: get, preview, edit")]
+    UnknownAgentContextCommand { verb: String },
+    #[error("unknown automation command {verb:?}; accepted: get, preview, edit; see [\"help\",\"automation\"]")]
+    UnknownAutomationCommand { verb: String },
+    #[error("unknown backend create option --{option}; accepted: --endpoint, --name, --wire-api")]
+    UnknownBackendCreateOption { option: String },
+    #[error("unknown {resource} command {verb:?}; accepted: get, preview, edit; see [\"help\",\"{resource}\"]")]
+    UnknownBoundCommand { resource: String, verb: String },
+    #[error("unknown cleanup command {verb:?}; accepted: preview, remove")]
+    UnknownCleanupCommand { verb: String },
+    #[error("unknown cleanup option --{option}; accepted: --target RESOURCE=ID, --digest SHA256")]
+    UnknownCleanupOption { option: String },
+    #[error("unknown config resource or command {name:?}; put the resource first, e.g. [\"profile\",\"list\"]. Accepted: help, get, {accepted}. See [\"help\"]")]
+    UnknownConfigResource { name: String, accepted: String },
+    #[error("unknown mcp-service command {verb:?}; accepted: get, preview, edit; see [\"help\",\"mcp-service\"]")]
+    UnknownMcpServiceCommand { verb: String },
+    #[error("unknown pack command {verb:?}; see [\"help\",\"pack\"]")]
+    UnknownPackCommand { verb: String },
+    #[error("unknown pack search option {name:?}; use options.query and options.page")]
+    UnknownPackSearchOption { name: String },
+    #[error("unknown profile command {verb:?}; accepted: get, preview, edit; see [\"help\",\"profile\"]")]
+    UnknownProfileCommand { verb: String },
+    #[error("use {command} list|get|create|update|delete; see [\"help\",\"{command}\"]")]
+    UseCrudCommands { command: String },
+    #[error("pack verify accepts a built .pack artifact; {path} is not one")]
+    VerifyNotPackArtifact { path: String },
+    #[error("pack {operation} requires an effective tool root")]
+    AuthoringToolRoot { operation: String },
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -498,7 +818,7 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
         match result {
             Ok(text) if help => Ok(text),
             Ok(text) => {
-                append_receipt(&text, &receipt).map_err(|error| anyhow::Error::from(error).into())
+                append_receipt(&text, &receipt).map_err(|error| SelfConfigError(error.into()))
             }
             Err(error) => {
                 let (message, recovery) = call.failure_guidance(error.as_ref(), &words, deleting);
@@ -508,10 +828,13 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
                     "recovery": recovery,
                     "config_execution": receipt,
                 };
-                Err(
-                    anyhow::anyhow!(serde_json::to_string(&failure).map_err(anyhow::Error::from)?)
-                        .into(),
-                )
+                Err(SelfConfigError(
+                    CommandError::ConfigFailure {
+                        body: serde_json::to_string(&failure)
+                            .map_err(|error| SelfConfigError(CommandError::Json(error).into()))?,
+                    }
+                    .into(),
+                ))
             }
         }
     }
@@ -715,12 +1038,18 @@ impl ConfigCommandTool {
                 )
             },
         );
-        let guidance = find_source::<CommandGuidance>(error).or_else(|| {
-            match find_source::<CommandError>(error) {
+        let guidance = find_source::<CommandGuidance>(error)
+            .or_else(|| match find_source::<CommandError>(error) {
                 Some(CommandError::Guidance(hint)) => Some(hint),
                 _ => None,
-            }
-        });
+            })
+            .or_else(|| match find_source::<Box<CommandError>>(error) {
+                Some(inner) => match inner.as_ref() {
+                    CommandError::Guidance(hint) => Some(hint),
+                    _ => None,
+                },
+                None => None,
+            });
         if let Some(hint) = guidance {
             return (message, json!({"next_call":hint.next_call}));
         }
@@ -805,15 +1134,13 @@ impl ConfigCommandTool {
             return self.help(resource, help_verb(argv));
         }
         let Some(command) = argv.first().map(String::as_str) else {
-            bail!("missing config command; see [\"help\"]");
+            return Err(CommandError::MissingConfigCommand.into());
         };
         if command == "schema" {
-            bail!("Schema management uses the separate schema tool. Call schema with argv:[\"help\"]. Enable it through Tools.built_ins.enable_schema_tool; config grants do not imply schema access");
+            return Err(CommandError::SchemaTool.into());
         }
         if argv.get(1).is_some_and(|verb| verb == "apply") {
-            if let Some(refusal) = apply_refusal(command) {
-                bail!(refusal);
-            }
+            return Err(apply_refusal(command).into());
         }
         if crud::resource_target(command).is_some() {
             let preview = argv.get(1).is_some_and(|v| v == "preview");
@@ -866,9 +1193,12 @@ impl ConfigCommandTool {
                 let (agent_id, rest) = extract_agent_target(&argv[1..])?;
                 if !rest.is_empty() {
                     return Err(CommandGuidance {
-                        message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
+                        message:
+                            "Put the resource before the verb: use agent get to inspect an agent."
+                                .into(),
                         next_call: json!({"argv":["agent","get"],"target_id":rest[0]}),
-                    }.into());
+                    }
+                    .into());
                 }
                 let core = self.target_core(agent_id.as_deref(), "get").await?;
                 let value = core
@@ -879,7 +1209,10 @@ impl ConfigCommandTool {
             "agent" => self.agent(&argv[1..]).await,
             "tools" => self.bound_document("tools", &argv[1..]).await,
             "datastore" => self.datastore(&argv[1..]).await,
-            "agent-target" | "execution" => bail!("use {command} list|get|create|update|delete; see [\"help\",\"{command}\"]"),
+            "agent-target" | "execution" => Err(CommandError::UseCrudCommands {
+                command: command.to_owned(),
+            }
+            .into()),
             "profile" => self.profile(&argv[1..]).await,
             "backend" => self.backend(&argv[1..]).await,
             "mcp-service" => self.mcp_service(&argv[1..]).await,
@@ -890,21 +1223,26 @@ impl ConfigCommandTool {
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
             "validate" => self.validate_saved(&argv[1..]).await,
-            other => bail!(
-                "unknown config resource or command {other:?}; put the resource first, e.g. [\"profile\",\"list\"]. Accepted: help, get, {}. See [\"help\"]",
-                model_resources(&self.categories, self.core.held_grants().pack_install).join(", ")
-            ),
+            other => Err(CommandError::UnknownConfigResource {
+                name: other.to_owned(),
+                accepted: model_resources(&self.categories, self.core.held_grants().pack_install)
+                    .join(", "),
+            }
+            .into()),
         }
     }
 
     async fn agent(&self, argv: &[String]) -> Result<String> {
-        anyhow::ensure!(
-            self.categories.contains("node") || self.categories.contains("agent"),
-            "agent configuration is not granted; enabled resources: {}",
-            model_resources(&self.categories, self.core.held_grants().pack_install).join(", ")
-        );
+        if !(self.categories.contains("node") || self.categories.contains("agent")) {
+            return Err(CommandError::ResourceNotGranted {
+                resource: "agent".to_owned(),
+                enabled: model_resources(&self.categories, self.core.held_grants().pack_install)
+                    .join(", "),
+            }
+            .into());
+        }
         let Some(verb) = argv.first().map(String::as_str) else {
-            bail!("agent command is required; see [\"help\",\"agent\"]");
+            return Err(CommandError::AgentCommandRequired.into());
         };
         match verb {
             "list" => {
@@ -915,7 +1253,7 @@ impl ConfigCommandTool {
                     .one("limit")?
                     .map(str::parse::<usize>)
                     .transpose()
-                    .context("--limit must be a positive integer")?
+                    .map_err(CommandError::LimitInvalid)?
                     .unwrap_or(20);
                 agent_list(
                     &self.node,
@@ -928,14 +1266,12 @@ impl ConfigCommandTool {
             }
             "get" => {
                 let flags = ParsedArgs::parse(&argv[1..])?;
-                anyhow::ensure!(
-                    flags.switches.is_empty() && flags.options.is_empty(),
-                    "agent get accepts only an optional agent_id; see [\"help\",\"agent\"]"
-                );
-                anyhow::ensure!(
-                    flags.positionals.len() <= 1,
-                    "agent get accepts at most one agent_id"
-                );
+                if !(flags.switches.is_empty() && flags.options.is_empty()) {
+                    return Err(CommandError::AgentGetArgs.into());
+                }
+                if flags.positionals.len() > 1 {
+                    return Err(CommandError::AgentGetPositionals.into());
+                }
                 let id = match flags.positionals.first() {
                     Some(id) => self.resolve_agent_id(id).await?,
                     None => self.core.agent_id().to_owned(),
@@ -944,26 +1280,19 @@ impl ConfigCommandTool {
                 agent_inspect(&self.node, &self.node_did, &id, &self.process_ceiling).await
             }
             "preview" => {
-                let operation = argv
-                    .get(1)
-                    .context("agent preview requires create|edit|clone|disable|default")?;
+                let operation = argv.get(1).ok_or(CommandError::AgentPreviewVerbRequired)?;
                 if operation == "default" {
-                    let agent_id = argv
-                        .get(2)
-                        .context("agent preview default requires AGENT_ID")?;
-                    anyhow::ensure!(
-                        argv.len() == 3,
-                        "agent preview default accepts exactly one AGENT_ID"
-                    );
+                    let agent_id = argv.get(2).ok_or(CommandError::AgentPreviewDefaultId)?;
+                    if argv.len() != 3 {
+                        return Err(CommandError::AgentPreviewDefaultArgs.into());
+                    }
                     let agent_id = self.resolve_agent_id(agent_id).await?;
                     self.ensure_node_authority("preview default")?;
                     let params = default_agent_params("preview", &agent_id);
                     return agent_management::model_agent_preview(&self.core, &params).await;
                 }
                 if operation == "edit" {
-                    let agent_id = argv.get(2).context(
-                        "agent preview update requires target_id and fields in set or clear",
-                    )?;
+                    let agent_id = argv.get(2).ok_or(CommandError::AgentPreviewEditTarget)?;
                     let core = self.target_core(Some(agent_id), "preview edit").await?;
                     let patch = parse_patch(&argv[3..], SelfConfigTarget::Agent)?;
                     return self
@@ -982,9 +1311,7 @@ impl ConfigCommandTool {
                 agent_management::model_agent_preview(&self.core, &params).await
             }
             "edit" => {
-                let agent_id = argv
-                    .get(1)
-                    .context("agent update requires target_id and fields in set or clear")?;
+                let agent_id = argv.get(1).ok_or(CommandError::AgentEditTarget)?;
                 let core = self.target_core(Some(agent_id), "edit").await?;
                 let patch = parse_patch(&argv[2..], SelfConfigTarget::Agent)?;
                 self.patch(
@@ -995,9 +1322,10 @@ impl ConfigCommandTool {
                 .await
             }
             "create" | "clone" | "disable" => {
-                let identity = self.identity.as_deref().context(
-                    "agent writes require the exact local node signer; reads remain available",
-                )?;
+                let identity = self
+                    .identity
+                    .as_deref()
+                    .ok_or(CommandError::AgentSignerRequired)?;
                 let mut params = agent_params(verb, None, &argv[1..])?;
                 self.resolve_agent_ids(verb, &mut params).await?;
                 self.ensure_agent_operation(verb, params.agent_id.as_deref())?;
@@ -1007,16 +1335,16 @@ impl ConfigCommandTool {
                 agent_management::model_agent_mutate(&self.core, identity, &params).await
             }
             "default" => {
-                let agent_id = argv.get(1).context("agent default requires AGENT_ID")?;
-                anyhow::ensure!(
-                    argv.len() == 2,
-                    "agent default accepts exactly one AGENT_ID"
-                );
+                let agent_id = argv.get(1).ok_or(CommandError::AgentDefaultRequiresId)?;
+                if argv.len() != 2 {
+                    return Err(CommandError::AgentDefaultArgs.into());
+                }
                 let agent_id = self.resolve_agent_id(agent_id).await?;
                 self.ensure_node_authority("default")?;
-                let identity = self.identity.as_deref().context(
-                    "agent writes require the exact local node signer; reads remain available",
-                )?;
+                let identity = self
+                    .identity
+                    .as_deref()
+                    .ok_or(CommandError::AgentSignerRequired)?;
                 self.execution.enter_mutation();
                 agent_management::model_agent_mutate(
                     &self.core,
@@ -1026,27 +1354,28 @@ impl ConfigCommandTool {
                 .await
             }
             "context" => self.agent_context(&argv[1..]).await,
-            other => bail!("unknown agent command {other:?}; see [\"help\",\"agent\"]"),
+            other => Err(CommandError::UnknownAgentCommand {
+                verb: other.to_owned(),
+            }
+            .into()),
         }
     }
 
     async fn agent_context(&self, argv: &[String]) -> Result<String> {
-        anyhow::ensure!(
-            self.categories.contains("agent") || self.categories.contains("node"),
-            "agent/context configuration is not granted"
-        );
+        if !(self.categories.contains("agent") || self.categories.contains("node")) {
+            return Err(CommandError::AgentContextNotGranted.into());
+        }
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("agent context requires get, preview, or edit")?;
+            .ok_or(CommandError::AgentContextVerbRequired)?;
         let (agent_id, rest) = extract_agent_target(&argv[1..])?;
         let core = self.target_core(agent_id.as_deref(), "context").await?;
         match verb {
             "get" => {
-                anyhow::ensure!(
-                    rest.is_empty(),
-                    "agent context get accepts only --agent AGENT_ID"
-                );
+                if !rest.is_empty() {
+                    return Err(CommandError::AgentContextGetArgs.into());
+                }
                 let effective = core
                     .read_effective_config(&self.categories, self.no_lockout, self.preview)
                     .await?;
@@ -1058,9 +1387,11 @@ impl ConfigCommandTool {
             "preview" | "edit" => {
                 let parsed = ParsedArgs::parse(&rest)?;
                 if let Some(word) = parsed.positionals.first() {
-                    bail!(
-                        "agent context {verb} takes no positional argument {word:?}; name the agent in options.agent and the fields in set: {{\"argv\":[\"agent\",\"context\",\"{verb}\"],\"options\":{{\"agent\":\"AGENT_ID\"}},\"set\":{{\"FIELD\":VALUE}}}}"
-                    );
+                    return Err(CommandError::AgentContextPositional {
+                        verb: verb.to_owned(),
+                        word: word.clone(),
+                    }
+                    .into());
                 }
                 let patch = parse_patch_args(parsed, SelfConfigTarget::AgentContext)?;
                 self.patch(
@@ -1074,17 +1405,21 @@ impl ConfigCommandTool {
                 )
                 .await
             }
-            other => {
-                bail!("unknown agent context command {other:?}; accepted: get, preview, edit")
+            other => Err(CommandError::UnknownAgentContextCommand {
+                verb: other.to_owned(),
             }
+            .into()),
         }
     }
 
     async fn bound_document(&self, resource: &str, argv: &[String]) -> Result<String> {
         self.ensure_resource(resource)?;
-        let verb = argv.first().map(String::as_str).with_context(|| {
-            format!("{resource} command is required; see [\"help\",\"{resource}\"]")
-        })?;
+        let verb =
+            argv.first()
+                .map(String::as_str)
+                .ok_or_else(|| CommandError::BoundCommandRequired {
+                    resource: resource.to_owned(),
+                })?;
         let target = match resource {
             "tools" => SelfConfigTarget::Tools,
             "backend" => SelfConfigTarget::InferenceBackend,
@@ -1097,15 +1432,18 @@ impl ConfigCommandTool {
                 self.inference_inventory(target, parse_limit(&parsed)?, parsed.one("cursor")?)
                     .await
             }
-            "list" => bail!(
-                "{resource} has no list: each agent has one; read it with {{\"argv\":[\"{resource}\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}} and find agents with [\"agent\",\"list\"]"
-            ),
+            "list" => Err(CommandError::BoundNoList {
+                resource: resource.to_owned(),
+            }
+            .into()),
             "get" => {
                 let (agent_id, rest) = extract_agent_target(&argv[1..])?;
-                anyhow::ensure!(
-                    rest.len() <= 1,
-                    "{resource} get accepts at most one ID and --agent AGENT_ID"
-                );
+                if rest.len() > 1 {
+                    return Err(CommandError::BoundGetArgs {
+                        resource: resource.to_owned(),
+                    }
+                    .into());
+                }
                 let core = self.target_core(agent_id.as_deref(), resource).await?;
                 match rest.first() {
                     Some(id) => self.exact_read(target, id).await,
@@ -1116,33 +1454,31 @@ impl ConfigCommandTool {
                 if target == SelfConfigTarget::Tools
                     && (verb == "create" || argv.get(1).is_some_and(|word| word == "create")) =>
             {
-                bail!(
-                "tools are created with their agent (agent create); change an agent's tools with {{\"argv\":[\"tools\",\"edit\"],\"options\":{{\"agent\":\"AGENT_ID\"}},\"set\":{{\"GROUP\":VALUE}}}}"
-                )
+                Err(CommandError::ToolsCreateWithAgent.into())
             }
             "preview" | "edit" => {
                 let (agent_id, rest) = extract_agent_target(&argv[1..])?;
                 let core = self.target_core(agent_id.as_deref(), resource).await?;
                 let (allow_drop, rest) = extract_allow_drop(&rest)?;
-                anyhow::ensure!(
-                    allow_drop.is_empty() || target == SelfConfigTarget::Tools,
-                    "allow-drop applies only to tools; see [\"help\",\"tools\"]"
-                );
+                if !(allow_drop.is_empty() || target == SelfConfigTarget::Tools) {
+                    return Err(CommandError::BoundAllowDropNotTools.into());
+                }
                 let patch = parse_patch(&rest, target)?;
                 let request = match target {
-                    SelfConfigTarget::Tools => refuse_silent_tools_drops(
-                        tools_request(&core, patch),
-                        allow_drop,
-                    ),
+                    SelfConfigTarget::Tools => {
+                        refuse_silent_tools_drops(tools_request(&core, patch), allow_drop)
+                    }
                     SelfConfigTarget::InferenceBackend => backend_request(patch),
                     _ => unreachable!("bound resource"),
                 };
                 self.patch(&core, verb, protect_working_agent(request))
                     .await
             }
-            other => bail!(
-                "unknown {resource} command {other:?}; accepted: get, preview, edit; see [\"help\",\"{resource}\"]"
-            ),
+            other => Err(CommandError::UnknownBoundCommand {
+                resource: resource.to_owned(),
+                verb: other.to_owned(),
+            }
+            .into()),
         }
     }
 
@@ -1151,7 +1487,7 @@ impl ConfigCommandTool {
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("backend command is required; see [\"help\",\"backend\"]")?;
+            .ok_or(CommandError::BackendCommandRequired)?;
         if verb == "list" {
             let parsed = ParsedArgs::parse(&argv[1..])?;
             parsed.reject_mutation_flags()?;
@@ -1174,24 +1510,24 @@ impl ConfigCommandTool {
         };
         if let Some(create_args) = create_args {
             let parsed = ParsedArgs::parse(create_args)?;
-            anyhow::ensure!(
-                parsed.positionals.len() == 1,
-                "backend create requires exactly one BACKEND_ID"
-            );
-            anyhow::ensure!(
-                parsed.switches.is_empty(),
-                "backend create accepts no switches"
-            );
+            if parsed.positionals.len() != 1 {
+                return Err(CommandError::BackendCreateId.into());
+            }
+            if !parsed.switches.is_empty() {
+                return Err(CommandError::BackendCreateSwitches.into());
+            }
             for option in parsed.options.keys() {
-                anyhow::ensure!(
-                    matches!(option.as_str(), "endpoint" | "name" | "wire-api"),
-                    "unknown backend create option --{option}; accepted: --endpoint, --name, --wire-api"
-                );
+                if !matches!(option.as_str(), "endpoint" | "name" | "wire-api") {
+                    return Err(CommandError::UnknownBackendCreateOption {
+                        option: option.clone(),
+                    }
+                    .into());
+                }
             }
             let endpoint = parsed
                 .one("endpoint")?
                 .filter(|value| !value.trim().is_empty())
-                .context("backend create requires --endpoint URL")?
+                .ok_or(CommandError::BackendCreateEndpoint)?
                 .to_owned();
             let wire_api =
                 crate::openai_wire::OpenAiWireApi::parse_optional(parsed.one("wire-api")?)?;
@@ -1211,7 +1547,9 @@ impl ConfigCommandTool {
                 .await;
         }
         if verb == "discover" {
-            anyhow::ensure!(argv.len() == 2, "backend discover requires one BACKEND_ID");
+            if argv.len() != 2 {
+                return Err(CommandError::BackendDiscoverArgs.into());
+            }
             let backend_id = &argv[1];
             let matches = crate::backend_registry::list_enabled_backends_for_agent(
                 &self.node,
@@ -1221,10 +1559,12 @@ impl ConfigCommandTool {
             .into_iter()
             .filter(|backend| backend.backend_id == *backend_id)
             .collect::<Vec<_>>();
-            anyhow::ensure!(
-                matches.len() == 1,
-                "no unique enabled backend with ID {backend_id:?}; inspect config backend list"
-            );
+            if matches.len() != 1 {
+                return Err(CommandError::BackendNotUnique {
+                    backend_id: backend_id.clone(),
+                }
+                .into());
+            }
             let backend = &matches[0];
             if backend.provider_kind != crate::BackendProviderKind::OpenAiCompatible
                 || !matches!(
@@ -1272,7 +1612,7 @@ impl ConfigCommandTool {
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("profile command is required; see [\"help\",\"profile\"]")?;
+            .ok_or(CommandError::ProfileCommandRequired)?;
         if verb == "list" {
             let parsed = ParsedArgs::parse(&argv[1..])?;
             parsed.reject_mutation_flags()?;
@@ -1293,18 +1633,15 @@ impl ConfigCommandTool {
             let profile_id = create_args
                 .first()
                 .filter(|value| !value.starts_with("--"))
-                .context(
-                    "profile create requires target_id plus set.backend_id and set.model_name",
-                )?;
+                .ok_or(CommandError::ProfileCreateTargetId)?;
             let patch = parse_patch(&create_args[1..], SelfConfigTarget::InferenceProfile)?;
             let fields = patch
                 .iter()
                 .filter_map(|(field, value)| value.as_ref().map(|_| field.as_str()))
                 .collect::<BTreeSet<_>>();
-            anyhow::ensure!(
-                fields.contains("backend_id") && fields.contains("model_name"),
-                "profile create requires --set backend_id=JSON and --set model_name=JSON"
-            );
+            if !(fields.contains("backend_id") && fields.contains("model_name")) {
+                return Err(CommandError::ProfileCreateFields.into());
+            }
             let request = profile_create_request(self.node_did.clone(), profile_id.clone(), patch);
             return self
                 .patch(
@@ -1334,7 +1671,9 @@ impl ConfigCommandTool {
                 "profile" | "sampling" | "execution" | "retry-policy" | "compaction"
             )
         {
-            anyhow::ensure!(rest.is_empty(), "profile get accepts one PROFILE_ID");
+            if !rest.is_empty() {
+                return Err(CommandError::ProfileGetId.into());
+            }
             return self
                 .exact_read(SelfConfigTarget::InferenceProfile, target_name)
                 .await;
@@ -1342,7 +1681,9 @@ impl ConfigCommandTool {
         let (request_name, target) = profile_target(target_name)?;
         match verb {
             "get" => {
-                anyhow::ensure!(rest.is_empty(), "profile get accepts at most one target");
+                if !rest.is_empty() {
+                    return Err(CommandError::ProfileGetTarget.into());
+                }
                 self.bound_read(&core, target).await
             }
             "preview" | "edit" => {
@@ -1354,9 +1695,10 @@ impl ConfigCommandTool {
                 )
                 .await
             }
-            other => bail!(
-                "unknown profile command {other:?}; accepted: get, preview, edit; see [\"help\",\"profile\"]"
-            ),
+            other => Err(CommandError::UnknownProfileCommand {
+                verb: other.to_owned(),
+            }
+            .into()),
         }
     }
 
@@ -1422,11 +1764,13 @@ impl ConfigCommandTool {
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("mcp-service command is required; see [\"help\",\"mcp-service\"]")?;
+            .ok_or(CommandError::McpServiceCommandRequired)?;
         let id = required_resource_id(argv.get(1), "SERVICE_ID")?;
         match verb {
             "get" => {
-                anyhow::ensure!(argv.len() == 2, "mcp-service get accepts one SERVICE_ID");
+                if argv.len() != 2 {
+                    return Err(CommandError::McpServiceGetId.into());
+                }
                 self.exact_read(SelfConfigTarget::ToolServiceRegistry, id)
                     .await
             }
@@ -1435,9 +1779,10 @@ impl ConfigCommandTool {
                 self.patch(&self.core, verb, mcp_service_request(id.clone(), patch))
                     .await
             }
-            other => bail!(
-                "unknown mcp-service command {other:?}; accepted: get, preview, edit; see [\"help\",\"mcp-service\"]"
-            ),
+            other => Err(CommandError::UnknownMcpServiceCommand {
+                verb: other.to_owned(),
+            }
+            .into()),
         }
     }
 
@@ -1446,11 +1791,9 @@ impl ConfigCommandTool {
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("automation command is required; see [\"help\",\"automation\"]")?;
+            .ok_or(CommandError::AutomationCommandRequired)?;
         if verb == "list" {
-            let kind = argv
-                .get(1)
-                .context("automation list requires task, trigger, schedule or event-source")?;
+            let kind = argv.get(1).ok_or(CommandError::AutomationListKind)?;
             let target = automation_target(&kind.replace('-', "_"))?;
             let parsed = ParsedArgs::parse(&argv[2..])?;
             parsed.reject_mutation_flags()?;
@@ -1458,16 +1801,15 @@ impl ConfigCommandTool {
                 .inference_inventory(target, parse_limit(&parsed)?, parsed.one("cursor")?)
                 .await;
         }
-        let kind = argv.get(1).context("automation requires KIND")?;
+        let kind = argv.get(1).ok_or(CommandError::AutomationKindRequired)?;
         let id = required_resource_id(argv.get(2), "automation ID")?;
         let target = automation_target(&kind.replace('-', "_"))?;
         match verb {
             "get" => {
                 let (agent_id, rest) = extract_agent_target(&argv[3..])?;
-                anyhow::ensure!(
-                    rest.is_empty(),
-                    "automation get accepts KIND, ID, and --agent AGENT_ID"
-                );
+                if !rest.is_empty() {
+                    return Err(CommandError::AutomationGetArgs.into());
+                }
                 let core = self.target_core(agent_id.as_deref(), "automation").await?;
                 self.automation_read(&core, target, id).await
             }
@@ -1475,14 +1817,16 @@ impl ConfigCommandTool {
                 let (agent_id, rest) = extract_agent_target(&argv[3..])?;
                 let core = self.target_core(agent_id.as_deref(), "automation").await?;
                 let patch = parse_patch(&rest, target)?;
-                anyhow::ensure!(
-                    target != SelfConfigTarget::EventSource
-                        || patch.iter().all(|(field, value)| {
-                            field != "filter"
-                                || value.as_ref().is_none_or(|value| value.is_string() || value.is_null())
-                        }),
-                    "filter must be a string holding a GraphQL object literal with unquoted keys, e.g. \"{{kind: {{_eq: \\\"review\\\"}}}}\", not a JSON object; see [\"help\",\"automation\"]"
-                );
+                if target == SelfConfigTarget::EventSource
+                    && !patch.iter().all(|(field, value)| {
+                        field != "filter"
+                            || value
+                                .as_ref()
+                                .is_none_or(|value| value.is_string() || value.is_null())
+                    })
+                {
+                    return Err(CommandError::AutomationFilterLiteral.into());
+                }
                 self.patch(
                     &core,
                     verb,
@@ -1490,9 +1834,10 @@ impl ConfigCommandTool {
                 )
                 .await
             }
-            other => bail!(
-                "unknown automation command {other:?}; accepted: get, preview, edit; see [\"help\",\"automation\"]"
-            ),
+            other => Err(CommandError::UnknownAutomationCommand {
+                verb: other.to_owned(),
+            }
+            .into()),
         }
     }
 
@@ -1500,54 +1845,52 @@ impl ConfigCommandTool {
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("cleanup requires preview or remove; see [\"help\",\"cleanup\"]")?;
-        anyhow::ensure!(
-            matches!(verb, "preview" | "remove"),
-            "unknown cleanup command {verb:?}; accepted: preview, remove"
-        );
-        if verb == "preview" {
-            anyhow::ensure!(
-                self.preview,
-                "cleanup preview is not granted for this agent"
-            );
+            .ok_or(CommandError::CleanupVerbRequired)?;
+        if !matches!(verb, "preview" | "remove") {
+            return Err(CommandError::UnknownCleanupCommand {
+                verb: verb.to_owned(),
+            }
+            .into());
+        }
+        if verb == "preview" && !self.preview {
+            return Err(CommandError::CleanupPreviewNotGranted.into());
         }
         let parsed = ParsedArgs::parse(&argv[1..])?;
-        anyhow::ensure!(
-            parsed.positionals.is_empty() && parsed.switches.is_empty(),
-            "cleanup accepts only repeated --target RESOURCE=ID"
-        );
+        if !(parsed.positionals.is_empty() && parsed.switches.is_empty()) {
+            return Err(CommandError::CleanupArgs.into());
+        }
         for option in parsed.options.keys() {
-            anyhow::ensure!(
-                matches!(option.as_str(), "target" | "digest"),
-                "unknown cleanup option --{option}; accepted: --target RESOURCE=ID, --digest SHA256"
-            );
+            if !matches!(option.as_str(), "target" | "digest") {
+                return Err(CommandError::UnknownCleanupOption {
+                    option: option.clone(),
+                }
+                .into());
+            }
         }
         let expected_digest = parsed.one("digest")?.map(ToOwned::to_owned);
         if verb == "preview" {
-            anyhow::ensure!(
-                expected_digest.is_none(),
-                "cleanup preview does not accept --digest; it returns the digest to authorize remove"
-            );
-        } else {
-            anyhow::ensure!(
-                expected_digest.is_some(),
-                "cleanup remove requires --digest from cleanup preview"
-            );
+            if expected_digest.is_some() {
+                return Err(CommandError::CleanupPreviewDigest.into());
+            }
+        } else if expected_digest.is_none() {
+            return Err(CommandError::CleanupRemoveDigest.into());
         }
         let values = parsed
             .options
             .get("target")
-            .context("cleanup requires at least one --target RESOURCE=ID")?;
+            .ok_or(CommandError::CleanupTargetRequired)?;
         let mut targets = Vec::with_capacity(values.len());
         let mut seen = BTreeSet::new();
         for value in values {
             let (resource, id) = value
                 .split_once('=')
-                .context("--target must be RESOURCE=ID")?;
-            anyhow::ensure!(
-                !id.trim().is_empty(),
-                "cleanup target {resource:?} requires a non-empty ID"
-            );
+                .ok_or(CommandError::CleanupTargetFormat)?;
+            if id.trim().is_empty() {
+                return Err(CommandError::CleanupTargetEmpty {
+                    resource: resource.to_owned(),
+                }
+                .into());
+            }
             let target = cleanup_target(resource)?;
             let id = if target == SelfConfigTarget::Agent {
                 self.resolve_agent_id(id).await?
@@ -1559,20 +1902,25 @@ impl ConfigCommandTool {
                 target,
                 SelfConfigTarget::Agent | SelfConfigTarget::AgentContext
             ) {
-                anyhow::ensure!(
-                    self.categories.contains("node"),
-                    "{resource} cleanup requires the agent catalog grant (category node)"
-                );
+                if !self.categories.contains("node") {
+                    return Err(CommandError::CleanupCatalogRequired {
+                        resource: resource.to_owned(),
+                    }
+                    .into());
+                }
             } else {
                 self.ensure_resource(match target.category() {
                     "mcp_service" => "mcp-service",
                     category => category,
                 })?;
             }
-            anyhow::ensure!(
-                seen.insert((target.collection_name(), id.to_owned())),
-                "duplicate cleanup target {resource}={id}"
-            );
+            if !seen.insert((target.collection_name(), id.to_owned())) {
+                return Err(CommandError::CleanupTargetDuplicate {
+                    resource: resource.to_owned(),
+                    id: id.to_owned(),
+                }
+                .into());
+            }
             targets.push((resource.to_owned(), target, id.to_owned()));
         }
         targets.sort_by(|left, right| {
@@ -1652,26 +2000,22 @@ impl ConfigCommandTool {
     }
 
     fn plugin(&self, argv: &[String]) -> Result<String> {
-        anyhow::ensure!(
-            self.core.held_grants().pack_install || self.categories.contains("tools"),
-            "plugin inspection requires the pack or tools grant"
-        );
-        let home = self
-            .plugins
-            .home()
-            .context("this runtime has no plugin home")?;
+        if !(self.core.held_grants().pack_install || self.categories.contains("tools")) {
+            return Err(CommandError::PluginNotGranted.into());
+        }
+        let home = self.plugins.home().ok_or(CommandError::PluginHomeMissing)?;
         match argv.first().map(String::as_str) {
             Some("list") => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
                 parsed.reject_mutation_flags()?;
-                anyhow::ensure!(
-                    parsed.positionals.is_empty()
-                        && parsed
-                            .options
-                            .keys()
-                            .all(|name| matches!(name.as_str(), "limit" | "cursor")),
-                    "plugin list accepts options.limit and options.cursor only"
-                );
+                if !(parsed.positionals.is_empty()
+                    && parsed
+                        .options
+                        .keys()
+                        .all(|name| matches!(name.as_str(), "limit" | "cursor")))
+                {
+                    return Err(CommandError::PluginListOptions.into());
+                }
                 let limit = parse_limit(&parsed)?;
                 let cursor = parsed.one("cursor")?;
                 let mut records = crate::plugin::store::list_records(home)?;
@@ -1700,15 +2044,14 @@ impl ConfigCommandTool {
                     "installed": record,
                 }.pretty()?)
             }
-            _ => bail!("plugin supports list and get; call [\"help\",\"plugin\"]"),
+            _ => Err(CommandError::PluginUnsupported.into()),
         }
     }
 
     async fn pack(&self, argv: &[String]) -> Result<String> {
-        anyhow::ensure!(
-            self.core.held_grants().pack_install,
-            "pack installation is not granted"
-        );
+        if !self.core.held_grants().pack_install {
+            return Err(CommandError::PackNotGranted.into());
+        }
         let installer = PackInstaller {
             core: self.core.clone(),
             node: self.node.clone(),
@@ -1717,28 +2060,27 @@ impl ConfigCommandTool {
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("pack command is required; see [\"help\",\"pack\"]")?;
+            .ok_or(CommandError::PackCommandRequired)?;
         if matches!(verb, "scaffold" | "check" | "verify" | "build" | "test") {
             return self.authoring(verb, &argv[1..]).await;
         }
         match verb {
             "search" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
-                anyhow::ensure!(
-                    parsed.switches.is_empty() && parsed.positionals.len() <= 1,
-                    "pack search takes an optional query and options.page; see [\"help\",\"pack\"]"
-                );
+                if !(parsed.switches.is_empty() && parsed.positionals.len() <= 1) {
+                    return Err(CommandError::PackSearchArgs.into());
+                }
                 for name in parsed.options.keys() {
-                    anyhow::ensure!(
-                        matches!(name.as_str(), "query" | "page"),
-                        "unknown pack search option {name:?}; use options.query and options.page"
-                    );
+                    if !matches!(name.as_str(), "query" | "page") {
+                        return Err(
+                            CommandError::UnknownPackSearchOption { name: name.clone() }.into()
+                        );
+                    }
                 }
                 let option_query = parsed.one("query")?;
-                anyhow::ensure!(
-                    option_query.is_none() || parsed.positionals.is_empty(),
-                    "supply the search query in argv or options.query, not both"
-                );
+                if option_query.is_some() && !parsed.positionals.is_empty() {
+                    return Err(CommandError::PackSearchQueryConflict.into());
+                }
                 let query = option_query
                     .or_else(|| parsed.positionals.first().map(String::as_str))
                     .unwrap_or("");
@@ -1746,8 +2088,10 @@ impl ConfigCommandTool {
                     .one("page")?
                     .unwrap_or("1")
                     .parse::<u32>()
-                    .context("pack search options.page must be a positive integer")?;
-                anyhow::ensure!(page > 0, "pack search options.page starts at 1");
+                    .map_err(CommandError::PackSearchPage)?;
+                if page == 0 {
+                    return Err(CommandError::PackSearchPageStart.into());
+                }
                 installer.search(query, page).await
             }
             "list" => {
@@ -1758,17 +2102,18 @@ impl ConfigCommandTool {
                     .await
             }
             "get" => {
-                anyhow::ensure!(argv.len() == 2, "pack get requires exactly one PACKAGE");
+                if argv.len() != 2 {
+                    return Err(CommandError::PackGetArgs.into());
+                }
                 installer.get(&argv[1]).await
             }
             "preview" => {
                 let operation = argv
                     .get(1)
-                    .context("pack preview requires install or update")?;
-                anyhow::ensure!(
-                    matches!(operation.as_str(), "install" | "update"),
-                    "pack preview supports install and update"
-                );
+                    .ok_or(CommandError::PackPreviewOperationRequired)?;
+                if !matches!(operation.as_str(), "install" | "update") {
+                    return Err(CommandError::PackPreviewOperation.into());
+                }
                 installer
                     .preview(operation, parse_pack_change(&argv[2..])?)
                     .await
@@ -1779,11 +2124,16 @@ impl ConfigCommandTool {
                 installer.apply(verb, change).await
             }
             "remove" => {
-                anyhow::ensure!(argv.len() == 2, "pack remove requires exactly one PACKAGE");
+                if argv.len() != 2 {
+                    return Err(CommandError::PackRemoveArgs.into());
+                }
                 self.execution.enter_mutation();
                 installer.remove(&argv[1]).await
             }
-            other => bail!("unknown pack command {other:?}; see [\"help\",\"pack\"]"),
+            other => Err(CommandError::UnknownPackCommand {
+                verb: other.to_owned(),
+            }
+            .into()),
         }
     }
 
@@ -1943,12 +2293,14 @@ impl ConfigCommandTool {
             })
             .collect::<Vec<_>>();
         ids.sort();
-        anyhow::ensure!(
-            ids.len() <= 1,
-            "profile {verb} needs options.agent because this node has several agents: {}. Name the agent whose profile to change; use {:?} for your own",
-            ids.join(", "),
-            self.core.agent_id()
-        );
+        if ids.len() > 1 {
+            return Err(CommandError::ProfileOwnerAmbiguous {
+                verb: verb.to_owned(),
+                agents: ids.join(", "),
+                own: self.core.agent_id().to_owned(),
+            }
+            .into());
+        }
         Ok(())
     }
 
@@ -1958,10 +2310,12 @@ impl ConfigCommandTool {
         params: &mut ConfigureAgentParams,
     ) -> Result<()> {
         if matches!(operation, "create" | "clone") {
-            anyhow::ensure!(
-                params.agent_id.is_none(),
-                "agent {operation} takes no id: it derives agent_id \"<DID>:<slug of display-name>\" and returns it; remove options.id"
-            );
+            if params.agent_id.is_some() {
+                return Err(CommandError::AgentIdNotAccepted {
+                    operation: operation.to_owned(),
+                }
+                .into());
+            }
         } else if let Some(id) = params.agent_id.take() {
             params.agent_id = Some(self.resolve_agent_id(&id).await?);
         }
@@ -2009,14 +2363,23 @@ impl ConfigCommandTool {
             })
             .map(|(field, _)| field.clone());
         let collection = request.target.collection_name();
-        self.patch_outcome(core, verb, request).await.map_err(|error| {
-            match stringified.filter(|_| ErrorChain(error.as_ref()).to_string().contains("invalid type: string")) {
-                Some(field) => anyhow!(
-                    "{collection} field {field:?} holds a JSON string; send a native JSON object or array in set, not a string. ({})", ErrorChain(error.as_ref())
-                ),
-                None => error,
-            }
-        })
+        self.patch_outcome(core, verb, request)
+            .await
+            .map_err(|error| {
+                match stringified.filter(|_| {
+                    ErrorChain(error.as_ref())
+                        .to_string()
+                        .contains("invalid type: string")
+                }) {
+                    Some(field) => CommandError::StringifiedField {
+                        collection,
+                        field,
+                        error: ErrorChain(error.as_ref()).to_string(),
+                    }
+                    .into(),
+                    None => error,
+                }
+            })
     }
 
     async fn patch_outcome(
@@ -2027,7 +2390,9 @@ impl ConfigCommandTool {
     ) -> Result<String> {
         let outcome = match verb {
             "preview" => {
-                anyhow::ensure!(self.preview, "preview is not granted for this agent");
+                if !self.preview {
+                    return Err(CommandError::PreviewNotGranted.into());
+                }
                 core.preview(request).await?
             }
             "edit" => {
@@ -2046,9 +2411,7 @@ impl ConfigCommandTool {
         let value = match target {
             SelfConfigTarget::Tools => effective.pointer("/documents/Tools"),
             SelfConfigTarget::InferenceProfile => effective.get("inference_profile"),
-            SelfConfigTarget::InferenceBackend => {
-                effective.pointer("/documents/InferenceBackend")
-            }
+            SelfConfigTarget::InferenceBackend => effective.pointer("/documents/InferenceBackend"),
             SelfConfigTarget::InferenceSampling => {
                 effective.pointer("/documents/InferenceSampling")
             }
@@ -2061,12 +2424,9 @@ impl ConfigCommandTool {
             SelfConfigTarget::Compaction => effective.pointer("/documents/Compaction"),
             _ => None,
         }
-        .with_context(|| {
-            format!(
-                "selected agent does not reference a {}; inspect config agent get {} to see its exact reference chain",
-                target.collection_name(),
-                core.agent_id()
-            )
+        .ok_or_else(|| CommandError::AgentReferenceMissing {
+            collection: target.collection_name().to_owned(),
+            agent_id: core.agent_id().to_owned(),
         })?;
         if target == SelfConfigTarget::InferenceBackend {
             let observation = self.backend_document_observation(value).await?;
@@ -2114,14 +2474,14 @@ impl ConfigCommandTool {
         let backend_id = document
             .get("backend_id")
             .and_then(Value::as_str)
-            .context("backend document has no backend_id")?;
+            .ok_or(CommandError::BackendDocumentBackendId)?;
         let provider_kind = serde_json::from_value(
             document
                 .get("provider_kind")
                 .cloned()
-                .context("backend document has no provider_kind")?,
+                .ok_or(CommandError::BackendDocumentProviderKind)?,
         )
-        .context("decoding backend provider_kind")?;
+        .map_err(CommandError::BackendProviderKindDecode)?;
         self.backend_observation_view(backend_id, provider_kind)
             .await
     }
@@ -2179,12 +2539,10 @@ impl ConfigCommandTool {
                 rows.iter()
                     .find(|row| row.get(target.unique_field()).and_then(Value::as_str) == Some(id))
             })
-            .with_context(|| {
-                format!(
-                    "no {} {id:?} is reachable from selected agent {:?}; use options.agent to select its owning agent, then get to read its automation IDs",
-                    target.collection_name(),
-                    core.agent_id()
-                )
+            .ok_or_else(|| CommandError::AutomationNotReachable {
+                collection: target.collection_name().to_owned(),
+                id: id.to_owned(),
+                agent_id: core.agent_id().to_owned(),
             })?;
         Ok(ordered! {"resource": target.collection_name(), "document": document}.pretty()?)
     }
@@ -2296,10 +2654,9 @@ impl ConfigCommandTool {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<String> {
-        anyhow::ensure!(
-            (1..=50).contains(&limit),
-            "--limit must be between 1 and 50"
-        );
+        if !(1..=50).contains(&limit) {
+            return Err(CommandError::InventoryLimit.into());
+        }
         let (collection, id_field, fields) = match target {
             SelfConfigTarget::InferenceProfile => (
                 "InferenceProfile",
@@ -2371,26 +2728,25 @@ impl ConfigCommandTool {
             .get("data")
             .and_then(|data| data.get(collection))
             .and_then(Value::as_array)
-            .context("inventory query returned no rows array")?
+            .ok_or(CommandError::InventoryRowsMissing)?
             .clone();
         if target == SelfConfigTarget::InferenceBackend {
             for row in &mut rows {
                 let observation: crate::document_config::InferenceBackendObservation =
-                    serde_json::from_value(row.clone()).context("decoding backend observation")?;
+                    serde_json::from_value(row.clone())
+                        .map_err(CommandError::BackendObservationDecode)?;
                 let provider_kind = serde_json::from_value(
                     row.get("provider_kind")
                         .cloned()
-                        .context("backend row has no provider_kind")?,
+                        .ok_or(CommandError::BackendRowProviderKind)?,
                 )
-                .context("decoding backend provider_kind")?;
+                .map_err(CommandError::BackendProviderKindDecode)?;
                 let view = crate::backend_registry::scoped_observation_view(
                     Some(&observation),
                     &self.node_did,
                     provider_kind,
                 )?;
-                let object = row
-                    .as_object_mut()
-                    .context("backend row must be an object")?;
+                let object = row.as_object_mut().ok_or(CommandError::BackendRowObject)?;
                 object.remove("catalogs");
                 object.insert("catalog".into(), view["catalog"].clone());
             }
@@ -2416,7 +2772,7 @@ impl ConfigCommandTool {
             for row in &mut selected {
                 let effective = super::read::execution_settings(Some(row))?;
                 row.as_object_mut()
-                    .context("execution row must be an object")?
+                    .ok_or(CommandError::ExecutionRowObject)?
                     .insert("effective".into(), effective);
             }
         }
@@ -2460,17 +2816,20 @@ fn normalize_verbs(argv: &mut Vec<String>) {
     }
 }
 
-fn apply_refusal(resource: &str) -> Option<String> {
+fn apply_refusal(resource: &str) -> CommandError {
     let form = match resource {
-        "pack" => "[\"pack\",\"install\",PACKAGE] with options.digest from [\"pack\",\"preview\",\"install\",PACKAGE]".to_owned(),
-        "cleanup" => "[\"cleanup\",\"remove\"] with options.target and options.digest from [\"cleanup\",\"preview\"]".to_owned(),
-        "skill" => "[\"skill\",\"import\",SKILL_ID,PATH]".to_owned(),
-        _ => "the previewed call with its target_id, options and set, removing \"preview\" from argv and putting \"edit\" in its place when no create or edit follows it".to_owned(),
+        "pack" => "[\"pack\",\"install\",PACKAGE] with options.digest from [\"pack\",\"preview\",\"install\",PACKAGE]",
+        "cleanup" => "[\"cleanup\",\"remove\"] with options.target and options.digest from [\"cleanup\",\"preview\"]",
+        "skill" => "[\"skill\",\"import\",SKILL_ID,PATH]",
+        _ => "the previewed call with its target_id, options and set, removing \"preview\" from argv and putting \"edit\" in its place when no create or edit follows it",
     };
-    Some(format!("{resource} has no apply verb; use {form}"))
+    CommandError::ApplyRefusal {
+        resource: resource.to_owned(),
+        form,
+    }
 }
 
-fn cleanup_plan_digest(owner: &str, targets: &[Value]) -> Result<String> {
+fn cleanup_plan_digest(owner: &str, targets: &[Value]) -> Result<String, serde_json::Error> {
     use sha2::{Digest, Sha256};
     Ok(format!(
         "sha256:{:x}",
@@ -2494,11 +2853,9 @@ async fn cleanup_in_txn(
         let document = ops::read_owned_doc(txn, *target, owner, id)
             .await?
             .map(|(_, document)| document)
-            .with_context(|| {
-                format!(
-                    "no owned {} with ID {id:?}; list or inspect exact IDs before cleanup",
-                    target.collection_name()
-                )
+            .ok_or_else(|| CommandError::OwnedDocumentMissing {
+                collection: target.collection_name().to_owned(),
+                id: id.clone(),
             })?;
         if *target == SelfConfigTarget::Agent {
             let protected = document
@@ -2508,10 +2865,9 @@ async fn cleanup_in_txn(
                     tags.iter()
                         .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))
                 });
-            anyhow::ensure!(
-                !protected,
-                "target agent {id:?} is the protected Engineer configurator and cannot be removed"
-            );
+            if protected {
+                return Err(CommandError::EngineerProtected { id: id.clone() }.into());
+            }
         }
         receipt.push(json!({
             "resource": resource,
@@ -2522,22 +2878,28 @@ async fn cleanup_in_txn(
     }
     let plan_digest = cleanup_plan_digest(owner, &receipt)?;
     if let Some(expected) = expected_digest {
-        anyhow::ensure!(
-            expected == plan_digest,
-            "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
-        );
+        if expected != plan_digest {
+            return Err(CommandError::CleanupDigestChanged {
+                expected: expected.to_owned(),
+                current: plan_digest.clone(),
+            }
+            .into());
+        }
     }
     crate::config_client::validate_desired_state_plan(txn, plan).await?;
     if !preview {
         crate::config_client::apply_desired_state_plan(txn, plan).await?;
         for (_, target, id) in targets {
-            anyhow::ensure!(
-                ops::read_owned_doc(txn, *target, owner, id)
-                    .await?
-                    .is_none(),
-                "cleanup did not remove {} {id:?}",
-                target.collection_name()
-            );
+            if ops::read_owned_doc(txn, *target, owner, id)
+                .await?
+                .is_some()
+            {
+                return Err(CommandError::CleanupNotRemoved {
+                    collection: target.collection_name().to_owned(),
+                    id: id.clone(),
+                }
+                .into());
+            }
         }
     }
     Ok((receipt, plan_digest))

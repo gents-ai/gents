@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::agent::RuntimeSnapshotObserver;
@@ -9,15 +9,21 @@ use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
 use crate::runtime_snapshot::{
     effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
 };
-use crate::runtime_status::RuntimeStatusHandle;
+use crate::runtime_status::{RuntimeStatusError, RuntimeStatusHandle};
 use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 
 use super::context::AgentResolution;
 
 #[derive(Debug, thiserror::Error)]
-enum RouterError {
+pub(super) enum RouterError {
     #[error("executor queue for agent {agent_id} closed unexpectedly")]
     ExecutorQueueClosed { agent_id: String },
+    #[error("durably acknowledge router generation {generation}")]
+    AcknowledgeGeneration {
+        generation: u64,
+        #[source]
+        source: RuntimeStatusError,
+    },
 }
 
 #[derive(Clone)]
@@ -340,6 +346,7 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
         Arc<ActiveRuntimeSnapshot>,
         crate::node_readiness_publisher::AgentAdmissionObservation,
     )>,
+    RouterError,
 >
 where
     W: Watcher,
@@ -385,11 +392,9 @@ where
             if let Err(error) = runtime_status
                 .publish_router_generation(routed_snapshot.generation)
                 .await
-                .with_context(|| {
-                    format!(
-                        "durably acknowledge router generation {}",
-                        routed_snapshot.generation
-                    )
+                .map_err(|source| RouterError::AcknowledgeGeneration {
+                    generation: routed_snapshot.generation,
+                    source,
                 })
             {
                 admission_gate.close().await;

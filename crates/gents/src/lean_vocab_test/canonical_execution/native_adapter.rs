@@ -1,8 +1,7 @@
-use gents_protocol::error_chain::ErrorChain;
+use gents_protocol::error_chain::{find_source, ErrorChain};
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
@@ -23,6 +22,24 @@ use crate::lean_vocab_test::{
     LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningPart,
     LeanRequestPurpose, LeanResultPart, LeanTerminalSelection,
 };
+
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+type Result<T, E = BoxError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+struct ContextError {
+    message: String,
+    #[source]
+    source: BoxError,
+}
+
+fn context(message: impl Into<String>, source: impl Into<BoxError>) -> BoxError {
+    Box::new(ContextError {
+        message: message.into(),
+        source: source.into(),
+    })
+}
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
@@ -103,8 +120,9 @@ fn native_sequence(value: u64) -> Result<u32, NativeFixtureError> {
     u32::try_from(next).map_err(NativeFixtureError::SequenceOutOfRange)
 }
 
-fn owner_error_is(error: &anyhow::Error, message: &str) -> bool {
-    error.chain().any(|cause| cause.to_string() == message)
+fn owner_error_is(error: &(dyn std::error::Error + 'static), message: &str) -> bool {
+    std::iter::successors(Some(error), |cause| cause.source())
+        .any(|cause| cause.to_string() == message)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -222,11 +240,12 @@ async fn create_signed_fixture_request(
         "test.native_execution.create_signed_request",
         &create
             .graphql_mutation_selecting(crate::watcher::AGENT_REQUEST_FIELDS)
-            .map_err(anyhow::Error::msg)?,
+            .map_err(BoxError::from)?,
     )
     .await?;
-    crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
-        .context("native request create omitted its physical identity")
+    crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?.ok_or(
+        BoxError::from("native request create omitted its physical identity"),
+    )
 }
 
 async fn claim_fixture_request(
@@ -250,10 +269,9 @@ async fn claim_fixture_request(
     let durable_claim = lifecycle
         .claim_pending_durable_with_inputs(|| now, || (now, generation.clone()))
         .await?;
-    anyhow::ensure!(
-        durable_claim.was_claimed(),
-        "signed request was not claimable"
-    );
+    if !(durable_claim.was_claimed()) {
+        return Err("signed request was not claimable".into());
+    }
     drop(lifecycle);
     if processing {
         crate::lifecycle::RequestLifecycle::begin_owned_execution_durable_with_clock(
@@ -309,22 +327,19 @@ impl NativeCanonicalExecution {
         outcome: &str,
         selection: &LeanTerminalSelection,
     ) -> Result<LeanCanonicalExecutionObservation> {
-        anyhow::ensure!(
-            outcome == "dead",
-            "modeled corrupt revocation outcome changed"
-        );
+        if !(outcome == "dead") {
+            return Err("modeled corrupt revocation outcome changed".into());
+        }
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
             crate::watcher::AGENT_REQUEST_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "read revocation request: {:?}",
-            response.errors
-        );
+        if !(!response.has_errors()) {
+            return Err(format!("read revocation request: {:?}", response.errors).into());
+        }
         let observed = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native revocation request disappeared")?;
+            .ok_or("native revocation request disappeared")?;
         let result = crate::lifecycle::revoke_execution_preserving_output_at(
             &self.node,
             &observed,
@@ -342,13 +357,11 @@ impl NativeCanonicalExecution {
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state terminal_output }} }}"#,
             crate::watcher::AGENT_REQUEST_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "read revoked request: {:?}",
-            response.errors
-        );
+        if !(!response.has_errors()) {
+            return Err(format!("read revoked request: {:?}", response.errors).into());
+        }
         let persisted = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native revoked request disappeared")?;
+            .ok_or("native revoked request disappeared")?;
         let expected_selection = match selection {
             LeanTerminalSelection::NoMessage => gents_protocol::output::TerminalOutput::NoMessage,
             LeanTerminalSelection::Message { id } => {
@@ -356,17 +369,15 @@ impl NativeCanonicalExecution {
                     .message_ids
                     .iter()
                     .find_map(|(physical, symbolic)| (*symbolic == *id).then_some(physical.clone()))
-                    .context("modeled corrupt revocation header has no physical identity")?;
+                    .ok_or("modeled corrupt revocation header has no physical identity")?;
                 gents_protocol::output::TerminalOutput::Message {
                     message_doc_id: physical,
                 }
             }
         };
-        anyhow::ensure!(
-            persisted.terminal_output.as_ref() == Some(&expected_selection),
-            "native revocation selected a different immutable header: expected {expected_selection:?}, got {:?}",
-            persisted.terminal_output
-        );
+        if !(persisted.terminal_output.as_ref() == Some(&expected_selection)) {
+            return Err(format!("native revocation selected a different immutable header: expected {expected_selection:?}, got {:?}", persisted.terminal_output).into());
+        }
         self.observe(true).await
     }
 
@@ -378,34 +389,34 @@ impl NativeCanonicalExecution {
         record: &LeanCanonicalSegment,
         message: &LeanCanonicalMessage<LeanPayloadSpec>,
     ) -> Result<LeanCanonicalExecutionObservation> {
-        anyhow::ensure!(
-            authority_outcome == "complete",
-            "native completion requires complete authority"
-        );
-        anyhow::ensure!(
-            matches!(record.coordinate.source, LeanCanonicalSource::Tool { call } if call == document)
-                && matches!(record.writer, LeanCanonicalWriter::Tool { call } if call == document),
-            "modeled tool closure is not bound to selected physical tool"
-        );
+        if !(authority_outcome == "complete") {
+            return Err("native completion requires complete authority".into());
+        }
+        if !(matches!(record.coordinate.source, LeanCanonicalSource::Tool { call } if call == document)
+            && matches!(record.writer, LeanCanonicalWriter::Tool { call } if call == document))
+        {
+            return Err("modeled tool closure is not bound to selected physical tool".into());
+        }
         let raw = String::from_utf8(
             record
                 .flush
                 .as_ref()
-                .context("modeled tool closure omitted raw flush")?
+                .ok_or("modeled tool closure omitted raw flush")?
                 .payload
                 .clone(),
         )?;
         let [LeanMessageBlock::ToolResult { doc_id, parts, .. }] = message.blocks.as_slice() else {
-            anyhow::bail!("modeled native completion has no sole ToolResult block")
+            return Err("modeled native completion has no sole ToolResult block".into());
         };
-        anyhow::ensure!(*doc_id == document, "modeled result refers to another tool");
+        if !(*doc_id == document) {
+            return Err("modeled result refers to another tool".into());
+        }
         let [LeanResultPart::Text { payload }] = parts.as_slice() else {
-            anyhow::bail!("modeled native completion has no sole text result")
+            return Err("modeled native completion has no sole text result".into());
         };
-        anyhow::ensure!(
-            payload.reference.close_id == record.id && payload.reference.stream == 0,
-            "modeled result does not reference the closing tool stream"
-        );
+        if !(payload.reference.close_id == record.id && payload.reference.stream == 0) {
+            return Err("modeled result does not reference the closing tool stream".into());
+        }
         let presentation = match &payload.presentation {
             LeanPresentation::Full => PayloadPresentation::Full,
             LeanPresentation::Composed { parts } => PayloadPresentation::Composed {
@@ -440,7 +451,7 @@ impl NativeCanonicalExecution {
             Some(&self.node_did),
         )
         .await?
-        .context("modeled tool disappeared before atomic completion")?;
+        .ok_or("modeled tool disappeared before atomic completion")?;
         let accepted = tool
             .complete_raw_with_presentation_at(
                 &raw,
@@ -457,17 +468,15 @@ impl NativeCanonicalExecution {
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !segments.has_errors(),
-            "read native completed tool source: {:?}",
-            segments.errors
-        );
+        if !(!segments.has_errors()) {
+            return Err(format!("read native completed tool source: {:?}", segments.errors).into());
+        }
         let closing = segments
             .data
             .as_ref()
             .and_then(|data| data.get("AgentOutputSegment"))
             .and_then(serde_json::Value::as_array)
-            .context("native completed tool source query omitted rows")?
+            .ok_or("native completed tool source query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
             .collect::<Result<Vec<_>, _>>()?
@@ -480,24 +489,22 @@ impl NativeCanonicalExecution {
             })
             .collect::<Vec<_>>();
         let [closing] = closing.as_slice() else {
-            anyhow::bail!("atomic tool completion did not persist one exact source closure")
+            return Err("atomic tool completion did not persist one exact source closure".into());
         };
         self.segment_ids.insert(closing.doc_id.clone(), record.id);
         let messages = self.node.execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !messages.has_errors(),
-            "read native completed tool result: {:?}",
-            messages.errors
-        );
+        if !(!messages.has_errors()) {
+            return Err(format!("read native completed tool result: {:?}", messages.errors).into());
+        }
         let delivered = messages
             .data
             .as_ref()
             .and_then(|data| data.get("AgentMessage"))
             .and_then(serde_json::Value::as_array)
-            .context("native completed tool result query omitted rows")?
+            .ok_or("native completed tool result query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
             .collect::<Result<Vec<_>, _>>()?
@@ -509,7 +516,7 @@ impl NativeCanonicalExecution {
             })
             .collect::<Vec<_>>();
         let [delivered] = delivered.as_slice() else {
-            anyhow::bail!("atomic tool completion did not publish one exact native result")
+            return Err("atomic tool completion did not publish one exact native result".into());
         };
         self.message_ids
             .insert(delivered.doc_id.clone(), message.header.id);
@@ -541,17 +548,15 @@ impl NativeCanonicalExecution {
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
             crate::watcher::AGENT_REQUEST_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "read recovery request: {:?}",
-            response.errors
-        );
+        if !(!response.has_errors()) {
+            return Err(format!("read recovery request: {:?}", response.errors).into());
+        }
         let observed = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native recovery request disappeared")?;
+            .ok_or("native recovery request disappeared")?;
         let expiry = observed
             .execution_lease_expires_at
             .as_deref()
-            .context("native recovery request omitted deadline")?;
+            .ok_or("native recovery request omitted deadline")?;
         let choice = match selection {
             LeanTerminalSelection::NoMessage => {
                 crate::lifecycle::RecoverySelectionChoice::NoMessage
@@ -600,31 +605,28 @@ impl NativeCanonicalExecution {
         match result {
             Ok(crate::lifecycle::RecoveryResult::Lost) => return self.observe(false).await,
             Err(error)
-                if error
-                    .downcast_ref::<crate::lifecycle::RecoverySelectionRejected>()
+                if find_source::<crate::lifecycle::RecoverySelectionRejected>(error.as_ref())
                     .is_some()
                     || crate::session::find_reconstruction_error(error.as_ref()).is_some() =>
             {
                 return self.observe(false).await;
             }
-            Err(error) => return Err(error.context("native terminal recovery owner failed")),
+            Err(error) => return Err(context("native terminal recovery owner failed", error)),
             Ok(crate::lifecycle::RecoveryResult::Won { .. }) => {}
         }
         let segments = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !segments.has_errors(),
-            "read recovered segments: {:?}",
-            segments.errors
-        );
+        if !(!segments.has_errors()) {
+            return Err(format!("read recovered segments: {:?}", segments.errors).into());
+        }
         for row in segments
             .data
             .as_ref()
             .and_then(|data| data.get("AgentOutputSegment"))
             .and_then(serde_json::Value::as_array)
-            .context("recovered segment query omitted rows")?
+            .ok_or("recovered segment query omitted rows")?
         {
             let row = crate::session::canonical_rows::decode_output_segment_row(row)?;
             if self.segment_ids.contains_key(&row.doc_id) {
@@ -640,7 +642,7 @@ impl NativeCanonicalExecution {
                 })
                 .collect::<Vec<_>>();
             let [item] = matches.as_slice() else {
-                anyhow::bail!("native recovery produced an unmapped or ambiguous closure")
+                return Err("native recovery produced an unmapped or ambiguous closure".into());
             };
             self.segment_ids.insert(row.doc_id, item.closing.id);
         }
@@ -648,17 +650,15 @@ impl NativeCanonicalExecution {
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !messages.has_errors(),
-            "read recovered headers: {:?}",
-            messages.errors
-        );
+        if !(!messages.has_errors()) {
+            return Err(format!("read recovered headers: {:?}", messages.errors).into());
+        }
         for row in messages
             .data
             .as_ref()
             .and_then(|data| data.get("AgentMessage"))
             .and_then(serde_json::Value::as_array)
-            .context("recovered header query omitted rows")?
+            .ok_or("recovered header query omitted rows")?
         {
             let row = crate::session::canonical_rows::decode_transcript_message_row(row)?;
             if self.message_ids.contains_key(&row.doc_id) {
@@ -681,7 +681,7 @@ impl NativeCanonicalExecution {
                 })
                 .collect::<Vec<_>>();
             let [message] = matching.as_slice() else {
-                anyhow::bail!("native recovery produced an unmapped or ambiguous header")
+                return Err("native recovery produced an unmapped or ambiguous header".into());
             };
             self.message_ids
                 .insert(row.doc_id.clone(), message.header.id);
@@ -697,7 +697,9 @@ impl NativeCanonicalExecution {
         self.tool_ids
             .iter()
             .find_map(|(physical, mapped)| (*mapped == symbolic).then_some(physical.as_str()))
-            .context("modeled tool has no accepted physical lifecycle")
+            .ok_or(BoxError::from(
+                "modeled tool has no accepted physical lifecycle",
+            ))
     }
 
     async fn refresh_output(&mut self) -> Result<()> {
@@ -706,17 +708,15 @@ impl NativeCanonicalExecution {
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !segments.has_errors(),
-            "read native output segments: {:?}",
-            segments.errors
-        );
+        if !(!segments.has_errors()) {
+            return Err(format!("read native output segments: {:?}", segments.errors).into());
+        }
         let mut decoded_segments = segments
             .data
             .as_ref()
             .and_then(|data| data.get("AgentOutputSegment"))
             .and_then(serde_json::Value::as_array)
-            .context("native segment query omitted rows")?
+            .ok_or("native segment query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
             .collect::<Result<Vec<_>, _>>()?;
@@ -733,7 +733,7 @@ impl NativeCanonicalExecution {
                     .segment_ids
                     .get(&row.doc_id)
                     .copied()
-                    .context("native segment has no symbolic identity")?;
+                    .ok_or("native segment has no symbolic identity")?;
                 self.lean_segment(id, &row.segment)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -742,17 +742,15 @@ impl NativeCanonicalExecution {
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !messages.has_errors(),
-            "read native message headers: {:?}",
-            messages.errors
-        );
+        if !(!messages.has_errors()) {
+            return Err(format!("read native message headers: {:?}", messages.errors).into());
+        }
         let mut decoded_messages = messages
             .data
             .as_ref()
             .and_then(|data| data.get("AgentMessage"))
             .and_then(serde_json::Value::as_array)
-            .context("native message query omitted rows")?
+            .ok_or("native message query omitted rows")?
             .iter()
             .map(crate::session::canonical_rows::decode_transcript_message_row)
             .collect::<Result<Vec<_>, _>>()?;
@@ -764,7 +762,7 @@ impl NativeCanonicalExecution {
                     .message_ids
                     .get(&row.doc_id)
                     .copied()
-                    .context("native header has no symbolic identity")?;
+                    .ok_or("native header has no symbolic identity")?;
                 let mut message = self.lean_message(id, &row.message)?;
                 if let Some(modeled_key) = self.modeled_message_keys.get(&row.doc_id) {
                     message.key.clone_from(modeled_key);
@@ -811,14 +809,14 @@ impl NativeCanonicalExecution {
                             gents_protocol::rendered_request::CaptureScopeKind::AccessReview => {
                                 LeanAuxiliaryKind::AccessReview
                             }
-                            _ => anyhow::bail!("native provider scope is not modeled"),
+                            _ => return Err("native provider scope is not modeled".into()),
                         },
                         scope: modeled_capture_seq(scope.seq)?,
                         turn: u64::from(*turn_index),
                         attempt: u64::from(*attempt),
                     }
                 }
-                _ => anyhow::bail!("native provider scope is not modeled"),
+                _ => return Err("native provider scope is not modeled".into()),
             },
             gents_protocol::output::OutputSource::ToolCall { tool_call_doc_id } => {
                 LeanCanonicalSource::Tool {
@@ -826,17 +824,17 @@ impl NativeCanonicalExecution {
                         .tool_ids
                         .get(tool_call_doc_id)
                         .copied()
-                        .context("native tool source has no symbolic identity")?,
+                        .ok_or("native tool source has no symbolic identity")?,
                 }
             }
-            _ => anyhow::bail!("native adapter observed unsupported segment source"),
+            _ => return Err("native adapter observed unsupported segment source".into()),
         };
         let writer = match &segment.writer {
             gents_protocol::output::OutputWriter::RequestExecution {
                 execution_generation,
             } => LeanCanonicalWriter::Request {
                 generation: parse_generation(Some(execution_generation))
-                    .context("native segment generation is not symbolic")?,
+                    .ok_or("native segment generation is not symbolic")?,
             },
             gents_protocol::output::OutputWriter::ToolExecution { tool_call_doc_id } => {
                 LeanCanonicalWriter::Tool {
@@ -844,7 +842,7 @@ impl NativeCanonicalExecution {
                         .tool_ids
                         .get(tool_call_doc_id)
                         .copied()
-                        .context("native tool writer has no symbolic identity")?,
+                        .ok_or("native tool writer has no symbolic identity")?,
                 }
             }
         };
@@ -898,9 +896,7 @@ impl NativeCanonicalExecution {
                                         gents_protocol::output::StreamPayload::ToolOutput => {
                                             (LeanPayloadKind::ToolOutput, None)
                                         }
-                                        _ => anyhow::bail!(
-                                            "native adapter observed unsupported stream payload"
-                                        ),
+                                        _ => return Err(BoxError::from("native adapter observed unsupported stream payload")),
                                     };
                                         Ok(crate::lean_vocab_test::LeanCanonicalDeclaration {
                                             block: u64::from(declaration.block_index),
@@ -962,7 +958,7 @@ impl NativeCanonicalExecution {
                         .segment_ids
                         .get(&reference.close_doc_id)
                         .copied()
-                        .context("native payload reference has no symbolic closure identity")?,
+                        .ok_or("native payload reference has no symbolic closure identity")?,
                     stream: u64::from(reference.stream),
                 },
                 presentation: LeanPresentation::Full,
@@ -1000,10 +996,9 @@ impl NativeCanonicalExecution {
             .map(|block| -> Result<LeanMessageBlock<LeanPayloadSpec>> {
                 Ok(match block {
                     MessageBlock::Text { text } => {
-                        anyhow::ensure!(
-                            matches!(text.presentation, PayloadPresentation::Full),
-                            "native text presentation is not modeled"
-                        );
+                        if !(matches!(text.presentation, PayloadPresentation::Full)) {
+                            return Err("native text presentation is not modeled".into());
+                        }
                         LeanMessageBlock::Text {
                             payload: payload_ref(&text.output)?,
                         }
@@ -1050,7 +1045,7 @@ impl NativeCanonicalExecution {
                             .tool_ids
                             .get(tool_call_doc_id)
                             .copied()
-                            .context("native tool call has no symbolic identity")?,
+                            .ok_or("native tool call has no symbolic identity")?,
                         id: id.clone(),
                         call_id: call_id.clone(),
                         name: name.clone(),
@@ -1071,7 +1066,7 @@ impl NativeCanonicalExecution {
                             .tool_ids
                             .get(tool_call_doc_id)
                             .copied()
-                            .context("native result has no symbolic tool identity")?,
+                            .ok_or("native result has no symbolic tool identity")?,
                         id: id.clone(),
                         call_id: call_id.clone(),
                         parts: parts
@@ -1083,12 +1078,12 @@ impl NativeCanonicalExecution {
                                     })
                                 }
                                 gents_protocol::output::ToolResultPart::Media(_) => {
-                                    anyhow::bail!("native result media is not in this fixture")
+                                    Err("native result media is not in this fixture".into())
                                 }
                             })
                             .collect::<Result<Vec<_>>>()?,
                     },
-                    _ => anyhow::bail!("native adapter observed unsupported message block"),
+                    _ => return Err("native adapter observed unsupported message block".into()),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1107,7 +1102,7 @@ impl NativeCanonicalExecution {
                                 .segment_ids
                                 .get(&reference.close_doc_id)
                                 .copied()
-                                .context(
+                                .ok_or(
                                     "native header reference has no symbolic closure identity",
                                 )?,
                             stream: u64::from(reference.stream),
@@ -1128,13 +1123,13 @@ impl NativeCanonicalExecution {
                         execution_generation,
                     } => LeanMessagePublication::RequestExecution {
                         generation: parse_generation(Some(execution_generation))
-                            .context("native header generation is not symbolic")?,
+                            .ok_or("native header generation is not symbolic")?,
                     },
                     MessagePublication::RequestRecovery {
                         execution_generation,
                     } => LeanMessagePublication::RequestRecovery {
                         generation: parse_generation(Some(execution_generation))
-                            .context("native recovery header generation is not symbolic")?,
+                            .ok_or("native recovery header generation is not symbolic")?,
                     },
                     MessagePublication::ToolDelivery { tool_call_doc_id } => {
                         LeanMessagePublication::ToolDelivery {
@@ -1142,10 +1137,10 @@ impl NativeCanonicalExecution {
                                 .tool_ids
                                 .get(tool_call_doc_id)
                                 .copied()
-                                .context("native delivery has no symbolic tool identity")?,
+                                .ok_or("native delivery has no symbolic tool identity")?,
                         }
                     }
-                    _ => anyhow::bail!("native adapter observed unsupported publication"),
+                    _ => return Err("native adapter observed unsupported publication".into()),
                 },
             },
             key: message.message_key.clone(),
@@ -1166,13 +1161,11 @@ impl NativeCanonicalExecution {
                 crate::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "observe native request: {:?}",
-            response.errors
-        );
+        if !(!response.has_errors()) {
+            return Err(format!("observe native request: {:?}", response.errors).into());
+        }
         let row: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
-            .context("native request disappeared")?;
+            .ok_or("native request disappeared")?;
         if let Some((_, parent_doc_id)) = &self.title_parent {
             let parent = crate::graphql::escape_graphql_string(parent_doc_id);
             let response = crate::graphql::graphql_with_transaction_retry(
@@ -1185,18 +1178,16 @@ impl NativeCanonicalExecution {
                 "test.native_execution.title_parent",
             ).await?;
             let parent: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
-                .context("title parent disappeared")?;
+                .ok_or("title parent disappeared")?;
             crate::request_admission::verify_historical_auxiliary_receipt(&row, &parent)?;
-            anyhow::ensure!(
-                parent.lifecycle_state == Some(RequestLifecycleState::Completed),
-                "title execution changed its terminal parent"
-            );
-            let data = response.data.context("title parent query omitted data")?;
+            if !(parent.lifecycle_state == Some(RequestLifecycleState::Completed)) {
+                return Err("title execution changed its terminal parent".into());
+            }
+            let data = response.data.ok_or("title parent query omitted data")?;
             for collection in ["AgentOutputSegment", "AgentMessage"] {
-                anyhow::ensure!(
-                    data[collection].as_array().is_some_and(Vec::is_empty),
-                    "title execution wrote output under its parent request"
-                );
+                if !(data[collection].as_array().is_some_and(Vec::is_empty)) {
+                    return Err("title execution wrote output under its parent request".into());
+                }
             }
         }
         let terminal_selection = match row.terminal_output.as_ref() {
@@ -1209,13 +1200,13 @@ impl NativeCanonicalExecution {
                     id: *self
                         .message_ids
                         .get(message_doc_id)
-                        .context("terminal output names an unmapped physical message")?,
+                        .ok_or("terminal output names an unmapped physical message")?,
                 })
             }
         };
         let state = row
             .lifecycle_state
-            .context("native request omitted lifecycle")?;
+            .ok_or("native request omitted lifecycle")?;
         let persisted_generation = parse_generation(row.execution_generation.as_deref());
         let active_lease = !state.is_terminal();
         let lease_deadline = row
@@ -1227,21 +1218,18 @@ impl NativeCanonicalExecution {
         let tools = self.node.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID request_doc_id lifecycle_state message_sequence await_mode stuck_since }} }}"#,
         )).await;
-        anyhow::ensure!(
-            !tools.has_errors(),
-            "observe native tools: {:?}",
-            tools.errors
-        );
+        if !(!tools.has_errors()) {
+            return Err(format!("observe native tools: {:?}", tools.errors).into());
+        }
         let tool_rows = tools
             .data
             .as_ref()
             .and_then(|data| data.get("AgentToolCall"))
             .and_then(serde_json::Value::as_array)
-            .context("native tool observation omitted rows")?;
-        anyhow::ensure!(
-            tool_rows.len() == self.tool_ids.len(),
-            "native tool observation contains unmapped physical rows"
-        );
+            .ok_or("native tool observation omitted rows")?;
+        if !(tool_rows.len() == self.tool_ids.len()) {
+            return Err("native tool observation contains unmapped physical rows".into());
+        }
         let mut tool_state = None;
         let mut tool_stuck_since = None;
         let mut in_flight = false;
@@ -1252,36 +1240,36 @@ impl NativeCanonicalExecution {
             let doc_id = tool
                 .get("_docID")
                 .and_then(serde_json::Value::as_str)
-                .context("native tool omitted physical identity")?;
+                .ok_or("native tool omitted physical identity")?;
             let symbolic = self
                 .tool_ids
                 .get(doc_id)
-                .context("native tool has no symbolic identity")?;
+                .ok_or("native tool has no symbolic identity")?;
             let state = tool
                 .get("lifecycle_state")
                 .and_then(serde_json::Value::as_str)
-                .context("native tool omitted lifecycle")?;
-            anyhow::ensure!(
-                tool.get("request_doc_id")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(self.request_doc_id.as_str()),
-                "native tool changed physical request binding"
-            );
+                .ok_or("native tool omitted lifecycle")?;
+            if !(tool
+                .get("request_doc_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(self.request_doc_id.as_str()))
+            {
+                return Err("native tool changed physical request binding".into());
+            }
             let sequence = tool
                 .get("message_sequence")
                 .and_then(serde_json::Value::as_u64)
-                .context("native tool omitted reserved sequence")?;
+                .ok_or("native tool omitted reserved sequence")?;
             let sequence = modeled_sequence(sequence)?;
             reserved_max = Some(reserved_max.map_or(sequence, |current| current.max(sequence)));
             if *symbolic == self.query_document {
-                anyhow::ensure!(
-                    tool_state.replace(state.to_owned()).is_none(),
-                    "queried symbolic tool has multiple physical rows"
-                );
+                if !(tool_state.replace(state.to_owned()).is_none()) {
+                    return Err("queried symbolic tool has multiple physical rows".into());
+                }
                 let await_mode = tool
                     .get("await_mode")
                     .and_then(serde_json::Value::as_str)
-                    .context("native tool omitted await mode")?;
+                    .ok_or("native tool omitted await mode")?;
                 tool_stuck_since = tool
                     .get("stuck_since")
                     .and_then(serde_json::Value::as_str)
@@ -1337,7 +1325,7 @@ impl NativeCanonicalExecution {
 }
 
 impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
-    type Error = anyhow::Error;
+    type Error = BoxError;
     type Native = NativeCanonicalExecution;
 
     fn initialize<'a>(
@@ -1345,72 +1333,76 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
         seed: &'a LeanCanonicalExecutionSeed,
     ) -> ExecutionFuture<'a, Result<Self::Native>> {
         Box::pin(async move {
-            anyhow::ensure!(
-                seed.segments.is_empty() && seed.messages.is_empty(),
-                "seeded durable output is not implemented by the native adapter"
-            );
-            anyhow::ensure!(
-                seed.tool_calls.is_empty() && seed.in_flight.is_empty(),
-                "seeded tool execution is not implemented by the native adapter"
-            );
-            anyhow::ensure!(
-                seed.next_sequence == 0,
-                "nonzero sequence without seeded durable facts is not implemented"
-            );
-            anyhow::ensure!(
-                matches!(
-                    seed.lease.request,
-                    RequestLifecycleState::Claimed | RequestLifecycleState::Processing
-                ) && seed.lease.lease.status
-                    == crate::lean_vocab_test::LeanRequestExecutionLeaseStatus::Active,
-                "native fixture only supports an active claimed or processing request"
-            );
+            if !(seed.segments.is_empty() && seed.messages.is_empty()) {
+                return Err(
+                    "seeded durable output is not implemented by the native adapter".into(),
+                );
+            }
+            if !(seed.tool_calls.is_empty() && seed.in_flight.is_empty()) {
+                return Err(
+                    "seeded tool execution is not implemented by the native adapter".into(),
+                );
+            }
+            if !(seed.next_sequence == 0) {
+                return Err(
+                    "nonzero sequence without seeded durable facts is not implemented".into(),
+                );
+            }
+            if !(matches!(
+                seed.lease.request,
+                RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+            ) && seed.lease.lease.status
+                == crate::lean_vocab_test::LeanRequestExecutionLeaseStatus::Active)
+            {
+                return Err(
+                    "native fixture only supports an active claimed or processing request".into(),
+                );
+            }
             let generation = seed
                 .lease
                 .lease
                 .generation
-                .context("native fixture requires an active generation")?;
+                .ok_or("native fixture requires an active generation")?;
             let duration = seed
                 .lease
                 .lease
                 .duration
-                .context("native fixture requires a lease duration")?;
-            anyhow::ensure!(
-                duration > 0
-                    && seed.lease.now.checked_add(duration) == Some(seed.lease.effective_expiry)
-                    && seed.lease.used_generations == [generation]
-                    && seed.lease.lease.explicit_deadline == Some(seed.lease.effective_expiry)
-                    && seed.lease.lease.outcome.is_none()
-                    && !seed.lease.continuation_required
-                    && !seed.lease.token_charge_required
-                    && seed.lease.continuation_count == 0
-                    && seed.lease.token_charge_count == 0,
-                "native fixture does not support this seeded lease history"
-            );
+                .ok_or("native fixture requires a lease duration")?;
+            if !(duration > 0
+                && seed.lease.now.checked_add(duration) == Some(seed.lease.effective_expiry)
+                && seed.lease.used_generations == [generation]
+                && seed.lease.lease.explicit_deadline == Some(seed.lease.effective_expiry)
+                && seed.lease.lease.outcome.is_none()
+                && !seed.lease.continuation_required
+                && !seed.lease.token_charge_required
+                && seed.lease.continuation_count == 0
+                && seed.lease.token_charge_count == 0)
+            {
+                return Err("native fixture does not support this seeded lease history".into());
+            }
             let seed_creation_time = fixture_time(seed.lease.now)?;
             let title_binding = match seed.purpose {
                 LeanRequestPurpose::Normal => {
-                    anyhow::ensure!(
-                        seed.title_binding.is_none(),
-                        "normal seed has title binding"
-                    );
+                    if !(seed.title_binding.is_none()) {
+                        return Err("normal seed has title binding".into());
+                    }
                     None
                 }
                 LeanRequestPurpose::TitleAudit | LeanRequestPurpose::AccessReview => {
                     let binding = seed
                         .title_binding
                         .as_ref()
-                        .context("title seed has no binding")?;
-                    anyhow::ensure!(
-                        binding.authenticated
-                            && binding.purpose == seed.purpose
-                            && binding.physical_request == seed.request_id
-                            && binding.node == seed.node_did
-                            && binding.session == seed.session_id
-                            && binding.parent_physical != binding.physical_request
-                            && binding.parent_logical != binding.logical_request,
-                        "modeled title binding does not name its exact request/session/node DID"
-                    );
+                        .ok_or("title seed has no binding")?;
+                    if !(binding.authenticated
+                        && binding.purpose == seed.purpose
+                        && binding.physical_request == seed.request_id
+                        && binding.node == seed.node_did
+                        && binding.session == seed.session_id
+                        && binding.parent_physical != binding.physical_request
+                        && binding.parent_logical != binding.logical_request)
+                    {
+                        return Err("modeled title binding does not name its exact request/session/node DID".into());
+                    }
                     Some(binding)
                 }
             };
@@ -1419,7 +1411,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 title_binding.map_or(seed.request_id, |binding| binding.logical_request)
             );
             let initial_session_id = format!("lean-session-{}", seed.session_id);
-            let key_dir = tempfile::tempdir().context("native fixture identity directory")?;
+            let key_dir = tempfile::tempdir()
+                .map_err(|source| context("native fixture identity directory", source))?;
             let identity: Arc<dyn NodeIdentity> = Arc::new(crate::KeyIdentity::load_or_create(
                 key_dir.path().join("agent.key"),
                 None,
@@ -1463,7 +1456,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     "general",
                 )
                 .await
-                .map_err(anyhow::Error::from)?;
+                .map_err(BoxError::from)?;
                 let generation = "native-title-parent";
                 claim_fixture_request(
                     node.clone(),
@@ -1475,21 +1468,20 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     true,
                 )
                 .await?;
-                anyhow::ensure!(
-                    matches!(
-                        crate::lifecycle::terminalize_owned_at(
-                            &node,
-                            &parent.doc_id,
-                            generation,
-                            crate::lifecycle::RequestTerminalOutcome::Completed,
-                            gents_protocol::output::TerminalOutput::NoMessage,
-                            seed_creation_time,
-                        )
-                        .await?,
-                        crate::lifecycle::TerminalizeResult::Won
-                    ),
-                    "native title parent did not terminalize"
-                );
+                if !(matches!(
+                    crate::lifecycle::terminalize_owned_at(
+                        &node,
+                        &parent.doc_id,
+                        generation,
+                        crate::lifecycle::RequestTerminalOutcome::Completed,
+                        gents_protocol::output::TerminalOutput::NoMessage,
+                        seed_creation_time,
+                    )
+                    .await?,
+                    crate::lifecycle::TerminalizeResult::Won
+                )) {
+                    return Err("native title parent did not terminalize".into());
+                }
                 Some(parent)
             } else {
                 None
@@ -1522,17 +1514,14 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             let now = fixture_time_at(fixture_epoch_seconds, seed.lease.now)?;
             let expiry = fixture_time_at(fixture_epoch_seconds, seed.lease.effective_expiry)?;
             let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
-            anyhow::ensure!(
-                !lookup.has_errors(),
-                "read native pending request: {:?}",
-                lookup.errors
-            );
+            if !(!lookup.has_errors()) {
+                return Err(format!("read native pending request: {:?}", lookup.errors).into());
+            }
             let row = crate::graphql::first_row::<AgentRequestRow>(&lookup, "AgentRequest")?
-                .context("native signed request disappeared")?;
-            anyhow::ensure!(
-                row.lifecycle_state == Some(RequestLifecycleState::Pending),
-                "native signed request was not pending"
-            );
+                .ok_or("native signed request disappeared")?;
+            if !(row.lifecycle_state == Some(RequestLifecycleState::Pending)) {
+                return Err("native signed request was not pending".into());
+            }
             let queued: crate::watcher::AgentRequest = row.try_into()?;
             let verified = match seed.purpose {
                 LeanRequestPurpose::Normal => {
@@ -1554,7 +1543,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await
                 }
             }
-            .map_err(anyhow::Error::from)?;
+            .map_err(BoxError::from)?;
             claim_fixture_request(
                 node.clone(),
                 &node_did,
@@ -1566,33 +1555,33 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             )
             .await?;
             let claimed = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
-            anyhow::ensure!(
-                !claimed.has_errors(),
-                "read native owned request: {:?}",
-                claimed.errors
-            );
+            if !(!claimed.has_errors()) {
+                return Err(format!("read native owned request: {:?}", claimed.errors).into());
+            }
             let claimed = crate::graphql::first_row::<AgentRequestRow>(&claimed, "AgentRequest")?
-                .context("native owned request disappeared")?;
-            anyhow::ensure!(
-                claimed.lifecycle_state == Some(seed.lease.request)
-                    && claimed.execution_generation.as_deref()
-                        == Some(symbolic_generation(generation).as_str())
-                    && claimed.execution_lease_expires_at.as_deref()
-                        == Some(expiry.to_rfc3339().as_str()),
-                "native claim/begin did not preserve modeled execution authority"
-            );
-            if let Some(parent) = &parent {
-                anyhow::ensure!(
-                    claimed.purpose == Some(seed.purpose.into())
-                        && claimed.caused_by_parent_request_id.as_deref()
-                            == Some(parent.request_id.as_str())
-                        && claimed.caused_by_parent_request_doc_id.as_deref()
-                            == Some(parent.doc_id.as_str())
-                        && claimed.caused_by_parent_tool_call_id.is_none()
-                        && claimed.caused_by_parent_tool_call_doc_id.is_none()
-                        && request_doc_id != parent.doc_id,
-                    "signed title lost its exact parent-only provenance"
+                .ok_or("native owned request disappeared")?;
+            if !(claimed.lifecycle_state == Some(seed.lease.request)
+                && claimed.execution_generation.as_deref()
+                    == Some(symbolic_generation(generation).as_str())
+                && claimed.execution_lease_expires_at.as_deref()
+                    == Some(expiry.to_rfc3339().as_str()))
+            {
+                return Err(
+                    "native claim/begin did not preserve modeled execution authority".into(),
                 );
+            }
+            if let Some(parent) = &parent {
+                if !(claimed.purpose == Some(seed.purpose.into())
+                    && claimed.caused_by_parent_request_id.as_deref()
+                        == Some(parent.request_id.as_str())
+                    && claimed.caused_by_parent_request_doc_id.as_deref()
+                        == Some(parent.doc_id.as_str())
+                    && claimed.caused_by_parent_tool_call_id.is_none()
+                    && claimed.caused_by_parent_tool_call_doc_id.is_none()
+                    && request_doc_id != parent.doc_id)
+                {
+                    return Err("signed title lost its exact parent-only provenance".into());
+                }
             }
             let scoped_session = node.execute(&format!(
                 r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id node_did requester_did agent_id created_at observation }} }}"#,
@@ -1600,37 +1589,43 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 crate::graphql::escape_graphql_string(&node_did),
                 crate::graphql::escape_graphql_string(&node_did),
             )).await;
-            anyhow::ensure!(
-                !scoped_session.has_errors(),
-                "read claimed requester session: {:?}",
-                scoped_session.errors
-            );
+            if !(!scoped_session.has_errors()) {
+                return Err(format!(
+                    "read claimed requester session: {:?}",
+                    scoped_session.errors
+                )
+                .into());
+            }
             let sessions: Vec<gents_protocol::session::AgentSession> =
                 crate::graphql::rows(&scoped_session, "AgentSession")?;
             let [session] = sessions.as_slice() else {
-                anyhow::bail!("real claim did not create one exact requester-scoped session")
+                return Err("real claim did not create one exact requester-scoped session".into());
             };
-            anyhow::ensure!(
-                session.session_id == session_id
-                    && session.node_did == node_did
-                    && session.requester_did.as_deref() == Some(node_did.as_str())
-                    && session.agent_id == "general"
-                    && session
-                        .observation
-                        .as_ref()
-                        .and_then(|observation| observation.latest_request.as_ref())
-                        .is_some_and(|head| match &parent {
-                            None =>
-                                head.request_doc_id == request_doc_id
-                                    && head.request_id == request_id
-                                    && head.lifecycle_state == RequestLifecycleState::Claimed,
-                            Some(parent) =>
-                                head.request_doc_id == parent.doc_id
-                                    && head.request_id == parent.request_id
-                                    && head.lifecycle_state == RequestLifecycleState::Completed,
-                        }),
-                "claim changed the expected normal request's exact session projection"
-            );
+            if !(session.session_id == session_id
+                && session.node_did == node_did
+                && session.requester_did.as_deref() == Some(node_did.as_str())
+                && session.agent_id == "general"
+                && session
+                    .observation
+                    .as_ref()
+                    .and_then(|observation| observation.latest_request.as_ref())
+                    .is_some_and(|head| match &parent {
+                        None => {
+                            head.request_doc_id == request_doc_id
+                                && head.request_id == request_id
+                                && head.lifecycle_state == RequestLifecycleState::Claimed
+                        }
+                        Some(parent) => {
+                            head.request_doc_id == parent.doc_id
+                                && head.request_id == parent.request_id
+                                && head.lifecycle_state == RequestLifecycleState::Completed
+                        }
+                    }))
+            {
+                return Err(
+                    "claim changed the expected normal request's exact session projection".into(),
+                );
+            }
             Ok(NativeCanonicalExecution {
                 node,
                 _identity_guard: key_dir,
@@ -1700,10 +1695,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     record,
                     ..
                 } => {
-                    anyhow::ensure!(
-                        record.close.is_none(),
-                        "append output cannot close a source"
-                    );
+                    if !(record.close.is_none()) {
+                        return Err("append output cannot close a source".into());
+                    }
                     let prepared = native.provider_segment(record, *generation)?;
                     let doc_id = crate::streaming::canonical::append_provider_segment_at(
                         &native.node,
@@ -1715,14 +1709,18 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let doc_id = match doc_id {
                         Ok(value) => value,
                         Err(error)
-                            if error
-                                .downcast_ref::<crate::streaming::canonical::ProviderAppendRejection>()
-                                .is_some()
-                                || owner_error_is(&error, "output source does not match its request purpose") =>
+                            if find_source::<
+                                crate::streaming::canonical::ProviderAppendRejection,
+                            >(error.as_ref())
+                            .is_some()
+                                || owner_error_is(
+                                    error.as_ref(),
+                                    "output source does not match its request purpose",
+                                ) =>
                         {
                             return native.observe(false).await;
                         }
-                        Err(error) => return Err(error),
+                        Err(error) => return Err(error.into()),
                     };
                     native.segment_ids.insert(doc_id, record.id);
                     native.observe(true).await
@@ -1733,10 +1731,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     record,
                     ..
                 } => {
-                    anyhow::ensure!(
-                        record.close.is_none() && record.flush.is_some(),
-                        "tool append requires a data flush without a closure"
-                    );
+                    if !(record.close.is_none() && record.flush.is_some()) {
+                        return Err("tool append requires a data flush without a closure".into());
+                    }
                     let physical = native.physical_tool(*document)?.to_owned();
                     let prepared = native.tool_output_segment(record, *document, &physical)?;
                     let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
@@ -1747,7 +1744,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Some(&native.node_did),
                     )
                     .await?
-                    .context("accepted physical tool disappeared before output append")?;
+                    .ok_or("accepted physical tool disappeared before output append")?;
                     let binding = tool.tool_output_binding()?;
                     let receipt = crate::tool_call_lifecycle::delivery::append_tool_output_at(
                         &binding,
@@ -1812,10 +1809,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         {
                             native.observe(false).await
                         }
-                        Err(error) => {
-                            Err(error.context("same-task guarded append failed unexpectedly"))
-                        }
-                        Ok(()) => anyhow::bail!("same-task guarded append bypassed mutation gate"),
+                        Err(error) => Err(context(
+                            "same-task guarded append failed unexpectedly",
+                            error,
+                        )),
+                        Ok(()) => Err("same-task guarded append bypassed mutation gate".into()),
                     }
                 }
                 LeanCanonicalExecutionOperation::ClosePartial {
@@ -1839,10 +1837,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     items,
                     ..
                 } => {
-                    anyhow::ensure!(
-                        matches!(outcome.as_str(), "failed" | "interrupted"),
-                        "modeled terminal recovery outcome is not supported by the lease owner"
-                    );
+                    if !(matches!(outcome.as_str(), "failed" | "interrupted")) {
+                        return Err(
+                            "modeled terminal recovery outcome is not supported by the lease owner"
+                                .into(),
+                        );
+                    }
                     native
                         .recover_terminal(
                             *now,
@@ -1862,10 +1862,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     tool_policy_allows,
                     ..
                 } => {
-                    anyhow::ensure!(
-                        *cancellation_allows && *tool_policy_allows,
-                        "native dispatch adapter has no external denial injection"
-                    );
+                    if !(*cancellation_allows && *tool_policy_allows) {
+                        return Err(
+                            "native dispatch adapter has no external denial injection".into()
+                        );
+                    }
                     let physical = native.physical_tool(*call)?.to_owned();
                     let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
                         native.node.clone(),
@@ -1875,7 +1876,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Some(&native.node_did),
                     )
                     .await?
-                    .context("accepted physical tool disappeared before dispatch")?;
+                    .ok_or("accepted physical tool disappeared before dispatch")?;
                     match tool
                         .start_running_at(
                             native.fixture_time(*now)?,
@@ -1887,10 +1888,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Err(error) if error.dispatch_rejection().is_some() => {
                             native.observe(false).await
                         }
-                        Err(error) => {
-                            Err(anyhow::Error::from(error)
-                                .context("native tool dispatch owner failed"))
-                        }
+                        Err(error) => Err(context("native tool dispatch owner failed", error)),
                     }
                 }
                 LeanCanonicalExecutionOperation::TerminalizeCompleted {
@@ -1906,7 +1904,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         "interrupted" => crate::lifecycle::RequestTerminalOutcome::Interrupted,
                         "dead" => crate::lifecycle::RequestTerminalOutcome::Dead,
                         "superseded" => crate::lifecycle::RequestTerminalOutcome::Superseded,
-                        other => anyhow::bail!("unknown modeled terminal outcome: {other}"),
+                        other => {
+                            return Err(format!("unknown modeled terminal outcome: {other}").into())
+                        }
                     };
                     let selection = match selection {
                         LeanTerminalSelection::NoMessage => {
@@ -1919,7 +1919,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                                 .find_map(|(physical, symbolic)| {
                                     (*symbolic == *id).then_some(physical.clone())
                                 })
-                                .context(
+                                .ok_or(
                                     "modeled terminal message has no published physical header",
                                 )?;
                             gents_protocol::output::TerminalOutput::Message {
@@ -1939,17 +1939,18 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let result = match result {
                         Ok(value) => value,
                         Err(error)
-                            if error
-                                .downcast_ref::<crate::lifecycle::ToolAccountingRejection>()
-                                .is_some()
+                            if find_source::<crate::lifecycle::ToolAccountingRejection>(
+                                error.as_ref(),
+                            )
+                            .is_some()
                                 || owner_error_is(
-                                    &error,
+                                    error.as_ref(),
                                     "auxiliary source has no unique closure",
                                 ) =>
                         {
                             return native.observe(false).await;
                         }
-                        Err(error) => return Err(error),
+                        Err(error) => return Err(error.into()),
                     };
                     native
                         .observe(!matches!(result, crate::lifecycle::TerminalizeResult::Lost))
@@ -2002,12 +2003,15 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Some(&native.node_did),
                     )
                     .await?
-                    .context("spawned admission parent disappeared")?;
-                    anyhow::ensure!(
-                        parent.execution_generation()
-                            == Some(symbolic_generation(*generation).as_str()),
-                        "modeled spawned admission generation differs from physical parent"
-                    );
+                    .ok_or("spawned admission parent disappeared")?;
+                    if !(parent.execution_generation()
+                        == Some(symbolic_generation(*generation).as_str()))
+                    {
+                        return Err(
+                            "modeled spawned admission generation differs from physical parent"
+                                .into(),
+                        );
+                    }
                     let child = parent
                         .admit_spawned_background_child_at(
                             crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
@@ -2020,14 +2024,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .await?;
                     let physical_child = child
                         .doc_id()
-                        .context("spawned admission child omitted physical identity")?
+                        .ok_or("spawned admission child omitted physical identity")?
                         .to_owned();
                     if let Some(existing_symbolic) = native.tool_ids.get(&physical_child) {
-                        anyhow::ensure!(
-                            *existing_symbolic == admission.document,
-                            "native spawned child maps to symbolic document {existing_symbolic}, not requested {}",
-                            admission.document
-                        );
+                        if !(*existing_symbolic == admission.document) {
+                            return Err(format!("native spawned child maps to symbolic document {existing_symbolic}, not requested {}", admission.document).into());
+                        }
                     } else {
                         native.tool_ids.insert(physical_child, admission.document);
                     }
@@ -2036,9 +2038,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 LeanCanonicalExecutionOperation::DeliverReplicatedSegment { record, .. } => {
                     let generation = match &record.writer {
                         LeanCanonicalWriter::Request { generation } => *generation,
-                        _ => anyhow::bail!(
-                            "replicated native fixture supports provider segments only"
-                        ),
+                        _ => {
+                            return Err(
+                                "replicated native fixture supports provider segments only".into()
+                            )
+                        }
                     };
                     let segment = native.provider_segment(record, generation)?;
                     let response = native.node.execute_request(
@@ -2048,11 +2052,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             crate::session::canonical_rows::output_segment_create_variables(&segment)?,
                         ),
                     ).await;
-                    anyhow::ensure!(
-                        !response.has_errors(),
-                        "replicate native segment: {:?}",
-                        response.errors
-                    );
+                    if !(!response.has_errors()) {
+                        return Err(
+                            format!("replicate native segment: {:?}", response.errors).into()
+                        );
+                    }
                     let doc_id = crate::graphql::created_doc_id(
                         &serde_json::json!({ "data": response.data }),
                         "AgentOutputSegment",
@@ -2088,9 +2092,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .accept_provider_turn(*now, *generation, closing, message, admissions)
                         .await
                 }
-                other => anyhow::bail!(
+                other => Err(format!(
                     "native canonical execution operation is not implemented yet: {other:?}"
-                ),
+                )
+                .into()),
             }
         })
     }
@@ -2107,7 +2112,7 @@ impl NativeCanonicalExecution {
             generation: writer_generation,
         } = &closing.writer
         else {
-            anyhow::bail!("auxiliary close requires a request writer")
+            return Err("auxiliary close requires a request writer".into());
         };
         let prepared = self.provider_segment(closing, *writer_generation)?;
         let close = match &prepared.close {
@@ -2122,7 +2127,7 @@ impl NativeCanonicalExecution {
             Some(SourceClose::Retracted) => {
                 crate::streaming::canonical::ProviderAttemptClose::Retracted
             }
-            _ => anyhow::bail!("auxiliary close must carry a closure"),
+            _ => return Err("auxiliary close must carry a closure".into()),
         };
         let result = crate::streaming::canonical::close_provider_attempt_at(
             &self.node,
@@ -2138,20 +2143,21 @@ impl NativeCanonicalExecution {
         .await;
         match result {
             Ok(None) => {}
-            Ok(Some(_)) => anyhow::bail!("auxiliary close published a header"),
+            Ok(Some(_)) => return Err("auxiliary close published a header".into()),
             Err(error)
-                if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
-                    .is_some()
+                if find_source::<crate::streaming::canonical::ProviderCloseRejection>(
+                    error.as_ref(),
+                )
+                .is_some()
                     || crate::session::find_reconstruction_error(error.as_ref()).is_some()
                     || owner_error_is(
-                        &error,
+                        error.as_ref(),
                         "output source does not match its request purpose",
                     ) =>
             {
                 return self.observe(false).await;
             }
-            Err(error) => return Err(error.context("native CloseAuxiliary owner failed")),
+            Err(error) => return Err(context("native CloseAuxiliary owner failed", error)),
         }
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
         let response = crate::config_client::ConfigAccess::local(self.node.clone())
@@ -2162,7 +2168,7 @@ impl NativeCanonicalExecution {
             .await?;
         let rows = response["data"]["AgentOutputSegment"]
             .as_array()
-            .context("auxiliary closure query omitted rows")?;
+            .ok_or("auxiliary closure query omitted rows")?;
         let matching = rows
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
@@ -2171,7 +2177,7 @@ impl NativeCanonicalExecution {
             .filter(|row| row.segment == prepared)
             .collect::<Vec<_>>();
         let [row] = matching.as_slice() else {
-            anyhow::bail!("accepted auxiliary close did not persist one exact closing fact")
+            return Err("accepted auxiliary close did not persist one exact closing fact".into());
         };
         self.segment_ids.insert(row.doc_id.clone(), closing.id);
         self.observe(true).await
@@ -2187,7 +2193,7 @@ impl NativeCanonicalExecution {
             generation: writer_generation,
         } = &item.closing.writer
         else {
-            anyhow::bail!("provider partial close requires a request writer")
+            return Err("provider partial close requires a request writer".into());
         };
         let closing = self.provider_segment(&item.closing, *writer_generation)?;
         let mut header = item
@@ -2252,14 +2258,15 @@ impl NativeCanonicalExecution {
         let message_doc_id = match result {
             Ok(message_doc_id) => message_doc_id,
             Err(error)
-                if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
-                    .is_some()
+                if find_source::<crate::streaming::canonical::ProviderCloseRejection>(
+                    error.as_ref(),
+                )
+                .is_some()
                     || crate::session::find_reconstruction_error(error.as_ref()).is_some() =>
             {
                 return self.observe(false).await;
             }
-            Err(error) => return Err(error.context("native ClosePartial owner failed")),
+            Err(error) => return Err(context("native ClosePartial owner failed", error)),
         };
 
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
@@ -2267,23 +2274,21 @@ impl NativeCanonicalExecution {
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
         )).await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "read partial closure: {:?}",
-            response.errors
-        );
+        if !(!response.has_errors()) {
+            return Err(format!("read partial closure: {:?}", response.errors).into());
+        }
         let rows = response
             .data
             .as_ref()
             .and_then(|data| data["AgentOutputSegment"].as_array())
-            .context("partial closure query omitted rows")?;
+            .ok_or("partial closure query omitted rows")?;
         let closing_row = rows
             .iter()
             .map(crate::session::canonical_rows::decode_output_segment_row)
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .find(|row| row.segment.close.is_some())
-            .context("accepted partial close did not persist its closure")?;
+            .ok_or("accepted partial close did not persist its closure")?;
         self.segment_ids.insert(closing_row.doc_id, item.closing.id);
         if let (Some(doc_id), Some(message)) = (message_doc_id, item.message.as_ref()) {
             self.message_ids.insert(doc_id.clone(), message.header.id);
@@ -2308,23 +2313,23 @@ impl NativeCanonicalExecution {
         message: &LeanCanonicalMessage<LeanPayloadSpec>,
         admissions: &[LeanCanonicalToolAdmission],
     ) -> Result<LeanCanonicalExecutionObservation> {
-        anyhow::ensure!(
-            matches!(
-                closing.close,
-                Some(crate::lean_vocab_test::LeanCanonicalClosure::Closed {
-                    outcome: LeanOutcome::Complete,
-                    ..
-                })
-            ),
-            "native publication owner accepts only complete provider closures"
-        );
+        if !(matches!(
+            closing.close,
+            Some(crate::lean_vocab_test::LeanCanonicalClosure::Closed {
+                outcome: LeanOutcome::Complete,
+                ..
+            })
+        )) {
+            return Err("native publication owner accepts only complete provider closures".into());
+        }
         let sealed = self.provider_segment(closing, generation)?;
         let header = self.protocol_message(message, generation)?;
         for committed in self.segments.iter().filter(|row| row.id == closing.id) {
-            anyhow::ensure!(
-                committed == closing,
-                "modeled replay close differs from its committed physical identity"
-            );
+            if !(committed == closing) {
+                return Err(
+                    "modeled replay close differs from its committed physical identity".into(),
+                );
+            }
         }
         let preceding = self
             .segments
@@ -2400,7 +2405,9 @@ impl NativeCanonicalExecution {
                         }
                         _ => None,
                     })
-                    .context("modeled background admission has no provider-native ToolCall")
+                    .ok_or(BoxError::from(
+                        "modeled background admission has no provider-native ToolCall",
+                    ))
             })
             .collect::<Result<Vec<_>>>()?;
         let tool_deadline_at = self
@@ -2428,18 +2435,20 @@ impl NativeCanonicalExecution {
         let published = match published {
             Ok(value) => value,
             Err(error)
-                if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
-                    .is_some() =>
+                if find_source::<crate::streaming::canonical::ProviderCloseRejection>(
+                    error.as_ref(),
+                )
+                .is_some() =>
             {
                 return self.observe(false).await;
             }
             Err(error)
-                if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderReplayRejection>()
-                    .is_some()
+                if find_source::<crate::streaming::canonical::ProviderReplayRejection>(
+                    error.as_ref(),
+                )
+                .is_some()
                     || owner_error_is(
-                        &error,
+                        error.as_ref(),
                         "provider publication does not bind its request generation",
                     ) =>
             {
@@ -2450,7 +2459,7 @@ impl NativeCanonicalExecution {
                     "native provider publication owner failed: {}",
                     ErrorChain(error.as_ref())
                 );
-                return Err(error.context(detail));
+                return Err(context(detail, error));
             }
         };
         let (stored_header, stored_native) = crate::session::load_canonical_message_from_node(
@@ -2460,36 +2469,40 @@ impl NativeCanonicalExecution {
             Some(&self.node_did),
         )
         .await?;
-        anyhow::ensure!(
-            stored_native == expected_native,
-            "native publication content differs: expected {expected_native:?}, got {stored_native:?}"
-        );
-        anyhow::ensure!(
-            stored_header.message_key == message.key,
-            "native publication key differs: expected {:?}, got {:?}",
-            message.key,
-            stored_header.message_key
-        );
-        anyhow::ensure!(
-            stored_header.sequence == native_sequence(message.sequence)?,
-            "native publication sequence differs: expected {}, got {}",
-            message.sequence,
-            stored_header.sequence
-        );
-        anyhow::ensure!(
-            stored_header.request_doc_id.as_deref() == Some(self.request_doc_id.as_str()),
-            "native publication request binding differs: expected {:?}, got {:?}",
-            self.request_doc_id,
-            stored_header.request_doc_id
-        );
+        if !(stored_native == expected_native) {
+            return Err(format!("native publication content differs: expected {expected_native:?}, got {stored_native:?}").into());
+        }
+        if !(stored_header.message_key == message.key) {
+            return Err(format!(
+                "native publication key differs: expected {:?}, got {:?}",
+                message.key, stored_header.message_key
+            )
+            .into());
+        }
+        if !(stored_header.sequence == native_sequence(message.sequence)?) {
+            return Err(format!(
+                "native publication sequence differs: expected {}, got {}",
+                message.sequence, stored_header.sequence
+            )
+            .into());
+        }
+        if !(stored_header.request_doc_id.as_deref() == Some(self.request_doc_id.as_str())) {
+            return Err(format!(
+                "native publication request binding differs: expected {:?}, got {:?}",
+                self.request_doc_id, stored_header.request_doc_id
+            )
+            .into());
+        }
         let expected_publication = MessagePublication::RequestExecution {
             execution_generation: symbolic_generation(generation),
         };
-        anyhow::ensure!(
-            stored_header.publication == expected_publication,
-            "native publication authority differs: expected {expected_publication:?}, got {:?}",
-            stored_header.publication
-        );
+        if !(stored_header.publication == expected_publication) {
+            return Err(format!(
+                "native publication authority differs: expected {expected_publication:?}, got {:?}",
+                stored_header.publication
+            )
+            .into());
+        }
         self.message_ids
             .insert(published.message_doc_id.clone(), message.header.id);
         self.modeled_message_keys
@@ -2502,10 +2515,11 @@ impl NativeCanonicalExecution {
             self.segment_ids
                 .insert(reference.close_doc_id.clone(), closing.id);
         }
-        anyhow::ensure!(
-            published.accepted_tools.len() == admissions.len(),
-            "native publication admission count differs from modeled acceptance"
-        );
+        if !(published.accepted_tools.len() == admissions.len()) {
+            return Err(
+                "native publication admission count differs from modeled acceptance".into(),
+            );
+        }
         for (accepted, admission) in published.accepted_tools.iter().zip(admissions) {
             self.tool_ids
                 .insert(accepted.tool_call_doc_id.clone(), admission.document);
@@ -2516,39 +2530,38 @@ impl NativeCanonicalExecution {
                     crate::graphql::escape_graphql_string(&accepted.tool_call_doc_id),
                 ))
                 .await;
-            anyhow::ensure!(
-                !response.has_errors(),
-                "read accepted native tool: {:?}",
-                response.errors
-            );
+            if !(!response.has_errors()) {
+                return Err(format!("read accepted native tool: {:?}", response.errors).into());
+            }
             let rows = response
                 .data
                 .as_ref()
                 .and_then(|data| data.get("AgentToolCall"))
                 .and_then(serde_json::Value::as_array)
-                .context("accepted native tool query omitted rows")?;
-            anyhow::ensure!(
-                rows.len() == 1,
-                "accepted native tool is not physically unique"
-            );
-            anyhow::ensure!(
-                rows[0]
-                    .get("request_doc_id")
+                .ok_or("accepted native tool query omitted rows")?;
+            if !(rows.len() == 1) {
+                return Err("accepted native tool is not physically unique".into());
+            }
+            if !(rows[0]
+                .get("request_doc_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(self.request_doc_id.as_str())
+                && rows[0]
+                    .get("lifecycle_state")
                     .and_then(serde_json::Value::as_str)
-                    == Some(self.request_doc_id.as_str())
-                    && rows[0]
-                        .get("lifecycle_state")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(admission.state.as_str()),
-                "accepted native tool readback differs from modeled admission"
-            );
-            anyhow::ensure!(
-                rows[0]
-                    .get("await_mode")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(admission.await_mode.as_str()),
-                "accepted native tool await mode differs from modeled admission"
-            );
+                    == Some(admission.state.as_str()))
+            {
+                return Err("accepted native tool readback differs from modeled admission".into());
+            }
+            if !(rows[0]
+                .get("await_mode")
+                .and_then(serde_json::Value::as_str)
+                == Some(admission.await_mode.as_str()))
+            {
+                return Err(
+                    "accepted native tool await mode differs from modeled admission".into(),
+                );
+            }
         }
         self.observe(true).await
     }
@@ -2558,22 +2571,22 @@ impl NativeCanonicalExecution {
         message: &LeanCanonicalMessage<LeanPayloadSpec>,
         generation: u64,
     ) -> Result<TranscriptMessage> {
-        anyhow::ensure!(message.header.session > 0, "message session is blank");
-        anyhow::ensure!(
-            message.header.request.is_some(),
-            "provider header omitted request"
-        );
-        anyhow::ensure!(
-            message.header.origin.is_none(),
-            "provider header has fork origin"
-        );
-        anyhow::ensure!(
-            matches!(message.header.publication,
+        if !(message.header.session > 0) {
+            return Err("message session is blank".into());
+        }
+        if !(message.header.request.is_some()) {
+            return Err("provider header omitted request".into());
+        }
+        if !(message.header.origin.is_none()) {
+            return Err("provider header has fork origin".into());
+        }
+        if !(matches!(message.header.publication,
                 LeanMessagePublication::RequestExecution { generation: owner }
                 | LeanMessagePublication::RequestRecovery { generation: owner }
-                if owner == generation),
-            "provider header generation conflicts with operation"
-        );
+                if owner == generation))
+        {
+            return Err("provider header generation conflicts with operation".into());
+        }
         let payload = |value: &LeanPayloadSpec| -> Result<PresentedPayload> {
             Ok(PresentedPayload {
                 output: PayloadRef {
@@ -2582,78 +2595,83 @@ impl NativeCanonicalExecution {
                 },
                 presentation: match &value.presentation {
                     LeanPresentation::Full => PayloadPresentation::Full,
-                    LeanPresentation::Composed { .. } => anyhow::bail!(
-                        "composed presentation is not implemented by the bounded adapter"
-                    ),
+                    LeanPresentation::Composed { .. } => {
+                        return Err(
+                            "composed presentation is not implemented by the bounded adapter"
+                                .into(),
+                        )
+                    }
                 },
             })
         };
-        let blocks = message
-            .blocks
-            .iter()
-            .map(|block| -> Result<MessageBlock> {
-                Ok(match block {
-                    LeanMessageBlock::Text { payload: value } => MessageBlock::Text {
-                        text: payload(value)?,
-                    },
-                    LeanMessageBlock::Reasoning { id, parts } => MessageBlock::Reasoning {
-                        id: id.clone(),
-                        parts: parts
-                            .iter()
-                            .map(|part| -> Result<ReasoningPart> {
-                                Ok(match part {
-                                    LeanReasoningPart::Text {
-                                        payload: value,
-                                        signature,
-                                    } => ReasoningPart::Text {
-                                        text: payload(value)?.output,
-                                        signature: signature.clone(),
-                                    },
-                                    LeanReasoningPart::Encrypted { payload: value } => {
-                                        ReasoningPart::Encrypted {
-                                            data: payload(value)?.output,
-                                        }
-                                    }
-                                    LeanReasoningPart::Redacted { payload: value } => {
-                                        ReasoningPart::Redacted {
-                                            data: payload(value)?.output,
-                                        }
-                                    }
-                                    LeanReasoningPart::Summary { payload: value } => {
-                                        ReasoningPart::Summary {
+        let blocks =
+            message
+                .blocks
+                .iter()
+                .map(|block| -> Result<MessageBlock> {
+                    Ok(match block {
+                        LeanMessageBlock::Text { payload: value } => MessageBlock::Text {
+                            text: payload(value)?,
+                        },
+                        LeanMessageBlock::Reasoning { id, parts } => MessageBlock::Reasoning {
+                            id: id.clone(),
+                            parts: parts
+                                .iter()
+                                .map(|part| -> Result<ReasoningPart> {
+                                    Ok(match part {
+                                        LeanReasoningPart::Text {
+                                            payload: value,
+                                            signature,
+                                        } => ReasoningPart::Text {
                                             text: payload(value)?.output,
+                                            signature: signature.clone(),
+                                        },
+                                        LeanReasoningPart::Encrypted { payload: value } => {
+                                            ReasoningPart::Encrypted {
+                                                data: payload(value)?.output,
+                                            }
                                         }
-                                    }
+                                        LeanReasoningPart::Redacted { payload: value } => {
+                                            ReasoningPart::Redacted {
+                                                data: payload(value)?.output,
+                                            }
+                                        }
+                                        LeanReasoningPart::Summary { payload: value } => {
+                                            ReasoningPart::Summary {
+                                                text: payload(value)?.output,
+                                            }
+                                        }
+                                    })
                                 })
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    },
-                    LeanMessageBlock::ToolCall {
-                        doc_id,
-                        id,
-                        call_id,
-                        name,
-                        arguments,
-                        signature,
-                        additional_params,
-                    } => MessageBlock::ToolCall {
-                        tool_call_doc_id: format!("lean-tool-{doc_id}"),
-                        id: id.clone(),
-                        call_id: call_id.clone(),
-                        name: name.clone(),
-                        arguments: payload(arguments)?.output,
-                        signature: signature.clone(),
-                        additional_params: additional_params
-                            .as_deref()
-                            .map(serde_json::from_str)
-                            .transpose()?,
-                    },
-                    _ => anyhow::bail!(
-                        "message block is not implemented by the bounded acceptance adapter"
-                    ),
+                                .collect::<Result<Vec<_>>>()?,
+                        },
+                        LeanMessageBlock::ToolCall {
+                            doc_id,
+                            id,
+                            call_id,
+                            name,
+                            arguments,
+                            signature,
+                            additional_params,
+                        } => MessageBlock::ToolCall {
+                            tool_call_doc_id: format!("lean-tool-{doc_id}"),
+                            id: id.clone(),
+                            call_id: call_id.clone(),
+                            name: name.clone(),
+                            arguments: payload(arguments)?.output,
+                            signature: signature.clone(),
+                            additional_params: additional_params
+                                .as_deref()
+                                .map(serde_json::from_str)
+                                .transpose()?,
+                        },
+                        _ => return Err(
+                            "message block is not implemented by the bounded acceptance adapter"
+                                .into(),
+                        ),
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
         Ok(TranscriptMessage {
             message_key: message.key.clone(),
             session_id: self.session_id.clone(),
@@ -2671,7 +2689,7 @@ impl NativeCanonicalExecution {
                         execution_generation: symbolic_generation(generation),
                     }
                 }
-                _ => anyhow::bail!("provider header has unsupported publication authority"),
+                _ => return Err("provider header has unsupported publication authority".into()),
             },
             outcome: match message.header.outcome {
                 LeanOutcome::Complete => OutputOutcome::Complete,
@@ -2729,7 +2747,7 @@ impl NativeCanonicalExecution {
                 *turn,
                 *attempt,
             ),
-            _ => anyhow::bail!("append output currently supports provider sources only"),
+            _ => return Err("append output currently supports provider sources only".into()),
         };
         let request_doc_id = if record.coordinate.request == self.request_id {
             &self.request_doc_id
@@ -2738,12 +2756,12 @@ impl NativeCanonicalExecution {
                 .as_ref()
                 .filter(|(symbolic, _)| *symbolic == record.coordinate.request)
                 .map(|(_, physical)| physical)
-                .context("provider coordinate names an unmapped physical request")?
+                .ok_or("provider coordinate names an unmapped physical request")?
         };
-        anyhow::ensure!(
-            matches!(&record.writer, LeanCanonicalWriter::Request { generation: writer } if *writer == generation),
-            "append output writer generation conflicts with operation"
-        );
+        if !(matches!(&record.writer, LeanCanonicalWriter::Request { generation: writer } if *writer == generation))
+        {
+            return Err("append output writer generation conflicts with operation".into());
+        }
         let runs = record
             .flush
             .as_ref()
@@ -2775,7 +2793,7 @@ impl NativeCanonicalExecution {
                                 let tool = declaration
                                     .tool
                                     .as_ref()
-                                    .context("argument stream omitted tool identity")?;
+                                    .ok_or("argument stream omitted tool identity")?;
                                 gents_protocol::output::StreamPayload::ToolArguments {
                                     id: tool.id.clone(),
                                     call_id: tool.call_id.clone(),
@@ -2785,9 +2803,9 @@ impl NativeCanonicalExecution {
                             LeanPayloadKind::ToolOutput => {
                                 gents_protocol::output::StreamPayload::ToolOutput
                             }
-                            LeanPayloadKind::Media => anyhow::bail!(
-                                "media append conversion is not implemented in the bounded adapter"
-                            ),
+                            LeanPayloadKind::Media => return Err(BoxError::from(
+                                "media append conversion is not implemented in the bounded adapter",
+                            )),
                         };
                         Ok(gents_protocol::output::StreamDeclaration {
                             block_index: u32::try_from(declaration.block)?,
@@ -2856,18 +2874,17 @@ impl NativeCanonicalExecution {
         symbolic_tool: u64,
         physical_tool: &str,
     ) -> Result<gents_protocol::output::OutputSegment> {
-        anyhow::ensure!(
-            record.coordinate.request == self.request_id,
-            "tool output segment belongs to another request"
-        );
-        anyhow::ensure!(
-            matches!(&record.coordinate.source, LeanCanonicalSource::Tool { call } if *call == symbolic_tool),
-            "tool output segment belongs to another source"
-        );
-        anyhow::ensure!(
-            matches!(&record.writer, LeanCanonicalWriter::Tool { call } if *call == symbolic_tool),
-            "tool output segment has another writer"
-        );
+        if !(record.coordinate.request == self.request_id) {
+            return Err("tool output segment belongs to another request".into());
+        }
+        if !(matches!(&record.coordinate.source, LeanCanonicalSource::Tool { call } if *call == symbolic_tool))
+        {
+            return Err("tool output segment belongs to another source".into());
+        }
+        if !(matches!(&record.writer, LeanCanonicalWriter::Tool { call } if *call == symbolic_tool))
+        {
+            return Err("tool output segment has another writer".into());
+        }
         let runs = record
             .flush
             .as_ref()
@@ -2880,10 +2897,11 @@ impl NativeCanonicalExecution {
                             .declaration
                             .as_ref()
                             .map(|declaration| {
-                                anyhow::ensure!(
-                                    declaration.kind == LeanPayloadKind::ToolOutput,
-                                    "modeled tool source declared a non-tool payload"
-                                );
+                                if !(declaration.kind == LeanPayloadKind::ToolOutput) {
+                                    return Err(BoxError::from(
+                                        "modeled tool source declared a non-tool payload",
+                                    ));
+                                }
                                 Ok(gents_protocol::output::StreamDeclaration {
                                     block_index: u32::try_from(declaration.block)?,
                                     part_index: u32::try_from(declaration.part)?,

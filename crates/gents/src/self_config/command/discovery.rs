@@ -27,14 +27,13 @@ impl ConfigCommandTool {
             .map(crate::tool_surface::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
-        anyhow::ensure!(
-            mode != crate::tool_surface::FileToolMode::Off,
-            "configuration discovery requires effective file read permission on the invoking agent"
-        );
+        if mode == crate::tool_surface::FileToolMode::Off {
+            return Err(CommandError::DiscoveryFileReadOff.into());
+        }
         let root = effective
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
-            .context("configuration discovery requires an effective tool root")?;
+            .ok_or(CommandError::DiscoveryToolRoot)?;
         let context = crate::toolset::ToolContext::new(root.into(), false)?;
         let sources = requested
             .into_iter()
@@ -48,7 +47,7 @@ impl ConfigCommandTool {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        discover_configuration_within(
+        Ok(discover_configuration_within(
             &DiscoveryRequest {
                 sources,
                 limits: DiscoveryLimits::default(),
@@ -56,56 +55,61 @@ impl ConfigCommandTool {
             &context.root(),
         )
         .to_model_json_pretty()
-        .context("serializing sanitized configuration discovery inventory")
+        .map_err(CommandError::DiscoveryInventory)?)
     }
 }
 
-fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
-    anyhow::ensure!(
-        argv.first().is_some_and(|value| value == "scan"),
-        "use config discovery scan --source SOURCE_ID claude|codex|grok user|project PATH"
-    );
+fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>, CommandError> {
+    if !argv.first().is_some_and(|value| value == "scan") {
+        return Err(CommandError::DiscoveryUsage);
+    }
     let mut index = 1;
     let mut sources = Vec::new();
     while index < argv.len() {
-        anyhow::ensure!(
-            argv.get(index).is_some_and(|value| value == "--source")
-                && argv.len().saturating_sub(index) >= 5,
-            "each discovery source must be --source SOURCE_ID claude|codex|grok user|project PATH"
-        );
+        if !(argv.get(index).is_some_and(|value| value == "--source")
+            && argv.len().saturating_sub(index) >= 5)
+        {
+            return Err(CommandError::DiscoverySourceUsage);
+        }
         let source_id = argv[index + 1].clone();
-        anyhow::ensure!(
-            !source_id.is_empty()
-                && source_id.len() <= 96
-                && source_id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')),
-            "discovery source ID must contain only ASCII letters, digits, '.', '_', or '-' and be at most 96 bytes"
-        );
+        if !(!source_id.is_empty()
+            && source_id.len() <= 96
+            && source_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+        {
+            return Err(CommandError::DiscoverySourceId);
+        }
         let kind = match argv[index + 2].as_str() {
             "claude" => DiscoverySourceKind::Claude,
             "codex" => DiscoverySourceKind::Codex,
             "grok" => DiscoverySourceKind::Grok,
-            other => anyhow::bail!(
-                "unsupported discovery source kind {other:?}; expected claude, codex, or grok"
-            ),
+            other => {
+                return Err(CommandError::DiscoverySourceKind {
+                    kind: other.to_owned(),
+                })
+            }
         };
         let scope = match argv[index + 3].as_str() {
             "user" => DiscoveryScope::User,
             "project" => DiscoveryScope::Project,
-            other => anyhow::bail!(
-                "unsupported discovery source scope {other:?}; expected user or project"
-            ),
+            other => {
+                return Err(CommandError::DiscoverySourceScope {
+                    scope: other.to_owned(),
+                })
+            }
         };
         let path = argv[index + 4].clone();
-        anyhow::ensure!(
-            !path.is_empty() && path.len() <= MAX_SOURCE_PATH_BYTES,
-            "discovery source path must be non-empty and at most {MAX_SOURCE_PATH_BYTES} bytes"
-        );
-        anyhow::ensure!(
-            sources.len() < DEFAULT_MAX_DISCOVERY_SOURCES,
-            "configuration discovery accepts at most {DEFAULT_MAX_DISCOVERY_SOURCES} explicit sources"
-        );
+        if path.is_empty() || path.len() > MAX_SOURCE_PATH_BYTES {
+            return Err(CommandError::DiscoverySourcePath {
+                max: MAX_SOURCE_PATH_BYTES,
+            });
+        }
+        if sources.len() >= DEFAULT_MAX_DISCOVERY_SOURCES {
+            return Err(CommandError::DiscoverySourceLimit {
+                max: DEFAULT_MAX_DISCOVERY_SOURCES,
+            });
+        }
         sources.push(RequestedSource {
             source_id,
             kind,
@@ -114,9 +118,8 @@ fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
         });
         index += 5;
     }
-    anyhow::ensure!(
-        !sources.is_empty(),
-        "configuration discovery requires at least one explicit --source"
-    );
+    if sources.is_empty() {
+        return Err(CommandError::DiscoveryNoSources);
+    }
     Ok(sources)
 }

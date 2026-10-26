@@ -1875,7 +1875,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents/src/hook/tests/goal_context.rs",
     "crates/gents/src/interrupt.rs",
     "crates/gents/src/interrupt/queue_tests.rs",
-    "crates/gents/src/lean_vocab_test/canonical_execution/native_adapter.rs",
     "crates/gents/src/lib.rs",
     "crates/gents/src/lifecycle.rs",
     "crates/gents/src/lifecycle/background_wake_recovery.rs",
@@ -1933,10 +1932,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents/src/schema_tool/mod.rs",
     "crates/gents/src/self_config/agent_management.rs",
     "crates/gents/src/self_config/command.rs",
-    "crates/gents/src/self_config/command/authoring.rs",
-    "crates/gents/src/self_config/command/crud.rs",
-    "crates/gents/src/self_config/command/datastore.rs",
-    "crates/gents/src/self_config/command/discovery.rs",
     "crates/gents/src/self_config/command/skill.rs",
     "crates/gents/src/self_config/mod.rs",
     "crates/gents/src/self_config/ops.rs",
@@ -1979,7 +1974,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents/tests/e2e_triggers/workspace_change_unit_cycle.rs",
     "crates/gents/tests/support/interrupt.rs",
     "crates/gents/tests/support/live_inference.rs",
-    "crates/gents/tests/support/snapshots.rs",
 ];
 
 /// Workspace members whose manifests still depend on `anyhow`; "Cargo.toml"

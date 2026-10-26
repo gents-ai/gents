@@ -162,7 +162,9 @@ impl ConfigCommandTool {
         let root = effective
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
-            .with_context(|| format!("pack {operation} requires an effective tool root"))?;
+            .ok_or_else(|| CommandError::AuthoringToolRoot {
+                operation: operation.to_owned(),
+            })?;
         Ok(crate::toolset::ToolContext::new(root.into(), false)?)
     }
 
@@ -206,12 +208,15 @@ impl ConfigCommandTool {
     async fn verify(&self, pack: &str) -> Result<String> {
         let context = self.authoring_paths("verify", false).await?;
         let path = context.resolve_existing_file(pack)?;
-        anyhow::ensure!(
-            path.extension()
-                .is_some_and(|extension| extension == crate::pack_archive::EXTENSION),
-            "pack verify accepts a built .pack artifact; {} is not one",
-            context.display_path(&path)
-        );
+        if !path
+            .extension()
+            .is_some_and(|extension| extension == crate::pack_archive::EXTENSION)
+        {
+            return Err(CommandError::VerifyNotPackArtifact {
+                path: context.display_path(&path),
+            }
+            .into());
+        }
         let header = verify_pack_file(&path)?;
         let resolved = context.display_path(&path);
         Ok(ordered! {

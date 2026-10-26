@@ -94,7 +94,10 @@ impl ConfigCommandTool {
             return Ok(None);
         }
         if verb == "create" && !exact {
-            bail!("{resource} create requires a new document ID in target_id or after create in argv; fields go in set");
+            return Err(CommandError::CreateNeedsId {
+                resource: resource.to_owned(),
+            }
+            .into());
         }
         if !exact
             && (verb == "update" && matches!(resource, "context" | "tools")
@@ -107,33 +110,42 @@ impl ConfigCommandTool {
             self.ensure_crud_resource(target)?;
         }
         if verb == "list" {
-            anyhow::ensure!(!preview, "list is read-only; omit preview");
+            if preview {
+                return Err(CommandError::ListPreview.into());
+            }
             let parsed = ParsedArgs::parse(args)?;
-            anyhow::ensure!(
-                parsed.positionals.is_empty()
-                    && parsed.switches.is_empty()
-                    && parsed
-                        .options
-                        .keys()
-                        .all(|key| matches!(key.as_str(), "limit" | "cursor")),
-                "{resource} list accepts only options.limit and options.cursor"
-            );
+            if !(parsed.positionals.is_empty()
+                && parsed.switches.is_empty()
+                && parsed
+                    .options
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "limit" | "cursor")))
+            {
+                return Err(CommandError::ListOptions {
+                    resource: resource.to_owned(),
+                }
+                .into());
+            }
             return self
                 .inference_inventory(target, parse_limit(&parsed)?, parsed.one("cursor")?)
                 .await
                 .map(Some);
         }
         if verb == "get" && !exact && resource == "context" {
-            anyhow::ensure!(!preview, "get is read-only; omit preview");
+            if preview {
+                return Err(CommandError::GetPreview.into());
+            }
             let mut bound = vec!["get".into()];
             bound.extend_from_slice(args);
             return self.agent_context(&bound).await.map(Some);
         }
         if verb == "get" {
-            anyhow::ensure!(
-                !preview && args.len() == 1,
-                "{resource} get requires target_id or one document ID after get in argv; use {resource} list to discover IDs"
-            );
+            if preview || args.len() != 1 {
+                return Err(CommandError::GetRequiresId {
+                    resource: resource.to_owned(),
+                }
+                .into());
+            }
             return self.exact_read(target, &args[0]).await.map(Some);
         }
         if !exact
@@ -155,10 +167,9 @@ impl ConfigCommandTool {
         let create = verb == "create";
         let (agent, rest) = extract_agent_target(&args[1..])?;
         let (allow_drop, rest) = extract_allow_drop(&rest)?;
-        anyhow::ensure!(
-            allow_drop.is_empty() || target == SelfConfigTarget::Tools,
-            "allow-drop applies only to tools"
-        );
+        if !(allow_drop.is_empty() || target == SelfConfigTarget::Tools) {
+            return Err(CommandError::AllowDropNotTools.into());
+        }
         let mut patch = if create && rest.is_empty() {
             Vec::new()
         } else if target == SelfConfigTarget::DatastoreToolSurface {
@@ -182,7 +193,12 @@ impl ConfigCommandTool {
             self.automation_core(target, &id, create, agent.as_deref(), &patch)
                 .await?
         } else {
-            anyhow::ensure!(agent.is_none(), "{resource} with an exact ID does not accept options.agent; the ID identifies the document");
+            if agent.is_some() {
+                return Err(CommandError::ExactIdAgentOption {
+                    resource: resource.to_owned(),
+                }
+                .into());
+            }
             self.core.clone()
         };
         let contextual = matches!(
@@ -230,14 +246,28 @@ impl ConfigCommandTool {
                 Box::pin(async move {
                     if !create {
                         if bound {
-                            anyhow::ensure!(anchor.ref_id(target.unique_field()).as_deref() == Some(id.as_str()), "document binding changed; get the agent again before updating {id:?}");
+                            if anchor.ref_id(target.unique_field()).as_deref() != Some(id.as_str())
+                            {
+                                return Err(CommandError::DocumentBindingChanged {
+                                    id: id.clone(),
+                                }
+                                .into());
+                            }
                         } else {
                             let owner = anchor
                                 .doc
                                 .get("node_did")
                                 .and_then(Value::as_str)
-                                .context("missing owner")?;
-                            anyhow::ensure!(document_agent_in_txn(txn, target, owner, &id).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current agent");
+                                .ok_or(CommandError::MissingOwner)?;
+                            if document_agent_in_txn(txn, target, owner, &id)
+                                .await?
+                                .is_some()
+                            {
+                                return Err(CommandError::DocumentSelectedDuringCall {
+                                    id: id.clone(),
+                                }
+                                .into());
+                            }
                         }
                     }
                     validation.await
@@ -342,8 +372,9 @@ impl ConfigCommandTool {
         if matches!(
             target,
             SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
-        ) {
-            anyhow::ensure!(self.categories.contains("node"), "exact-ID context/tools operations require the agent catalog grant; use options.agent to edit your selected configuration");
+        ) && !self.categories.contains("node")
+        {
+            return Err(CommandError::ExactIdCatalogRequired.into());
         }
         if target == SelfConfigTarget::AgentContext {
             return Ok(());
@@ -367,35 +398,39 @@ impl ConfigCommandTool {
 
     pub(super) async fn batch(&self, argv: &[String]) -> Result<String> {
         let parsed = ParsedArgs::parse(&argv[1..])?;
-        anyhow::ensure!(
-            parsed.positionals.is_empty()
-                && parsed.switches.is_empty()
-                && parsed.options.keys().all(|key| key == "operations"),
-            "batch accepts only options.operations: an array of config calls"
-        );
+        if !(parsed.positionals.is_empty()
+            && parsed.switches.is_empty()
+            && parsed.options.keys().all(|key| key == "operations"))
+        {
+            return Err(CommandError::BatchOptions.into());
+        }
         let source = parsed
             .one("operations")?
-            .context("batch requires options.operations: an array of config calls")?;
-        anyhow::ensure!(source.len() <= 128 * 1024, "batch is limited to 128 KiB");
-        let operations: Vec<ConfigCommandParams> = serde_json::from_str(source).context("options.operations must be an array of config calls with argv, target_id, set, clear and options")?;
-        anyhow::ensure!(
-            !operations.is_empty() && operations.len() <= 64,
-            "batch requires 1..64 operations"
-        );
+            .ok_or(CommandError::BatchOperationsMissing)?;
+        if source.len() > 128 * 1024 {
+            return Err(CommandError::BatchTooLarge.into());
+        }
+        let operations: Vec<ConfigCommandParams> =
+            serde_json::from_str(source).map_err(CommandError::BatchOperationsJson)?;
+        if operations.is_empty() || operations.len() > 64 {
+            return Err(CommandError::BatchCount.into());
+        }
         let commands = operations
             .into_iter()
             .enumerate()
             .map(|(index, call)| {
                 let argv = call
                     .into_argv()
-                    .with_context(|| format!("batch item {index}; no operations ran"))?;
-                anyhow::ensure!(
-                    argv.first().is_none_or(|word| word != "batch"),
-                    "batch item {index}: nested batches are not supported; no operations ran"
-                );
+                    .map_err(|source| CommandError::BatchItemArgv {
+                        index,
+                        source: Box::new(source),
+                    })?;
+                if argv.first().is_some_and(|word| word == "batch") {
+                    return Err(CommandError::BatchNested { index });
+                }
                 Ok(argv)
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, CommandError>>()?;
         let mut results = Vec::new();
         for (index, argv) in commands.iter().enumerate() {
             let child = Self {
@@ -449,10 +484,10 @@ async fn document_referrers(
     };
     let query = format!("{{ {collection}(filter: {{node_did: {{_eq: \"{}\"}}, {field}: {{_eq: \"{}\"}}}}) {{{key}}} }}", escape_graphql_string(owner), escape_graphql_string(id));
     let response = txn.execute(&query).await?;
-    response["data"][collection]
+    Ok(response["data"][collection]
         .as_array()
         .cloned()
-        .context("reference query missing rows")
+        .ok_or(CommandError::ReferenceRowsMissing)?)
 }
 
 async fn document_agent_in_txn(
@@ -462,7 +497,9 @@ async fn document_agent_in_txn(
     id: &str,
 ) -> Result<Option<String>> {
     let rows = document_referrers(txn, target, owner, id).await?;
-    anyhow::ensure!(rows.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration");
+    if rows.len() > 1 {
+        return Err(CommandError::SharedTargetConfiguration.into());
+    }
     let Some(row) = rows.first() else {
         return Ok(None);
     };
@@ -470,22 +507,24 @@ async fn document_agent_in_txn(
         return Ok(Some(
             row["agent_id"]
                 .as_str()
-                .context("referring agent ID missing")?
+                .ok_or(CommandError::ReferringAgentMissing)?
                 .to_owned(),
         ));
     }
     let context = row["context_id"]
         .as_str()
-        .context("referring context ID missing")?;
+        .ok_or(CommandError::ReferringContextMissing)?;
     let agents = document_referrers(txn, SelfConfigTarget::AgentContext, owner, context).await?;
-    anyhow::ensure!(agents.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration");
-    agents
+    if agents.len() > 1 {
+        return Err(CommandError::SharedTargetConfiguration.into());
+    }
+    Ok(agents
         .first()
         .map(|row| {
             row["agent_id"]
                 .as_str()
                 .map(str::to_owned)
-                .context("referring agent ID missing")
+                .ok_or(CommandError::ReferringAgentMissing)
         })
-        .transpose()
+        .transpose()?)
 }

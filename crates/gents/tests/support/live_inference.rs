@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents::config_client::DesiredStateApplyPlan;
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{
@@ -22,6 +21,8 @@ use serde::Deserialize;
 
 use crate::support::interrupt::BootedAgent;
 use crate::support::{first_optional_row, TestDb};
+
+type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";
 
@@ -68,11 +69,17 @@ impl InferenceTarget {
 
     fn load_path(name: String, path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)
-            .with_context(|| format!("reading inference target {}", path.display()))?;
+            .map_err(|error| format!("reading inference target {}: {error}", path.display()))?;
         let value = serde_json::from_slice(&bytes)
-            .with_context(|| format!("parsing inference target {}", path.display()))?;
-        Self::decode(name, value)
-            .with_context(|| format!("invalid inference target {}", path.display()))
+            .map_err(|error| format!("parsing inference target {}: {error}", path.display()))?;
+        Self::decode(name, value).map_err(|error| {
+            format!(
+                "invalid inference target {}: {}",
+                path.display(),
+                ErrorChain(&*error)
+            )
+            .into()
+        })
     }
 
     pub fn decode(name: String, value: serde_json::Value) -> Result<Self> {
@@ -84,25 +91,31 @@ impl InferenceTarget {
             // Targets are literal documents: interpolating the process
             // environment could copy secrets into endpoints, reports or the DB.
             &|_| None,
-            &|_, _, reference| anyhow::bail!("inference targets have no sidecars: {reference}"),
+            &|_, _, reference| {
+                Err(anyhow::anyhow!(
+                    "inference targets have no sidecars: {reference}"
+                ))
+            },
         )?;
         let authored = serde_json::to_value(&config)?;
-        let authored = authored.as_object().context("configuration bundle")?;
+        let authored = authored.as_object().ok_or("configuration bundle")?;
         for key in authored.keys() {
-            anyhow::ensure!(
-                matches!(
-                    key.as_str(),
-                    "node" | "inference_backends" | "inference_profiles"
-                ),
-                "an inference target authors only one backend and one profile, not {key}"
-            );
+            if !matches!(
+                key.as_str(),
+                "node" | "inference_backends" | "inference_profiles"
+            ) {
+                return Err(format!(
+                    "an inference target authors only one backend and one profile, not {key}"
+                )
+                .into());
+            }
         }
-        anyhow::ensure!(
-            authored["node"]
-                .as_object()
-                .is_some_and(|node| node.len() == 1),
-            "an inference target's node must be empty; the test binds its node"
-        );
+        if !authored["node"]
+            .as_object()
+            .is_some_and(|node| node.len() == 1)
+        {
+            return Err("an inference target's node must be empty; the test binds its node".into());
+        }
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
         ConfigReferences::from_documents(
             TARGET_VALIDATION_OWNER,
@@ -112,21 +125,25 @@ impl InferenceTarget {
         )?
         .validate()?;
         let [backend] = <[InferenceBackend; 1]>::try_from(config.inference_backends)
-            .map_err(|_| anyhow::anyhow!("an inference target has exactly one backend"))?;
+            .map_err(|_| "an inference target has exactly one backend")?;
         let [profile] = <[InferenceProfile; 1]>::try_from(config.inference_profiles)
-            .map_err(|_| anyhow::anyhow!("an inference target has exactly one profile"))?;
+            .map_err(|_| "an inference target has exactly one profile")?;
         backend.validate()?;
         profile.validate()?;
-        anyhow::ensure!(
-            !matches!(backend.auth, BackendAuth::NodeOAuth { .. }),
-            "NodeOAuth targets are not supported for fresh-node evals: \
-             each trial's new node has no OAuthCredential"
-        );
-        anyhow::ensure!(
-            !matches!(backend.auth, BackendAuth::ApiKey { .. }),
-            "inference targets select credentials by environment variable, never an inline API key"
-        );
-        anyhow::ensure!(backend.enabled, "inference target backend is disabled");
+        if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
+            return Err("NodeOAuth targets are not supported for fresh-node evals: \
+                 each trial's new node has no OAuthCredential"
+                .into());
+        }
+        if matches!(backend.auth, BackendAuth::ApiKey { .. }) {
+            return Err(
+                "inference targets select credentials by environment variable, never an inline API key"
+                    .into(),
+            );
+        }
+        if !backend.enabled {
+            return Err("inference target backend is disabled".into());
+        }
         Ok(Self {
             name,
             backend,
@@ -136,7 +153,7 @@ impl InferenceTarget {
 
     pub fn selected_all() -> Result<Vec<Self>> {
         let value = std::env::var(EVAL_TARGET_VARIABLE).map_err(|_| {
-            anyhow::anyhow!(
+            format!(
                 "set {EVAL_TARGET_VARIABLE} to one or more inference targets (names in {} or paths)",
                 targets_dir().display()
             )
@@ -165,11 +182,13 @@ impl InferenceTarget {
 
     pub fn selected() -> Result<Self> {
         let mut targets = Self::selected_all()?;
-        anyhow::ensure!(
-            targets.len() == 1,
-            "this live test runs against one inference target; {EVAL_TARGET_VARIABLE} names {}",
-            targets.len()
-        );
+        if targets.len() != 1 {
+            return Err(format!(
+                "this live test runs against one inference target; {EVAL_TARGET_VARIABLE} names {}",
+                targets.len()
+            )
+            .into());
+        }
         Ok(targets.remove(0))
     }
 

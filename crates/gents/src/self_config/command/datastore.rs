@@ -1,6 +1,8 @@
 use super::*;
 
-pub(super) fn mailbox_entries(policy: crate::mailbox::MailboxNotificationPolicy) -> Result<Value> {
+pub(super) fn mailbox_entries(
+    policy: crate::mailbox::MailboxNotificationPolicy,
+) -> Result<Value, CommandError> {
     policy.validate()?;
     let mut declaration = crate::mailbox::canonical_mailbox_write_decl();
     declaration.notification = Some(policy);
@@ -9,11 +11,11 @@ pub(super) fn mailbox_entries(policy: crate::mailbox::MailboxNotificationPolicy)
     )]))
 }
 
-pub(super) fn surface_patch(argv: &[String]) -> Result<SelfConfigPatch> {
+pub(super) fn surface_patch(argv: &[String]) -> Result<SelfConfigPatch, CommandError> {
     let mut parsed = ParsedArgs::parse(argv)?;
     if let Some(policy) = parsed.one("mailbox")? {
-        let policy: crate::mailbox::MailboxNotificationPolicy = serde_json::from_str(policy)
-            .context("--mailbox requires a notification policy JSON object")?;
+        let policy: crate::mailbox::MailboxNotificationPolicy =
+            serde_json::from_str(policy).map_err(CommandError::MailboxPolicyJson)?;
         let entries = mailbox_entries(policy)?;
         parsed.options.remove("mailbox");
         parsed
@@ -22,10 +24,7 @@ pub(super) fn surface_patch(argv: &[String]) -> Result<SelfConfigPatch> {
             .or_default()
             .push(format!("entries={entries}"));
     }
-    Ok(parse_patch_args(
-        parsed,
-        SelfConfigTarget::DatastoreToolSurface,
-    )?)
+    parse_patch_args(parsed, SelfConfigTarget::DatastoreToolSurface)
 }
 
 #[test]
@@ -66,22 +65,22 @@ impl ConfigCommandTool {
         let verb = argv
             .first()
             .map(String::as_str)
-            .context("see [\"help\",\"datastore\"]")?;
+            .ok_or(CommandError::DatastoreSeeHelp)?;
         let listing = !preview && (verb == "list" || verb == "get" && argv.len() == 1);
-        anyhow::ensure!(
-            !listing,
-            "surface IDs are listed in an agent's Tools: read {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}}, then [\"datastore\",\"get\",SURFACE_ID] for one of its datastore.datastore_tool_surface_ids"
-        );
+        if listing {
+            return Err(CommandError::DatastoreListing.into());
+        }
         let id = required_resource_id(argv.get(1), "SURFACE_ID")?;
         let target = SelfConfigTarget::DatastoreToolSurface;
         if verb == "get" && !preview {
-            anyhow::ensure!(argv.len() == 2, "datastore get accepts only SURFACE_ID");
+            if argv.len() != 2 {
+                return Err(CommandError::DatastoreGetArgs.into());
+            }
             return self.exact_read(target, id).await;
         }
-        anyhow::ensure!(
-            matches!(verb, "create" | "edit"),
-            "see [\"help\",\"datastore\"]; expected create or edit"
-        );
+        if !matches!(verb, "create" | "edit") {
+            return Err(CommandError::DatastoreVerb.into());
+        }
         let mut request = ApplyRequest::new(target, surface_patch(&argv[2..])?);
         let surface_id = id.clone();
         request.resolve_unique = Box::new(move |_| Ok(surface_id.clone()));

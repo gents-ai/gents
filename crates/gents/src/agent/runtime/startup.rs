@@ -3,7 +3,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -14,13 +14,61 @@ use super::context::{RuntimeContext, StartupBarrier};
 use crate::admission::{AdmissionRegistry, BackendAdmissionConfig};
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{
-    DocumentResolveContext, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
+    AgentError, DocumentResolveContext, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
 };
 use crate::backend_registry;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
-use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
-use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::migration::RuntimeMigrationError;
+use crate::node_readiness_publisher::NodeReadinessPublisherError;
+use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, RuntimeSnapshotError};
+use crate::runtime_status::{ReconcilePhase, RuntimeStatusError, RuntimeStatusHandle};
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RuntimeStartupError {
+    #[error("durably publish runtime Ready state")]
+    ReadyPublish(#[source] RuntimeStatusError),
+    #[error(transparent)]
+    RuntimeStatus(#[from] RuntimeStatusError),
+    #[error(transparent)]
+    ReadinessDemotion(#[from] NodeReadinessPublisherError),
+    #[error("{error}")]
+    DemotionPublish { error: String },
+    #[error("initialize runtime agent_config readiness")]
+    InitializeReadiness(#[source] RuntimeStatusError),
+    #[error("ensure runtime schema migrations")]
+    SchemaMigrations(#[source] RuntimeMigrationError),
+    #[error("background task join failed: {error}")]
+    BackgroundTaskJoin { error: tokio::task::JoinError },
+    #[error("background task join failed during shutdown: {error}")]
+    BackgroundTaskJoinDuringShutdown { error: tokio::task::JoinError },
+    #[error("{name} task join failed during shutdown: {error}")]
+    OwnedTaskJoinDuringShutdown {
+        name: &'static str,
+        error: tokio::task::JoinError,
+    },
+    #[error("runtime snapshot observer join failed during shutdown: {error}")]
+    SnapshotObserverJoinDuringShutdown { error: tokio::task::JoinError },
+    #[error("missing tool surface for agent_config {agent_id}")]
+    MissingToolSurface { agent_id: String },
+    #[error("agent {node_did} has no runnable agents at startup")]
+    NoRunnableAgents { node_did: String },
+    #[error("agent {node_did} has no runnable agents at startup due to invalid configuration ({blocking})")]
+    NoRunnableAgentsInvalidConfiguration { node_did: String, blocking: String },
+    #[error("validate agent_config readiness source for {node_did}")]
+    ValidateReadinessSource {
+        node_did: String,
+        #[source]
+        source: RuntimeSnapshotError,
+    },
+    #[error("agent_config {agent_id} references missing backend {backend_id}")]
+    MissingBackend {
+        agent_id: String,
+        backend_id: String,
+    },
+    #[error("backend observation disappeared during admission resolution")]
+    BackendObservationMissing,
+}
 
 enum BackgroundTaskResult {
     Router(Result<()>),
@@ -77,7 +125,7 @@ struct StartupSlotFailurePolicy {
     runtime_status: RuntimeStatusHandle,
     admission_gate: super::router::RuntimeAdmissionGate,
     runtime_cancel: CancellationToken,
-    fatal_error: mpsc::UnboundedSender<anyhow::Error>,
+    fatal_error: mpsc::UnboundedSender<RuntimeStartupError>,
     observer: Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     budget: u32,
 }
@@ -131,7 +179,7 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
                     );
                 }
                 self.runtime_cancel.cancel();
-                return Err(anyhow!(rendered));
+                return Err(RuntimeStartupError::DemotionPublish { error: rendered }.into());
             }
         };
         if !applied {
@@ -189,14 +237,15 @@ impl RuntimeLifecycleCoordinator {
         }
     }
 
-    async fn become_ready(&self) -> Result<bool> {
+    async fn become_ready(&self) -> Result<bool, RuntimeStartupError> {
         let closing = self.closing.lock().await;
         if *closing {
             return Ok(false);
         }
         self.runtime_status
             .set_process_state_durable(ProcessLifecycleState::Ready)
-            .await?;
+            .await
+            .map_err(RuntimeStartupError::ReadyPublish)?;
         self.admission_gate.open().await;
         if let Some(observer) = &self.observer {
             observer.on_process_state_change(ProcessLifecycleState::Ready);
@@ -204,7 +253,7 @@ impl RuntimeLifecycleCoordinator {
         Ok(true)
     }
 
-    async fn begin_shutdown(&self) -> Result<()> {
+    async fn begin_shutdown(&self) -> Result<(), RuntimeStartupError> {
         let mut closing = self.closing.lock().await;
         if *closing {
             return Ok(());
@@ -220,7 +269,7 @@ impl RuntimeLifecycleCoordinator {
         Ok(())
     }
 
-    async fn finish_shutdown(&self) -> Result<()> {
+    async fn finish_shutdown(&self) -> Result<(), RuntimeStartupError> {
         let _closing = self.closing.lock().await;
         self.runtime_status
             .set_process_state_durable(ProcessLifecycleState::Shutdown)
@@ -238,7 +287,7 @@ pub(in crate::agent) async fn run_agent(
 ) -> Result<()> {
     crate::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
-        .context("ensure runtime schema migrations")?;
+        .map_err(RuntimeStartupError::SchemaMigrations)?;
     let (runtime_status_owner, runtime_status) =
         RuntimeStatusHandle::start(agent.node.clone(), agent.node_did().to_string());
     run_agent_with_runtime_status(
@@ -279,7 +328,7 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
 ) -> Result<()> {
     crate::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
-        .context("ensure runtime schema migrations")?;
+        .map_err(RuntimeStartupError::SchemaMigrations)?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         agent.node.clone(),
         agent.node_did().to_string(),
@@ -318,9 +367,7 @@ async fn run_agent_with_runtime_status(
             )
             .await
         }
-        Err(error) => {
-            Err(anyhow::Error::new(error).context("initialize runtime agent_config readiness"))
-        }
+        Err(error) => Err(RuntimeStartupError::InitializeReadiness(error).into()),
     };
 
     finish_run_agent(
@@ -338,7 +385,7 @@ async fn finish_run_agent(
     runtime_status: RuntimeStatusHandle,
     terminal_observer: Option<Arc<dyn crate::agent::ProcessLifecycleObserver>>,
 ) -> Result<()> {
-    let mut teardown_error = None;
+    let mut teardown_error: Option<RuntimeStatusError> = None;
     let process_state = runtime_status.readiness().observation().process_state();
     if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::Shutdown {
         if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::ShuttingDown
@@ -391,7 +438,7 @@ async fn run_agent_owned(
 ) -> Result<()> {
     let cancel = CancellationToken::new();
     let _cancel_on_drop = cancel.clone().drop_guard();
-    let (fatal_error_tx, mut fatal_error_rx) = mpsc::unbounded_channel();
+    let (fatal_error_tx, mut fatal_error_rx) = mpsc::unbounded_channel::<RuntimeStartupError>();
     let (runtime_shutdown_tx, shutdown) = watch::channel(false);
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Resolving)
@@ -478,8 +525,7 @@ async fn run_agent_owned(
     *agent
         .enrollment_authority
         .write()
-        .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))? =
-        Some(enrollment_handle.clone());
+        .map_err(|_| AgentError::EnrollmentAuthorityUnavailable)? = Some(enrollment_handle.clone());
     let lsp_pool = tool_runtime.lsp_pool.clone();
     let job_driver =
         crate::plugin_job::driver::JobDriver::new(crate::plugin_job::driver::JobRuntime {
@@ -747,8 +793,7 @@ async fn run_agent_owned(
             Ok(ready) => ready,
             Err(error) => {
                 tracing::error!(error = %error, "failed to durably publish runtime readiness");
-                let _ = readiness_fatal_error
-                    .send(error.context("durably publish runtime Ready state"));
+                let _ = readiness_fatal_error.send(error);
                 return;
             }
         };
@@ -994,21 +1039,21 @@ async fn run_agent_owned(
         });
     }
 
-    let result = tokio::select! {
+    let result: Result<()> = tokio::select! {
         biased;
-        Some(error) = fatal_error_rx.recv() => Err(error),
+        Some(error) = fatal_error_rx.recv() => Err(error.into()),
         _ = external_shutdown.changed() => Ok(()),
         Some(joined) = background_tasks.join_next() => match joined {
             Ok(task) => task.into_result(),
-            Err(error) => Err(anyhow!("background task join failed: {error}")),
+            Err(error) => Err(RuntimeStartupError::BackgroundTaskJoin { error }.into()),
         },
         else => Ok(()),
     };
 
-    let mut teardown_error = None;
+    let mut teardown_error: Option<anyhow::Error> = None;
     if let Err(error) = lifecycle.begin_shutdown().await {
         tracing::error!(error = %error, "failed to begin ordered runtime shutdown");
-        teardown_error = Some(error);
+        teardown_error = Some(error.into());
     }
 
     runtime_shutdown_tx.send_replace(true);
@@ -1021,9 +1066,9 @@ async fn run_agent_owned(
     while let Some(joined) = background_tasks.join_next().await {
         let task_result = match joined {
             Ok(task) => task.into_result(),
-            Err(error) => Err(anyhow!(
-                "background task join failed during shutdown: {error}"
-            )),
+            Err(error) => {
+                Err(RuntimeStartupError::BackgroundTaskJoinDuringShutdown { error }.into())
+            }
         };
         if let Err(error) = task_result {
             tracing::error!(error = %error, "background task exited during shutdown");
@@ -1044,7 +1089,8 @@ async fn run_agent_owned(
         if let Err(error) = joined {
             tracing::error!(name, error = %error, "owned runtime task join failed during shutdown");
             if teardown_error.is_none() {
-                teardown_error = Some(anyhow!("{name} task join failed during shutdown: {error}"));
+                teardown_error =
+                    Some(RuntimeStartupError::OwnedTaskJoinDuringShutdown { name, error }.into());
             }
         }
     }
@@ -1052,9 +1098,8 @@ async fn run_agent_owned(
         if let Err(error) = handle.await {
             tracing::error!(error = %error, "runtime snapshot observer join failed during shutdown");
             if teardown_error.is_none() {
-                teardown_error = Some(anyhow!(
-                    "runtime snapshot observer join failed during shutdown: {error}"
-                ));
+                teardown_error =
+                    Some(RuntimeStartupError::SnapshotObserverJoinDuringShutdown { error }.into());
             }
         }
     }
@@ -1063,7 +1108,7 @@ async fn run_agent_owned(
     if let Err(error) = lifecycle.finish_shutdown().await {
         tracing::error!(error = %error, "failed to finish ordered runtime shutdown");
         if teardown_error.is_none() {
-            teardown_error = Some(error);
+            teardown_error = Some(error.into());
         }
     }
 
@@ -1207,12 +1252,12 @@ async fn validate_startup_snapshot(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &ResolvedRuntimeSnapshot,
 ) -> Result<()> {
-    snapshot.validate_node_readiness_source().with_context(|| {
-        format!(
-            "validate agent_config readiness source for {}",
-            agent.node_did()
-        )
-    })?;
+    snapshot
+        .validate_node_readiness_source()
+        .map_err(|source| RuntimeStartupError::ValidateReadinessSource {
+            node_did: agent.node_did().to_string(),
+            source,
+        })?;
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot
@@ -1223,10 +1268,10 @@ async fn validate_startup_snapshot(
         unavailable.sort_by(|left, right| left.0.cmp(&right.0));
 
         if unavailable.is_empty() {
-            anyhow::bail!(
-                "agent {} has no runnable agents at startup",
-                agent.node_did()
-            );
+            return Err(RuntimeStartupError::NoRunnableAgents {
+                node_did: agent.node_did().to_string(),
+            }
+            .into());
         }
 
         let blocking = unavailable
@@ -1251,11 +1296,11 @@ async fn validate_startup_snapshot(
                 .iter()
                 .map(|(agent_id, reason)| format!("{agent_id}: {}", reason.public_message()))
                 .collect::<Vec<_>>();
-            anyhow::bail!(
-                "agent {} has no runnable agents at startup due to invalid configuration ({})",
-                agent.node_did(),
-                blocking.join("; ")
-            );
+            return Err(RuntimeStartupError::NoRunnableAgentsInvalidConfiguration {
+                node_did: agent.node_did().to_string(),
+                blocking: blocking.join("; "),
+            }
+            .into());
         }
     }
 
@@ -1263,10 +1308,11 @@ async fn validate_startup_snapshot(
     agent_ids.sort();
 
     for agent_id in agent_ids {
-        let tool_surface = snapshot
-            .tool_surfaces
-            .get(&agent_id)
-            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_id}"))?;
+        let tool_surface = snapshot.tool_surfaces.get(&agent_id).ok_or_else(|| {
+            RuntimeStartupError::MissingToolSurface {
+                agent_id: agent_id.clone(),
+            }
+        })?;
         tool_surface
             .build_tools(tool_runtime)
             .await
@@ -1337,17 +1383,14 @@ async fn resolve_backend_admission_configs(
         let (resolved_backend_id, config) = async {
             let backend = backend_registry::lookup_backend(node, agent.node_did(), backend_id)
                 .await?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "agent_config {} references missing backend {}",
-                        agent.agent_id,
-                        backend_id
-                    )
+                .ok_or_else(|| RuntimeStartupError::MissingBackend {
+                    agent_id: agent.agent_id.clone(),
+                    backend_id: backend_id.to_string(),
                 })?;
             let observation =
                 backend_registry::lookup_backend_observation(node, agent.node_did(), backend_id)
                     .await?
-                    .context("backend observation disappeared during admission resolution")?;
+                    .ok_or(RuntimeStartupError::BackendObservationMissing)?;
             tracing::Span::current().record("backend_enabled", backend.enabled);
             tracing::Span::current().record(
                 "probe_status",
