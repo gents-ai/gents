@@ -47,6 +47,7 @@ pub fn run() {
     install_runtime();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
         .plugin(init_bridge(bridge_config()))
         .plugin(fixture_domain_plugin::init(DomainConfig {
             home: domain_home,

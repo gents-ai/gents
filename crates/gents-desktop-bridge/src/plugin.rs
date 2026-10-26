@@ -12,8 +12,10 @@ where
 {
     Builder::<R>::new("gents-desktop-bridge")
         .setup(move |app, _api| {
+            // Tauri holds its plugin registry while a plugin sets up, so
+            // registering the fs plugin from here would wait on itself.
             if app.try_fs_scope().is_none() {
-                app.plugin(tauri_plugin_fs::init())?;
+                return Err("register tauri_plugin_fs before the desktop bridge".into());
             }
             let app_data_dir = app.path().app_data_dir().ok();
             let policy = resolve_policy(&config, app_data_dir)
