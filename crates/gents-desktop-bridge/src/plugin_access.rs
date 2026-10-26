@@ -83,12 +83,13 @@ impl From<&approval::Request> for PluginApprovalView {
 pub(crate) fn answer(value: &str) -> Result<approval::Answer, BridgeError> {
     match value {
         "once" => Ok(approval::Answer::Once),
+        "invocation" => Ok(approval::Answer::AlwaysInvocation),
         "file" => Ok(approval::Answer::AlwaysPath),
         "always" => Ok(approval::Answer::AlwaysFolder),
         "deny" => Ok(approval::Answer::Deny),
         other => Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
-            format!("{other:?} is not an answer; use once, file, always or deny"),
+            format!("{other:?} is not an answer; use once, invocation, file, always or deny"),
         )),
     }
 }

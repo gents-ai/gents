@@ -148,6 +148,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) mailbox_sweep_cases: Vec<serde_json::Value>,
     pub(crate) client_installation_cases: Vec<serde_json::Value>,
     pub(crate) client_installation_compatibility_cases: Vec<serde_json::Value>,
+    pub(crate) runtime_service_replacement_cases: Vec<serde_json::Value>,
     pub(crate) client_observation_scope_cases: Vec<serde_json::Value>,
     pub(crate) client_observation_admission_cases: Vec<serde_json::Value>,
     pub(crate) client_settings_cases: serde_json::Value,
@@ -192,6 +193,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_client_start_cases: Vec<serde_json::Value>,
     pub(crate) goal_client_receipt_cases: Vec<serde_json::Value>,
     pub(crate) goal_observation_cases: Vec<serde_json::Value>,
+    pub(crate) workspace_command_grant_answers: Vec<serde_json::Value>,
+    pub(crate) workspace_command_grant_lookups: Vec<serde_json::Value>,
+    pub(crate) workspace_command_grant_revocations: Vec<serde_json::Value>,
     pub(crate) workspace_permission_write_cases: Vec<serde_json::Value>,
     pub(crate) workspace_permission_cases: Vec<serde_json::Value>,
     pub(crate) workspace_command_root_cases: Vec<serde_json::Value>,
@@ -238,6 +242,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
+    pub(crate) snapshot_demotion_cases: Vec<serde_json::Value>,
+    pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     pub(crate) eval_outcome_cases: Vec<LeanEvalOutcomeCase>,
@@ -416,6 +422,7 @@ pub(crate) struct LeanPluginJobAdmissionCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobAdmissionExpected {
     pub(crate) admitted: bool,
+    pub(crate) dynamic_code_disabled: bool,
     pub(crate) code: Option<String>,
     pub(crate) job: Option<LeanPluginJobRow>,
     pub(crate) row_state: String,
@@ -1078,6 +1085,8 @@ pub(crate) struct LeanPluginJobRecoveryRow {
     pub(crate) step_new: u32,
     pub(crate) deadline_expired: bool,
     pub(crate) available: bool,
+    pub(crate) stepped: bool,
+    pub(crate) step_in_flight: bool,
 }
 
 /// `Conformance.PluginResources.dataCasesJson`: `PluginData.admitted` and
@@ -4293,4 +4302,12 @@ pub(crate) struct LeanSessionInputEditReceipt {
 pub(crate) fn lean_prompt_assembly_service_tier_cases(
 ) -> &'static [LeanPromptAssemblyServiceTierCase] {
     &lean_contract_snapshot().prompt_assembly_service_tier_cases
+}
+
+pub(crate) fn lean_snapshot_demotion_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().snapshot_demotion_cases
+}
+
+pub(crate) fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().plugin_reference_cases
 }

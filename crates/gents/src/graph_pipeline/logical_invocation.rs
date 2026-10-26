@@ -1,6 +1,6 @@
 use super::*;
 use crate::goal::{GoalDocument, GOAL_FIELDS};
-use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
+use crate::request_admission::verify_request_receipt_signature;
 
 pub(super) struct Invocation {
     pub root_request_id: String,
@@ -157,10 +157,11 @@ pub(super) async fn load(
     owner_did: &str,
 ) -> Result<Projection> {
     let routes = planned_trigger_nodes(plan)?;
+    let fields = crate::goal::request_selection_fields();
     let response = executor
         .execute_graph_query(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: "{}" }},
-        caused_by_trigger_id: {{ _in: {} }} }}) {{ {SIGNED_REQUEST_FIELDS} failure_reason }} }}"#,
+        caused_by_trigger_id: {{ _in: {} }} }}) {{ {fields} }} }}"#,
             escape_graphql_string(correlation),
             graphql_string_list_literal(&routes.keys().cloned().collect::<Vec<_>>()),
         ))
@@ -185,7 +186,7 @@ pub(super) async fn load(
             let response = executor.execute_graph_query(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
                 session_id: {{ _eq: "{}" }} }},
-                order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} failure_reason }}
+                order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }}
                 Goal(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {GOAL_FIELDS} }} }}"#,
                 escape_graphql_string(owner), escape_graphql_string(session),
                 escape_graphql_string(owner), escape_graphql_string(session),

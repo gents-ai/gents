@@ -4,7 +4,7 @@
 //! toward its usage, but only the spawn and message requests are its requests.
 
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -44,13 +44,15 @@ tokio::task_local! {
     pub(super) static CHILD_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-const FIELDS: &str = "_docID request_id node_did agent_id session_id retry_key lifecycle_state input created_at terminalized_at";
+const FIELDS: &str = "_docID caused_by_parent_tool_call_doc_id request_id node_did agent_id session_id retry_key lifecycle_state input created_at terminalized_at";
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Stored {
     #[serde(default, rename = "_docID")]
     doc_id: Option<String>,
     request_id: String,
+    #[serde(default)]
+    caused_by_parent_tool_call_doc_id: Option<String>,
     #[serde(default)]
     node_did: Option<String>,
     #[serde(default)]
@@ -95,71 +97,155 @@ pub async fn derive_children_in_txn(
     chain_rows: &[String],
     result_bytes: u64,
 ) -> Result<Vec<(StepChild, JobChildView)>> {
-    if chain_rows.is_empty() {
+    Ok(
+        derive_scoped_children_in_txn(txn, &[(chain_rows, result_bytes)])
+            .await?
+            .pop()
+            .unwrap_or_default(),
+    )
+}
+
+/// Each scope names one canonical job chain; attempt uniqueness and the pinned
+/// output limit apply within that scope.
+pub(super) async fn derive_children_for_jobs(
+    access: &ConfigAccess,
+    scopes: &[(&[String], u64)],
+) -> Result<Vec<Vec<(StepChild, JobChildView)>>> {
+    if scopes.is_empty() {
         return Ok(Vec::new());
     }
-    let list = graphql_string_list_literal(chain_rows.iter().map(String::as_str));
+    access
+        .transact_readonly("plugin_job.derive_children", |txn| {
+            Box::pin(derive_scoped_children_in_txn(txn, scopes))
+        })
+        .await
+}
+
+struct ChildRead {
+    attempts: BTreeMap<(String, u32), Attempt>,
+    sessions: RapidHashMap<String, (String, u32)>,
+    caused: RapidHashSet<String>,
+    result_bytes: u64,
+}
+
+impl ChildRead {
+    fn new(rows: Vec<Stored>, result_bytes: u64) -> Result<Self> {
+        let caused: RapidHashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
+        let mut attempts: BTreeMap<(String, u32), Attempt> = BTreeMap::new();
+        let mut sessions: RapidHashMap<String, (String, u32)> = RapidHashMap::new();
+        for row in rows {
+            let key = row.retry_key.clone().unwrap_or_default();
+            let Some((slot, attempt)) = decode_job_retry_key(&key) else {
+                continue;
+            };
+            let session = row
+                .session_id
+                .clone()
+                .context("spawn request omitted session_id")?;
+            if sessions.insert(session, (slot.clone(), attempt)).is_some() {
+                anyhow::bail!("two spawn requests share a session");
+            }
+            if attempts
+                .insert(
+                    (slot.clone(), attempt),
+                    Attempt {
+                        slot,
+                        attempt,
+                        spawn: row,
+                        messages: Vec::new(),
+                        usage_only: Vec::new(),
+                    },
+                )
+                .is_some()
+            {
+                anyhow::bail!("duplicate slot attempt");
+            }
+        }
+        Ok(Self {
+            attempts,
+            sessions,
+            caused,
+            result_bytes,
+        })
+    }
+
+    fn add_session_rows(&mut self, rows: &RapidHashMap<String, Vec<Stored>>) -> Result<()> {
+        for (session, (slot, attempt)) in &self.sessions {
+            let attempt = self
+                .attempts
+                .get_mut(&(slot.clone(), *attempt))
+                .context("spawn session missing its attempt")?;
+            for row in rows.get(session).into_iter().flatten() {
+                if row.request_id == attempt.spawn.request_id {
+                    continue;
+                }
+                if self.caused.contains(&row.request_id) {
+                    attempt.messages.push(row.clone());
+                } else {
+                    attempt.usage_only.push(row.request_id.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn derive_scoped_children_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    scopes: &[(&[String], u64)],
+) -> Result<Vec<Vec<(StepChild, JobChildView)>>> {
+    let chain_rows: BTreeSet<_> = scopes.iter().flat_map(|(chain, _)| chain.iter()).collect();
+    if chain_rows.is_empty() {
+        return Ok(scopes.iter().map(|_| Vec::new()).collect());
+    }
+    let list = graphql_string_list_literal(chain_rows.into_iter().map(String::as_str));
     let document = format!(
         "{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _in: {list} }} }}) {{ {FIELDS} }} }}"
     );
     let rows: Vec<Stored> = read(txn, &document, "AgentRequest").await?;
-    let caused: RapidHashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
-    let mut attempts: BTreeMap<(String, u32), Attempt> = BTreeMap::new();
-    let mut sessions: RapidHashMap<String, (String, u32)> = RapidHashMap::new();
+    let mut by_parent: RapidHashMap<String, Vec<Stored>> = RapidHashMap::new();
     for row in rows {
-        let key = row.retry_key.clone().unwrap_or_default();
-        let Some((slot, attempt)) = decode_job_retry_key(&key) else {
-            continue;
-        };
-        let session = row
-            .session_id
+        let parent = row
+            .caused_by_parent_tool_call_doc_id
             .clone()
-            .context("spawn request omitted session_id")?;
-        if sessions.insert(session, (slot.clone(), attempt)).is_some() {
-            anyhow::bail!("two spawn requests share a session");
-        }
-        if attempts
-            .insert(
-                (slot.clone(), attempt),
-                Attempt {
-                    slot,
-                    attempt,
-                    spawn: row,
-                    messages: Vec::new(),
-                    usage_only: Vec::new(),
-                },
-            )
-            .is_some()
-        {
-            anyhow::bail!("duplicate slot attempt");
-        }
+            .context("caused request omitted its parent tool call document")?;
+        by_parent.entry(parent).or_default().push(row);
     }
-    if attempts.is_empty() {
-        return Ok(Vec::new());
+    let mut reads = scopes
+        .iter()
+        .map(|(chain, result_bytes)| {
+            let chain: BTreeSet<_> = chain.iter().collect();
+            let rows = chain
+                .into_iter()
+                .filter_map(|parent| by_parent.get(parent))
+                .flatten()
+                .cloned()
+                .collect();
+            ChildRead::new(rows, *result_bytes)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    drop(by_parent);
+    let sessions: BTreeSet<_> = reads.iter().flat_map(|read| read.sessions.keys()).collect();
+    if sessions.is_empty() {
+        return Ok(reads.into_iter().map(|_| Vec::new()).collect());
     }
-    let list = graphql_string_list_literal(sessions.keys().map(String::as_str));
+    let list = graphql_string_list_literal(sessions.into_iter().map(String::as_str));
     let document =
         format!("{{ AgentRequest(filter: {{ session_id: {{ _in: {list} }} }}) {{ {FIELDS} }} }}");
-    for row in read::<Stored>(txn, &document, "AgentRequest").await? {
-        let Some((slot, attempt)) = row.session_id.as_deref().and_then(|id| sessions.get(id))
-        else {
-            continue;
-        };
-        let attempt = attempts
-            .get_mut(&(slot.clone(), *attempt))
-            .context("spawn session missing its attempt")?;
-        if row.request_id == attempt.spawn.request_id {
-            continue;
-        }
-        if caused.contains(&row.request_id) {
-            attempt.messages.push(row);
-        } else {
-            attempt.usage_only.push(row.request_id);
+    let rows: Vec<Stored> = read(txn, &document, "AgentRequest").await?;
+    let mut by_session: RapidHashMap<String, Vec<Stored>> = RapidHashMap::new();
+    for row in rows {
+        if let Some(session) = row.session_id.as_ref() {
+            by_session.entry(session.clone()).or_default().push(row);
         }
     }
+    for read in &mut reads {
+        read.add_session_rows(&by_session)?;
+    }
+    drop(by_session);
     let mut request_ids = Vec::new();
     let mut latest_docs = Vec::new();
-    for attempt in attempts.values() {
+    for attempt in reads.iter().flat_map(|read| read.attempts.values()) {
         request_ids.push(attempt.spawn.request_id.clone());
         request_ids.extend(attempt.messages.iter().map(|row| row.request_id.clone()));
         request_ids.extend(attempt.usage_only.iter().cloned());
@@ -172,9 +258,14 @@ pub async fn derive_children_in_txn(
     }
     let usage = usage_by_request(txn, &request_ids).await?;
     let terminals = caused_request_terminals_in_txn(txn, &latest_docs).await?;
-    attempts
-        .into_values()
-        .map(|attempt| pair(attempt, &usage, &terminals, result_bytes))
+    reads
+        .into_iter()
+        .map(|read| {
+            read.attempts
+                .into_values()
+                .map(|attempt| pair(attempt, &usage, &terminals, read.result_bytes))
+                .collect()
+        })
         .collect()
 }
 
@@ -518,10 +609,14 @@ async fn session_jobs(
                 tool_call_id: row.tool_call_id,
                 handle: pin.handle,
                 state,
+                adopted_at: pin.adopted_at,
+                resume_of: pin.resume_of,
             })
         })
         .collect();
-    jobs.sort_by(|left, right| left.row_doc_id.cmp(&right.row_doc_id));
+    jobs.sort_by(|left, right| {
+        (left.adopted_at, &left.row_doc_id).cmp(&(right.adopted_at, &right.row_doc_id))
+    });
     Ok(jobs)
 }
 
@@ -1181,6 +1276,74 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn batched_jobs_keep_their_own_result_caps_for_repeated_slots() {
+        let node = open().await;
+        for (chain, request_id) in [("first-row", "first-child"), ("second-row", "second-child")] {
+            completed_request(
+                &node,
+                chain,
+                request_id,
+                &job_session_id(chain, "review", 0),
+                &job_spawn_key(chain, "review", 0),
+                "twelve bytes",
+            )
+            .await;
+        }
+        let access = ConfigAccess::local(node.clone());
+        let first = vec!["first-row".into(), "first-row".into()];
+        let second = vec!["second-row".into()];
+        let children =
+            super::derive_children_for_jobs(&access, &[(&first, 5), (&second, 64), (&[], 0)])
+                .await
+                .unwrap();
+        assert_eq!(children.len(), 3);
+        for (index, request_id, bytes, truncated) in
+            [(0, "first-child", 5, true), (1, "second-child", 12, false)]
+        {
+            assert_eq!(children[index].len(), 1);
+            let (child, view) = &children[index][0];
+            assert_eq!(child.slot, "review");
+            assert_eq!(child.attempt, 0);
+            assert_eq!(view.request_id, request_id);
+            assert_eq!(view.output_bytes, bytes);
+            assert_eq!(view.truncated, truncated);
+        }
+        assert!(children[2].is_empty());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn batched_jobs_reject_colliding_attempts_within_one_chain() {
+        let node = open().await;
+        for (request_id, retry_root) in [("first-child", "root"), ("foreign-child", "foreign-root")]
+        {
+            request(
+                &node,
+                "chain-row",
+                request_id,
+                request_id,
+                &job_spawn_key(retry_root, "review", 0),
+                "agent-a",
+                "processing",
+                None,
+                "2026-01-01T00:00:00Z",
+                None,
+            )
+            .await;
+        }
+        let access = ConfigAccess::local(node.clone());
+        let chain = vec!["chain-row".into()];
+        let error = super::derive_children_for_jobs(&access, &[(&chain, 64)])
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("duplicate slot attempt"),
+            "{error:#}"
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn completed_child_reports_its_rendered_terminal_and_truncates_at_the_cap() {
         let node = open().await;
         let chain = "chain-row";
@@ -1575,6 +1738,17 @@ pub(crate) mod tests {
         }
 
         pub(crate) async fn write_progress(&self, row: &str, state: JobState, spawned: u32) {
+            self.write_progress_observed(row, state, spawned, 0).await;
+        }
+
+        /// [`Self::write_progress`] with `observed` terminal children observed.
+        pub(crate) async fn write_progress_observed(
+            &self,
+            row: &str,
+            state: JobState,
+            spawned: u32,
+            observed: u32,
+        ) {
             ConfigAccess::transact_local_write(&self.node, None, "test.input.progress", |txn| {
                 Box::pin(async move {
                     let guest = JobProgress {
@@ -1602,7 +1776,7 @@ pub(crate) mod tests {
                             spent: spawned,
                             remaining: 4 - spawned,
                         },
-                        observed_terminal_children: 0,
+                        observed_terminal_children: observed,
                         state,
                         pause_reason: None,
                     };
@@ -1837,11 +2011,58 @@ pub(crate) mod tests {
                 tool_call_id: job.call_ids[row].clone(),
                 handle: format!("handle-{row}"),
                 state,
+                adopted_at: fixture_job_pin().adopted_at,
+                resume_of: None,
             })
             .collect();
         expected.sort_by(|a, b| a.row_doc_id.cmp(&b.row_doc_id));
         assert_eq!(input.jobs, expected);
         assert!(input.jobs.iter().all(|view| view.row_doc_id != unpinned));
+        job.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn jobs_list_oldest_first_with_the_row_each_resumed() {
+        let live = live_settings(JobPolicy::default());
+        let mut job = new_job(Some(&live), None).await;
+        let mut rows = Vec::new();
+        for call in ["call-1", "call-2", "call-3"] {
+            rows.push(job.row("workflow", call, json!({"argv": ["run"]})).await);
+        }
+        rows.sort();
+        // Adopted in the reverse of doc id order; the middle row resumed the oldest.
+        let (newest, middle, oldest) = (&rows[0], &rows[1], &rows[2]);
+        for (row, adopted_at, resume_of) in [
+            (oldest, 1_000, None),
+            (middle, 2_000, Some(oldest.as_str())),
+            (newest, 3_000, None),
+        ] {
+            let pin = JobPin {
+                adopted_at,
+                ..job.pin(row, resume_of)
+            };
+            job.write_pin(row, &pin).await;
+        }
+        let (input, _) = job.later(newest).await.unwrap();
+        let listed: Vec<(&str, u64, Option<&str>)> = input
+            .jobs
+            .iter()
+            .map(|view| {
+                (
+                    view.row_doc_id.as_str(),
+                    view.adopted_at,
+                    view.resume_of.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (oldest.as_str(), 1_000, None),
+                (middle.as_str(), 2_000, Some(oldest.as_str())),
+                (newest.as_str(), 3_000, None),
+            ]
+        );
         job.node.shutdown().await;
     }
 
@@ -2004,6 +2225,8 @@ pub(crate) mod tests {
                 tool_call_id: "c".into(),
                 handle: "h".into(),
                 state: JobState::Running,
+                adopted_at: 1,
+                resume_of: None,
             }],
         };
         let output = JobStepOutput::Result {

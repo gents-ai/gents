@@ -266,6 +266,42 @@ fn inference_setup_state_uses_scoped_wire_arguments() {
 }
 
 #[test]
+fn provider_usage_read_uses_scoped_wire_arguments() {
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"desktop_provider_usage_read",
+        "args":{"request":{"nodeDid":"did:fixture", "refresh":false, "provider":null}}
+    }))
+    .unwrap();
+    assert!(command.is_cancellable());
+    assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+        "name":"desktop_provider_usage_read", "args":{"request":{"refresh":false}}
+    }))
+    .is_err());
+}
+
+#[tokio::test]
+async fn provider_usage_read_rejects_an_unconfigured_runtime() {
+    let (core, _dir) = crate::tests::support::boot_core().await;
+    let host = ClientHost::new(core.clone());
+    let error = host
+        .execute(
+            protocol::ClientCommand::ProviderUsageRead {
+                request: crate::accounts::usage::ProviderUsageReadRequest {
+                    node_did: "did:unconfigured".into(),
+                    refresh: false,
+                    provider: None,
+                },
+            },
+            &super::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    core.shutdown().await.unwrap();
+}
+
+#[test]
 fn agent_model_selection_is_scoped_and_not_cancellable() {
     let mut request = json!({
         "nodeDid":"did:fixture", "agentId":"agent", "backendId":"backend",
@@ -459,6 +495,25 @@ fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection
         let mut incomplete = request.clone();
         incomplete.as_object_mut().unwrap().remove(field);
         assert!(decode(incomplete).is_err(), "missing {field}");
+    }
+}
+
+#[test]
+fn forgetting_commands_is_scoped_and_drains_the_native_write() {
+    let request = json!({
+        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
+        "expectedRevision":"2","expectedWorkspacePath":"/project"
+    });
+    let decode = |request: Value| {
+        serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name":"client_workspace_permissions_forget_commands","args":{"request":request}
+        }))
+    };
+    assert!(!decode(request.clone()).unwrap().is_cancellable());
+    for field in ["requesterDid", "home", "mode", "taskId"] {
+        let mut invalid = request.clone();
+        invalid[field] = "untrusted".into();
+        assert!(decode(invalid).is_err(), "accepted {field}");
     }
 }
 

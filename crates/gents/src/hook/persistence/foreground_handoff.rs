@@ -51,18 +51,27 @@ impl DefraSessionHook {
         let (answer, result) = oneshot::channel();
         let hook = self.clone();
         let internal_id = internal_id.to_owned();
+        let doc = lifecycle
+            .doc_id()
+            .expect("accepted foreground tool")
+            .to_owned();
+        let process_token = CancellationToken::new();
+        let reservation = match self.background_executions.reserve(
+            lifecycle.tool_call_id().to_owned(),
+            doc.clone(),
+            process_token.clone(),
+        ) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return ForegroundResult::Settled(
+                    crate::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
+                        &error.to_string(),
+                    ),
+                );
+            }
+        };
         tokio::spawn(crate::plugin::approval::carry_interactive(async move {
             let mut lifecycle = lifecycle;
-            let doc = lifecycle
-                .doc_id()
-                .expect("accepted foreground tool")
-                .to_owned();
-            let process_token = CancellationToken::new();
-            let reservation = hook.background_executions.reserve(
-                lifecycle.tool_call_id().to_owned(),
-                doc.clone(),
-                process_token.clone(),
-            );
             let recorder = hook
                 .background_executions
                 .process_recorder(lifecycle.tool_call_id(), &doc);

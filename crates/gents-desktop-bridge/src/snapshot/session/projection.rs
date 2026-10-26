@@ -223,6 +223,8 @@ fn canonical_tool_payload(
     (arguments, result, ready())
 }
 
+/// Live inspection uses the native tool-display limit; canonical segments retain
+/// the complete output for terminal inspection and retrieval.
 fn canonical_live_tool_output(
     tool: &AgentToolCallRow,
     request: Option<&AgentRequestRow>,
@@ -291,7 +293,14 @@ fn canonical_live_tool_output(
         .map(|stream| stream.text)
         .collect::<Vec<_>>()
         .join("");
-    (!text.is_empty()).then_some(text)
+    (!text.is_empty()).then(|| {
+        gents::truncation::truncate(
+            &text,
+            gents::truncation::TruncationMode::Tail,
+            &gents::truncation::TruncationLimits::default(),
+        )
+        .text
+    })
 }
 
 #[expect(
@@ -510,11 +519,10 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let owner_absent = |request: &AgentRequestRow| {
         owner_fact(request).map_or(pending_owner_known, |fact| !fact.materialized)
     };
-    let pending_turn = (include_live_tail && latest_request.is_some_and(owner_absent))
-        .then_some(latest_request_id.as_deref())
-        .flatten()
-        .and_then(|request_id| {
-            build_pending_turn(store, context_store, node_did, session_id, request_id)
+    let pending_turn = latest_request
+        .filter(|request| include_live_tail && owner_absent(request))
+        .and_then(|request| {
+            project_pending_turn(store, context_store, node_did, session_id, request)
         });
     let resolved_node_did = session_row
         .map(|row| row.node_did.clone())
@@ -584,13 +592,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         .iter()
         .filter(|request| include_live_tail && same_requester(request))
         .filter_map(|request| {
-            build_pending_turn(
-                store,
-                context_store,
-                node_did,
-                session_id,
-                &request.request_id,
-            )
+            project_pending_turn(store, context_store, node_did, session_id, request)
         })
         .collect::<Vec<_>>();
     let folded_inputs = gents_desktop_core::client::folded_requests(
@@ -619,13 +621,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
             {
                 return None;
             }
-            let turn = build_pending_turn(
-                store,
-                context_store,
-                node_did,
-                session_id,
-                &request.request_id,
-            )?;
+            let turn = project_pending_turn(store, context_store, node_did, session_id, request)?;
             let observed_anchor = full_transcript
                 .messages
                 .iter()
@@ -795,9 +791,26 @@ mod canonical_projection_tests {
             },
         };
         assert_eq!(
-            canonical_live_tool_output(&tool, Some(&request), &[], &[row], &[], &[], &[]),
+            canonical_live_tool_output(
+                &tool,
+                Some(&request),
+                &[],
+                std::slice::from_ref(&row),
+                &[],
+                &[],
+                &[]
+            ),
             Some("live text".to_string())
         );
+        let mut large = row;
+        large.segment.payload =
+            "λ🙂".repeat(gents::truncation::LIVE_STREAM_CAPACITY_BYTES) + " newest output";
+        large.segment.runs[0].bytes =
+            u32::try_from(large.segment.payload.len()).expect("payload byte length");
+        let tail = canonical_live_tool_output(&tool, Some(&request), &[], &[large], &[], &[], &[])
+            .expect("live tail");
+        assert!(tail.len() <= gents::truncation::LIVE_STREAM_CAPACITY_BYTES);
+        assert!(tail.ends_with(" newest output"));
     }
 
     #[test]
@@ -1115,6 +1128,117 @@ mod tests {
     use crate::types::RenderedTimelineItem;
     use gents_desktop_core::client::ClientStoreRows;
     use gents_protocol::output::MessageRole;
+
+    #[test]
+    fn fresh_folded_projection_does_not_need_a_replica_copy_to_show_content() {
+        let capture = serde_json::from_value::<gents_protocol::request_input::CapturedContext>(
+            serde_json::json!({
+                "kind": "file", "source": "editor", "capturedAt": "2026-10-26T08:00:00Z",
+                "uri": "file:///workspace/context.rs", "unsaved": true,
+                "content": "exact captured text"
+            }),
+        )
+        .unwrap();
+        let requests = vec![
+            AgentRequestRow {
+                doc_id: Some("doc-head".into()),
+                request_id: "head".into(),
+                node_did: Some("did:test:amy".into()),
+                session_id: Some("session-1".into()),
+                content: Some("head text".into()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                ..Default::default()
+            },
+            AgentRequestRow {
+                doc_id: Some("doc-folded".into()),
+                request_id: "folded".into(),
+                node_did: Some("did:test:amy".into()),
+                session_id: Some("session-1".into()),
+                content: Some("exact steered text".into()),
+                input: Some(gents_protocol::request_input::RequestInput {
+                    captured_context: vec![capture.clone()],
+                    ..Default::default()
+                }),
+                lifecycle_state: Some(RequestLifecycleState::Superseded),
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                superseded_by_request: Some("head".into()),
+                superseded_by_request_doc_id: Some("doc-head".into()),
+                failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+                ..Default::default()
+            },
+        ];
+        let store = ClientStore::default();
+        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        for request in &requests {
+            ownership.by_request_doc_id.insert(
+                request.doc_id.clone().unwrap(),
+                gents_desktop_core::client::RequestPromptFact {
+                    node_did: "did:test:amy".into(),
+                    session_id: "session-1".into(),
+                    requester_did: None,
+                    materialized: false,
+                    first_sequence: None,
+                },
+            );
+        }
+        let mut stale_store = ClientStore::from_rows(ClientStoreRows {
+            requests: requests.clone(),
+            ..Default::default()
+        });
+        stale_store.requests[1].content = Some("obsolete replica text".into());
+        stale_store.requests[1].input = None;
+        for store in [&store, &stale_store] {
+            let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
+                store,
+                store,
+                store,
+                None,
+                Some(&ownership),
+                true,
+                false,
+                false,
+                true,
+                Some("did:test:amy"),
+                "session-1",
+                Some("head"),
+                Some(&requests),
+            )
+            .expect("fresh request projection establishes the session");
+            let inputs = snapshot
+                .timeline_items
+                .iter()
+                .filter_map(|item| match item {
+                    RenderedTimelineItem::PendingUserTurn {
+                        request_id,
+                        content,
+                        ..
+                    } => Some((request_id.as_str(), content.as_str())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                inputs,
+                [("head", "head text"), ("folded", "exact steered text")]
+            );
+            assert_eq!(
+                snapshot
+                    .pending_turn
+                    .as_ref()
+                    .map(|turn| turn.content.as_str()),
+                Some("head text")
+            );
+            let folded_capture = snapshot.timeline_items.iter().find_map(|item| match item {
+                RenderedTimelineItem::PendingUserTurn {
+                    request_id,
+                    captured_context,
+                    ..
+                } if request_id == "folded" => captured_context.as_ref(),
+                _ => None,
+            });
+            assert_eq!(folded_capture, Some(&vec![capture.clone()]));
+        }
+    }
 
     #[test]
     fn a_published_folded_message_stays_owned_outside_and_on_its_original_page() {
@@ -1604,11 +1728,7 @@ pub(super) fn project_transcript_rows(
             };
 
             MessageView {
-                started_goal_id: input_request
-                    .and_then(|request| request.input.as_ref())
-                    .and_then(|input| input.goal_assignment.as_ref())
-                    .filter(|assignment| assignment.root_request_doc_id.is_none())
-                    .map(|assignment| assignment.goal_id.clone()),
+                started_goal_id: None,
                 request_turn: row
                     .message
                     .request_doc_id

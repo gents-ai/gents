@@ -39,6 +39,7 @@
   }
 
   .tool-activity-label {
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -52,7 +53,12 @@
   }
 
   .tool-activity-errors {
+    min-width: 0;
+    max-width: 70%;
+    overflow: hidden;
     color: var(--color-error);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tool-activity-chevron {

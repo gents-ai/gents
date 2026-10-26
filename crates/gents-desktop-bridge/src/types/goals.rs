@@ -69,4 +69,9 @@ pub struct GoalControlResult {
     pub goal_id: String,
     pub session_id: String,
     pub request_id: Option<String>,
+    /// Present only after the runtime confirms the signed opening assignment.
+    /// A resumed request is a continuation, even when it has a new request ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub started_goal_id: Option<String>,
 }

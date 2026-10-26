@@ -65,3 +65,6 @@ mod plugin_node_tests;
 
 #[cfg(test)]
 mod logical_invocation_contract_tests;
+
+#[cfg(test)]
+mod idle_read_profile;

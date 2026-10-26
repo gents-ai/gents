@@ -16,6 +16,7 @@ pub struct Request {
     /// The waiting call publishes its actual deadline, including shorter waits.
     pub expires_at_ms: u64,
     subject: Subject,
+    command_grant: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,7 +64,10 @@ impl Request {
     }
 
     pub(crate) fn for_binding(binding: workspace::Binding, session_id: Option<String>) -> Self {
-        Self::with_subject(Subject::Workspace(Box::new(binding)), session_id)
+        let supported = matches!(binding.action, workspace::BindingAction::Command { .. });
+        let mut request = Self::with_subject(Subject::Workspace(Box::new(binding)), session_id);
+        request.command_grant = supported;
+        request
     }
 
     fn with_subject(subject: Subject, session_id: Option<String>) -> Self {
@@ -74,6 +78,7 @@ impl Request {
             created_at_ms,
             expires_at_ms: created_at_ms.saturating_add(WAIT.as_millis() as u64),
             subject,
+            command_grant: false,
         }
     }
 
@@ -123,7 +128,11 @@ impl Request {
     }
 
     pub fn allows_answer(&self, answer: Answer) -> bool {
-        policy::answer_allowed(self.kind(), answer.remembered())
+        if answer == Answer::AlwaysInvocation {
+            policy::can_remember_command(self.kind(), self.command_grant)
+        } else {
+            policy::answer_allowed(self.kind(), answer.remembered())
+        }
     }
 
     pub fn answers(&self) -> Vec<Answer> {
@@ -131,6 +140,7 @@ impl Request {
             Answer::Once,
             Answer::AlwaysPath,
             Answer::AlwaysFolder,
+            Answer::AlwaysInvocation,
             Answer::Deny,
         ]
         .into_iter()
@@ -191,6 +201,8 @@ impl<'a> FilesystemApproval<'a> {
 #[serde(deny_unknown_fields)]
 struct WireRequest {
     id: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    command_grant: bool,
     #[serde(default)]
     session_id: Option<String>,
     created_at_ms: u64,
@@ -241,7 +253,13 @@ impl TryFrom<WireRequest> for Request {
                 access,
             }
         };
+        anyhow::ensure!(
+            !wire.command_grant
+                || matches!(&subject, Subject::Workspace(binding) if matches!(binding.action, workspace::BindingAction::Command { .. })),
+            "Remembered invocation support requires a bound command."
+        );
         Ok(Self {
+            command_grant: wire.command_grant,
             id: wire.id,
             session_id: wire.session_id,
             created_at_ms: wire.created_at_ms,
@@ -254,6 +272,7 @@ impl TryFrom<WireRequest> for Request {
 impl From<Request> for WireRequest {
     fn from(request: Request) -> Self {
         let mut wire = Self {
+            command_grant: request.command_grant,
             id: request.id,
             session_id: request.session_id,
             created_at_ms: request.created_at_ms,

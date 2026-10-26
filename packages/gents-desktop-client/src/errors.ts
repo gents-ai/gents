@@ -3,25 +3,27 @@ import type { BridgeErrorCode } from "./generated/BridgeErrorCode.js";
 
 export type BridgeErrorPayload = GeneratedBridgeError;
 
-const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
-  "clientNotRunning",
-  "clientStartFailed",
-  "localHistoryLocked",
-  "notFound",
-  "projectionPending",
-  "goalControlRejected",
-  "invalidArgument",
-  "unsupported",
-  "endpointUnreachable",
-  "pathEscapesRoot",
-  "backend",
-  "incompatibleLocalStore",
-  "pairing",
-  "credentialNotSaved",
-  "runtimeStillBooting",
-  "sessionNotOwned",
-  "unknown",
-]);
+const BRIDGE_ERROR_CODES: Record<BridgeErrorCode, true> = {
+  clientNotRunning: true,
+  clientStartFailed: true,
+  localHistoryLocked: true,
+  runtimeKeyAccess: true,
+  storageFull: true,
+  notFound: true,
+  projectionPending: true,
+  goalControlRejected: true,
+  invalidArgument: true,
+  unsupported: true,
+  endpointUnreachable: true,
+  pathEscapesRoot: true,
+  backend: true,
+  incompatibleLocalStore: true,
+  pairing: true,
+  credentialNotSaved: true,
+  runtimeStillBooting: true,
+  sessionNotOwned: true,
+  unknown: true,
+};
 
 export class BridgeInvokeError extends Error {
   readonly code: BridgeErrorCode;
@@ -50,7 +52,7 @@ export function asBridgeErrorPayload(
       : record;
   if (
     typeof candidate.code === "string" &&
-    BRIDGE_ERROR_CODES.has(candidate.code as BridgeErrorCode) &&
+    Object.hasOwn(BRIDGE_ERROR_CODES, candidate.code) &&
     typeof candidate.message === "string" &&
     typeof candidate.retryable === "boolean" &&
     (typeof candidate.endpoint === "string" || candidate.endpoint === null)

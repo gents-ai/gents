@@ -235,6 +235,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
             &selected,
         )
         .unwrap();
+        let promoted_request_id = uuid::Uuid::new_v4().to_string();
         replacement = submit_pending_user_steer(
             &access,
             db.node_identity.as_ref(),
@@ -244,9 +245,11 @@ async fn steering_case(hold_tool: bool, promote: bool) {
             name,
             edit,
             &selected,
+            Some(&promoted_request_id),
         )
         .await
         .unwrap();
+        assert_eq!(replacement.request_ids.first(), Some(&promoted_request_id));
         assert_eq!(row(&db, &selected).await["lifecycle_state"], "superseded");
     }
     assert_eq!(row(&db, &old).await["lifecycle_state"], "superseded");

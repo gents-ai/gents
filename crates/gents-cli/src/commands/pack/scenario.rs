@@ -2071,6 +2071,7 @@ async fn verify_source_edges(
 
 async fn render_projection_artifacts(
     bin: &Path,
+    home: &Path,
     graphql: &GraphqlEndpoint,
     run_dir: &Path,
     stages: &[StageResult],
@@ -2084,6 +2085,8 @@ async fn render_projection_artifacts(
         let timeline_args = vec![
             "trace".to_string(),
             "timeline".to_string(),
+            "--home".to_string(),
+            path_arg(home),
             "--graphql".to_string(),
             graphql.to_string(),
             "--request-id".to_string(),
@@ -2102,6 +2105,8 @@ async fn render_projection_artifacts(
             let project_args = vec![
                 "trace".to_string(),
                 "project".to_string(),
+                "--home".to_string(),
+                path_arg(home),
                 "--graphql".to_string(),
                 graphql.to_string(),
                 "--request-id".to_string(),
@@ -3497,6 +3502,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         }
         let projection_artifacts = render_projection_artifacts(
             &bin,
+            &home,
             &graphql,
             &run_dir,
             &projection_requests,
@@ -4477,5 +4483,51 @@ mod tests {
         assert!(error.to_string().contains("tool_root"), "{error}");
         manifest.init.tool_root = Some(".".into());
         validate_manifest(&manifest).expect("declared tool_root is enough");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn projection_traces_read_as_the_served_home() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let calls = temp.path().join("calls");
+        let bin = temp.path().join("gents");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\necho '{{}}'\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let graphql = GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql");
+        let stages = [StageResult {
+            trigger_id: "stage".to_string(),
+            request_id: "req-1".to_string(),
+            lifecycle_state: RequestLifecycleState::Completed,
+            caused_by_source_doc_id: None,
+        }];
+
+        let home = temp.path().join("home");
+        render_projection_artifacts(
+            &bin,
+            &home,
+            &graphql,
+            temp.path(),
+            &stages,
+            &["langfuse".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        assert_eq!(calls.lines().count(), 2, "{calls}");
+        for call in calls.lines() {
+            assert!(
+                call.contains(&format!("--home {}", home.display())),
+                "{call}"
+            );
+        }
     }
 }

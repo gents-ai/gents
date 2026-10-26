@@ -7,6 +7,8 @@ pub enum BridgeErrorCode {
     ClientNotRunning,
     ClientStartFailed,
     LocalHistoryLocked,
+    /// Unlock the existing managed-runtime keys through an explicit user action.
+    RuntimeKeyAccess,
     /// Storage recovery preserves retained history and unresolved submission identity.
     StorageFull,
     /// The read could not publish against the current observation fence.
@@ -34,6 +36,7 @@ impl BridgeErrorCode {
             Self::ClientNotRunning => "clientNotRunning",
             Self::ClientStartFailed => "clientStartFailed",
             Self::LocalHistoryLocked => "localHistoryLocked",
+            Self::RuntimeKeyAccess => "runtimeKeyAccess",
             Self::StorageFull => "storageFull",
             Self::ProjectionPending => "projectionPending",
             Self::GoalControlRejected => "goalControlRejected",

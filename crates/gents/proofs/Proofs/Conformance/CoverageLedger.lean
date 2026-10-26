@@ -857,6 +857,16 @@ def caseCoverage : List CoverageEntry :=
       "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "plugin_reference_cases"
+      "PluginReferenceCases"
+      "pack::installation::tests::generated_plugin_reference_cases_validate_prepared_pack_resources")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "snapshot_demotion_cases"
+      "SnapshotDemotionCases"
+      "agent::runtime::tests::startup_recovery::generated_snapshot_demotions_preserve_healthy_agents")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "startup_readiness_cases"
       "StartupReadinessCases"
       "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release")
@@ -1111,6 +1121,11 @@ def caseCoverage : List CoverageEntry :=
       "ClientInstallationCompatibilityCases"
       "client_installation::compatibility_tests::generated_installation_compatibility_matches_lean")
       "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "runtime_service_replacement_cases"
+      "RuntimeServiceReplacementCases"
+      "serve_lifecycle::replacement::tests::generated_replacement_traces_match_authenticated_admission_and_release_guards")
+      "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
   , tagged (consumerCoverage
       "client_observation_scope_cases"
       "ClientObservationScopeCases"
@@ -2174,6 +2189,21 @@ def caseCoverage : List CoverageEntry :=
       "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_command_grant_answers"
+      "WorkspaceCommandGrantAnswers"
+      "plugin::approval::command_grant_contract_tests::generated_command_answers_preserve_scope_and_one_time_delivery")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_command_grant_lookups"
+      "WorkspaceCommandGrantLookups"
+      "tool_policy::workspace_permissions::tests::generated_command_grant_lookups")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_command_grant_revocations"
+      "WorkspaceCommandGrantRevocations"
+      "plugin::approval::command_grant_contract_tests::generated_command_revocation_preserves_the_selected_mode")
+      "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_permission_write_cases"
       "WorkspacePermissionWriteCases"

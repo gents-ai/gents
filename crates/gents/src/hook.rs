@@ -110,6 +110,7 @@ struct BackgroundExecution {
     cancellation_token: CancellationToken,
     completion_tx: watch::Sender<bool>,
     tool_call_doc_id: String,
+    _service_work: Arc<crate::runtime_service::RuntimeServiceWork>,
 }
 
 #[derive(Clone, Default)]
@@ -146,11 +147,16 @@ pub struct BackgroundExecutionRegistry {
     live_outputs: BackgroundLiveOutputState,
     process_records: crate::managed_exec::ownership::ProcessRecordStore,
     task_hook_records: crate::task_hooks::TaskHookRecordStore,
+    service_admission: crate::runtime_service::RuntimeServiceAdmission,
 }
 
 const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl BackgroundExecutionRegistry {
+    pub(crate) fn service_admission(&self) -> &crate::runtime_service::RuntimeServiceAdmission {
+        &self.service_admission
+    }
+
     /// Keep durable host records of spawned background processes in `dir`,
     /// which must belong to this runtime's exclusively locked store; a
     /// restarted runtime otherwise cannot prove it owns a surviving process.
@@ -325,7 +331,8 @@ impl BackgroundExecutionRegistry {
         tool_call_id: String,
         tool_call_doc_id: String,
         cancellation_token: CancellationToken,
-    ) -> BackgroundExecutionReservation {
+    ) -> anyhow::Result<BackgroundExecutionReservation> {
+        let service_work = Arc::new(self.service_admission.admit()?);
         let (completion_tx, _) = watch::channel(false);
         self.lock_executions().insert(
             tool_call_id.clone(),
@@ -333,13 +340,15 @@ impl BackgroundExecutionRegistry {
                 cancellation_token,
                 completion_tx,
                 tool_call_doc_id,
+                _service_work: service_work.clone(),
             },
         );
-        BackgroundExecutionReservation {
+        Ok(BackgroundExecutionReservation {
             registry: self.clone(),
             tool_call_id,
             armed: true,
-        }
+            _service_work: service_work,
+        })
     }
 
     #[cfg(test)]
@@ -395,6 +404,7 @@ pub(crate) struct BackgroundExecutionReservation {
     registry: BackgroundExecutionRegistry,
     tool_call_id: String,
     armed: bool,
+    _service_work: Arc<crate::runtime_service::RuntimeServiceWork>,
 }
 
 impl BackgroundExecutionReservation {

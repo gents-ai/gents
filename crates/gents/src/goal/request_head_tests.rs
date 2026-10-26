@@ -37,6 +37,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                 .map(|row| serde_json::from_value(row["request"].clone()).unwrap())
                 .collect(),
             expected: None,
+            assignment_root: None,
         };
         let mut fixture = Fixture {
             case: &case,
@@ -248,6 +249,16 @@ struct Scope {
     session: u64,
     goal: u64,
 }
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum InputDisposition {
+    #[default]
+    Execution,
+    Folded,
+    Replaced,
+    Removed,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct ModelRow {
     purpose: gents_protocol::request_admission::RequestPurpose,
@@ -261,6 +272,8 @@ struct ModelRow {
     sequence: u64,
     receipt_valid: bool,
     deterministic_identity: bool,
+    #[serde(default)]
+    input_disposition: InputDisposition,
 }
 #[derive(Deserialize)]
 struct Case {
@@ -268,6 +281,8 @@ struct Case {
     scope: Scope,
     rows: Vec<ModelRow>,
     expected: Option<ModelRow>,
+    #[serde(default)]
+    assignment_root: Option<u64>,
 }
 
 fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
@@ -348,7 +363,11 @@ impl Fixture<'_> {
             .iter()
             .position(|row| row.request == request)
             .unwrap_or(0);
-        format!("2026-07-15T00:00:{:02}Z", 59 - index)
+        (chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z").unwrap()
+            + chrono::Duration::seconds(
+                i64::try_from(self.case.rows.len().max(60) - 1 - index).unwrap(),
+            ))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
     fn build<'a>(
         &'a mut self,
@@ -435,6 +454,25 @@ impl Fixture<'_> {
                 .await
                 .unwrap();
             let mut row = signed_row(&create, model.doc);
+            match model.input_disposition {
+                InputDisposition::Execution => {}
+                InputDisposition::Folded | InputDisposition::Replaced => {
+                    row.lifecycle_state = Some(RequestLifecycleState::Superseded);
+                    row.failure_reason = Some(
+                        match model.input_disposition {
+                            InputDisposition::Folded => crate::lifecycle::FOLDED_REASON,
+                            _ => crate::lifecycle::REPLACED_REASON,
+                        }
+                        .into(),
+                    );
+                    row.superseded_by_request = Some(self.base_id(100));
+                    row.superseded_by_request_doc_id = Some("physical-10".into());
+                }
+                InputDisposition::Removed => {
+                    row.lifecycle_state = Some(RequestLifecycleState::Interrupted);
+                    row.failure_reason = Some(crate::lifecycle::REMOVED_REASON.into());
+                }
+            }
             if !model.receipt_valid {
                 row.content = Some("altered after signing".into());
             }
@@ -453,7 +491,7 @@ impl Fixture<'_> {
 #[tokio::test]
 async fn generated_goal_request_head_cases_drive_signed_row_selector() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.goal_request_head_cases.len(), 17);
+    assert_eq!(snapshot.goal_request_head_cases.len(), 22);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
@@ -464,6 +502,7 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
             "_docID": "goal-doc", "goal_id": format!("goal-{}", case.scope.goal),
             "node_did": identities[(case.scope.owner - 1) as usize].did(),
             "session_id": format!("session-{}", case.scope.session), "status": "active",
+            "assignment_root_request_doc_id": case.assignment_root.map(|doc| format!("physical-{doc}")),
         }))
         .unwrap();
         let mut fixture = Fixture {
@@ -502,7 +541,19 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
             verify_request_receipt_signature(&rows[0]).unwrap();
             verify_request_receipt_signature(&rows[1]).unwrap();
         }
-        let selected = latest_goal_request(&goal, &rows).and_then(|row| row.doc_id.as_deref());
+        let (selected, verifications) =
+            crate::request_admission::count_request_receipt_verifications(|| {
+                latest_goal_request(&goal, &rows).and_then(|row| row.doc_id.as_deref())
+            });
+        if case.assignment_root.is_some() {
+            assert!(
+                verifications <= 8 * rows.len(),
+                "{}: {} receipt checks for {} history rows",
+                case.name,
+                verifications,
+                rows.len(),
+            );
+        }
         let expected = case
             .expected
             .as_ref()

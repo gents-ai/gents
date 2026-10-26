@@ -92,6 +92,8 @@ pub mod xai_oauth_refresh;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    pub(crate) mod read_observation;
+
     /// A test's `#[tokio::test]` runtime is its entry point; constructors take
     /// that runtime's handle from here.
     #[allow(
@@ -401,6 +403,7 @@ pub(crate) mod request_binding;
 pub mod retry;
 pub mod run_timeline;
 pub mod run_timeline_fetch;
+pub mod runtime_service;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;

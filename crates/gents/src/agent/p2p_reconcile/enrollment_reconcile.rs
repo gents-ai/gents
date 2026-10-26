@@ -305,28 +305,29 @@ pub(crate) fn test_enrollment_authority(
     )
 }
 
-impl EnrollmentAuthorityOwner {
-    fn publish_ready(&self, projection: EnrollmentProjection) {
-        let next = EnrollmentAuthorityState::Ready(Arc::new(projection));
-        self.sender.send_if_modified(|current| {
-            if *current == next {
-                return false;
-            }
-            *current = next;
-            true
-        });
-    }
+fn publish_ready(
+    sender: &watch::Sender<EnrollmentAuthorityState>,
+    projection: EnrollmentProjection,
+) {
+    let next = EnrollmentAuthorityState::Ready(Arc::new(projection));
+    sender.send_if_modified(|current| {
+        if *current == next {
+            return false;
+        }
+        *current = next;
+        true
+    });
+}
 
-    fn publish_failed(&self, error: &anyhow::Error) {
-        let next = EnrollmentAuthorityState::Failed(Arc::from(format!("{error:#}")));
-        self.sender.send_if_modified(|current| {
-            if *current == next {
-                return false;
-            }
-            *current = next;
-            true
-        });
-    }
+fn publish_failed(sender: &watch::Sender<EnrollmentAuthorityState>, error: &anyhow::Error) {
+    let next = EnrollmentAuthorityState::Failed(Arc::from(format!("{error:#}")));
+    sender.send_if_modified(|current| {
+        if *current == next {
+            return false;
+        }
+        *current = next;
+        true
+    });
 }
 
 /// Authority rows plus the applied pairing witness that a route receipt
@@ -356,35 +357,60 @@ pub async fn run_enrollment_reconciler(
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    sweep_enrollment(
-        &node,
-        &identity,
-        &store,
-        &pairing_admin,
-        &owner,
-        &mut delivered,
-    )
-    .await;
+    loop {
+        let sweep = sweep_enrollment(
+            &node,
+            &identity,
+            &store,
+            &pairing_admin,
+            &owner.sender,
+            &mut delivered,
+        );
+        if !serve_authority_during_sweep(sweep, &store, &owner.sender, &mut owner.commands, &cancel)
+            .await
+        {
+            return Ok(());
+        }
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Ok(()),
+                _ = interval.tick() => break,
+                command = owner.commands.recv() => {
+                    let Some(command) = command else { return Ok(()); };
+                    handle_authority_command(&store, &owner.sender, command).await;
+                }
+                batch = subscription.recv(), if subscription_open => {
+                    if batch.is_none() {
+                        tracing::warn!("enrollment change subscription closed; continuing periodic sweeps");
+                        subscription_open = false;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Network effects can require transport admission through this same authority.
+/// Keep fresh database-backed checks responsive while the sweep awaits those effects.
+async fn serve_authority_during_sweep(
+    sweep: impl std::future::Future<Output = ()>,
+    store: &impl EnrollmentProjectionReader,
+    sender: &watch::Sender<EnrollmentAuthorityState>,
+    commands: &mut mpsc::Receiver<EnrollmentAuthorityCommand>,
+    cancel: &CancellationToken,
+) -> bool {
+    tokio::pin!(sweep);
     loop {
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {
-                sweep_enrollment(&node, &identity, &store, &pairing_admin, &owner, &mut delivered).await;
-            }
-            command = owner.commands.recv() => {
-                let Some(command) = command else {
-                    continue;
-                };
-                handle_authority_command(&store, &owner, command).await;
-            }
-            batch = subscription.recv(), if subscription_open => {
-                if batch.is_none() {
-                    tracing::warn!("enrollment change subscription closed; continuing periodic sweeps");
-                    subscription_open = false;
-                    continue;
-                }
-                sweep_enrollment(&node, &identity, &store, &pairing_admin, &owner, &mut delivered).await;
+            _ = cancel.cancelled() => return false,
+            _ = &mut sweep => return true,
+            command = commands.recv() => {
+                let Some(command) = command else { return false; };
+                handle_authority_command(store, sender, command).await;
             }
         }
     }
@@ -392,7 +418,7 @@ pub async fn run_enrollment_reconciler(
 
 async fn handle_authority_command(
     store: &impl EnrollmentProjectionReader,
-    owner: &EnrollmentAuthorityOwner,
+    sender: &watch::Sender<EnrollmentAuthorityState>,
     command: EnrollmentAuthorityCommand,
 ) {
     match command {
@@ -403,11 +429,11 @@ async fn handle_authority_command(
         } => {
             let result = match store.load_authority_projection().await {
                 Ok(projection) => {
-                    owner.publish_ready(projection.clone());
+                    publish_ready(sender, projection.clone());
                     exact_authorization_fence(&projection, &member_did, &member_peer)
                 }
                 Err(error) => {
-                    owner.publish_failed(&error);
+                    publish_failed(sender, &error);
                     Err(error.context("reload enrollment authority for authorization fence"))
                 }
             };
@@ -416,7 +442,7 @@ async fn handle_authority_command(
         EnrollmentAuthorityCommand::MemberAdmission { member_did, ack } => {
             let result = match store.load_authority_projection().await {
                 Ok(projection) => {
-                    owner.publish_ready(projection.clone());
+                    publish_ready(sender, projection.clone());
                     if projection.conflict.is_some() {
                         Err(anyhow::anyhow!("enrollment root authority is conflicted"))
                     } else {
@@ -427,7 +453,7 @@ async fn handle_authority_command(
                     }
                 }
                 Err(error) => {
-                    owner.publish_failed(&error);
+                    publish_failed(sender, &error);
                     Err(error.context("reload enrollment authority for peer admission"))
                 }
             };
@@ -436,11 +462,11 @@ async fn handle_authority_command(
         EnrollmentAuthorityCommand::PeerAuthorization { member_peer, ack } => {
             let result = match store.load_authority_projection().await {
                 Ok(projection) => {
-                    owner.publish_ready(projection.clone());
+                    publish_ready(sender, projection.clone());
                     exact_peer_authorization_fence(&projection, &member_peer)
                 }
                 Err(error) => {
-                    owner.publish_failed(&error);
+                    publish_failed(sender, &error);
                     Err(error.context("reload enrollment authority for transport fence"))
                 }
             };
@@ -449,11 +475,11 @@ async fn handle_authority_command(
         EnrollmentAuthorityCommand::MemberAuthorization { member_did, ack } => {
             let result = match store.load_authority_projection().await {
                 Ok(projection) => {
-                    owner.publish_ready(projection.clone());
+                    publish_ready(sender, projection.clone());
                     exact_member_authorization_fence(&projection, &member_did)
                 }
                 Err(error) => {
-                    owner.publish_failed(&error);
+                    publish_failed(sender, &error);
                     Err(error.context("reload enrollment authority for request admission"))
                 }
             };
@@ -560,21 +586,21 @@ async fn sweep_enrollment(
     identity: &Arc<dyn NodeIdentity>,
     store: &GraphqlEnrollmentStore,
     pairing_admin: &EmbeddedRemoteP2pAdmin,
-    owner: &EnrollmentAuthorityOwner,
+    sender: &watch::Sender<EnrollmentAuthorityState>,
     delivered: &mut BTreeSet<String>,
 ) {
     let projection = match store.load_projection().await {
         Ok(projection) => projection,
         Err(error) => {
-            owner.publish_failed(&error);
+            publish_failed(sender, &error);
             tracing::warn!(error = %error, "enrollment projection read failed; authority remains fail closed");
             return;
         }
     };
-    owner.publish_ready(projection.clone());
+    publish_ready(sender, projection.clone());
 
     if let Err(error) = reconcile_data_plane(node, identity.did(), store, &projection).await {
-        owner.publish_failed(&error);
+        publish_failed(sender, &error);
         tracing::warn!(error = %error, "enrollment data-plane reconciliation failed; will retry");
     }
     if let Err(error) =
@@ -1125,6 +1151,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stalled_network_sweep_serves_fresh_authority_and_revocation() {
+        let active = active_enrollment(1, "2099-01-01T00:00:00Z");
+        let member = active.request.candidate_did.clone();
+        let script = ScriptedProjectionReader {
+            steps: Mutex::new(VecDeque::from([
+                ScriptedProjection::Projection(projection_with_active(active.clone())),
+                ScriptedProjection::Projection(projection_with_revoked(&active)),
+                ScriptedProjection::Error("authority unavailable during network replay"),
+            ])),
+        };
+        let (mut owner, handle) = enrollment_authority_channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            serve_authority_during_sweep(
+                async {
+                    held.await.unwrap();
+                },
+                &script,
+                &owner.sender,
+                &mut owner.commands,
+                &CancellationToken::new(),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            assert!(handle
+                .fresh_member_authorization(&member)
+                .await
+                .unwrap()
+                .is_some());
+            assert!(handle
+                .fresh_member_authorization(&member)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(handle.fresh_member_authorization(&member).await.is_err());
+        })
+        .await
+        .expect("fresh authority must not wait for network replay");
+        assert!(!task.is_finished(), "the network effect is still held");
+        release.send(()).unwrap();
+        assert!(task.await.unwrap());
+    }
+
+    #[tokio::test]
     async fn client_observation_reloads_current_scoped_authority() {
         let active = active_enrollment(1, "2099-01-01T00:00:00Z");
         let member = active.request.candidate_did.clone();
@@ -1154,7 +1225,7 @@ mod tests {
                     .recv()
                     .await
                     .expect("observation authorization");
-                handle_authority_command(&script, &owner, command).await;
+                handle_authority_command(&script, &owner.sender, command).await;
             }
         });
         assert!(handle
@@ -1290,7 +1361,7 @@ mod tests {
     fn authority_handle_is_fail_closed_until_owner_publishes() {
         let (owner, handle) = enrollment_authority_channel();
         assert!(handle.current().is_err());
-        owner.publish_ready(EnrollmentProjection::default());
+        publish_ready(&owner.sender, EnrollmentProjection::default());
         assert_eq!(*handle.current().unwrap(), EnrollmentProjection::default());
     }
 
@@ -1383,7 +1454,7 @@ mod tests {
         let command_task = tokio::spawn(async move {
             for _ in 0..8 {
                 let command = owner.commands.recv().await.expect("authority command");
-                handle_authority_command(&script, &owner, command).await;
+                handle_authority_command(&script, &owner.sender, command).await;
             }
         });
         let verifier =

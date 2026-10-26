@@ -76,7 +76,7 @@ def effectiveTargets (ctx : StepContext) (pin : Pin) : EndpointScope Target Unit
 
 inductive Refusal
   | terminal | notAvailable | engineChanged | policyDenied | stalled | depthExceeded | timedOut
-  | stepFailed | backgroundBudgetExceeded
+  | stepFailed | backgroundBudgetExceeded | dynamicCodeDisabled | resumeUnknown | resumeNotHead
   deriving DecidableEq, Repr
 
 /-- The host terminal codes; `.terminal` is a no-op and has none. -/
@@ -84,12 +84,14 @@ def Refusal.code : Refusal → Option String
   | .terminal => none
   | .notAvailable => some "plugin_job_not_available"
   | .engineChanged => some "plugin_job_engine_changed"
-  | .policyDenied => some "plugin_job_policy_denied"
+  | .policyDenied | .dynamicCodeDisabled => some "plugin_job_policy_denied"
   | .stalled => some "plugin_job_stalled"
   | .depthExceeded => some "plugin_job_depth_exceeded"
   | .timedOut => some "plugin_job_timed_out"
   | .stepFailed => some "plugin_job_step_failed"
   | .backgroundBudgetExceeded => some "background_tool_budget_exceeded"
+  | .resumeUnknown => some "plugin_job_resume_unknown"
+  | .resumeNotHead => some "plugin_job_resume_not_head"
 
 def StepOutput.pin : StepOutput → Option GuestPin
   | .result _ _ p _ => p
@@ -150,6 +152,23 @@ def resumeAdmitted (ctx : StepContext) (out : StepOutput) : Bool :=
       ctx.resumeIsHead r.rowDoc && root.pin.isSome &&
         resumeValid ctx.callerScope owner samePlugin prior g ctx.resumeFacts r
     | _, _ => false
+
+/-- The refusal of a step-0 `resume` that `resumeAdmitted` rejects, so the
+model learns the next call: `resumeUnknown` when no row has the named id, and
+`resumeNotHead` when the caller may manage the named row of this plugin but a
+later resume already continued it. Every other rejection stays
+`policyDenied`: a row the caller may not manage is not described beyond
+existing, and a resume beside no pin is a malformed output. -/
+def resumeRefusal (ctx : StepContext) (out : StepOutput) : Refusal :=
+  match out.resume, out.pin with
+  | some r, some _ =>
+    match ctx.resumeTarget r.rowDoc with
+    | none => .resumeUnknown
+    | some (owner, samePlugin, _, _) =>
+      if Background.ProcessControl.authorized ctx.callerScope owner && samePlugin &&
+          !ctx.resumeIsHead r.rowDoc then .resumeNotHead
+      else .policyDenied
+  | _, _ => .policyDenied
 
 /-- The row a step is admitted against: a validated step-0 `resume` continues
 the chain, so its freshness, spend and live bounds are the chain head's
@@ -352,12 +371,19 @@ def admitNonJob (ctx : StepContext) (job : Job) : StepOutput → Except Refusal 
 def scriptVerbs : List String := ["run", "check", "import"]
 
 /-- A call runs dynamic script code when a script verb carries its source with
-the call: an inline `script` or a `path`. A pinless call presents no source
+the call: a nonempty inline `script` or `path`. Empty optional strings carry
+no source bytes; whitespace remains source and is never trimmed. A pinless call presents no source
 digest, so the host treats a carried source as dynamic. A named run of an
 installed script and the workflow control, status, result and help verbs
 carry neither. -/
 def CallArgs.runsDynamicScript (c : CallArgs) : Bool :=
-  c.argv.head?.any scriptVerbs.contains && (c.script.isSome || c.path.isSome)
+  c.argv.head?.any scriptVerbs.contains && (c.script.any (fun source => !source.isEmpty) || c.path.any (fun source => !source.isEmpty))
+
+theorem empty_source_fields_preserve_dynamic_classification (c : CallArgs) :
+    ({ c with script := some "", path := some "" }).runsDynamicScript =
+      ({ c with script := none, path := none }).runsDynamicScript := by
+  have empty : "".isEmpty = true := by decide
+  simp [CallArgs.runsDynamicScript, empty]
 
 /-- A pinless call runs dynamic code when it carries a dynamic source
 (`CallArgs.runsDynamicScript`) or when a script verb names a script whose
@@ -386,11 +412,12 @@ def dynamicModeRefusal (p : Policy) (origin : Origin) (job : Job) (out : StepOut
 host's pin; a step-0 pinned `result` or `suspend` is adopted and ends the row
 in the same transaction. Under the empty ceiling (an absent job block) a new
 pin is refused with `notAvailable` and a pinless call still runs. A step-0 `resume` is admitted only if `resumeValid`
-accepts it (`resumeAdmitted`), and its effects are admitted against the resumed
-chain row (`stepRow`). Under `policy.mode = off` a dynamic-origin pin is
-refused with `policyDenied` by `dynamicModeRefusal`, and a pinless step 0
-here, before `admitNonJob`, when its call runs dynamic code
-(`runsDynamicCode`): it carries a `script` or a `path`, or a script verb names
+accepts it (`resumeAdmitted`), otherwise refused with the cause `resumeRefusal`
+names, and its effects are admitted against the resumed chain row (`stepRow`).
+Under `policy.mode = off` a dynamic-origin pin is refused with `policyDenied`
+by `dynamicModeRefusal`. A pinless step 0 is refused with `dynamicCodeDisabled`
+here, before `admitNonJob`, when its call runs dynamic code (`runsDynamicCode`):
+it carries a nonempty `script` or `path`, or a script verb names
 a script whose resolved origin is dynamic. Any other pinless call is not
 refused by the mode. A step whose pin has installed origin is refused with
 `policyDenied` once the step-0 rules pass when `installedTrusted` no longer
@@ -400,11 +427,11 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
   else if !ctx.available || !ctx.engineProvenanceOperator then .error .notAvailable
   else if engineChanged ctx job out then .error .engineChanged
   else if out.resume.isSome && !resumePlaced job out then .error .policyDenied
-  else if !resumeAdmitted ctx out then .error .policyDenied
+  else if !resumeAdmitted ctx out then .error (resumeRefusal ctx out)
   else
     match stepPin ctx job out with
     | none =>
-      if ctx.policy.mode = .off ∧ runsDynamicCode ctx job.call = true then .error .policyDenied
+      if ctx.policy.mode = .off ∧ runsDynamicCode ctx job.call = true then .error .dynamicCodeDisabled
       else admitNonJob ctx job out
     | some pin =>
       if (dynamicModeRefusal ctx.policy pin.origin (stepRow ctx job out) out).isSome then
@@ -427,14 +454,27 @@ def settleStep (ctx : StepContext) (job : Job) (out : StepOutput)
   | .error .terminal => (job, [])
   | .error _ => ((terminalizeRow job .failed).1, (Control.kill job .stop obs).2)
 
+/-- A resume naming no row is `resumeUnknown`; one naming a row the caller may
+manage that a later resume continued is `resumeNotHead`. -/
+theorem resume_refusal_names_cause (ctx : StepContext) (out : StepOutput) (r : Resume)
+    (g : GuestPin) (hr : out.resume = some r) (hp : out.pin = some g) :
+    (ctx.resumeTarget r.rowDoc = none → resumeRefusal ctx out = .resumeUnknown) ∧
+      (∀ owner prior root, ctx.resumeTarget r.rowDoc = some (owner, true, prior, root) →
+        Background.ProcessControl.authorized ctx.callerScope owner = true →
+        ctx.resumeIsHead r.rowDoc = false → resumeRefusal ctx out = .resumeNotHead) := by
+  refine ⟨fun ht => ?_, fun owner prior root ht ha hh => ?_⟩
+  · simp [resumeRefusal, hr, hp, ht]
+  · simp [resumeRefusal, hr, hp, ht, ha, hh]
+
 theorem refusal_code_spellings :
     Refusal.code .terminal = none ∧
       [Refusal.stalled, .policyDenied, .notAvailable, .engineChanged, .timedOut, .depthExceeded,
-          .stepFailed, .backgroundBudgetExceeded].map Refusal.code =
+          .stepFailed, .backgroundBudgetExceeded, .resumeUnknown, .resumeNotHead].map Refusal.code =
         [some "plugin_job_stalled", some "plugin_job_policy_denied", some "plugin_job_not_available",
           some "plugin_job_engine_changed", some "plugin_job_timed_out",
           some "plugin_job_depth_exceeded", some "plugin_job_step_failed",
-          some "background_tool_budget_exceeded"] ∧
+          some "background_tool_budget_exceeded", some "plugin_job_resume_unknown",
+          some "plugin_job_resume_not_head"] ∧
       ∀ r : Refusal, r.code = none ↔ r = .terminal := by
   refine ⟨rfl, rfl, ?_⟩
   intro r
@@ -640,7 +680,7 @@ theorem budget_counts_only_new_keys (ctx : StepContext) (job : Job) (e : Effects
       dynamicModeRefusal ctx.policy o (stepRow ctx job (.effects e)) (.effects e) := fun o =>
     dynamicModeRefusal_fresh _ o _ _ _ (hf _ _) rfl
   simp only [admitStep, admitJobOutput, admitEffects, admitNonJob, stepPin, StepOutput.pin,
-    StepOutput.resume, engineChanged, resumePlaced, resumeAdmitted, stepRow_spawns, adoptedPin_spawns, hf, hmr]
+    StepOutput.resume, engineChanged, resumePlaced, resumeAdmitted, resumeRefusal, stepRow_spawns, adoptedPin_spawns, hf, hmr]
 
 private theorem freshSpawns_append_repeat (J : Job) (spawns : List Spawn) (d : Spawn)
     (h : ∃ s ∈ spawns, spawnKey J s = spawnKey J d) :
@@ -672,7 +712,7 @@ theorem budget_ignores_repeated_key (ctx : StepContext) (job : Job) (e : Effects
       dynamicModeRefusal ctx.policy o (stepRow ctx job (.effects e)) (.effects e) := fun o =>
     dynamicModeRefusal_fresh _ o _ _ _ (freshSpawns_append_repeat _ _ _ h) rfl
   simp only [admitStep, admitJobOutput, admitEffects, admitNonJob, stepPin, StepOutput.pin,
-    StepOutput.resume, engineChanged, resumePlaced, resumeAdmitted, stepRow_spawns, adoptedPin_spawns, hf, hmr]
+    StepOutput.resume, engineChanged, resumePlaced, resumeAdmitted, resumeRefusal, stepRow_spawns, adoptedPin_spawns, hf, hmr]
 
 /-- An admitted spawn is permitted by the live, pinned, job and caller
 ceilings. -/
@@ -1121,13 +1161,13 @@ theorem terminal_with_live_children_fails_closed (ctx : StepContext) (job : Job)
     cases out with
     | effects e => exact absurd rfl (hout e)
     | result x c g r =>
-      cases r <;> simp [admitStep, hr, ha, ho, he, hpin, stepPin, resumePlaced, StepOutput.resume,
+      cases r <;> simp [admitStep, resumeAdmitted, resumeRefusal, hr, ha, ho, he, hpin, stepPin, resumePlaced, StepOutput.resume,
         stepRow, admitJobOutput, endRow, liveCount_adopt, hl]
     | fail x =>
-      simp [admitStep, hr, ha, ho, he, hpin, stepPin, StepOutput.resume, stepRow, admitJobOutput,
+      simp [admitStep, resumeAdmitted, resumeRefusal, hr, ha, ho, he, hpin, stepPin, StepOutput.resume, stepRow, admitJobOutput,
         endRow, liveCount_adopt, hl]
     | suspend k rs x g r =>
-      cases r <;> simp [admitStep, hr, ha, ho, he, hpin, stepPin, resumePlaced, StepOutput.resume,
+      cases r <;> simp [admitStep, resumeAdmitted, resumeRefusal, hr, ha, ho, he, hpin, stepPin, resumePlaced, StepOutput.resume,
         stepRow, admitJobOutput, endRow, liveCount_adopt, hl]
   exact ⟨hd, (panel_refusal_fails_closed ctx p job out obs).2 hd⟩
 

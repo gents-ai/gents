@@ -13,7 +13,6 @@ use crate::oauth_credential::{
     account_failure_state, backend_account, list_accounts, serving_account, AccountState,
     AccountSummary, ServingAccount,
 };
-use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use crate::Collection;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -272,12 +271,13 @@ async fn requests_in_txn(
     node_did: &str,
     filter: &str,
 ) -> Result<Vec<AgentRequestRow>> {
+    let fields = crate::goal::request_selection_fields();
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(
                 filter: {{ node_did: {{ _eq: "{}" }}, {filter} }},
                 order: [{{ created_at: DESC }}, {{ request_id: DESC }}]
-            ) {{ {SIGNED_REQUEST_FIELDS} failure_reason }} }}"#,
+            ) {{ {fields} }} }}"#,
             escape_graphql_string(node_did)
         ))
         .await?;

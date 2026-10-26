@@ -24,6 +24,10 @@ impl MockUpdateSubscriptionSource {
         }
     }
 
+    pub fn close(&self) {
+        self.bus.close();
+    }
+
     pub fn publish_update(&self, collection_id: impl Into<String>, doc_id: impl Into<String>) {
         let collection_id = collection_id.into();
         let doc_id = doc_id.into();

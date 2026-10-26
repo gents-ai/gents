@@ -182,6 +182,11 @@ export function PluginAccessPrompt() {
               Always allow this folder
             </Button>
           )}
+          {question?.answers.includes("invocation") && (
+            <Button variant="outline" onClick={() => void answer("invocation")}>
+              Remember this exact command
+            </Button>
+          )}
           <Button onClick={() => void answer("once")}>Allow once</Button>
         </DialogFooter>
       </DialogContent>

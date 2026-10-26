@@ -82,6 +82,10 @@ pub enum ClientCommand {
     ConfigApply {
         request: Box<crate::types::ConfigComponentsApplyRequest>,
     },
+    #[serde(rename = "desktop_provider_usage_read")]
+    ProviderUsageRead {
+        request: crate::accounts::usage::ProviderUsageReadRequest,
+    },
     #[serde(rename = "client_provider_accounts_list")]
     AccountsList {
         request: crate::accounts::ProviderAccountsRequest,
@@ -222,6 +226,10 @@ pub enum ClientCommand {
     WorkspacePermissions {
         request: super::permissions::WorkspacePermissionsRequest,
     },
+    #[serde(rename = "client_workspace_permissions_forget_commands")]
+    WorkspacePermissionsForgetCommands {
+        request: super::permissions::WorkspacePermissionsForgetCommandsRequest,
+    },
     #[serde(rename = "client_workspace_permissions_save")]
     WorkspacePermissionsSave {
         request: super::permissions::WorkspacePermissionsSaveRequest,
@@ -321,6 +329,7 @@ impl ClientCommand {
         "client_inference_model_recommendation",
         "client_config_apply",
         "client_provider_accounts_list",
+        "desktop_provider_usage_read",
         "client_provider_account_sign_in",
         "client_provider_account_disconnect",
         "client_provider_account_rename",
@@ -343,6 +352,7 @@ impl ClientCommand {
         "client_connect_local",
         "client_workspace_permissions",
         "client_workspace_permissions_save",
+        "client_workspace_permissions_forget_commands",
         "client_plugin_approval_subscribe",
         "client_plugin_approval_unsubscribe",
         "client_plugin_approval_pending",
@@ -380,6 +390,7 @@ impl ClientCommand {
                 | Self::InferenceModelsDiscover { .. }
                 | Self::InferenceModelRecommendation { .. }
                 | Self::AccountsList { .. }
+                | Self::ProviderUsageRead { .. }
                 | Self::ConfigCatalog { .. }
                 | Self::ConfigRead { .. }
                 | Self::ActionCatalog { .. }

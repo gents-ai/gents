@@ -349,6 +349,9 @@ pub struct PendingQueueEntryView {
 #[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
     pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub started_goal_id: Option<String>,
     #[serde(skip)]
     #[ts(skip)]
     pub(crate) request_doc_id: Option<String>,
@@ -462,6 +465,9 @@ pub enum RenderedTimelineItem {
     PendingUserTurn {
         item_key: String,
         request_id: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        started_goal_id: Option<String>,
         content: String,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]

@@ -62,47 +62,77 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
         node,
         None,
         "goal.stop_unavailable_claimed_continuation",
-        |txn| Box::pin(async move {
-            let Some(goal) = load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await? else {
-                return Ok(false);
-            };
-            if goal.doc_id != observed.doc_id || goal.status != observed.status
-                || goal.continuation_sequence() != observed.continuation_sequence()
-                || goal.last_continued_from_request_id != observed.last_continued_from_request_id
-                || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
-                || gate_claimed_goal_continuation(
-                    GoalAgentObservation::Unavailable, true, false,
-                    &goal.state().context("goal has an unknown status")?,
-                ) != GoalClaimedDecision::Stop
-            {
-                return Ok(false);
-            }
-            let did = escape_graphql_string(&goal.node_did);
-            let session = escape_graphql_string(&goal.session_id);
-            let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
+        |txn| {
+            Box::pin(async move {
+                let Some(goal) =
+                    load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id)
+                        .await?
+                else {
+                    return Ok(false);
+                };
+                if goal.doc_id != observed.doc_id
+                    || goal.status != observed.status
+                    || goal.continuation_sequence() != observed.continuation_sequence()
+                    || goal.last_continued_from_request_id
+                        != observed.last_continued_from_request_id
+                    || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
+                    || gate_claimed_goal_continuation(
+                        GoalAgentObservation::Unavailable,
+                        true,
+                        false,
+                        &goal.state().context("goal has an unknown status")?,
+                    ) != GoalClaimedDecision::Stop
+                {
+                    return Ok(false);
+                }
+                let fields = super::request_head::request_selection_fields();
+                let did = escape_graphql_string(&goal.node_did);
+                let session = escape_graphql_string(&goal.session_id);
+                let response = txn
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{
                 node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
-            }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#)).await?;
-            let requests: Vec<AgentRequestRow> = serde_json::from_value(
-                response.pointer("/data/AgentRequest").cloned()
-                    .context("claimed stop request query omitted rows")?
-            )?;
-            if !goal_session_is_idle(&requests)
-                || !latest_goal_request(&goal, &requests).is_some_and(|parent|
-                    parent.request_id == parent_request_id
-                        && parent.lifecycle_state.is_some_and(RequestLifecycleState::is_terminal))
-                || requests.iter().any(|request|
-                    request.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
-                        && request.caused_by_trigger_id.as_deref() == Some(goal.goal_id.as_str())
-                        && request.caused_by_parent_request_id.as_deref() == Some(parent_request_id))
-            {
-                return Ok(false);
-            }
-            Ok(stop_claimed_continuation_in_txn(
-                txn, &goal, observed.continuation_sequence(), parent_request_id,
-                reason, false, Utc::now(),
-            ).await?.is_some())
-        }),
-    ).await
+            }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
+                    ))
+                    .await?;
+                let requests: Vec<AgentRequestRow> = serde_json::from_value(
+                    response
+                        .pointer("/data/AgentRequest")
+                        .cloned()
+                        .context("claimed stop request query omitted rows")?,
+                )?;
+                if !goal_session_is_idle(&requests)
+                    || !latest_goal_request(&goal, &requests).is_some_and(|parent| {
+                        parent.request_id == parent_request_id
+                            && parent
+                                .lifecycle_state
+                                .is_some_and(RequestLifecycleState::is_terminal)
+                    })
+                    || requests.iter().any(|request| {
+                        request.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
+                            && request.caused_by_trigger_id.as_deref()
+                                == Some(goal.goal_id.as_str())
+                            && request.caused_by_parent_request_id.as_deref()
+                                == Some(parent_request_id)
+                    })
+                {
+                    return Ok(false);
+                }
+                Ok(stop_claimed_continuation_in_txn(
+                    txn,
+                    &goal,
+                    observed.continuation_sequence(),
+                    parent_request_id,
+                    reason,
+                    false,
+                    Utc::now(),
+                )
+                .await?
+                .is_some())
+            })
+        },
+    )
+    .await
 }
 
 type StoppedReason = std::sync::Mutex<Option<String>>;
@@ -129,13 +159,14 @@ async fn stage_claimed_continuation(
     if goal.doc_id != observed.doc_id {
         return Ok(None);
     }
+    let fields = super::request_head::request_selection_fields();
     let did = escape_graphql_string(&goal.node_did);
     let session = escape_graphql_string(&goal.session_id);
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
         node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
-    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
+    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
         ))
         .await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(

@@ -1,5 +1,7 @@
 mod question;
 mod queue;
+#[cfg(test)]
+pub(crate) mod testing;
 pub mod workspace;
 pub use question::{CommandApproval, FilesystemApproval, Request};
 use queue::Queue;
@@ -74,6 +76,8 @@ pub enum Answer {
     AlwaysPath,
     #[serde(rename = "always")]
     AlwaysFolder,
+    #[serde(rename = "invocation")]
+    AlwaysInvocation,
     #[serde(rename = "deny")]
     Deny,
 }
@@ -400,9 +404,16 @@ fn decide_with_clock(
     }
     anyhow::ensure!(
         request.allows_answer(answer),
-        "this action only supports allow once or deny"
+        "This answer is not available for this action. Reopen the access request."
     );
-    if answer.remembered() {
+    if answer == Answer::AlwaysInvocation {
+        workspace::remember_command(
+            home,
+            request
+                .binding()
+                .context("This approval has no bound command.")?,
+        )?;
+    } else if answer.remembered() {
         let file = request
             .filesystem()
             .context("this approval cannot remember filesystem access")?;
@@ -433,3 +444,6 @@ mod tests;
 #[cfg(test)]
 #[path = "approval_contract_tests.rs"]
 mod contract_tests;
+
+#[cfg(test)]
+mod command_grant_contract_tests;

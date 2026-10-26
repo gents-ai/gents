@@ -19,12 +19,14 @@ const WORKERS: [(&str, &str); 2] = [
 pub struct Provider {
     gates: [Arc<Semaphore>; 2],
     fail_history: bool,
+    profile_commands: bool,
 }
 impl Provider {
-    pub fn new(fail_history: bool) -> Self {
+    pub fn new(fail_history: bool, profile_commands: bool) -> Self {
         Self {
             gates: std::array::from_fn(|_| Arc::new(Semaphore::new(0))),
             fail_history,
+            profile_commands,
         }
     }
     pub fn reply(&self, request: &Value) -> Option<ChatAction> {
@@ -43,6 +45,11 @@ impl Provider {
                     }
             })
         };
+        if self.profile_commands {
+            if let Some(action) = super::editor_command_output::reply(request) {
+                return Some(action);
+            }
+        }
         for (index, (_, prompt)) in WORKERS.iter().enumerate() {
             if has_user(prompt) {
                 if index == 1 && self.fail_history {
@@ -120,6 +127,7 @@ pub async fn verify(
     author: &str,
     root: &Path,
     fail_history: bool,
+    profile_commands: bool,
 ) -> Result<Value> {
     use anyhow::ensure;
     use gents::graphql::escape_graphql_string as escape;
@@ -195,6 +203,19 @@ pub async fn verify(
             "two starts reused one session"
         );
     }
+    let mut activity = Value::Null;
+    if profile_commands {
+        let requests: Vec<_> = rows
+            .iter()
+            .filter(|row| {
+                row.content.as_deref() == Some(super::editor_command_output::ACTIVITY_PROMPT)
+            })
+            .collect();
+        let [request] = requests.as_slice() else {
+            anyhow::bail!("the command profile must be admitted exactly once");
+        };
+        activity = super::editor_command_output::verify(access, node, session, request).await?;
+    }
     let ui: Value =
         serde_json::from_slice(&std::fs::read(root.join("editor-related-work-ui.json"))?)?;
     ensure!(
@@ -206,7 +227,13 @@ pub async fn verify(
             && (!fail_history || ui["failedWorkerObserved"] == true),
         "installed related-work evidence is incomplete"
     );
+    if profile_commands {
+        ensure!(
+            ui["activityLiveOutputObserved"] == true && ui["activityCommandsCollapsed"] == true,
+            "installed command-output evidence is incomplete"
+        );
+    }
     Ok(
-        json!({"parentRequest":parent.doc_id,"relatedSessions":sessions,"signedAncestryVerified":true,"ui":ui}),
+        json!({"parentRequest":parent.doc_id,"relatedSessions":sessions,"signedAncestryVerified":true,"activity":activity,"ui":ui}),
     )
 }

@@ -1,3 +1,4 @@
+import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.AccessReview
@@ -6,6 +7,7 @@ import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.ClientInstallation
+import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases
 import Proofs.Conformance.ClientRequestCacheIdentityCases
@@ -35,6 +37,7 @@ import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
+import Proofs.Conformance.Contracts.Json.PackInstallation
 import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
@@ -182,6 +185,9 @@ def snapshotJson : String :=
     ++ "\"access_review_cases\":" ++ Conformance.AccessReview.casesJson.compress ++ ","
     ++ "\"access_review_task_cases\":" ++ Conformance.AccessReview.taskCasesJson.compress ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
+    ++ "\"workspace_command_grant_answers\":" ++ Conformance.WorkspaceCommandGrants.answersJson.compress ++ ","
+    ++ "\"workspace_command_grant_lookups\":" ++ Conformance.WorkspaceCommandGrants.lookupsJson.compress ++ ","
+    ++ "\"workspace_command_grant_revocations\":" ++ Conformance.WorkspaceCommandGrants.revocationsJson.compress ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"graph_logical_invocation_cases\":"
@@ -334,6 +340,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientInstallation.casesJson ++ ","
     ++ "\"client_installation_compatibility_cases\":"
       ++ Conformance.ClientInstallation.compatibilityCasesJson ++ ","
+    ++ "\"runtime_service_replacement_cases\":"
+      ++ Conformance.RuntimeServiceReplacement.casesJson ++ ","
     ++ "\"client_observation_scope_cases\":"
       ++ Conformance.ClientObservationScope.casesJson ++ ","
     ++ "\"client_settings_cases\":"
@@ -354,6 +362,10 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"client_live_delta_cases\":"
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
+    ++ "\"plugin_reference_cases\":"
+      ++ PackInstallation.casesJson ++ ","
+    ++ "\"snapshot_demotion_cases\":"
+      ++ snapshotDemotionCasesJson ++ ","
     ++ "\"startup_readiness_cases\":"
       ++ startupReadinessCasesJson ++ ","
     ++ "\"readiness_publication_cases\":"

@@ -518,4 +518,26 @@ theorem backend_negative_queue_rejected (queue : Int) (h : queue < 0) :
   have hn : ¬ (0 : Int) ≤ queue := by omega
   simp [resolveBackendControls, defaultBackendControls, ConfigDefaults.resolveNat, hn]
 
+/-- Local pack preparation has the root and declared dependency manifests and
+an installed-plugin inventory. Every declared reference must resolve through
+those existing resources before configuration writes begin. -/
+def pluginReferencesAvailable (references shipped installed : List String) : Bool :=
+  references.all fun reference => decide (reference ∈ shipped ∨ reference ∈ installed)
+
+theorem pluginReferencesAvailable_iff (references shipped installed : List String) :
+    pluginReferencesAvailable references shipped installed = true ↔
+      ∀ reference ∈ references, reference ∈ shipped ∨ reference ∈ installed := by
+  simp [pluginReferencesAvailable, List.all_eq_true]
+
+theorem missing_plugin_refuses_install (references shipped installed : List String)
+    (reference : String) (hReference : reference ∈ references)
+    (hShipped : reference ∉ shipped) (hInstalled : reference ∉ installed) :
+    pluginReferencesAvailable references shipped installed = false := by
+  cases h : pluginReferencesAvailable references shipped installed with
+  | false => rfl
+  | true =>
+      have resolved := (pluginReferencesAvailable_iff references shipped installed).mp h
+        reference hReference
+      exact False.elim (resolved.elim hShipped hInstalled)
+
 end Configuration
