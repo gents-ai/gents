@@ -38,6 +38,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                 .collect(),
             expected: None,
             assignment_root: None,
+            expected_receipt_checks: None,
         };
         let mut fixture = Fixture {
             case: &case,
@@ -283,6 +284,8 @@ struct Case {
     expected: Option<ModelRow>,
     #[serde(default)]
     assignment_root: Option<u64>,
+    #[serde(default)]
+    expected_receipt_checks: Option<usize>,
 }
 
 fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
@@ -491,7 +494,7 @@ impl Fixture<'_> {
 #[tokio::test]
 async fn generated_goal_request_head_cases_drive_signed_row_selector() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.goal_request_head_cases.len(), 22);
+    assert_eq!(snapshot.goal_request_head_cases.len(), 27);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
@@ -545,13 +548,11 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
             crate::request_admission::count_request_receipt_verifications(|| {
                 latest_goal_request(&goal, &rows).and_then(|row| row.doc_id.as_deref())
             });
-        if case.assignment_root.is_some() {
-            assert!(
-                verifications <= 8 * rows.len(),
-                "{}: {} receipt checks for {} history rows",
+        if let Some(expected_checks) = case.expected_receipt_checks {
+            assert_eq!(
+                verifications, expected_checks,
+                "{}: receipt checks must match the executed Lean authentication plan",
                 case.name,
-                verifications,
-                rows.len(),
             );
         }
         let expected = case

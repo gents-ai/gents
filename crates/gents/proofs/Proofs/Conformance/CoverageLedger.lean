@@ -1790,6 +1790,16 @@ def caseCoverage : List CoverageEntry :=
       "lifecycle::queue::folding::assignment_tests::generated_goal_assignments_bound_fold_and_steering")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "durable_observation_cases"
+      "DurableObservationCases"
+      "hook::persistence::background_control::observation::tests::generated_observation_cases_preserve_deadlines_and_closed_feed_recovery")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_target_resolution_cases"
+      "PluginTargetResolutionCases"
+      "plugin_job::admit::tests::generated_wire_targets_preserve_endpoint_and_permission_identity")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_request_head_cases"
       "GoalRequestHeadCases"
       "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector")

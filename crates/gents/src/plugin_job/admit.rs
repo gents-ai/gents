@@ -966,6 +966,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn generated_wire_targets_preserve_endpoint_and_permission_identity() {
+        #[derive(serde::Deserialize)]
+        struct Binding {
+            wire: String,
+            node: String,
+            agent: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            bindings: Vec<Binding>,
+            wire: String,
+            ids: Vec<String>,
+            target: (String, String),
+            expected_resolved: Option<(String, String)>,
+            expected_permitted: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Contracts {
+            plugin_target_resolution_cases: Vec<Case>,
+        }
+        let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+        assert!(!contracts.plugin_target_resolution_cases.is_empty());
+        for case in contracts.plugin_target_resolution_cases {
+            let mut context = base_context();
+            context.target_ids = case
+                .bindings
+                .into_iter()
+                .map(|binding| (binding.wire, (binding.node, binding.agent)))
+                .collect();
+            assert_eq!(
+                resolve_target(&context, &case.wire),
+                case.expected_resolved.as_ref()
+            );
+            assert_eq!(
+                ids_permit(&context, &case.ids, &case.target),
+                case.expected_permitted
+            );
+        }
+    }
+
     fn pin() -> JobPin {
         JobPin {
             script_id: "script".to_owned(),

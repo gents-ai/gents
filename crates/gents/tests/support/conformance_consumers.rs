@@ -56,6 +56,20 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "hook::persistence::background_control::observation::tests::generated_observation_cases_preserve_deadlines_and_closed_feed_recovery",
+            package: "gents",
+            source_path: "crates/gents/src/hook/persistence/background_control/observation_tests.rs",
+            module_path: "hook::persistence::background_control::observation::tests",
+            function: "generated_observation_cases_preserve_deadlines_and_closed_feed_recovery",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin_job::admit::tests::generated_wire_targets_preserve_endpoint_and_permission_identity",
+            package: "gents",
+            source_path: "crates/gents/src/plugin_job/admit.rs",
+            module_path: "plugin_job::admit::tests",
+            function: "generated_wire_targets_preserve_endpoint_and_permission_identity",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",
             package: "gents-protocol",
             source_path: "crates/gents-protocol/src/database_error.rs",
