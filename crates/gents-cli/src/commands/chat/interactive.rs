@@ -167,7 +167,7 @@ pub(super) async fn run(
                             approval::decide(home, &request.id, Answer::Deny)?;
                         } else {
                             println!("{}", request.prompt());
-                            println!("Use /approve {} once|file|folder|deny", request.id);
+                            println!("Use /approve {} once|invocation|file|folder|deny", request.id);
                             approval_prompt = Some(request);
                         }
                     }
@@ -185,10 +185,11 @@ fn handle_approval_command(home: &Path, shown: &mut Option<Request>, line: &str)
     let words = line.split_whitespace().collect::<Vec<_>>();
     anyhow::ensure!(
         words.len() == 3 && words[0] == "/approve",
-        "use /approve <request-id> once|file|folder|deny with the displayed request ID"
+        "use /approve <request-id> once|invocation|file|folder|deny with the displayed request ID"
     );
     let answer = match words[2] {
         "once" => Answer::Once,
+        "invocation" => Answer::AlwaysInvocation,
         "file" => Answer::AlwaysPath,
         "folder" => Answer::AlwaysFolder,
         "deny" => Answer::Deny,
@@ -199,7 +200,7 @@ fn handle_approval_command(home: &Path, shown: &mut Option<Request>, line: &str)
         .context("no displayed approval is pending; wait for its request ID")?;
     anyhow::ensure!(
         request.id == words[1],
-        "approval ID does not match the displayed request; use /approve {} once|file|folder|deny",
+        "approval ID does not match the displayed request; use /approve {} once|invocation|file|folder|deny",
         request.id
     );
     anyhow::ensure!(
