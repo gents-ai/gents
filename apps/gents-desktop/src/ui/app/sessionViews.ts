@@ -14,11 +14,14 @@ export type ReadingPlace = { key: string; offset: number; sequence: number | nul
 export type SessionViews = {
   /** by session, the most recently read first */
   places: { session: string; place: ReadingPlace }[];
+  /** by session, the started sessions its dock shows nested, the most
+      recently changed first */
+  opened: { session: string; rows: string[] }[];
 };
 
 export const PLACES_KEPT = 200;
 
-const initial = (): SessionViews => ({ places: [] });
+const initial = (): SessionViews => ({ places: [], opened: [] });
 
 function isPlace(value: unknown): value is ReadingPlace {
   if (typeof value !== "object" || value === null) return false;
@@ -38,11 +41,20 @@ export function restoreSessionViews(stored: unknown): SessionViews {
     unknown
   >;
   const places = Array.isArray(saved.places) ? saved.places : [];
+  const opened = Array.isArray(saved.opened) ? saved.opened : [];
   return {
     places: places
       .filter(
         (entry): entry is SessionViews["places"][number] =>
           typeof entry?.session === "string" && isPlace(entry.place),
+      )
+      .slice(0, PLACES_KEPT),
+    opened: opened
+      .filter(
+        (entry): entry is SessionViews["opened"][number] =>
+          typeof entry?.session === "string" &&
+          Array.isArray(entry.rows) &&
+          entry.rows.every((row: unknown) => typeof row === "string"),
       )
       .slice(0, PLACES_KEPT),
   };
@@ -70,6 +82,22 @@ export const sessionViews = {
     const others = store.getState().places.filter((entry) => entry.session !== session);
     store.setState({
       places: (place ? [{ session, place }, ...others] : others).slice(0, PLACES_KEPT),
+    });
+  },
+  openedOf(session: string | null): readonly string[] {
+    if (!session) return [];
+    return (
+      store.getState().opened.find((entry) => entry.session === session)?.rows ?? []
+    );
+  },
+  /** none open forgets the session */
+  setOpened(session: string, rows: readonly string[]) {
+    const others = store.getState().opened.filter((entry) => entry.session !== session);
+    store.setState({
+      opened: (rows.length ? [{ session, rows: [...rows] }, ...others] : others).slice(
+        0,
+        PLACES_KEPT,
+      ),
     });
   },
 };
