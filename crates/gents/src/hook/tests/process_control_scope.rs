@@ -40,9 +40,9 @@ async fn unowned_live_process_group_keeps_the_retained_owner_record() {
         .release_process_record("stale-call", "stale-doc")
         .await;
     assert!(registry.process_record("stale-call", "stale-doc").is_some());
-    registry.forget_process_record("stale-call");
+    registry.forget_process_record("stale-call", "stale-doc");
     assert!(registry.process_record("stale-call", "stale-doc").is_some());
-    registry.process_records.remove("stale-call");
+    registry.process_records.remove("stale-doc");
 }
 use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};

@@ -995,6 +995,17 @@ pub struct JobView {
     pub completed_at: Option<u64>,
 }
 
+pub const JOB_CONTROL_PATH: &str = "/jobs/control";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct OperatorJobControlRequest {
+    pub node_did: String,
+    pub tool_call_doc_id: String,
+    pub action: JobControlKind,
+}
+
 /// The result of controlling a job row. Control is local-only: it runs on
 /// the runtime that drives the row, while the view also works remotely.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

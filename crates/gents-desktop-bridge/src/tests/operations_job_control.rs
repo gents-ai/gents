@@ -22,13 +22,13 @@ use crate::tests::support::{boot_core, create_tool_call, seed_job_row, OPERATOR}
 use crate::types::DesktopJobControlRequest;
 
 fn request(
-    session_id: &str,
-    tool_call_id: &str,
+    core: &Arc<ClientCore>,
+    tool_call_doc_id: &str,
     action: JobControlKind,
 ) -> DesktopJobControlRequest {
     DesktopJobControlRequest {
-        session_id: session_id.into(),
-        tool_call_id: tool_call_id.into(),
+        node_did: core.node_arc().node_identity_did().unwrap().into(),
+        tool_call_doc_id: tool_call_doc_id.into(),
         action,
     }
 }
@@ -207,12 +207,9 @@ pub(super) async fn seed_admission_for_node(
 async fn job_control_on_a_missing_row_reports_not_found() {
     let (core, _tmp) = boot_core().await;
 
-    let error = job_control(
-        &core,
-        &request("sess_none", "call-none", JobControlKind::Stop),
-    )
-    .await
-    .expect_err("no row");
+    let error = job_control(&core, &request(&core, "missing-doc", JobControlKind::Stop))
+        .await
+        .expect_err("no row");
 
     assert_eq!(
         error,
@@ -223,14 +220,16 @@ async fn job_control_on_a_missing_row_reports_not_found() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn job_control_on_a_plain_tool_row_reports_unknown_run() {
     let (core, _tmp) = boot_core().await;
-    create_tool_call(&core, "tc_plain", "shell").await;
+    let doc = create_tool_call(&core, "tc_plain", "shell").await;
+    let did = core.node_arc().node_identity_did().unwrap().to_owned();
+    ConfigAccess::local(core.node_arc()).write("test.plain_job_owner", &format!(
+        r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{ node_did: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&doc), escape_graphql_string(&did),
+    )).await.unwrap();
 
-    let error = job_control(
-        &core,
-        &request("sess_parent", "tc_plain", JobControlKind::Stop),
-    )
-    .await
-    .expect_err("plain row");
+    let error = job_control(&core, &request(&core, &doc, JobControlKind::Stop))
+        .await
+        .expect_err("plain row");
 
     assert_eq!(error, "workflow_control_unknown_run");
 }
@@ -238,8 +237,10 @@ async fn job_control_on_a_plain_tool_row_reports_unknown_run() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn job_control_on_an_ended_job_row_is_already_terminal() {
     let (core, _tmp) = boot_core().await;
-    let row = seed_job_row(
+    let did = core.node_arc().node_identity_did().unwrap().to_owned();
+    let row = crate::tests::support::seed_job_row_for_node(
         &core,
+        &did,
         "sess_job",
         "call-done",
         "completed",
@@ -247,10 +248,10 @@ async fn job_control_on_an_ended_job_row_is_already_terminal() {
         None,
     )
     .await;
-    seed_admission(&core, "sess_job", &row, "call-done", 1).await;
+    seed_admission_for_node(&core, &did, "sess_job", &row, "call-done", 1).await;
 
     for action in [JobControlKind::Stop, JobControlKind::Pause] {
-        let outcome = job_control(&core, &request("sess_job", "call-done", action))
+        let outcome = job_control(&core, &request(&core, &row, action))
             .await
             .expect("ended row answers");
         assert_eq!(
@@ -260,4 +261,90 @@ async fn job_control_on_an_ended_job_row_is_already_terminal() {
             }
         );
     }
+}
+
+#[tokio::test]
+async fn job_control_routes_to_the_owner_without_a_replica_row() {
+    use wiremock::matchers::{body_json, header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let expected = JobControlOutcome::Applied {
+        state: JobState::Cancelled,
+        killed_children: 1,
+    };
+    Mock::given(method("POST")).and(path(gents_protocol::job::JOB_CONTROL_PATH))
+        .and(header_exists("authorization"))
+        .and(body_json(serde_json::json!({"nodeDid": OPERATOR, "toolCallDocId": "runtime-only-doc", "action": "stop"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::to_value(&expected).unwrap()))
+        .expect(1).mount(&server).await;
+    let (core, temp) = boot_core().await;
+    core.add_managed_enrollment_peer_for_test(
+        OPERATOR,
+        &format!("{}/api/v0/graphql", server.uri()),
+        temp.path().join("runtime").to_str().unwrap(),
+        1,
+    )
+    .await
+    .unwrap();
+    let mut command = request(&core, "runtime-only-doc", JobControlKind::Stop);
+    command.node_did = OPERATOR.into();
+    let actual = job_control(&core, &command).await.unwrap();
+    assert_eq!(actual, expected);
+    core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn job_control_refuses_a_physical_row_owned_by_another_node() {
+    let (core, _temp) = boot_core().await;
+    let row = seed_job_row(
+        &core,
+        "same-session",
+        "same-call",
+        "completed",
+        &completed_progress(),
+        None,
+    )
+    .await;
+    seed_admission(&core, "same-session", &row, "same-call", 1).await;
+    let mut command = request(&core, &row, JobControlKind::Stop);
+    command.node_did = "did:test:other-runtime".into();
+    assert_eq!(
+        job_control(&core, &command).await.unwrap_err(),
+        "workflow_control_unknown_run"
+    );
+    core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unknown_peer_replica_cannot_be_used_as_the_executing_runtime() {
+    let (core, _temp) = boot_core().await;
+    let peer = "did:test:unknown-peer";
+    let row = crate::tests::support::seed_job_row_for_node(
+        &core,
+        peer,
+        "replicated-session",
+        "call",
+        "running",
+        &completed_progress(),
+        None,
+    )
+    .await;
+    let mut command = request(&core, &row, JobControlKind::Stop);
+    command.node_did = peer.into();
+    assert_eq!(
+        job_control(&core, &command).await.unwrap_err(),
+        "workflow_control_unknown_run"
+    );
+    let observed = ConfigAccess::local(core.node_arc())
+        .execute(&format!(
+            r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state }} }}"#,
+            escape_graphql_string(&row),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        observed["data"]["AgentToolCall"][0]["lifecycle_state"],
+        "running"
+    );
+    core.shutdown().await.unwrap();
 }

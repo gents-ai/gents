@@ -130,20 +130,16 @@ pub async fn run_session_command_reconciler(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let changes = crate::subscribe_collections(
-        &node,
-        [
-            "AgentSessionInputEdit",
-            "AgentSessionGoalControl",
-            "Goal",
-            "AgentSession",
-            "GoalObservation",
-        ],
-    )?;
+    let watched = CommandKind::ALL
+        .into_iter()
+        .map(CommandKind::collection)
+        .chain(crate::goal::GOAL_OBSERVATION_SOURCES.iter().copied());
+    let changes = crate::subscribe_collections(&node, watched)?;
     let changes = futures::stream::unfold(changes, |mut changes| async move {
         changes.recv().await.map(|batch| (batch, changes))
     });
-    let interval = tokio::time::interval(super::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let ticks = futures::stream::unfold(interval, |mut interval| async move {
         interval.tick().await;
         Some(((), interval))

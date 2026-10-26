@@ -259,11 +259,8 @@ enum Stepped {
     /// The row had already ended; the step did nothing.
     Ended,
     Stale,
-    Refused {
-        row: Box<StepRow>,
-        refusal: Refusal,
-    },
-    Stopped(Box<StepRow>),
+    Refused(Refusal),
+    Stopped,
     Committed(Option<PluginJobTerminal>),
 }
 
@@ -288,8 +285,7 @@ pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutc
         if !row_running {
             return Ok(StepOutcome::Refused(Refusal::Terminal));
         }
-        let row = read_step_row(&access, row_doc_id).await?;
-        kill(&access, &mut lifecycle, &row, KillCause::Stop).await?;
+        kill(&access, &mut lifecycle, KillCause::Stop).await?;
         return Ok(StepOutcome::Settled);
     }
     let pin = read_pin(&access, row_doc_id)
@@ -298,12 +294,8 @@ pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutc
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
     let installed = match read_record(&runtime.home, namespace, name) {
         Ok(record) if record.digest == pin.engine_digest => record,
-        Ok(_) => {
-            return fail_closed(&access, &mut lifecycle, row_doc_id, Refusal::EngineChanged).await
-        }
-        Err(_) => {
-            return fail_closed(&access, &mut lifecycle, row_doc_id, Refusal::NotAvailable).await
-        }
+        Ok(_) => return fail_closed(&access, &mut lifecycle, Refusal::EngineChanged).await,
+        Err(_) => return fail_closed(&access, &mut lifecycle, Refusal::NotAvailable).await,
     };
     let (input, revision) = build_step_input(&access, runtime, row_doc_id, StepKind::Later).await?;
     step_on(runtime, &mut lifecycle, &installed, input, revision).await
@@ -473,14 +465,14 @@ async fn step_on(
     match stepped {
         Stepped::Ended => Ok(StepOutcome::Refused(Refusal::Terminal)),
         Stepped::Stale => Ok(StepOutcome::Stale),
-        Stepped::Refused { row, refusal } => {
+        Stepped::Refused(refusal) => {
             lifecycle.stage_plugin_receipt(Some(receipt));
-            kill(&access, lifecycle, &row, KillCause::FailClosed(refusal)).await?;
+            kill(&access, lifecycle, KillCause::FailClosed(refusal)).await?;
             Ok(StepOutcome::Refused(refusal))
         }
-        Stepped::Stopped(row) => {
+        Stepped::Stopped => {
             lifecycle.stage_plugin_receipt(Some(receipt));
-            kill(&access, lifecycle, &row, KillCause::Stop).await?;
+            kill(&access, lifecycle, KillCause::Stop).await?;
             Ok(StepOutcome::Settled)
         }
         Stepped::Committed(Some(terminal)) => {
@@ -540,17 +532,12 @@ async fn step_transaction(
     )
     .await?
     {
-        return Ok(Stepped::Stopped(Box::new(row)));
+        return Ok(Stepped::Stopped);
     }
     let (ctx, installed) = step_context(txn, runtime, input, pin, output, lifecycle).await?;
     let admitted = match admit_step(&ctx, &row, output) {
         Ok(admitted) => admitted,
-        Err(refusal) => {
-            return Ok(Stepped::Refused {
-                row: Box::new(row),
-                refusal: refusal.refusal,
-            })
-        }
+        Err(refusal) => return Ok(Stepped::Refused(refusal.refusal)),
     };
     if let JobStepOutput::Effects { effects } = output {
         let fresh = fresh_spawns(&ctx, &row, output);
@@ -844,11 +831,9 @@ pub(super) async fn load_lifecycle(
 async fn fail_closed(
     access: &ConfigAccess,
     lifecycle: &mut ToolCallLifecycle,
-    row_doc_id: &str,
     refusal: Refusal,
 ) -> Result<StepOutcome> {
-    let row = read_step_row(access, row_doc_id).await?;
-    kill(access, lifecycle, &row, KillCause::FailClosed(refusal)).await?;
+    kill(access, lifecycle, KillCause::FailClosed(refusal)).await?;
     Ok(StepOutcome::Refused(refusal))
 }
 
@@ -1142,7 +1127,6 @@ impl JobDriver {
             kill(
                 &access,
                 &mut lifecycle,
-                &row,
                 KillCause::FailClosed(Refusal::StepFailed),
             )
             .await?;

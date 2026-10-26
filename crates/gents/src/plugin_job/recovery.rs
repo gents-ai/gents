@@ -34,6 +34,40 @@ pub struct RecoveryFacts {
     pub in_flight: bool,
 }
 
+/// Raw observations projected by Lean `PluginJob.RecoveryTrace.project`.
+pub struct DurableRead {
+    pub session_stopped: bool,
+    pub now_millis: u64,
+    pub available: Result<(), Refusal>,
+    pub progress_revision: u64,
+    pub in_flight: bool,
+}
+
+pub fn facts_from_durable_read(
+    row: &StepRow,
+    lifecycle_running: bool,
+    pin: &JobPin,
+    read: DurableRead,
+) -> RecoveryFacts {
+    RecoveryFacts {
+        running: lifecycle_running,
+        session_stopped: read.session_stopped,
+        terminal_children: terminal_count(row) as u32,
+        observed: row.observed_terminal,
+        live: live_count(row) as u32,
+        step_new: 0,
+        deadline_expired: pin.adopted_at + pin.ceiling_at_pin.max_wall_secs * 1000
+            <= read.now_millis,
+        available: if read.session_stopped {
+            Err(Refusal::NotAvailable)
+        } else {
+            read.available
+        },
+        stepped: read.progress_revision > 1,
+        in_flight: read.in_flight,
+    }
+}
+
 /// What one application of Lean's `pluginJobRecover` does to a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickAction {
@@ -142,14 +176,14 @@ async fn tick(
     pin: &JobPin,
 ) -> Result<bool> {
     let in_flight = driver.is_stepping(row_doc_id);
-    let (row, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin, in_flight).await?;
+    let (_, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin, in_flight).await?;
     match tick_action(&facts) {
         TickAction::Untouched => Ok(false),
         TickAction::Kill(KillCause::FailClosed(Refusal::Stalled)) => {
             kill_at_rest(driver, access, row_doc_id, request_doc_id, pin).await
         }
         TickAction::Kill(cause) => {
-            kill_row(access, row_doc_id, &row, cause).await?;
+            kill_row(access, row_doc_id, cause).await?;
             Ok(true)
         }
         TickAction::Step => {
@@ -177,26 +211,21 @@ async fn kill_at_rest(
 ) -> Result<bool> {
     driver
         .hold_steps(row_doc_id, async {
-            let (row, facts) =
+            let (_, facts) =
                 facts_of(driver, access, row_doc_id, request_doc_id, pin, false).await?;
             let TickAction::Kill(cause) = tick_action(&facts) else {
                 return Ok(false);
             };
-            kill_row(access, row_doc_id, &row, cause).await?;
+            kill_row(access, row_doc_id, cause).await?;
             Ok(true)
         })
         .await
         .unwrap_or(Ok(false))
 }
 
-async fn kill_row(
-    access: &ConfigAccess,
-    row_doc_id: &str,
-    row: &StepRow,
-    cause: KillCause,
-) -> Result<()> {
+async fn kill_row(access: &ConfigAccess, row_doc_id: &str, cause: KillCause) -> Result<()> {
     let mut lifecycle = load_lifecycle(access, row_doc_id).await?;
-    kill(access, &mut lifecycle, row, cause).await?;
+    kill(access, &mut lifecycle, cause).await?;
     Ok(())
 }
 
@@ -215,9 +244,9 @@ async fn facts_of(
 ) -> Result<(StepRow, RecoveryFacts)> {
     let runtime = driver.runtime();
     let row = read_step_row(access, row_doc_id).await?;
-    let stepped = read_progress(access, row_doc_id)
+    let progress_revision = read_progress(access, row_doc_id)
         .await?
-        .is_some_and(|progress| progress.revision > 1);
+        .map_or(0, |progress| progress.revision);
     let lifecycle = load_lifecycle(access, row_doc_id).await?;
     let session_stopped = crate::session::session_is_stopped(
         &runtime.node,
@@ -251,19 +280,18 @@ async fn facts_of(
             _ => Err(Refusal::NotAvailable),
         }
     };
-    let deadline = pin.adopted_at + pin.ceiling_at_pin.max_wall_secs * 1000;
-    let facts = RecoveryFacts {
-        running: lifecycle.is_running(),
-        session_stopped,
-        terminal_children: terminal_count(&row) as u32,
-        observed: row.observed_terminal,
-        live: live_count(&row) as u32,
-        step_new: 0,
-        deadline_expired: deadline <= u64::try_from(chrono::Utc::now().timestamp_millis())?,
-        available,
-        stepped,
-        in_flight,
-    };
+    let facts = facts_from_durable_read(
+        &row,
+        lifecycle.is_running(),
+        pin,
+        DurableRead {
+            session_stopped,
+            now_millis: u64::try_from(chrono::Utc::now().timestamp_millis())?,
+            available,
+            progress_revision,
+            in_flight,
+        },
+    );
     Ok((row, facts))
 }
 

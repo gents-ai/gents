@@ -3748,7 +3748,7 @@ async fn background_ownership_blocks_retirement_and_stopping_refuses_new_reserva
         refusal.downcast_ref::<RetirementError>(),
         Some(&RetirementError::Stopping)
     );
-    assert!(!registry.contains("refused").await);
+    assert!(!registry.contains("refused", "refused-doc").await);
 }
 
 #[tokio::test]
@@ -3787,9 +3787,17 @@ async fn background_execution_reservation_drop_releases_ownership() {
                 CancellationToken::new(),
             )
             .unwrap();
-        assert!(registry.contains("tool-reserved").await);
+        assert!(
+            registry
+                .contains("tool-reserved", "tool-reserved-doc")
+                .await
+        );
     }
-    assert!(!registry.contains("tool-reserved").await);
+    assert!(
+        !registry
+            .contains("tool-reserved", "tool-reserved-doc")
+            .await
+    );
 
     let reservation = registry
         .reserve(
@@ -3799,7 +3807,11 @@ async fn background_execution_reservation_drop_releases_ownership() {
         )
         .unwrap();
     reservation.disarm();
-    assert!(registry.contains("tool-transferred").await);
+    assert!(
+        registry
+            .contains("tool-transferred", "tool-transferred-doc")
+            .await
+    );
     registry.remove("tool-transferred").await;
 }
 

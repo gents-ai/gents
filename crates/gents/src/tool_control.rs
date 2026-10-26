@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
 use crate::background_tools::ProcessControlScope;
 use crate::config_client::ConfigAccess;
 use crate::hook::BackgroundExecutionRegistry;
-use crate::plugin_job::control::control;
+use crate::plugin_job::control::control_by_doc_id;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle, ToolRowKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,15 +79,26 @@ pub async fn cancel_background_tool_call(
             requester_did: lifecycle.requester_did().map(str::to_owned),
         };
         let access = ConfigAccess::local(node.clone());
+        let doc_id = lifecycle
+            .doc_id()
+            .context("job cancellation lacks physical identity")?;
         return Ok(
-            match control(&access, &scope, tool_call_id, JobControlKind::Stop).await {
+            match control_by_doc_id(&access, &scope, doc_id, JobControlKind::Stop).await {
                 Ok(JobControlOutcome::Applied { .. }) => {
                     CancelBackgroundToolCallOutcome::Cancelled {
                         live_execution_cancelled: false,
                     }
                 }
                 Ok(JobControlOutcome::AlreadyTerminal { .. }) => {
-                    match ToolCallLifecycle::load(node, session_id, tool_call_id).await? {
+                    match ToolCallLifecycle::load_by_doc_id(
+                        node,
+                        doc_id,
+                        &scope.node_did,
+                        &scope.session_id,
+                        scope.requester_did.as_deref(),
+                    )
+                    .await?
+                    {
                         Some(reloaded) => CancelBackgroundToolCallOutcome::AlreadyTerminal {
                             state: reloaded.state().as_str().to_string(),
                         },
@@ -122,7 +133,15 @@ pub async fn cancel_background_tool_call(
         );
     }
 
-    if !background_executions.contains(tool_call_id).await {
+    if !background_executions
+        .contains(
+            tool_call_id,
+            lifecycle
+                .doc_id()
+                .context("background cancellation lacks physical identity")?,
+        )
+        .await
+    {
         let (process, _) = ToolCallLifecycle::cancel_unowned_background_tool(
             &node,
             &mut lifecycle,

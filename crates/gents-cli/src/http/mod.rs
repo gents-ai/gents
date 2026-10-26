@@ -6,6 +6,7 @@ pub(crate) mod fleet_slots;
 pub(crate) mod healthz;
 pub(crate) mod identity_decide;
 pub(crate) mod inference;
+pub(crate) mod job_control;
 pub(crate) mod liveness;
 pub(crate) mod mcp_pool;
 pub(crate) mod mcp_server;
