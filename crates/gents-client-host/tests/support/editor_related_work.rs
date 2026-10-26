@@ -109,7 +109,7 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> TestRe
             documents.push((Collection::Tools, serde_json::to_value(tools)?));
             let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection, value)| DesiredStateApplyDocument {collection, add:value.clone(), update:value}).collect())?;
             apply_desired_state_plan(txn, &plan).await?;
-            Ok(())
+            TestResult::Ok(())
         })
     }).await?;
     Ok(())
