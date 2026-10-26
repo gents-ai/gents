@@ -1050,11 +1050,13 @@ impl JobDriver {
         row_doc_id: &str,
         f: impl std::future::Future<Output = T>,
     ) -> Option<T> {
+        let work;
         {
             let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
             if in_flight.contains_key(row_doc_id) {
                 return None;
             }
+            work = self.service_admission.admit().ok()?;
             in_flight.insert(row_doc_id.to_owned(), Dirty::default());
         }
         let out = f.await;
@@ -1063,7 +1065,7 @@ impl JobDriver {
             in_flight.insert(row_doc_id.to_owned(), Dirty::default());
             let driver = self.this.upgrade().expect("a driver is held by its Arc");
             let row_doc_id = row_doc_id.to_owned();
-            tokio::spawn(async move { driver.drive(&row_doc_id).await });
+            tokio::spawn(async move { driver.drive(&row_doc_id, work).await });
         } else {
             in_flight.remove(row_doc_id);
         }
@@ -2773,6 +2775,42 @@ pub(crate) mod tests {
             }),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
+        use crate::runtime_service::{RetirementError, RuntimeServiceAdmission};
+        use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
+
+        let step = stepper(json!({"effects": {}})).await;
+        live_child(&step, "did-owner").await;
+        let admission = RuntimeServiceAdmission::default();
+        let driver = JobDriver::with_service_admission(step.job.runtime.clone(), admission.clone());
+        let authority = || RetirementAuthority {
+            operator_authenticated: true,
+            observed_build_matches: true,
+        };
+        let held = driver.permits.acquire_many(4).await.unwrap();
+        driver
+            .hold_steps(&step.row, async {
+                assert_eq!(admission.retire(authority()), Err(RetirementError::Busy));
+                driver.kick(&step.row);
+            })
+            .await
+            .unwrap();
+        assert!(driver.is_stepping(&step.row));
+        assert_eq!(admission.retire(authority()), Err(RetirementError::Busy));
+        drop(held);
+        idle(&driver).await;
+        assert_eq!(step.progress(&step.row).await.revision, 2);
+        admission.retire(authority()).unwrap();
+        assert!(driver
+            .hold_steps(&step.row, async {
+                panic!("retiring runtime admitted recovery")
+            })
+            .await
+            .is_none());
+        step.close().await;
     }
 
     #[tokio::test]
