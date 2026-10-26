@@ -605,9 +605,9 @@ impl NativeCanonicalExecution {
         match result {
             Ok(crate::lifecycle::RecoveryResult::Lost) => return self.observe(false).await,
             Err(error)
-                if find_source::<crate::lifecycle::RecoverySelectionRejected>(error.as_ref())
+                if find_source::<crate::lifecycle::RecoverySelectionRejected>(&error)
                     .is_some()
-                    || crate::session::find_reconstruction_error(error.as_ref()).is_some() =>
+                    || crate::session::find_reconstruction_error(&error).is_some() =>
             {
                 return self.observe(false).await;
             }
@@ -1711,10 +1711,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Err(error)
                             if find_source::<
                                 crate::streaming::canonical::ProviderAppendRejection,
-                            >(error.as_ref())
+                            >(&error)
                             .is_some()
                                 || owner_error_is(
-                                    error.as_ref(),
+                                    &error,
                                     "output source does not match its request purpose",
                                 ) =>
                         {
@@ -1940,17 +1940,17 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(value) => value,
                         Err(error)
                             if find_source::<crate::lifecycle::ToolAccountingRejection>(
-                                error.as_ref(),
+                                &error,
                             )
                             .is_some()
                                 || matches!(
                                     find_source::<crate::lifecycle::TerminalToolsError>(
-                                        error.as_ref()
+                                        &error
                                     ),
                                     Some(crate::lifecycle::TerminalToolsError::Accounting(_))
                                 )
                                 || owner_error_is(
-                                    error.as_ref(),
+                                    &error,
                                     "auxiliary source has no unique closure",
                                 ) =>
                         {
@@ -2152,12 +2152,12 @@ impl NativeCanonicalExecution {
             Ok(Some(_)) => return Err("auxiliary close published a header".into()),
             Err(error)
                 if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
-                    error.as_ref(),
+                    &error,
                 )
                 .is_some()
-                    || crate::session::find_reconstruction_error(error.as_ref()).is_some()
+                    || crate::session::find_reconstruction_error(&error).is_some()
                     || owner_error_is(
-                        error.as_ref(),
+                        &error,
                         "output source does not match its request purpose",
                     ) =>
             {
@@ -2265,10 +2265,10 @@ impl NativeCanonicalExecution {
             Ok(message_doc_id) => message_doc_id,
             Err(error)
                 if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
-                    error.as_ref(),
+                    &error,
                 )
                 .is_some()
-                    || crate::session::find_reconstruction_error(error.as_ref()).is_some() =>
+                    || crate::session::find_reconstruction_error(&error).is_some() =>
             {
                 return self.observe(false).await;
             }
@@ -2442,7 +2442,7 @@ impl NativeCanonicalExecution {
             Ok(value) => value,
             Err(error)
                 if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
-                    error.as_ref(),
+                    &error,
                 )
                 .is_some() =>
             {
@@ -2450,11 +2450,11 @@ impl NativeCanonicalExecution {
             }
             Err(error)
                 if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderReplayRejection>(
-                    error.as_ref(),
+                    &error,
                 )
                 .is_some()
                     || owner_error_is(
-                        error.as_ref(),
+                        &error,
                         "provider publication does not bind its request generation",
                     ) =>
             {
@@ -2463,7 +2463,7 @@ impl NativeCanonicalExecution {
             Err(error) => {
                 let detail = format!(
                     "native provider publication owner failed: {}",
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 );
                 return Err(context(detail, error));
             }

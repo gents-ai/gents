@@ -803,7 +803,7 @@ pub(super) async fn replace_pending_user_messages(
                     creates,
                 )
                 .await?
-                .map_err(|message| QueueError::RequestFields { message })?;
+                .map_err(|message| QueueError::EditRejected { message })?;
                 Ok(apply_pending_user_edit_in_txn(txn, validated).await?)
             })
         })

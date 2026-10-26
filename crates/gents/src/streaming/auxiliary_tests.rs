@@ -467,7 +467,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             assert!(
                 matches!(
                     canonical::provider_rejection::<canonical::ProviderAppendRejection>(
-                        claimed_append.unwrap_err().as_ref()
+                        &claimed_append.unwrap_err()
                     ),
                     Some(canonical::ProviderAppendRejection::LostLease)
                 ),
@@ -679,7 +679,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         );
         if !case.expected.native_publication_accepted {
             let error = publication.unwrap_err();
-            let diagnostic = ErrorChain(error.as_ref()).to_string();
+            let diagnostic = ErrorChain(&error).to_string();
             assert!(
                 diagnostic.contains("provider publication does not bind its request generation"),
                 "{}: empty auxiliary header failed outside publication owner: {diagnostic}",
@@ -735,11 +735,11 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         );
         if !case.expected.stale_close_replay_accepted {
             let error = stale_replay.unwrap_err();
-            let diagnostic = ErrorChain(error.as_ref()).to_string();
+            let diagnostic = ErrorChain(&error).to_string();
             assert!(
                 matches!(
                     canonical::provider_rejection::<canonical::ProviderCloseRejection>(
-                        error.as_ref()
+                        &error
                     ),
                     Some(canonical::ProviderCloseRejection::WriterMismatch)
                 ),

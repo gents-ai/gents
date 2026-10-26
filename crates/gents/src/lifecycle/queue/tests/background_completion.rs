@@ -715,7 +715,7 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
             .to_string()
             .contains("replay conflicts with authority, scope, or content"),
         "unexpected conflict: {}",
-        ErrorChain(conflict.as_ref())
+        ErrorChain(&conflict)
     );
 }
 

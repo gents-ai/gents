@@ -1966,13 +1966,15 @@ mod tests {
             .transact_write("test.claim.import", |txn| {
                 let imported = imported.clone();
                 Box::pin(async move {
-                    txn.execute_with_variables(
-                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-                        &crate::session::canonical_rows::transcript_message_create_variables(
-                            &imported,
-                        )?,
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                        txn.execute_with_variables(
+                            crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                            &crate::session::canonical_rows::transcript_message_create_variables(
+                                &imported,
+                            )?,
+                        )
+                        .await?,
                     )
-                    .await
                 })
             })
             .await

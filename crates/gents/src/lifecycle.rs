@@ -33,7 +33,7 @@ pub(crate) use execution_lease::{
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
 #[cfg(test)]
-pub(crate) use terminal_tools::ToolAccountingRejection;
+pub(crate) use terminal_tools::{TerminalToolsError, ToolAccountingRejection};
 pub mod manual;
 pub(crate) mod materialize;
 mod session_message_presentation;

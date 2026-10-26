@@ -792,7 +792,7 @@ async fn plain_graph_root_factory_fences_publication_and_cancellation() {
     assert!(
         error.to_string().contains("graph run"),
         "unexpected factory failure: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(publication_state(&node).await, closed);
     node.shutdown().await;

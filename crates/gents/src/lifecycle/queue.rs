@@ -334,6 +334,8 @@ pub enum QueueError {
     Materialize(#[from] crate::lifecycle::materialize::MaterializeError),
     #[error(transparent)]
     AgentRequestAdmission(#[from] crate::request_admission::AgentRequestAdmissionError),
+    #[error("{message}")]
+    EditRejected { message: String },
 }
 
 impl crate::config_client::TransactionFailure for QueueError {

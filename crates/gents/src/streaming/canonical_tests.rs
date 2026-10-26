@@ -420,7 +420,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
     )
     .await
     .expect_err("first publication must compare reconstructed and native messages");
-    assert!(ErrorChain(error.as_ref())
+    assert!(ErrorChain(&error)
         .to_string()
         .contains("first publication native message changed"));
     let rows = node
@@ -458,8 +458,10 @@ async fn publish_tool_turn_for_rollback_test(
         background_calls: Vec::new(),
         consumes_folded: None,
     };
-    super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
-        .await
+    Ok(
+        super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
+            .await?,
+    )
 }
 
 #[tokio::test]
@@ -912,7 +914,7 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
     )
     .await
     .expect_err("closure time must be nondecreasing against committed data");
-    assert!(ErrorChain(error.as_ref())
+    assert!(ErrorChain(&error)
         .to_string()
         .contains("closure timestamp precedes"));
     let rows = node.execute(&format!(

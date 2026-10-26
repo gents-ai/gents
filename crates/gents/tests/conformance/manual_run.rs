@@ -233,7 +233,7 @@ async fn manual_run_render_failure_materializes_no_request() {
     assert!(
         error.to_string().contains("render"),
         "the failure reason must name the render path: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     assert_eq!(

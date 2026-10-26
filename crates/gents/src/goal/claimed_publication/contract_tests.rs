@@ -543,7 +543,7 @@ async fn run_generated_wait_observations() {
                 .unwrap_or_else(|error| panic!(
                     "{} terminalize: {}",
                     case.name,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 )),
             TerminalizeResult::Won,
             "{}",

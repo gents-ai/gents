@@ -71,6 +71,21 @@ pub enum TerminalToolsError {
     ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
     #[error(transparent)]
     Accounting(#[from] ToolAccountingRejection),
+    #[error(transparent)]
+    Error(#[from] serde_json::Error),
+}
+
+impl crate::config_client::TransactionFailure for TerminalToolsError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::GraphqlResponse(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::ToolCallLifecycle(error) => error.config_client_error(),
+            Self::ToolCallQuery(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 type Result<T, E = TerminalToolsError> = std::result::Result<T, E>;

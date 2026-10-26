@@ -665,8 +665,12 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             assert_eq!(completion.is_ok(), case.completion_probe_accepted);
             let native_in_flight = completion.as_ref().err().is_some_and(|rejection| {
                 matches!(
-                    rejection.downcast_ref::<crate::lifecycle::ToolAccountingRejection>(),
-                    Some(crate::lifecycle::ToolAccountingRejection::ForegroundRunning)
+                    rejection,
+                    crate::lifecycle::LifecycleError::TerminalTools(
+                        crate::lifecycle::TerminalToolsError::Accounting(
+                            crate::lifecycle::ToolAccountingRejection::ForegroundRunning
+                        )
+                    )
                 )
             });
             assert_eq!(
