@@ -348,8 +348,27 @@ pub async fn verify(
             "Undo overwrote a protected target"
         );
     }
-    for file in cases()[2]["files"].as_array().context("partial files")? {
-        let expected = file["later"].as_str().unwrap_or(text(file, "before")?);
+    let partial_cases = cases();
+    let partial_files = partial_cases[2]["files"]
+        .as_array()
+        .context("partial files")?;
+    let conflict_path = text(&ui, "partialConflictPath")?;
+    ensure!(
+        partial_files
+            .iter()
+            .any(|file| file["path"] == conflict_path),
+        "partial conflict target was not a fixture file"
+    );
+    let conflict_text = partial_files
+        .iter()
+        .find_map(|file| file["later"].as_str())
+        .context("partial conflict text")?;
+    for file in partial_files {
+        let expected = if file["path"] == conflict_path {
+            conflict_text
+        } else {
+            text(file, "before")?
+        };
         ensure!(
             std::fs::read(root.join(text(file, "path")?))? == expected.as_bytes(),
             "Undo lost a partial save outcome"

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub const VERSION: u32 = 1;
 const MAX_BYTES: usize = gents_desktop_bridge::host::protocol::MAX_FRAME_BYTES;
 const JOURNAL: &str = "editor-undo.v1.json";
-const LOCK: &str = ".editor-undo.lock";
+const EDITOR_UNDO_LOCK: &str = ".editor-undo.lock";
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -253,7 +253,7 @@ impl Session {
                     .parent()
                     .context("checkpoint directory has no parent")?,
             )?;
-            let file = open_regular(&directory.join(LOCK), true)?;
+            let file = open_regular(&directory.join(EDITOR_UNDO_LOCK), true)?;
             let guard = match FileLock::try_exclusive(file) {
                 Ok(guard) => guard,
                 Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
