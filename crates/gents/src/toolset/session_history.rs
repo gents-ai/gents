@@ -2071,7 +2071,7 @@ mod tests {
         let inserted = node.execute(&mutation).await;
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
         let details = load_session_context_details(
-            &node,
+            &crate::config_client::ConfigAccess::local(node.clone()),
             PIN_FIXED_DID,
             Some(PIN_FIXED_DID),
             "session-a",
@@ -2092,12 +2092,16 @@ mod tests {
             ),
             (PIN_FIXED_DID, Some(PIN_FIXED_DID), "session-b"),
         ] {
-            assert!(
-                load_session_context_details(&node, agent, requester, session, &context)
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(load_session_context_details(
+                &crate::config_client::ConfigAccess::local(node.clone()),
+                agent,
+                requester,
+                session,
+                &context
+            )
+            .await
+            .unwrap()
+            .is_none());
         }
         let mut missing_base_context = context.clone();
         missing_base_context.accounting.turn_index += 1;
@@ -2142,7 +2146,7 @@ mod tests {
         let inserted = node.execute(&mutation).await;
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
         assert!(load_session_context_details(
-            &node,
+            &crate::config_client::ConfigAccess::local(node.clone()),
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some(PIN_FIXED_DID),
             "session-a",
@@ -2184,7 +2188,7 @@ mod tests {
             let inserted = node.execute(&mutation).await;
             assert!(!inserted.has_errors(), "{:?}", inserted.errors);
             assert!(load_session_context_details(
-                &node,
+                &crate::config_client::ConfigAccess::local(node.clone()),
                 "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                 Some(PIN_FIXED_DID),
                 "session-a",
@@ -2196,7 +2200,7 @@ mod tests {
         }
         context.call_id = "foreign-call".into();
         assert!(load_session_context_details(
-            &node,
+            &crate::config_client::ConfigAccess::local(node.clone()),
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some(PIN_FIXED_DID),
             "session-a",

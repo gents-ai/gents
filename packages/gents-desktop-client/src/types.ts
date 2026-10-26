@@ -115,6 +115,8 @@ export type {
   CommandDenialView,
   DesktopSessionSnapshot,
   SessionHydrationView,
+  SessionContextDetails,
+  SessionContextDetailsRequest,
   SessionLiveDeltaView,
   SessionLiveTextPatchView,
   SessionRowsView,

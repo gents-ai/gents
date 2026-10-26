@@ -59,5 +59,6 @@ pub(crate) use observer::run_background_completion_observer;
 pub(crate) use session_message::{settle_running_session_message_rows, settle_session_message_row};
 
 use datetime_fields::agent_tool_call_datetime_update_fragment;
-use rendering::tool_completion_presentation;
+pub(crate) use rendering::is_tool_completion_text;
+pub(crate) use rendering::tool_completion_presentation;
 use side_effects::existing_tool_completion_notification;

@@ -671,3 +671,12 @@ pub struct SessionHistoryPage {
     pub sessions: Vec<super::SessionSummary>,
     pub next_cursor: Option<String>,
 }
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionContextDetailsRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub request_id: String,
+    pub call_id: String,
+}
