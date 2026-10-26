@@ -31,7 +31,7 @@ pub(crate) enum BackendClientError {
         agent_id: String,
         endpoint: String,
         #[source]
-        source: ClientBuildFailure<crate::chatgpt_codex::ChatGptCodexClientError>,
+        source: Box<ClientBuildFailure<crate::chatgpt_codex::ChatGptCodexClientError>>,
     },
     #[error("building Grok OAuth completion client for agent {agent_id} against {endpoint}")]
     XaiGrok {
@@ -294,7 +294,7 @@ pub(crate) async fn build_backend_client(
             .map_err(|source| BackendClientError::ChatGptCodex {
                 agent_id: agent.agent_id.to_string(),
                 endpoint: agent.backend_endpoint.clone(),
-                source,
+                source: Box::new(source),
             })?;
             Ok(BackendClient::ChatGptCodex(client))
         }

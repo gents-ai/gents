@@ -346,11 +346,11 @@ pub(crate) async fn fence_root_workspace_in_txn(
         return Err(GraphPipelineError::SignedWorkspaceMismatch);
     }
     super::super::runtime::fence_observed_graph_publication_in_txn(
-            txn,
-            &resolved.run,
-            &resolved.digest,
-        )
-        .await
+        txn,
+        &resolved.run,
+        &resolved.digest,
+    )
+    .await
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

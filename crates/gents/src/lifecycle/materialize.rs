@@ -10,13 +10,19 @@ pub struct EnqueuedAgentRequest {
 #[derive(Debug, thiserror::Error)]
 pub enum MaterializeError {
     #[error(transparent)]
-    Lifecycle(#[from] LifecycleError),
+    Lifecycle(Box<LifecycleError>),
     #[error(transparent)]
     Signing(#[from] crate::request_admission::AgentRequestSigningError),
     #[error("session-message lineage requires the full calling request and tool call edge")]
     SessionMessageLineage,
     #[error("load the caller's registered identity to sign its session message")]
     SessionMessageSigner(#[source] crate::identity::IdentityError),
+}
+
+impl From<LifecycleError> for MaterializeError {
+    fn from(error: LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for MaterializeError {
@@ -875,11 +881,9 @@ impl RequestLifecycle {
         .await?;
         match lifecycle.claim_with_identity().await? {
             ClaimOutcome::Claimed => Ok(lifecycle),
-            outcome => {
-                Err(LifecycleError::NewlyMaterializedSignedAgentRequestWasNot {
-                    outcome: format!("{:?}", outcome),
-                })
-            }
+            outcome => Err(LifecycleError::NewlyMaterializedSignedAgentRequestWasNot {
+                outcome: format!("{:?}", outcome),
+            }),
         }
     }
 

@@ -151,7 +151,7 @@ pub enum ToolSurfaceError {
     #[error(transparent)]
     MetaTool(#[from] crate::meta_tools::MetaToolError),
     #[error(transparent)]
-    PluginTool(#[from] crate::plugin::tool::PluginToolError),
+    PluginTool(Box<crate::plugin::tool::PluginToolError>),
     #[error(transparent)]
     RootAdmission(Box<crate::tool_surface::RootAdmissionError>),
     #[error(transparent)]
@@ -164,6 +164,12 @@ pub enum ToolSurfaceError {
     DocumentView(#[from] crate::agent::document_view::DocumentViewError),
     #[error(transparent)]
     Build(Box<crate::tool_surface::build::BuildError>),
+}
+
+impl From<crate::plugin::tool::PluginToolError> for ToolSurfaceError {
+    fn from(error: crate::plugin::tool::PluginToolError) -> Self {
+        Self::PluginTool(Box::new(error))
+    }
 }
 
 impl From<crate::tool_surface::build::BuildError> for ToolSurfaceError {

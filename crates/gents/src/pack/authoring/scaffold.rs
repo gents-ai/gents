@@ -9,9 +9,9 @@ use super::template::{Kind, Template};
 #[derive(Debug, thiserror::Error)]
 pub enum ScaffoldError {
     #[error(transparent)]
-    Build(#[from] super::build::BuildError),
+    Build(Box<super::build::BuildError>),
     #[error(transparent)]
-    Check(#[from] super::check::CheckError),
+    Check(Box<super::check::CheckError>),
     #[error("{} already exists", path.display())]
     SourceExists { path: PathBuf },
     #[error("gents cannot build {language:?} plugins; use one of {}", crate::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", "))]
@@ -50,6 +50,18 @@ pub enum ScaffoldError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+impl From<super::check::CheckError> for ScaffoldError {
+    fn from(error: super::check::CheckError) -> Self {
+        Self::Check(Box::new(error))
+    }
+}
+
+impl From<super::build::BuildError> for ScaffoldError {
+    fn from(error: super::build::BuildError) -> Self {
+        Self::Build(Box::new(error))
+    }
 }
 
 type Result<T, E = ScaffoldError> = std::result::Result<T, E>;

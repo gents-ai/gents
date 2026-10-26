@@ -50,9 +50,15 @@ pub enum PackTestError {
     #[error(transparent)]
     Plugin(#[from] PluginError),
     #[error(transparent)]
-    Run(#[from] PluginRunError),
+    Run(Box<PluginRunError>),
     #[error(transparent)]
     Authority(#[from] crate::plugin::authority::AuthorityError),
+}
+
+impl From<PluginRunError> for PackTestError {
+    fn from(error: PluginRunError) -> Self {
+        Self::Run(Box::new(error))
+    }
 }
 
 type Result<T, E = PackTestError> = std::result::Result<T, E>;

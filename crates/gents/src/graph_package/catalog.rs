@@ -94,7 +94,7 @@ pub enum GraphPackageError {
     DatastoreSurface {
         surface_id: String,
         #[source]
-        source: crate::document_config::DocumentConfigError,
+        source: Box<crate::document_config::DocumentConfigError>,
     },
     #[error("foreign graph capability owner")]
     ForeignCapabilityOwner,
@@ -300,7 +300,7 @@ where
                 .validate()
                 .map_err(|source| GraphPackageError::DatastoreSurface {
                     surface_id: surface.surface_id.clone(),
-                    source,
+                    source: Box::new(source),
                 })?;
         }
     }

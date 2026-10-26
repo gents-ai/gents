@@ -18,7 +18,7 @@ use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 #[derive(Debug, thiserror::Error)]
 pub enum PluginToolError {
     #[error(transparent)]
-    Run(#[from] super::executor::PluginRunError),
+    Run(Box<super::executor::PluginRunError>),
     #[error("plugin {plugin} does not declare job dispatch; install a pack whose plugin sets `job: true`")]
     NotJobDispatch { plugin: String },
     #[error("runtime-filled plugin inputs require an object schema")]
@@ -40,6 +40,12 @@ pub enum PluginToolError {
     MissingFill,
     #[error(transparent)]
     Fill(Box<crate::document_config::DocumentConfigError>),
+}
+
+impl From<super::executor::PluginRunError> for PluginToolError {
+    fn from(error: super::executor::PluginRunError) -> Self {
+        Self::Run(Box::new(error))
+    }
 }
 
 type Result<T, E = PluginToolError> = std::result::Result<T, E>;

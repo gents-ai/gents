@@ -399,7 +399,7 @@ async fn step_on(
             let source = if trapped {
                 StepRunFailure::Failure(StepFailure::Trap(format!("{}", ErrorChain(&error))))
             } else {
-                StepRunFailure::Run(error)
+                StepRunFailure::Run(Box::new(error))
             };
             return Err(PluginJobError::StepJobRowDidNotRun {
                 row_doc_id: row_doc_id.to_string(),

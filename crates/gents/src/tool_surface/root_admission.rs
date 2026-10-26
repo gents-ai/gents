@@ -16,7 +16,7 @@ type Result<T, E = RootAdmissionError> = std::result::Result<T, E>;
 #[derive(Debug, thiserror::Error)]
 pub enum RootAdmissionError {
     #[error(transparent)]
-    ToolSurface(#[from] ToolSurfaceError),
+    ToolSurface(Box<ToolSurfaceError>),
     #[error(transparent)]
     ConfigClient(#[from] ConfigClientError),
     #[error("resolving relative tool root {}", path.display())]
@@ -55,6 +55,12 @@ pub enum RootAdmissionError {
     DecodeWorkspaceRoots(#[source] serde_json::Error),
     #[error("querying WorkspaceRoot policy in configuration transaction")]
     QueryWorkspaceRoots(#[source] ConfigClientError),
+}
+
+impl From<ToolSurfaceError> for RootAdmissionError {
+    fn from(error: ToolSurfaceError) -> Self {
+        Self::ToolSurface(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for RootAdmissionError {

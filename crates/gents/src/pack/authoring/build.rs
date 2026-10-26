@@ -114,13 +114,19 @@ pub enum BuildError {
     #[error(transparent)]
     Out(crate::pack::CallbackError),
     #[error(transparent)]
-    GraphPackage(#[from] crate::graph_package::GraphPackageError),
+    GraphPackage(Box<crate::graph_package::GraphPackageError>),
     #[error("building {}", dir.display())]
     Building {
         dir: PathBuf,
         #[source]
         source: Box<BuildError>,
     },
+}
+
+impl From<crate::graph_package::GraphPackageError> for BuildError {
+    fn from(error: crate::graph_package::GraphPackageError) -> Self {
+        Self::GraphPackage(Box::new(error))
+    }
 }
 
 type Result<T, E = BuildError> = std::result::Result<T, E>;
@@ -331,7 +337,7 @@ pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
     let mut assets = manifest.metadata.assets.clone();
     assets.extend(missing);
     std::fs::write(&manifest_path, replace_assets(&text, &assets)?)
-            .map_err(BuildError::WriteManifestJson)
+        .map_err(BuildError::WriteManifestJson)
 }
 
 fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
@@ -433,12 +439,12 @@ pub fn build_plugin(
         source,
     })?;
     std::fs::create_dir_all(stamp.parent().ok_or(BuildError::StampParent)?)?;
-    std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact))).map_err(
-            |source| BuildError::Write {
-                path: stamp.clone(),
-                source,
-            },
-        )
+    std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact))).map_err(|source| {
+        BuildError::Write {
+            path: stamp.clone(),
+            source,
+        }
+    })
 }
 
 pub const BUILDER_ID: &str = concat!("gents/", env!("CARGO_PKG_VERSION"));

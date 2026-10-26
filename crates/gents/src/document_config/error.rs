@@ -579,7 +579,7 @@ pub enum DocumentConfigError {
     TriggerScheduleOption {
         trigger_id: String,
         #[source]
-        source: TriggerEngineError,
+        source: Box<TriggerEngineError>,
     },
     #[error("trigger {trigger_id} sources FireOutcome but task {task_id} enables emit_outcome")]
     TriggerFireOutcomeSource { trigger_id: String, task_id: String },

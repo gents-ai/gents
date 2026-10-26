@@ -16,13 +16,19 @@ pub enum ToolControlError {
     #[error("background cancellation lacks physical identity")]
     LacksPhysicalIdentity,
     #[error(transparent)]
-    SessionMessage(#[from] crate::session_message::SessionMessageError),
+    SessionMessage(Box<crate::session_message::SessionMessageError>),
     #[error(transparent)]
     ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
     #[error(transparent)]
     ToolCallRecovery(#[from] crate::tool_call_lifecycle::ToolCallRecoveryError),
     #[error(transparent)]
     Transition(#[from] crate::tool_call_lifecycle::TransitionError),
+}
+
+impl From<crate::session_message::SessionMessageError> for ToolControlError {
+    fn from(error: crate::session_message::SessionMessageError) -> Self {
+        Self::SessionMessage(Box::new(error))
+    }
 }
 
 type Result<T, E = ToolControlError> = std::result::Result<T, E>;

@@ -25,7 +25,7 @@ pub enum GraphPackageInstallError {
     #[error(transparent)]
     GraphPipeline(#[from] GraphPipelineError),
     #[error(transparent)]
-    GraphPackage(#[from] GraphPackageError),
+    GraphPackage(Box<GraphPackageError>),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -118,6 +118,12 @@ pub enum GraphPackageInstallError {
         #[source]
         source: crate::config_client::SchemaInstallError,
     },
+}
+
+impl From<GraphPackageError> for GraphPackageInstallError {
+    fn from(error: GraphPackageError) -> Self {
+        Self::GraphPackage(Box::new(error))
+    }
 }
 
 impl From<crate::pack::ProvenanceError> for GraphPackageInstallError {

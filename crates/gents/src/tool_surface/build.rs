@@ -21,9 +21,9 @@ type Result<T, E = BuildError> = std::result::Result<T, E>;
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
     #[error(transparent)]
-    ToolSurface(#[from] ToolSurfaceError),
+    ToolSurface(Box<ToolSurfaceError>),
     #[error(transparent)]
-    RootAdmission(#[from] RootAdmissionError),
+    RootAdmission(Box<RootAdmissionError>),
     #[error(transparent)]
     ConfigClient(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
@@ -35,6 +35,18 @@ pub enum BuildError {
         #[source]
         source: Box<RootAdmissionError>,
     },
+}
+
+impl From<RootAdmissionError> for BuildError {
+    fn from(error: RootAdmissionError) -> Self {
+        Self::RootAdmission(Box::new(error))
+    }
+}
+
+impl From<ToolSurfaceError> for BuildError {
+    fn from(error: ToolSurfaceError) -> Self {
+        Self::ToolSurface(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for BuildError {
@@ -342,7 +354,7 @@ pub fn resolve_effective_tool_root(
                             );
                             super::root_admission::resolve_configured_tool_root(ceiling_root)
                                 .map(Some)
-                                .map_err(BuildError::RootAdmission)
+                                .map_err(BuildError::from)
                         }
                         None => Err(ToolSurfaceError::FileToolRootEscapes {
                             agent_name: agent_name.to_owned(),
@@ -370,7 +382,7 @@ pub fn resolve_effective_tool_root(
         (None, Some(ceiling_root)) => {
             super::root_admission::resolve_configured_tool_root(ceiling_root)
                 .map(Some)
-                .map_err(BuildError::RootAdmission)
+                .map_err(BuildError::from)
         }
         (None, None) => Ok(None),
     }

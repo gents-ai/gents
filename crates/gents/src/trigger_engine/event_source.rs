@@ -262,7 +262,7 @@ enum NativeProvenanceError {
     #[error(transparent)]
     Source(#[from] TriggerEngineError),
     #[error(transparent)]
-    Workspace(#[from] crate::workspace::overlay::OverlayError),
+    Workspace(Box<crate::workspace::overlay::OverlayError>),
     #[error(transparent)]
     Callback(#[from] crate::callback::CallbackError),
     #[error("CallbackResult owner does not match Task agent")]
@@ -293,6 +293,12 @@ enum NativeProvenanceError {
     SourceNotObject,
     #[error("native source {field} conflicts with CallbackInvocation input")]
     RouteFieldConflict { field: &'static str },
+}
+
+impl From<crate::workspace::overlay::OverlayError> for NativeProvenanceError {
+    fn from(error: crate::workspace::overlay::OverlayError) -> Self {
+        Self::Workspace(Box::new(error))
+    }
 }
 
 async fn enrich_native_outcome_provenance(

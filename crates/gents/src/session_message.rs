@@ -127,7 +127,7 @@ pub enum SessionMessageError {
     #[error(transparent)]
     ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
     #[error(transparent)]
-    ToolSurface(#[from] crate::tool_surface::ToolSurfaceError),
+    ToolSurface(Box<crate::tool_surface::ToolSurfaceError>),
     #[error(transparent)]
     BackgroundCompletion(#[from] crate::background_completion::BackgroundCompletionError),
     #[error(transparent)]
@@ -142,6 +142,12 @@ pub enum SessionMessageError {
     Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Transition(#[from] crate::tool_call_lifecycle::TransitionError),
+}
+
+impl From<crate::tool_surface::ToolSurfaceError> for SessionMessageError {
+    fn from(error: crate::tool_surface::ToolSurfaceError) -> Self {
+        Self::ToolSurface(Box::new(error))
+    }
 }
 
 impl From<crate::lifecycle::materialize::MaterializeError> for SessionMessageError {
@@ -879,8 +885,8 @@ async fn start_dispatch(
     start: &crate::tool_call_lifecycle::delivery::DispatchStart,
 ) -> Result<chrono::DateTime<chrono::Utc>> {
     crate::tool_call_lifecycle::delivery::start_running_in_txn(txn, start, None)
-            .await?
-            .ok_or(SessionMessageError::RowNotPending)
+        .await?
+        .ok_or(SessionMessageError::RowNotPending)
 }
 
 pub(crate) async fn load_receipt(

@@ -61,11 +61,17 @@ pub enum OutputObligationError {
     #[error(transparent)]
     Goal(Box<crate::goal::GoalError>),
     #[error(transparent)]
-    RunTimeline(#[from] crate::run_timeline_fetch::RunTimelineError),
+    RunTimeline(Box<crate::run_timeline_fetch::RunTimelineError>),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Watcher(#[from] crate::watcher::WatcherError),
+}
+
+impl From<crate::run_timeline_fetch::RunTimelineError> for OutputObligationError {
+    fn from(error: crate::run_timeline_fetch::RunTimelineError) -> Self {
+        Self::RunTimeline(Box::new(error))
+    }
 }
 
 impl From<crate::goal::GoalError> for OutputObligationError {

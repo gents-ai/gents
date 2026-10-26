@@ -464,7 +464,7 @@ pub enum GoalError {
     #[error(transparent)]
     OAuthCredential(#[from] crate::oauth_credential::OAuthCredentialError),
     #[error(transparent)]
-    ProfileSwitch(#[from] crate::config_client::ProfileSwitchError),
+    ProfileSwitch(Box<crate::config_client::ProfileSwitchError>),
     #[error(transparent)]
     DocumentConfig(Box<crate::document_config::DocumentConfigError>),
     #[error(transparent)]
@@ -481,6 +481,12 @@ pub enum GoalError {
     WaitObservation(#[from] claimed_publication::wait_observation::WaitObservationError),
     #[error(transparent)]
     PluginSlots(crate::pack::CallbackError),
+}
+
+impl From<crate::config_client::ProfileSwitchError> for GoalError {
+    fn from(error: crate::config_client::ProfileSwitchError) -> Self {
+        Self::ProfileSwitch(Box::new(error))
+    }
 }
 
 impl From<crate::session::SessionError> for GoalError {
@@ -1427,7 +1433,13 @@ pub enum CreateGoalForSessionError {
     #[error("the current session already has a goal with a different objective or budget")]
     Conflict,
     #[error(transparent)]
-    Storage(#[from] GoalError),
+    Storage(Box<GoalError>),
+}
+
+impl From<GoalError> for CreateGoalForSessionError {
+    fn from(error: GoalError) -> Self {
+        Self::Storage(Box::new(error))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1727,11 +1739,11 @@ pub(crate) async fn create_goal_for_request(
     let owner = caller
         .node_did
         .as_deref()
-        .ok_or_else(|| CreateGoalForSessionError::Storage(GoalError::GoalToolCallerHasNoOwner))?;
+        .ok_or_else(|| CreateGoalForSessionError::from(GoalError::GoalToolCallerHasNoOwner))?;
     let session = caller
         .session_id
         .as_deref()
-        .ok_or_else(|| CreateGoalForSessionError::Storage(GoalError::GoalToolCallerHasNoSession))?;
+        .ok_or_else(|| CreateGoalForSessionError::from(GoalError::GoalToolCallerHasNoSession))?;
     create_goal_for_session_inner(node, owner, session, objective, token_budget, Some(caller)).await
 }
 
@@ -1867,9 +1879,9 @@ async fn create_goal_for_session_inner(
             } else {
                 load_canonical_goal(node, node_did, session_id)
                     .await
-                    .map_err(CreateGoalForSessionError::Storage)?
+                    .map_err(CreateGoalForSessionError::from)?
                     .ok_or(GoalError::CommittedGoalRowNotFound)
-                    .map_err(CreateGoalForSessionError::Storage)?
+                    .map_err(CreateGoalForSessionError::from)?
             };
             Ok(match outcome.disposition {
                 StagedGoalDisposition::Created => CreateGoalForSessionOutcome::Created(goal),
@@ -1879,17 +1891,17 @@ async fn create_goal_for_session_inner(
         Err(GoalError::CreateConflict) if caller.is_some() => {
             Err(CreateGoalForSessionError::Conflict)
         }
-        Err(error) if caller.is_some() => Err(CreateGoalForSessionError::Storage(error)),
+        Err(error) if caller.is_some() => Err(CreateGoalForSessionError::from(error)),
         Err(error) => {
             if let Some(existing) = load_canonical_goal(node, node_did, session_id)
                 .await
-                .map_err(CreateGoalForSessionError::Storage)?
+                .map_err(CreateGoalForSessionError::from)?
             {
                 if existing.objective.trim() == objective
                     && existing.token_budget == token_budget
                     && load_goal_creation_claim_fingerprint(node, node_did, session_id)
                         .await
-                        .map_err(CreateGoalForSessionError::Storage)?
+                        .map_err(CreateGoalForSessionError::from)?
                         == Some(requested_fingerprint.clone())
                 {
                     return Ok(CreateGoalForSessionOutcome::Idempotent(existing));
@@ -1898,7 +1910,7 @@ async fn create_goal_for_session_inner(
             }
             match error {
                 GoalError::CreateConflict => Err(CreateGoalForSessionError::Conflict),
-                error => Err(CreateGoalForSessionError::Storage(error)),
+                error => Err(CreateGoalForSessionError::from(error)),
             }
         }
     }

@@ -168,13 +168,13 @@ pub enum HookError {
     #[error(transparent)]
     Queue(Box<crate::lifecycle::QueueError>),
     #[error(transparent)]
-    AdmissionCause(#[from] crate::request_admission::AdmissionCause),
+    AdmissionCause(Box<crate::request_admission::AdmissionCause>),
     #[error(transparent)]
     Delivery(Box<crate::tool_call_lifecycle::delivery::DeliveryError>),
     #[error(transparent)]
     SessionControl(#[from] crate::session::SessionControlError),
     #[error(transparent)]
-    SessionMessage(#[from] crate::session_message::SessionMessageError),
+    SessionMessage(Box<crate::session_message::SessionMessageError>),
     #[error(transparent)]
     ToolCallRecovery(#[from] crate::tool_call_lifecycle::ToolCallRecoveryError),
     #[error(transparent)]
@@ -189,6 +189,18 @@ pub enum HookError {
     OutputObligation(#[from] crate::agent::output_obligation::OutputObligationError),
     #[error(transparent)]
     PluginJob(Box<crate::plugin_job::origin::PluginJobError>),
+}
+
+impl From<crate::session_message::SessionMessageError> for HookError {
+    fn from(error: crate::session_message::SessionMessageError) -> Self {
+        Self::SessionMessage(Box::new(error))
+    }
+}
+
+impl From<crate::request_admission::AdmissionCause> for HookError {
+    fn from(error: crate::request_admission::AdmissionCause) -> Self {
+        Self::AdmissionCause(Box::new(error))
+    }
 }
 
 impl From<crate::document_config::DocumentConfigError> for HookError {

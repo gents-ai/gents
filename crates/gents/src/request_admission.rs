@@ -115,7 +115,7 @@ pub enum AdmissionCause {
     #[error(transparent)]
     GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
     #[error(transparent)]
-    Overlay(#[from] crate::workspace::overlay::OverlayError),
+    Overlay(Box<crate::workspace::overlay::OverlayError>),
     #[error(transparent)]
     RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
     #[error(transparent)]
@@ -130,6 +130,12 @@ pub enum AdmissionCause {
     Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Watcher(Box<crate::watcher::WatcherError>),
+}
+
+impl From<crate::workspace::overlay::OverlayError> for AdmissionCause {
+    fn from(error: crate::workspace::overlay::OverlayError) -> Self {
+        Self::Overlay(Box::new(error))
+    }
 }
 
 impl From<crate::document_config::DocumentConfigError> for AdmissionCause {

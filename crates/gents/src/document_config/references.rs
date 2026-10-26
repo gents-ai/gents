@@ -491,7 +491,7 @@ impl ConfigReferences {
                         .map_err(|source| {
                             DocumentConfigError::TriggerScheduleOption {
                                 trigger_id: doc.trigger_id.clone(),
-                                source,
+                                source: Box::new(source),
                             }
                         })?;
                         &["doc", "args", "group"]

@@ -942,7 +942,7 @@ fn receipt_of(
 /// A failed call: one that ran carries its own receipt; one refused before
 /// running has none.
 enum Attempted {
-    Ran(PluginAttemptError),
+    Ran(Box<PluginAttemptError>),
     Refused(PluginRunError),
 }
 
@@ -963,7 +963,7 @@ impl From<PluginRunError> for Attempted {
 
 impl From<PluginAttemptError> for Attempted {
     fn from(attempt: PluginAttemptError) -> Self {
-        Self::Ran(attempt)
+        Self::Ran(Box::new(attempt))
     }
 }
 

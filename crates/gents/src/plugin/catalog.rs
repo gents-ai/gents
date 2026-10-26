@@ -30,9 +30,15 @@ pub enum CatalogError {
         source: serde_json::Error,
     },
     #[error(transparent)]
-    Run(#[from] super::executor::PluginRunError),
+    Run(Box<super::executor::PluginRunError>),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+impl From<super::executor::PluginRunError> for CatalogError {
+    fn from(error: super::executor::PluginRunError) -> Self {
+        Self::Run(Box::new(error))
+    }
 }
 
 type Result<T, E = CatalogError> = std::result::Result<T, E>;

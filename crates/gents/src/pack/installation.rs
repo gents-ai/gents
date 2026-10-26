@@ -167,11 +167,11 @@ pub enum InstallationError {
     #[error(transparent)]
     Loader(#[from] super::LoaderError),
     #[error(transparent)]
-    GraphPackage(#[from] crate::graph_package::GraphPackageError),
+    GraphPackage(Box<crate::graph_package::GraphPackageError>),
     #[error(transparent)]
     GraphPackageInstall(Box<crate::graph_package::GraphPackageInstallError>),
     #[error(transparent)]
-    PluginJob(#[from] crate::plugin_job::origin::PluginJobError),
+    PluginJob(Box<crate::plugin_job::origin::PluginJobError>),
     #[error(transparent)]
     PluginInstall(Box<crate::plugin::install::PluginInstallError>),
     #[error("graph installation failed after local pack plugins were published; the plugins remain installed")]
@@ -184,6 +184,18 @@ pub enum InstallationError {
     DependencyAssetNotPrepared { path: String },
     #[error("pack plugins require the node's local plugin home")]
     PluginHomeRequired,
+}
+
+impl From<crate::plugin_job::origin::PluginJobError> for InstallationError {
+    fn from(error: crate::plugin_job::origin::PluginJobError) -> Self {
+        Self::PluginJob(Box::new(error))
+    }
+}
+
+impl From<crate::graph_package::GraphPackageError> for InstallationError {
+    fn from(error: crate::graph_package::GraphPackageError) -> Self {
+        Self::GraphPackage(Box::new(error))
+    }
 }
 
 impl From<crate::graph_pipeline::GraphPipelineError> for InstallationError {

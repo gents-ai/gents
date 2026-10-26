@@ -343,7 +343,7 @@ pub enum GraphPipelineError {
     #[error(transparent)]
     Materializer(Box<crate::trigger_engine::production_materializer::MaterializerError>),
     #[error(transparent)]
-    Overlay(#[from] crate::workspace::overlay::OverlayError),
+    Overlay(Box<crate::workspace::overlay::OverlayError>),
     #[error(transparent)]
     SubscriptionSource(#[from] crate::trigger_engine::subscription_source::SubscriptionSourceError),
     #[error(transparent)]
@@ -364,6 +364,12 @@ pub enum GraphPipelineError {
     GraphSessionContinuationRequiresExactlyOne,
     #[error(transparent)]
     Interrupt(Box<crate::interrupt::InterruptError>),
+}
+
+impl From<crate::workspace::overlay::OverlayError> for GraphPipelineError {
+    fn from(error: crate::workspace::overlay::OverlayError) -> Self {
+        Self::Overlay(Box::new(error))
+    }
 }
 
 impl From<crate::interrupt::InterruptError> for GraphPipelineError {

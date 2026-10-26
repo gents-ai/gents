@@ -162,7 +162,7 @@ pub enum PluginJobError {
     #[error(transparent)]
     Mounts(#[from] crate::plugin::mounts::MountsError),
     #[error(transparent)]
-    AdmissionCause(#[from] crate::request_admission::AdmissionCause),
+    AdmissionCause(Box<crate::request_admission::AdmissionCause>),
     #[error(transparent)]
     ConfigClient(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
@@ -184,7 +184,7 @@ pub enum PluginJobError {
     #[error(transparent)]
     RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
     #[error(transparent)]
-    SessionMessage(#[from] crate::session_message::SessionMessageError),
+    SessionMessage(Box<crate::session_message::SessionMessageError>),
     #[error(transparent)]
     ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
     #[error(transparent)]
@@ -210,7 +210,25 @@ pub enum PluginJobError {
     #[error(transparent)]
     Graphql(#[from] gents_protocol::graphql::GraphqlError),
     #[error(transparent)]
-    Lifecycle(#[from] crate::lifecycle::LifecycleError),
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+}
+
+impl From<crate::lifecycle::LifecycleError> for PluginJobError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<crate::session_message::SessionMessageError> for PluginJobError {
+    fn from(error: crate::session_message::SessionMessageError) -> Self {
+        Self::SessionMessage(Box::new(error))
+    }
+}
+
+impl From<crate::request_admission::AdmissionCause> for PluginJobError {
+    fn from(error: crate::request_admission::AdmissionCause) -> Self {
+        Self::AdmissionCause(Box::new(error))
+    }
 }
 
 impl From<crate::lifecycle::materialize::MaterializeError> for PluginJobError {
@@ -278,7 +296,7 @@ pub enum StepRunFailure {
     #[error(transparent)]
     Failure(crate::plugin_job::driver::StepFailure),
     #[error(transparent)]
-    Run(crate::plugin::executor::PluginRunError),
+    Run(Box<crate::plugin::executor::PluginRunError>),
 }
 
 impl PluginJobError {

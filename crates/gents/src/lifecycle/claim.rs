@@ -778,7 +778,7 @@ impl RequestLifecycle {
             let limit = self
                 .configured_max_total_tokens
                 .map(|limit| {
-                    if limit <= 0 {
+                    if limit == 0 {
                         return Err(LifecycleError::ConfiguredMaxTotalTokensMustPositive);
                     }
                     i64::try_from(limit).map_err(LifecycleError::from)

@@ -223,9 +223,7 @@ where
         Some(cid) => cid.to_string(),
         None => {
             let error = anyhow!("one-shot request has no commit CID");
-            return Err(
-                terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await,
-            );
+            return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
         }
     };
     config.deadline = request

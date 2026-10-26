@@ -113,15 +113,27 @@ pub enum WorkspaceRuntimeError {
     #[error(transparent)]
     Documents(#[from] DocumentsError),
     #[error(transparent)]
-    Overlay(#[from] OverlayError),
+    Overlay(Box<OverlayError>),
     #[error(transparent)]
     Binding(#[from] BindingError),
     #[error(transparent)]
     Authority(#[from] ToolPolicyError),
     #[error(transparent)]
-    Lifecycle(#[from] LifecycleError),
+    Lifecycle(Box<LifecycleError>),
     #[error(transparent)]
     Executor(#[from] WorkspaceExecutorError),
+}
+
+impl From<LifecycleError> for WorkspaceRuntimeError {
+    fn from(error: LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<OverlayError> for WorkspaceRuntimeError {
+    fn from(error: OverlayError) -> Self {
+        Self::Overlay(Box::new(error))
+    }
 }
 
 type Result<T, E = WorkspaceRuntimeError> = std::result::Result<T, E>;

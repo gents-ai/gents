@@ -68,13 +68,19 @@ pub enum TitleAuditUsageError {
     #[error("audit usage query omitted InferenceCall rows")]
     AuditUsageQueryOmittedInferenceCallRows,
     #[error(transparent)]
-    AdmissionCause(#[from] crate::request_admission::AdmissionCause),
+    AdmissionCause(Box<crate::request_admission::AdmissionCause>),
     #[error(transparent)]
     ConfigClient(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
     RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
     #[error(transparent)]
     ProviderUsage(#[from] gents_loop::provider_usage::ProviderUsageError),
+}
+
+impl From<crate::request_admission::AdmissionCause> for TitleAuditUsageError {
+    fn from(error: crate::request_admission::AdmissionCause) -> Self {
+        Self::AdmissionCause(Box::new(error))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

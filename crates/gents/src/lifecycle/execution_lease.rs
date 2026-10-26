@@ -36,7 +36,7 @@ pub enum ExecutionLeaseError {
     #[error(transparent)]
     OwnershipLost(#[from] ExecutionOwnershipLost),
     #[error(transparent)]
-    Lifecycle(#[from] LifecycleError),
+    Lifecycle(Box<LifecycleError>),
     #[error(transparent)]
     Config(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
@@ -77,6 +77,12 @@ pub enum ExecutionLeaseError {
     AuxiliarySourceClosure,
     #[error("natural completion lost execution ownership")]
     NaturalCompletionLost,
+}
+
+impl From<LifecycleError> for ExecutionLeaseError {
+    fn from(error: LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for ExecutionLeaseError {

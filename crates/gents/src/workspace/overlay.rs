@@ -137,7 +137,7 @@ pub enum OverlayError {
     #[error(transparent)]
     ToolPolicy(#[from] gents_loop::tool_policy::ToolPolicyError),
     #[error(transparent)]
-    RootAdmission(#[from] crate::tool_surface::RootAdmissionError),
+    RootAdmission(Box<crate::tool_surface::RootAdmissionError>),
     #[error(transparent)]
     Adapter(#[from] super::adapter::AdapterError),
     #[error(transparent)]
@@ -179,6 +179,12 @@ pub enum OverlayError {
     RequestCwdOutsideRoot { cwd: PathBuf, root: PathBuf },
     #[error("workspace placement {} escapes operator tool root {}", path.display(), ceiling.display())]
     PlacementEscapesToolRoot { path: PathBuf, ceiling: PathBuf },
+}
+
+impl From<crate::tool_surface::RootAdmissionError> for OverlayError {
+    fn from(error: crate::tool_surface::RootAdmissionError) -> Self {
+        Self::RootAdmission(Box::new(error))
+    }
 }
 
 type Result<T, E = OverlayError> = std::result::Result<T, E>;

@@ -21,9 +21,9 @@ type Result<T, E = EntryError> = std::result::Result<T, E>;
 #[derive(Debug, thiserror::Error)]
 pub enum EntryError {
     #[error(transparent)]
-    GraphPackage(#[from] GraphPackageError),
+    GraphPackage(Box<GraphPackageError>),
     #[error(transparent)]
-    PluginRun(#[from] crate::plugin::executor::PluginRunError),
+    PluginRun(Box<crate::plugin::executor::PluginRunError>),
     #[error(transparent)]
     GraphPipeline(#[from] GraphPipelineError),
     #[error(transparent)]
@@ -39,7 +39,7 @@ pub enum EntryError {
     #[error("{} is not a Git work tree", path.display())]
     NotWorkTree { path: PathBuf },
     #[error(transparent)]
-    Overlay(#[from] crate::workspace::overlay::OverlayError),
+    Overlay(Box<crate::workspace::overlay::OverlayError>),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -78,6 +78,24 @@ pub enum EntryError {
     },
     #[error("the {coordinate} plugin's document fields must be a JSON object")]
     PrepareFieldsNotObject { coordinate: String },
+}
+
+impl From<crate::workspace::overlay::OverlayError> for EntryError {
+    fn from(error: crate::workspace::overlay::OverlayError) -> Self {
+        Self::Overlay(Box::new(error))
+    }
+}
+
+impl From<crate::plugin::executor::PluginRunError> for EntryError {
+    fn from(error: crate::plugin::executor::PluginRunError) -> Self {
+        Self::PluginRun(Box::new(error))
+    }
+}
+
+impl From<GraphPackageError> for EntryError {
+    fn from(error: GraphPackageError) -> Self {
+        Self::GraphPackage(Box::new(error))
+    }
 }
 
 impl TransactionFailure for EntryError {

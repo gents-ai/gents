@@ -149,11 +149,9 @@ async fn submit_prepared_edit(
     let doc_id = crate::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
     match tokio::time::timeout(RECEIPT_WAIT, answered(access, &doc_id, &command)).await {
         Ok(receipt) => Ok(receipt?),
-        Err(_) => {
-            Err(QueueError::PendingEditWasSavedWaitingRuntime {
-                command_id: command.command_id.to_string(),
-            })
-        }
+        Err(_) => Err(QueueError::PendingEditWasSavedWaitingRuntime {
+            command_id: command.command_id.to_string(),
+        }),
     }
 }
 
