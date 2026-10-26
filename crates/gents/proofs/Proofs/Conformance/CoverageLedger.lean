@@ -1795,6 +1795,11 @@ def caseCoverage : List CoverageEntry :=
       "hook::persistence::background_control::observation::tests::generated_observation_cases_preserve_deadlines_and_closed_feed_recovery")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "background_process_identity_cases"
+      "BackgroundProcessIdentityCases"
+      "hook::tests::generated_background_process_identity_cases_cancel_only_the_physical_invocation")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "plugin_target_resolution_cases"
       "PluginTargetResolutionCases"
       "plugin_job::admit::tests::generated_wire_targets_preserve_endpoint_and_permission_identity")

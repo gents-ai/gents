@@ -1,4 +1,5 @@
 import Proofs.Background.Observation
+import Proofs.Background.ProcessControl
 import Proofs.PluginJob.TargetResolution
 import Proofs.Conformance.ContractTypes
 
@@ -63,6 +64,19 @@ def targetCasesJson : String :=
         | none => Json.null
         | some pair => toJson [pair.1, pair.2]),
       ("expected_permitted", toJson (permits table ids target))])
+  (toJson cases).compress
+
+def processIdentityCasesJson : String :=
+  let cases := do
+    let ownedId ← ["call", "spawned:parent-doc"]
+    let ownedDoc ← ["tool-doc-a", "tool-doc-b"]
+    let requestedId ← ["call", "spawned:parent-doc", "parent-doc"]
+    let requestedDoc ← ["tool-doc-a", "tool-doc-b", "missing"]
+    pure (Json.mkObj [
+      ("owned_id", toJson ownedId), ("owned_doc", toJson ownedDoc),
+      ("requested_id", toJson requestedId), ("requested_doc", toJson requestedDoc),
+      ("expected_cancel", toJson (Background.ProcessControl.sameInvocation
+        ⟨requestedId, requestedDoc⟩ ⟨ownedId, ownedDoc⟩))])
   (toJson cases).compress
 
 end Conformance.NativeRefinement

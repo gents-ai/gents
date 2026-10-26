@@ -4623,3 +4623,50 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(data_path);
 }
+
+#[tokio::test]
+async fn generated_background_process_identity_cases_cancel_only_the_physical_invocation() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().background_process_identity_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let registry = BackgroundExecutionRegistry::default();
+        let token = CancellationToken::new();
+        let owned_id = case["owned_id"].as_str().unwrap();
+        let owned_doc = case["owned_doc"].as_str().unwrap();
+        let reservation = registry
+            .reserve(owned_id.into(), owned_doc.into(), token.clone())
+            .unwrap();
+        let sibling = CancellationToken::new();
+        let sibling_doc = format!("{owned_doc}-sibling");
+        let sibling_reservation = registry
+            .reserve(owned_id.into(), sibling_doc.clone(), sibling.clone())
+            .unwrap();
+        let worker_token = token.clone();
+        let expected = case["expected_cancel"].as_bool().unwrap();
+        let worker = tokio::spawn(async move {
+            if expected {
+                worker_token.cancelled().await;
+            }
+            drop(reservation);
+        });
+        let outcome = registry
+            .stop_execution(
+                case["requested_id"].as_str().unwrap(),
+                case["requested_doc"].as_str().unwrap(),
+            )
+            .await;
+        assert_eq!(token.is_cancelled(), expected, "{case}");
+        assert_eq!(
+            outcome == crate::managed_exec::ProcessStopOutcome::Stopped,
+            expected,
+            "{case}"
+        );
+        assert!(
+            !sibling.is_cancelled(),
+            "a repeated provider call ID must not alias its sibling: {case}"
+        );
+        worker.await.unwrap();
+        assert_eq!(registry.active_tool_call_doc_ids(), vec![sibling_doc]);
+        drop(sibling_reservation);
+    }
+}
