@@ -51,19 +51,19 @@ theorem newest_chain_checks_linear (edges : Nat) : newestChainChecks edges ≤ 3
   rw [newest_chain_checks_exact]
   omega
 
-/-- Rejected candidates can repeat ancestry work. The compositional budget
-charges every actual path; it does not silently extend the newest-chain
-linear bound to arbitrary selections. -/
-def selectionChecks (paths : List (List Visit)) : Nat :=
+/-- Rejected candidates can repeat assignment ancestry work. This budget
+charges those paths only; selector supersession-edge checks are additional.
+The newest-chain bound does not extend to arbitrary selections. -/
+def assignmentChecks (paths : List (List Visit)) : Nat :=
   (paths.map fun path => pathChecks path + 1).sum
 
-theorem selection_checks_bounded (paths : List (List Visit)) :
-    selectionChecks paths ≤ 3 * (paths.map List.length).sum + paths.length := by
+theorem assignment_checks_bounded (paths : List (List Visit)) :
+    assignmentChecks paths ≤ 3 * (paths.map List.length).sum + paths.length := by
   induction paths with
-  | nil => simp [selectionChecks]
+  | nil => simp [assignmentChecks]
   | cons path rest ih =>
     have := path_checks_linear path
-    simp only [selectionChecks, List.map_cons, List.sum_cons, List.length_cons] at *
+    simp only [assignmentChecks, List.map_cons, List.sum_cons, List.length_cons] at *
     omega
 
 end GoalAutomation.AuthenticationCost
