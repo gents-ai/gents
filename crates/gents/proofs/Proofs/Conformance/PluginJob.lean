@@ -2,6 +2,7 @@ import Proofs.PluginJob.Admission
 import Proofs.PluginJob.Adoption
 import Proofs.PluginJob.Step
 import Proofs.PluginJob.Authority
+import Proofs.PluginJob.RecoveryTrace
 import Proofs.Recovery.Sweeps.PluginJob
 import Lean
 
@@ -31,7 +32,8 @@ namespace Conformance.PluginJob
 private def targetA : Target := ("node-a", "reviewer")
 private def targetB : Target := ("node-b", "writer")
 private def targetC : Target := ("node-c", "deployer")
-private def knownTargets : List Target := [targetA, targetB, targetC]
+private def targetD : Target := ("node-b", "reviewer")
+private def knownTargets : List Target := [targetA, targetB, targetC, targetD]
 private def knownSources : List String := ["source-1", "source-2"]
 
 private def scope (ts : List Target) : EndpointScope Target Unit := .only ts.toFinset fun _ => ()
@@ -352,20 +354,18 @@ private def contextJson (ctx : StepContext) : Json :=
             ("prior", jobJson prior), ("root", jobJson root)]))])),
     ("resume_facts", hostFactsJson ctx.resumeFacts)]
 
-private def render (c : AdmissionCase) : Json :=
+private def render (c : AdmissionCase) (wireTrace : Json := .null) : Json :=
   let (row, kill) := settled c
   let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool := match admitStep c.ctx c.job c.out with
     | .ok j => ((none : Option String), some j, false)
     | .error r => (r.code, none, decide (r = Refusal.dynamicCodeDisabled))
   Json.mkObj [("name", toJson c.name), ("context", contextJson c.ctx), ("job", jobJson c.job),
-    ("output", outputJson c.out),
+    ("output", outputJson c.out), ("wire_trace", wireTrace),
     ("expected", Json.mkObj [("admitted", toJson admitted.isSome), ("code", toJson code),
       ("dynamic_code_disabled", toJson dynamicDisabled),
       ("job", toJson (admitted.map jobJson)), ("row_state", rowStateJson row.state),
       ("kill", toJson (kill.map fun (k, a) =>
         Json.mkObj [("retry_key", toJson k.retryKey), ("action", toJson a.toContract)]))])]
-
-def admissionCasesJson : String := (toJson ((admissionCases ++ sourceBoundaryCases).map render)).compress
 
 private def toolCall : ToolExecution.ToolCallContext :=
   { callId := 1, requestId := 1, state := .running, operation := .nativeCommand, deadline := 20
@@ -1613,5 +1613,59 @@ private def renderRecovery (c : RecoveryCase) : Json :=
     ("expected_row", jobRowJson after)]
 
 def recoveryCasesJson : String := (toJson (recoveryCases.map renderRecovery)).compress
+
+private def wireBindings : List TargetResolution.Binding :=
+  [ ⟨"target-local", targetA.1, targetA.2⟩
+  , ⟨"target-alias", targetA.1, targetA.2⟩
+  , ⟨"target-remote", targetD.1, targetD.2⟩
+  , ⟨"reviewer", targetC.1, targetC.2⟩ ]
+
+private def wirePlans : List (String × List String × List String) :=
+  [ ("target-local", ["target-local"], ["target-local"])
+  , ("target-remote", ["target-remote"], ["target-remote"])
+  , ("reviewer", ["target-local"], ["target-local"])
+  , ("target-alias", ["target-local"], ["target-alias"])
+  , ("target-alias", ["target-local", "target-alias"], ["target-alias"])
+  , ("target-remote", ["target-local"], ["target-local"]) ]
+
+/-- Each trace resolves actual wire input, intersects raw wire ceilings,
+executes admission and settlement, and projects that resulting row into the
+registered recovery owner. Availability and cancellation observations occur
+after the step, so their event order is distinct from admission's snapshot. -/
+private def wireRecoveryCases : List Json := Id.run do
+  let mut cases := []
+  for (wire, liveIds, pinnedIds) in wirePlans do
+    for stopped in [false, true] do
+      for expired in [false, true] do
+        for inFlight in [false, true] do
+          for available in [false, true] do
+            let targets := TargetResolution.scope wireBindings
+              (TargetResolution.meetIds liveIds pinnedIds)
+            let ctx := { context with
+              live := { ceiling with targets }
+              callerTargets := scope [targetA, targetD]
+              jobTargets := scope [targetA, targetD] }
+            let job := { pinned [child "existing" .live] 1 0 with
+              pin := some { hostPin guestPin facts with
+                ceilingAtPin := { ceiling with targets } } }
+            let some target := TargetResolution.resolve wireBindings wire | continue
+            let out := effects [spawn "new" target]
+            let c : AdmissionCase := ⟨s!"wire_recovery_{cases.length}", ctx, job, out⟩
+            let observed : RecoveryTrace.Observation :=
+              ⟨stopped, expired, available, true, inFlight, 1⟩
+            let before := RecoveryTrace.afterStep ctx job out observation observed
+            let after := RecoveryTrace.recoverAfterStep ctx job out observation observed
+            let trace := Json.mkObj
+              [("bindings", toJson (wireBindings.map fun binding => Json.mkObj
+                  [("wire", toJson binding.wire), ("target", targetJson (TargetResolution.endpoint binding))])),
+               ("live_ids", toJson liveIds), ("pinned_ids", toJson pinnedIds),
+               ("spawn_wires", toJson [wire]), ("before", jobRowJson before),
+               ("after", jobRowJson after)]
+            cases := cases ++ [render c trace]
+  return cases
+
+def admissionCasesJson : String :=
+  (toJson (((admissionCases ++ sourceBoundaryCases).map fun c => render c) ++
+    wireRecoveryCases)).compress
 
 end Conformance.PluginJob
