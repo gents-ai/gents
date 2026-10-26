@@ -20,7 +20,7 @@ import { isWorkingNode } from "@/lib/nodes";
 import { useScroller } from "@/lib/scroll";
 import { useSentTurnPlacement } from "@/preferences";
 import { listedSession, nodeOf } from "../../../hooks/fleetStore";
-import { useFleet, workersOfId } from "../../hooks/useFleet";
+import { useFleet } from "../../hooks/useFleet";
 import {
   useSelectedSession,
   useSelectedSessionFields,
@@ -66,7 +66,6 @@ export function OpenSession() {
     [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
   );
   const homeDid = useHomeDid();
-  const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   const column = useRef<HTMLDivElement | null>(null);
   const [scroller, ownScroller] = useScroller();
@@ -173,7 +172,6 @@ export function OpenSession() {
                     agentId={session?.agentId}
                     size="sm"
                     keyboard
-                    workers={sessionWorkers}
                   />
                   <div className="min-w-0 flex-1 [&_form]:min-w-0 [&_h1]:truncate [&_h1]:text-sm [&_input]:h-7 [&_input]:text-sm">
                     {session ? (
@@ -255,7 +253,6 @@ export function OpenSession() {
                     <NodeAgentStack
                       nodeDid={session?.nodeDid}
                       agentId={session?.agentId}
-                      workers={sessionWorkers}
                     />
                     <span className="text-sm text-muted-foreground">
                       {agentName(session?.agentId ?? null, deployment)}
