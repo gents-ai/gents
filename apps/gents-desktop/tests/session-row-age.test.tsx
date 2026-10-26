@@ -28,7 +28,7 @@ describe("an age on screen", () => {
   });
 });
 
-describe("a worker's age in the workers surface", () => {
+describe("a working worker's run time in the workers surface", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-03T12:00:00Z"));
@@ -42,8 +42,8 @@ describe("a worker's age in the workers surface", () => {
       requesterDid: null,
       agentId: null,
       title: sessionId,
-      turnState: "completed",
-      updatedAt: "2026-10-03T11:56:00Z",
+      turnState: "running",
+      createdAt: "2026-10-03T11:56:00Z",
       startedBy: null,
       ...over,
     });
