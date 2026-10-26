@@ -203,8 +203,10 @@ pub enum IdentityError {
     KeychainVerifyFailed { label: String, code: i32 },
     #[error("Keychain item {label} is still present after deletion; its custody record must be retained")]
     KeychainStillPresent { label: String },
+    #[cfg(target_os = "macos")]
     #[error("loading default macOS keychain")]
     DefaultKeychain(#[source] security_framework::base::Error),
+    #[cfg(target_os = "macos")]
     #[error(transparent)]
     Keychain(#[from] security_framework::base::Error),
     #[error("macOS Secure Enclave key not found for label {label}")]
@@ -223,12 +225,14 @@ pub enum IdentityError {
     },
     #[error("multiple keychain private keys found for label {label}")]
     MultipleSecureEnclaveKeys { label: String },
+    #[cfg(target_os = "macos")]
     #[error("searching keychain for macOS Secure Enclave key label {label}")]
     SearchSecureEnclaveKey {
         label: String,
         #[source]
         source: security_framework::base::Error,
     },
+    #[cfg(target_os = "macos")]
     #[error("creating Secure Enclave key access control")]
     SecureEnclaveAccessControl(#[source] security_framework::base::Error),
     #[error("creating macOS Secure Enclave key label {label}: {error}")]
