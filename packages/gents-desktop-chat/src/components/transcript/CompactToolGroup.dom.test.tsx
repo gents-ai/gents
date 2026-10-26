@@ -53,7 +53,7 @@ it("opens the actual failed action from mixed history while retaining every chro
     />,
   );
   const summary = screen.getByRole("button", {
-    name: /View actions: Ran 2 commands.*1 action failed/,
+    name: /View actions: Ran 2 commands.*1 command failed/,
   });
   fireEvent.click(summary);
   const dialog = screen.getByRole("dialog", { name: /Actions 4/ });
@@ -122,4 +122,78 @@ it("keeps a long interrupted block to three rows and opens every original action
   expect(details[3]?.open).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Close actions" }));
   expect(document.activeElement).toBe(rows[0]);
+});
+
+it.each([
+  [1, 0, "1 command failed"],
+  [2, 0, "2 commands failed"],
+  [0, 1, "1 action failed"],
+  [0, 2, "2 actions failed"],
+  [2, 1, "2 commands, 1 action failed"],
+])(
+  "identifies %s failed commands and %s failed other actions",
+  (commands, actions, label) => {
+    const failedCommands = Array.from({ length: commands }, (_, index) =>
+      tool(`command-${index}`, "error"),
+    );
+    const failedActions = Array.from(
+      { length: actions },
+      (_, index): RenderedToolCallView => ({
+        ...tool(`action-${index}`, "error"),
+        toolName: "read_file",
+        presentation: {
+          kind: "fileRead",
+          operation: "read_file",
+          target: "file.rs",
+          returnedCount: 0,
+          totalCount: 0,
+          truncated: false,
+          body: "",
+          fallbackOutput: null,
+        },
+      }),
+    );
+    render(
+      <CompactToolGroup
+        tools={[
+          tool("success", "success"),
+          ...failedCommands,
+          ...failedActions,
+        ]}
+      />,
+    );
+    const summary = screen.getByRole("button", {
+      name: `View actions: Ran 1 command · ${label}`,
+    });
+    expect(
+      summary.querySelector(".tool-activity-errors")?.getAttribute("title"),
+    ).toBe(label);
+    expect(summary.querySelector(".tool-activity-errors")?.textContent).toBe(
+      label,
+    );
+    expect(
+      summary.querySelector(".tool-activity-label")?.getAttribute("title"),
+    ).toBe(`Ran 1 command · ${label}`);
+  },
+);
+
+it("keeps successful stderr warnings and cancelled commands out of failure counts", () => {
+  const success = tool("warning", "success");
+  if (success.presentation.kind === "command")
+    success.presentation.stderr = "Warning: color settings conflict";
+  const cancelled = {
+    ...tool("cancelled", "error"),
+    cancelCause: {
+      cause: "userCancelled",
+      source: "requestInterrupt",
+      confidence: "direct",
+      at: null,
+      evidence: [],
+    },
+  } satisfies RenderedToolCallView;
+  render(<CompactToolGroup tools={[success, cancelled]} />);
+  const summary = screen.getByRole("button", {
+    name: "View actions: Ran 1 command · 1 action stopped",
+  });
+  expect(summary.querySelector(".tool-activity-errors")).toBeNull();
 });
