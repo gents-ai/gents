@@ -326,7 +326,7 @@ async fn oversized_cancellation_reason_is_rejected_before_any_write() {
     assert!(
         error.to_string().contains("cancellation reason exceeds"),
         "unexpected rejection: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     let durable = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
         .await

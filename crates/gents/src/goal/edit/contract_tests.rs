@@ -106,7 +106,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
                     case.fields.validate().is_err(),
                     "{}: {}",
                     case.name,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 );
                 None
             }

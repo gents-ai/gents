@@ -3923,7 +3923,7 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         )
         .await
         .expect_err("every unfinished sibling must block resume");
-        let detail = ErrorChain(error.as_ref()).to_string();
+        let detail = ErrorChain(&error).to_string();
         assert!(
             !detail.contains("no longer the latest"),
             "wrong guard masked unfinished row: {detail}"

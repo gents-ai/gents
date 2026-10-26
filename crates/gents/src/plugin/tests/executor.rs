@@ -216,9 +216,9 @@ fn a_pin_that_no_longer_matches_the_installed_plugin_is_refused() {
         .err()
         .expect("a stale pin must not resolve");
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("not the pinned"),
+        format!("{}", ErrorChain(&error)).contains("not the pinned"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 

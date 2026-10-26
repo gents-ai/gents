@@ -625,7 +625,7 @@ async fn run_generated_wait_observations() {
                     crate::config_client::is_transaction_step_unavailable(&error),
                     "{}: {}",
                     case.name,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 );
                 assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
                 let retried = publish_claimed_continuation(
@@ -835,7 +835,7 @@ async fn run_historical_publication_cases() {
                 txn.discard().await.unwrap();
             }
             "conflict" => {
-                let error = format!("{}", ErrorChain(result.unwrap_err().as_ref()));
+                let error = format!("{}", ErrorChain(&result.unwrap_err()));
                 assert!(
                     error.contains("binding")
                         || error.contains("receipt")

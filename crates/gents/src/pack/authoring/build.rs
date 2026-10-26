@@ -720,7 +720,7 @@ mod tests {
         let (compiler, called) = RefusingCompiler::new();
 
         let error = build_pack(&root, &compiler, None).unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("plugins/format_check.afb"), "{message}");
         assert!(message.contains("missing"), "{message}");
@@ -750,7 +750,7 @@ mod tests {
         let (compiler, called) = RefusingCompiler::new();
 
         let error = build_pack(&root, &compiler, None).unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("is not a directory"), "{message}");
         assert!(
@@ -847,9 +847,9 @@ mod tests {
         .unwrap();
         let error = build_pack(&root, &compiler, None).unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("no compiler in this test"),
+            format!("{}", ErrorChain(&error)).contains("no compiler in this test"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(
             called.load(std::sync::atomic::Ordering::SeqCst),
@@ -878,7 +878,7 @@ mod tests {
         let (compiler, _) = RefusingCompiler::new();
 
         let error = build_pack(&root, &compiler, None).unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("has no source/main.rs"), "{message}");
     }
@@ -903,7 +903,7 @@ mod tests {
         let (compiler, _) = RefusingCompiler::new();
 
         let error = build_pack(&root, &compiler, None).unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("haskell"), "{message}");
     }
@@ -912,7 +912,7 @@ mod tests {
     fn missing_pack_dir_names_a_clear_error() {
         let (compiler, _) = RefusingCompiler::new();
         let error = build_pack(Path::new("/no/such/pack"), &compiler, None).unwrap_err();
-        assert!(format!("{}", ErrorChain(error.as_ref())).contains("manifest"));
+        assert!(format!("{}", ErrorChain(&error)).contains("manifest"));
     }
 
     #[test]
@@ -923,7 +923,7 @@ mod tests {
         std::fs::write(dir.path().join("catalog.json"), b"[]").unwrap();
         let (compiler, _) = RefusingCompiler::new();
 
-        let reports = build_all(dir.path(), &compiler, |_| Ok(None)).unwrap();
+        let reports = build_all(dir.path(), &compiler, |_| Ok::<_, BuildError>(None)).unwrap();
         let mut names: Vec<_> = reports.iter().map(|report| report.pack.clone()).collect();
         names.sort();
         assert_eq!(names, vec!["alpha", "beta"]);

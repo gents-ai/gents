@@ -878,7 +878,7 @@ fn job_block_on_a_plugin_without_job_true_is_refused() {
             .err()
             .expect("a job block needs a plugin that declares job dispatch");
     assert_eq!(
-        format!("{}", ErrorChain(error.as_ref())),
+        format!("{}", ErrorChain(&error)),
         "plugin team/plugin does not declare job dispatch; install a pack whose plugin sets `job: true`"
     );
 }

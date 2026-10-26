@@ -147,7 +147,7 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
                             before.update_generation,
                             observed.update_generation,
                             "unexpected owner error: {}",
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         );
                     }
                 }

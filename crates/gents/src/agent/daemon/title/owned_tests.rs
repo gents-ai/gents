@@ -272,7 +272,7 @@ async fn goal_usage_rejects_a_review_without_its_same_session_parent() {
     )
     .await
     .unwrap_err();
-    assert!(ErrorChain(error.as_ref())
+    assert!(ErrorChain(&error)
         .to_string()
         .contains("goal review has no same-session parent"));
 }

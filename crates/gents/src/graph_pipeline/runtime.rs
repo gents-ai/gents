@@ -3160,10 +3160,13 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(
-                error.downcast_ref::<super::super::GraphRunUnobservable>(),
+                match &error {
+                    GraphPipelineError::Unobservable(refusal) => Some(refusal),
+                    _ => None,
+                },
                 Some(&refusal),
                 "{}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
         }
         assert_eq!(

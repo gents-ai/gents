@@ -493,7 +493,7 @@ async fn cleaned_source_attenuates_for_triage_but_bound_destination_cannot_upgra
     assert!(
         error.to_string().contains("immutable entry seal"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -654,7 +654,7 @@ async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
             .to_string()
             .contains("conflicts with authenticated entry"),
         "unexpected denial: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     txn.discard().await.unwrap();
     let omitted = fx
@@ -669,7 +669,7 @@ async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
             .to_string()
             .contains("differs from resolved publication evidence"),
         "unexpected denial: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     txn.discard().await.unwrap();
     fx.node.shutdown().await;

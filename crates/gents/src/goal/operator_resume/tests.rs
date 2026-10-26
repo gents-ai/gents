@@ -216,7 +216,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 .await
                 .unwrap();
                 let error = limited.resume_on(&limited.b).await.unwrap_err();
-                assert!(format!("{}", ErrorChain(error.as_ref())).contains("target account"));
+                assert!(format!("{}", ErrorChain(&error)).contains("target account"));
                 assert!(limited.children().await.is_empty());
                 assert_eq!(limited.goal_status().await, "usage_limited");
             }

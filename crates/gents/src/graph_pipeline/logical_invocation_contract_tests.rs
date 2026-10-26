@@ -509,7 +509,7 @@ async fn typed_resume_obeys_cancelled_or_failed_graph_fence() {
         assert!(
             error.to_string().contains("graph run"),
             "unexpected pre-fence rejection: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert_eq!(
             publication_state(&node).await,
@@ -633,7 +633,7 @@ async fn automatic_claimed_publication_obeys_graph_fence() {
             assert!(
                 error.to_string().contains("graph run"),
                 "unexpected pre-fence rejection: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
             assert_eq!(publication_state(&node).await, before);
         } else {
@@ -708,7 +708,7 @@ async fn fresh_goal_on_closed_rooted_session_rolls_back() {
     assert!(
         error.to_string().contains("graph run"),
         "unexpected pre-fence rejection: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(publication_state(&node).await, before);
     node.shutdown().await;
@@ -881,7 +881,7 @@ async fn goal_backed_graph_root_factory_rolls_back_after_cancellation() {
     assert!(
         error.to_string().contains("graph run"),
         "unexpected submission failure: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(publication_state(&node).await, closed);
     assert_eq!(
@@ -1273,7 +1273,7 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
         assert!(
             denial.to_string().contains("node is not its pinned owner"),
             "{}",
-            ErrorChain(denial.as_ref())
+            ErrorChain(&denial)
         );
         txn.discard().await.unwrap();
         execute(&node, &request.graphql_mutation().unwrap()).await;
