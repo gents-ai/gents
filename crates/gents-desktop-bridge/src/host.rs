@@ -551,6 +551,9 @@ impl ClientHost {
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
                 encode(())
             }
+            ClientCommand::WorkspacePermissionsForgetCommands { request } => {
+                encode(permissions::forget_commands(&self.core, request).await?)
+            }
             ClientCommand::WorkspacePermissionsSave { request } => {
                 encode(permissions::save(&self.core, request).await?)
             }

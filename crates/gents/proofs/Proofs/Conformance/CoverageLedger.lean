@@ -2180,6 +2180,21 @@ def caseCoverage : List CoverageEntry :=
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "workspace_command_grant_answers"
+      "WorkspaceCommandGrantAnswers"
+      "plugin::approval::command_grant_contract_tests::generated_command_answers_preserve_scope_and_one_time_delivery")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_command_grant_lookups"
+      "WorkspaceCommandGrantLookups"
+      "tool_policy::workspace_permissions::tests::generated_command_grant_lookups")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_command_grant_revocations"
+      "WorkspaceCommandGrantRevocations"
+      "plugin::approval::command_grant_contract_tests::generated_command_revocation_preserves_the_selected_mode")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "workspace_permission_write_cases"
       "WorkspacePermissionWriteCases"
       "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases")

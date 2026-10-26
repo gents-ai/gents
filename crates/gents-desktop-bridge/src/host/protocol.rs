@@ -226,6 +226,10 @@ pub enum ClientCommand {
     WorkspacePermissions {
         request: super::permissions::WorkspacePermissionsRequest,
     },
+    #[serde(rename = "client_workspace_permissions_forget_commands")]
+    WorkspacePermissionsForgetCommands {
+        request: super::permissions::WorkspacePermissionsForgetCommandsRequest,
+    },
     #[serde(rename = "client_workspace_permissions_save")]
     WorkspacePermissionsSave {
         request: super::permissions::WorkspacePermissionsSaveRequest,
@@ -344,6 +348,7 @@ impl ClientCommand {
         "client_connect_local",
         "client_workspace_permissions",
         "client_workspace_permissions_save",
+        "client_workspace_permissions_forget_commands",
         "client_plugin_approval_subscribe",
         "client_plugin_approval_unsubscribe",
         "client_plugin_approval_pending",
