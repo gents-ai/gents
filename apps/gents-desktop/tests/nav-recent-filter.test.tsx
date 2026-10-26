@@ -82,6 +82,20 @@ describe("the side nav's recent sessions filter", () => {
     await waitFor(() => expect(recentTitles()).toEqual(["Done"]));
   });
 
+  it("offers a state no session is in yet", async () => {
+    const { u } = showNav();
+    await u.click(screen.getByRole("button", { name: "Filter recent sessions" }));
+    await u.click(await screen.findByRole("menuitem", { name: /State/ }));
+    await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(1));
+    const failed = within(screen.getAllByRole("menu").at(-1)!).getByRole(
+      "menuitemcheckbox",
+      { name: /Failed/ },
+    );
+    expect(failed).not.toHaveAttribute("aria-disabled");
+    await u.click(failed);
+    await waitFor(() => expect(recentTitles()).toEqual([]));
+  });
+
   it("says when nothing matches and clears the filter", async () => {
     listViews.setRecentFilter({ states: ["failed"], sources: [], agents: [] });
     const { u } = showNav();

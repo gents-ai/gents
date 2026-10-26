@@ -143,7 +143,6 @@ function Axis({
             <DropdownMenuCheckboxItem
               key={value}
               checked={checked}
-              disabled={count === 0 && !checked}
               onCheckedChange={onToggle}
               closeOnClick={false}
             >

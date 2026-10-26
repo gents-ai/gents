@@ -121,7 +121,6 @@ export function Axis<V extends string>({
             <DropdownMenuCheckboxItem
               key={v}
               checked={value.includes(v)}
-              disabled={(counts[v] ?? 0) === 0 && !value.includes(v)}
               onCheckedChange={() => toggle(v)}
               closeOnClick={false}
             >
@@ -224,11 +223,7 @@ function AgentAxis({
             const b = byId.get(id);
             if (!b) return null;
             return (
-              <ComboboxItem
-                key={id}
-                value={id}
-                disabled={b.count === 0 && !value.includes(id)}
-              >
+              <ComboboxItem key={id} value={id}>
                 <AgentInitials name={b.name} className="size-5 text-[9px]" />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
                 <span className="text-xs tabular-nums text-muted-foreground">
