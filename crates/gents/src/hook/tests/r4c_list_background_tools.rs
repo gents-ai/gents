@@ -15,6 +15,9 @@ use crate::support::test_db;
 #[path = "background_wait_wakes.rs"]
 mod background_wait_wakes;
 
+#[path = "background_wait_profile.rs"]
+mod background_wait_profile;
+
 struct StaticTool {
     name: &'static str,
     result: &'static str,
