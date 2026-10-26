@@ -192,7 +192,7 @@ pub async fn resume_goal_on_account(
     from_request_id: &str,
     target_backend_id: &str,
     move_companions: bool,
-    plugin_slots: &dyn Fn(&str) -> Result<Vec<String>>,
+    plugin_slots: &dyn Fn(&str) -> std::result::Result<Vec<String>, crate::pack::CallbackError>,
 ) -> Result<GoalResumeOnReceipt> {
     use crate::blocked_turn::{blocked_turn_from, stopped_request, BlockedReason, FailedCall};
     if identity.did() != node_did {
@@ -221,7 +221,7 @@ pub async fn resume_goal_on_account(
     let switch = match limited.profile {
         Some(profile) => {
             let receipt = async {
-                let slots = plugin_slots(&profile)?;
+                let slots = plugin_slots(&profile).map_err(GoalError::PluginSlots)?;
                 Ok::<_, GoalError>(
                     crate::config_client::switch_profile_account(
                         access,

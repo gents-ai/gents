@@ -41,6 +41,7 @@ impl ClientCore {
             input,
         )
         .await
+        .map_err(anyhow::Error::from)
     }
 
     /// DefraDB returns successful empty data for an anonymous NAC denial. A cold
@@ -69,6 +70,7 @@ impl ClientCore {
             Some(&self.requester_did(&record)),
         )
         .await
+        .map_err(anyhow::Error::from)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -158,6 +160,7 @@ impl ClientCore {
             command,
         )
         .await
+        .map_err(anyhow::Error::from)
     }
 }
 

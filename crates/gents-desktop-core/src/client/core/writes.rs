@@ -690,7 +690,7 @@ impl ClientCore {
                 self.clear_mutation_error();
                 Ok(receipt)
             }
-            Err(error) => Err(self.record_mutation_error("edit pending messages", error)),
+            Err(error) => Err(self.record_mutation_error("edit pending messages", error.into())),
         }
     }
 
@@ -1556,7 +1556,7 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("interrupt request", error)),
+            Err(error) => Err(self.record_mutation_error("interrupt request", error.into())),
         }
     }
 

@@ -526,6 +526,7 @@ pub(crate) async fn prepare_cli_goal_input(
         input,
     )
     .await
+    .map_err(anyhow::Error::from)
 }
 
 /// Exact retries use the same immutable submission key and converge to the

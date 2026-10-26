@@ -41,7 +41,7 @@ impl GraphRunCursor {
         let access = &ConfigAccess::local(node.clone());
         reports.extend(
             self.observe(session, sender, projections, now, |run_id| async move {
-                load_graph_run_view_with_access(access, principal, &run_id).await
+                Ok(load_graph_run_view_with_access(access, principal, &run_id).await?)
             })
             .await,
         );

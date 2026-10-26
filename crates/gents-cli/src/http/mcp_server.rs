@@ -99,6 +99,7 @@ impl DefraQueryMcp {
                         .map_err(invalid)?;
                 gents::graph_pipeline::load_graph_run_view_with_access(&access, &did, &args.run_id)
                     .await
+                    .map_err(anyhow::Error::from)
                     .and_then(|view| Ok(serde_json::to_value(view)?))
             }
             gents::self_config::GET_GRAPH_RESULT_TOOL_NAME => {
@@ -111,6 +112,7 @@ impl DefraQueryMcp {
                     &args.run_id,
                 )
                 .await
+                .map_err(anyhow::Error::from)
                 .and_then(|view| result_value_in_scope(&self.options.scope, view))
             }
             other => {

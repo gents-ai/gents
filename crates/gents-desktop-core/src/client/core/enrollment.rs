@@ -146,7 +146,7 @@ impl ClientCore {
                             .filter(|(persisted, _)| persisted == &request)
                             .with_context(|| {
                                 format!(
-                                    "enrollment request commit was not observably recovered after: {}", ErrorChain(write_error.as_ref())
+                                    "enrollment request commit was not observably recovered after: {}", ErrorChain(&write_error)
                                 )
                             })?;
                         recovered.1
@@ -370,7 +370,7 @@ impl ClientCore {
             request.request_id == request_id,
             "enrollment request {request_id} is not the request persisted for its offer"
         );
-        push_enrollment_request(&self.p2p, &offer, &request.request_id, &document_id).await
+        Ok(push_enrollment_request(&self.p2p, &offer, &request.request_id, &document_id).await?)
     }
 
     async fn existing_request_for_offer(

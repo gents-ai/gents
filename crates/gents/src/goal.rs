@@ -479,6 +479,8 @@ pub enum GoalError {
     Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
     #[error(transparent)]
     WaitObservation(#[from] claimed_publication::wait_observation::WaitObservationError),
+    #[error(transparent)]
+    PluginSlots(crate::pack::CallbackError),
 }
 
 impl From<crate::lifecycle::materialize::MaterializeError> for GoalError {

@@ -120,7 +120,7 @@ pub async fn interrupt_request(
         format!(
             "interrupt of {} failed: {}",
             req.request_id,
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         )
     })?;
     let latched =

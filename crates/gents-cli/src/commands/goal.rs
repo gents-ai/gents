@@ -48,7 +48,7 @@ async fn goal_show_value(
     let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
         .unwrap_or_else(|error| {
-            tracing::warn!(session_id, error = %format!("{}", ErrorChain(error.as_ref())), "blocked turn unreadable");
+            tracing::warn!(session_id, error = %format!("{}", ErrorChain(&error)), "blocked turn unreadable");
             None
         });
     value["blocked"] = serde_json::to_value(blocked)?;
@@ -130,7 +130,10 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
         &args.from,
         &backend_id,
         args.with_compaction,
-        &|profile| crate::commands::config::profile::bound_slots(home, graphql, &node_did, profile),
+        &|profile| {
+            crate::commands::config::profile::bound_slots(home, graphql, &node_did, profile)
+                .map_err(Into::into)
+        },
     )
     .await?;
     Ok(print_json(&serde_json::to_value(receipt)?)?)
@@ -207,7 +210,7 @@ async fn load_goal(
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
     if let Some(node) = access.local_node() {
-        return load_canonical_goal(node, node_did, session_id).await;
+        return Ok(load_canonical_goal(node, node_did, session_id).await?);
     }
     let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);

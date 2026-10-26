@@ -100,7 +100,7 @@ fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
 }
 
 fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConfig> {
-    gents::pack::authoring::load_config(archive)
+    Ok(gents::pack::authoring::load_config(archive)?)
 }
 
 async fn check_filters(
@@ -167,7 +167,7 @@ pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
 }
 
 pub(crate) fn write_topology(dir: &Path) -> Result<()> {
-    gents::pack::authoring::write_topology(dir)
+    Ok(gents::pack::authoring::write_topology(dir)?)
 }
 
 #[cfg(test)]

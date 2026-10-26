@@ -51,7 +51,7 @@ struct ScenarioRun {
 }
 
 pub(crate) async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
-    gents::pack::authoring::run_plugin_cases(dir).await
+    Ok(gents::pack::authoring::run_plugin_cases(dir).await?)
 }
 
 #[cfg(test)]

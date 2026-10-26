@@ -330,7 +330,7 @@ impl ClientRouteManager {
             }
             Err(error) => {
                 let remote_error =
-                    gents_protocol::error_chain::find_source::<RemoteP2pAdminError>(error.as_ref());
+                    gents_protocol::error_chain::find_source::<RemoteP2pAdminError>(&error);
                 let error_class = remote_error.map(classify_remote_admin_error);
                 if let Some(remote_error) = remote_error {
                     record_failure(record, sync_state, &desired, remote_error);
@@ -349,7 +349,7 @@ impl ClientRouteManager {
                     ),
                     Some(format!(
                         "client route reconcile failed: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     )),
                     error_class,
                 );
@@ -957,12 +957,12 @@ fn publish_route_status(
 fn record_pairing_error(
     record: &PeerRecord,
     sync_state: &ClientSyncStateOwner,
-    error: &anyhow::Error,
+    error: &(dyn std::error::Error + 'static),
 ) {
     sync_state.update_peer(record, |status| {
         status.last_error = Some(format!(
             "client route reconcile failed: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(error)
         ));
     });
 }
