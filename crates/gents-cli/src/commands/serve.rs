@@ -6,32 +6,32 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use axum::{http::Uri, routing::get, Router};
+use axum::{Router, http::Uri, routing::get};
 use gents::defra_node::EmbeddedNode;
 use gents::{
     DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity, ProcessLifecycleObserver,
     ProcessLifecycleState,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::cli::*;
-use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
+use crate::commands::codex_shim::{CodexShimBindArgs, bind_codex_shim};
 #[cfg(unix)]
-use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
+use crate::commands::grok_shim::{GrokShimBindArgs, bind_grok_shim};
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
-    default_data_dir, default_key_path, display_host, format_tool_ceiling, host_tool_ceiling,
-    parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir, server_start_failure_hint,
-    write_runtime_state, DEFAULT_NODE_NAME,
+    DEFAULT_NODE_NAME, default_data_dir, default_key_path, display_host, format_tool_ceiling,
+    host_tool_ceiling, parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir,
+    server_start_failure_hint, write_runtime_state,
 };
 use gents::codex_shim_binding::{ShimBinding, ShimUnboundReason};
 use gents_protocol::row::{
-    project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
-    ProjectedNodeReadinessSummary,
+    AgentReadinessState, NodeReadinessSummary, ProjectedNodeReadinessSummary,
+    project_node_readiness_summary,
 };
 
 pub(crate) struct CliReadyObserver {
@@ -131,28 +131,26 @@ async fn wait_for_live_node_readiness(
 ) -> Result<NodeReadinessSummary> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let last_observation =
-            match crate::commands::status::load_live_node_readiness(
-                &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
-                node_did,
-            )
-                .await
-            {
-                Ok(row) => match project_node_readiness_summary(row.as_ref(), node_did) {
-                    ProjectedNodeReadinessSummary::Observed(summary)
-                        if fence.is_none_or(|fence| fence.matches(&summary)) =>
-                    {
-                        return Ok(summary);
-                    }
-                    ProjectedNodeReadinessSummary::Observed(summary) => format!(
-                        "waiting for post-apply runtime projection (current generation={}, default={:?})",
-                        summary.snapshot.active_generation,
-                        summary.snapshot.default_agent_id,
-                    ),
-                    ProjectedNodeReadinessSummary::Unknown(reason) => format!("{reason:?}"),
-                },
-                Err(error) => error.to_string(),
-            };
+        let last_observation = match crate::commands::status::load_live_node_readiness(
+            &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
+            node_did,
+        )
+        .await
+        {
+            Ok(row) => match project_node_readiness_summary(row.as_ref(), node_did) {
+                ProjectedNodeReadinessSummary::Observed(summary)
+                    if fence.is_none_or(|fence| fence.matches(&summary)) =>
+                {
+                    return Ok(summary);
+                }
+                ProjectedNodeReadinessSummary::Observed(summary) => format!(
+                    "waiting for post-apply runtime projection (current generation={}, default={:?})",
+                    summary.snapshot.active_generation, summary.snapshot.default_agent_id,
+                ),
+                ProjectedNodeReadinessSummary::Unknown(reason) => format!("{reason:?}"),
+            },
+            Err(error) => error.to_string(),
+        };
         if Instant::now() >= deadline {
             anyhow::bail!(
                 "runtime readiness never reached an admissible durable generation: \
@@ -247,7 +245,7 @@ async fn apply_pack_after_ready(
 ) -> Result<AppliedPack> {
     use crate::cli::ManifestNodeDidBindingArg;
     use crate::commands::config::apply::apply_bound_desired_manifest;
-    use crate::commands::config::binding::{load_bound_manifest, ManifestBindingOptions};
+    use crate::commands::config::binding::{ManifestBindingOptions, load_bound_manifest};
     use crate::commands::schema::apply_pack_schemas_if_present;
     use crate::config_writes::ConfigAccess;
 
@@ -483,7 +481,7 @@ async fn serve_with_startup(
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         match signal(SignalKind::terminate()) {
             Ok(mut terminate) => {
                 tokio::select! {
@@ -777,6 +775,11 @@ async fn serve_foreground(
     let mut node_builder = crate::persistent_node_builder(&home_dir, &data_dir)
         .await?
         .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
+    if args.keychain_startup_approval {
+        drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
+    }
+    let _post_open_keychain_prompt_guard =
+        crate::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
         node_builder = node_builder
             .with_node_identity_did(node_identity_did.clone())

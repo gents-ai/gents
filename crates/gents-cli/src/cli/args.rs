@@ -1906,6 +1906,8 @@ pub(crate) struct ServeArgs {
         help = "Fail instead of displaying macOS Keychain access dialogs"
     )]
     pub(crate) no_keychain_prompts: bool,
+    #[arg(skip)]
+    pub(crate) keychain_startup_approval: bool,
     #[arg(long, hide = true)]
     pub(crate) data_dir: Option<PathBuf>,
     #[arg(
