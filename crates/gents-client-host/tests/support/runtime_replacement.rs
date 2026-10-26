@@ -75,6 +75,8 @@ pub struct Fixture<'a> {
 }
 
 impl Fixture<'_> {
+    /// Serving-runtime readiness and the attached client's authorized write route
+    /// are separate observations during replacement.
     pub async fn replace_and_verify(
         &self,
         original: &mut Child,
@@ -147,6 +149,7 @@ impl Fixture<'_> {
             )? == providers,
             "replacement changed provider settings"
         );
+        super::wait_chat_deployment(client, id, self.node_did).await?;
         let receipt = client
             .call(
                 *id,
