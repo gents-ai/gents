@@ -225,14 +225,16 @@ fn generated_command_revocation_preserves_the_selected_mode() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn remembered_invocation_runs_again_and_revocation_requires_new_consent() {
+async fn automatic_review_reuses_remembered_invocations_until_revocation() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("home");
     let project = root.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let key = workspace::WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
-    workspace::save_mode(&home, &key, 0, policy::Mode::Ask, None).unwrap();
+    let reviewer =
+        workspace::ReviewTaskSelection::for_task(&workspace::default_review_task("node", "agent"));
+    workspace::save_mode(&home, &key, 0, policy::Mode::AutoReview, Some(&reviewer)).unwrap();
     mark_listening(&home).unwrap();
     let context = workspace::for_request(
         Some(&home),
