@@ -1,5 +1,6 @@
 import Proofs.GoalAutomation.RequestHead
 import Proofs.GoalAutomation.RequestAncestry
+import Proofs.GoalAutomation.AuthenticationCost
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.GoalRequestHeadContracts
@@ -19,8 +20,8 @@ def child : Row := ⟨.normal, 20, 200, 1, 1, some 1, some 10, some 100, 1, true
 def grandchild : Row := ⟨.normal, 30, 300, 1, 1, some 1, some 20, some 200, 2, true, true, .execution⟩
 def unrelated : Row := ⟨.normal, 40, 400, 1, 1, none, none, none, 0, true, true, .execution⟩
 
-def retainedChain : List Row :=
-  (List.range 128).map fun index =>
+def retainedChain (size : Nat) : List Row :=
+  (List.range size).map fun index =>
     { root with
       doc := 10 + index
       request := 100 + index
@@ -59,11 +60,12 @@ def cases : List Case :=
   , ⟨"replaced_input_is_not_the_goal_execution_head", [{unrelated with inputDisposition := .replaced}, root, child], some child, none⟩
   , ⟨"removed_input_is_not_an_execution_interrupt", [{unrelated with inputDisposition := .removed}, root, child], some child, none⟩
   , ⟨"retired_inputs_do_not_invent_execution", [{unrelated with inputDisposition := .folded}, {root with inputDisposition := .replaced}], none, none⟩
-  , ⟨"retained_assigned_goal_chain", retainedChain.reverse, retainedChain.getLast?, some 10⟩
   , ⟨"empty_session", [], none, none⟩
   , ⟨"title_cannot_be_public_head", [{unrelated with purpose := .titleAudit}, root], some root, none⟩
   , ⟨"title_cannot_supersede_parent", [root, {child with purpose := .titleAudit}], some root, none⟩
-  ]
+  ] ++ [1, 2, 3, 8, 32, 128].map (fun size =>
+    ⟨"retained_assigned_goal_chain_" ++ toString size,
+      (retainedChain size).reverse, (retainedChain size).getLast?, some 10⟩)
 
 example : select scope [{child with parentDoc := some 30, parentRequest := some 300}, grandchild] = none := by decide
 
@@ -94,11 +96,13 @@ def caseJson (testCase : Case) : String :=
   ",\"scope\":{\"owner\":" ++ toString scope.owner ++
   ",\"session\":" ++ toString scope.session ++ ",\"goal\":" ++ toString scope.goal ++ "}" ++
   ",\"assignment_root\":" ++ optionalNatJson testCase.assignmentRoot ++
+  ",\"expected_receipt_checks\":" ++ optionalNatJson (testCase.assignmentRoot.map fun _ =>
+    GoalAutomation.AuthenticationCost.newestChainChecks (testCase.rows.length - 1)) ++
   ",\"rows\":" ++ jsonArray (testCase.rows.map rowJson) ++
   ",\"expected\":" ++ (match testCase.expected with | none => "null" | some row => rowJson row) ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-theorem cases_count : cases.length = 22 := by decide
+theorem cases_count : cases.length = 27 := by decide
 
 end Conformance.GoalRequestHeadContracts

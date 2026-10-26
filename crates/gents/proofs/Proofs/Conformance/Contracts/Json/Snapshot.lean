@@ -93,6 +93,7 @@ import Proofs.Conformance.GoalRequestAncestry
 import Proofs.Conformance.GoalQueueAssignment
 import Proofs.Conformance.GoalFirstRequestBinding
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.NativeRefinement
 import Proofs.Conformance.GoalRequestAssignment
 import Proofs.Conformance.GoalDeliveryInput
 import Proofs.Conformance.GoalToolContext
@@ -173,6 +174,10 @@ def snapshotJson : String :=
       ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
+    ++ "\"durable_observation_cases\":"
+      ++ Conformance.NativeRefinement.observationCasesJson ++ ","
+    ++ "\"plugin_target_resolution_cases\":"
+      ++ Conformance.NativeRefinement.targetCasesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
     ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
