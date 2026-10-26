@@ -5,6 +5,13 @@ import type {
   SessionContextDetails,
 } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@gents/ui/components/tooltip";
+import { cn } from "@gents/ui/lib/utils";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
@@ -72,7 +79,7 @@ function inputParts(input: LastRequest, details: SessionContextDetails | null) {
           {
             label: "Messages & instructions",
             tokens: components.messages,
-            color: "bg-green-700 dark:bg-green-300",
+            color: "bg-green-700 dark:bg-green-500",
           },
         ]),
     {
@@ -88,7 +95,7 @@ function inputParts(input: LastRequest, details: SessionContextDetails | null) {
     {
       label: "Request settings",
       tokens: components.additionalParameters,
-      color: "bg-gray-600 dark:bg-gray-500",
+      color: "bg-gray-600 dark:bg-yellow",
     },
   ];
   return parts.filter((part) => part.tokens > 0);
@@ -96,15 +103,25 @@ function inputParts(input: LastRequest, details: SessionContextDetails | null) {
 
 const SEGMENT_GAP_PX = 2;
 
+function shareLabel(tokens: number, total: number) {
+  return formatPercent(total > 0 ? (tokens / total) * 100 : 0);
+}
+
+type Highlight = { active: string | null; onActive: (label: string | null) => void };
+
 function InputBar({
   parts,
+  total,
   window,
   threshold,
+  active,
+  onActive,
 }: {
   parts: InputPart[];
+  total: number;
   window: number;
   threshold: number;
-}) {
+} & Highlight) {
   const used = parts.reduce((sum, part) => sum + part.tokens, 0);
   const remainder = used < window;
   /* shares are laid out over the width left after the gaps, so the tick at the
@@ -121,46 +138,67 @@ function InputBar({
     .map((part) => `${part.label} ${part.tokens.toLocaleString()}`)
     .join(", ");
   return (
-    <div
-      role="img"
-      aria-label={`Model input by part: ${summary || "none"}. ${window.toLocaleString()}-token context window; compaction threshold at ${threshold.toLocaleString()} tokens`}
-      className="relative flex h-2 gap-0.5"
-      data-testid="context-bar"
-    >
-      {parts.map((part) => (
-        <span
-          key={part.label}
-          className={`min-w-[3px] rounded-full ${part.color}`}
-          style={{
-            flex: `0 1 calc((100% - ${gaps}px) * ${part.tokens / window})`,
-          }}
-          title={`${part.label}: ${part.tokens.toLocaleString()} tokens`}
-          data-testid="context-segment"
-          data-share={(part.tokens / window).toFixed(4)}
-        />
-      ))}
-      {remainder && (
-        <span className="min-w-0 flex-1 rounded-full bg-muted-foreground/20" />
-      )}
-      {threshold > 0 && (
-        <span
-          className="absolute inset-y-[-3px] w-0 border-l border-dashed border-foreground/70"
-          style={{
-            left: `calc((100% - ${gaps}px) * ${thresholdShare} + ${gapsBeforeThreshold * SEGMENT_GAP_PX}px)`,
-          }}
-          title={`Compaction threshold: ${threshold.toLocaleString()} tokens`}
-          data-testid="compaction-threshold"
-          data-position={thresholdShare.toFixed(4)}
-        />
-      )}
-    </div>
+    <TooltipProvider delay={0}>
+      <div
+        role="img"
+        aria-label={`Model input by part: ${summary || "none"}. ${window.toLocaleString()}-token context window; compaction threshold at ${threshold.toLocaleString()} tokens`}
+        className="relative flex h-2 gap-0.5"
+        data-testid="context-bar"
+      >
+        {parts.map((part) => (
+          <Tooltip key={part.label}>
+            <TooltipTrigger
+              render={
+                <span
+                  className={cn(
+                    "relative min-w-[3px] rounded-full transition-opacity before:absolute before:inset-x-0 before:inset-y-[-6px]",
+                    part.color,
+                    active && active !== part.label && "opacity-40",
+                  )}
+                  style={{
+                    flex: `0 1 calc((100% - ${gaps}px) * ${part.tokens / window})`,
+                  }}
+                  data-testid="context-segment"
+                  data-part={part.label}
+                  data-share={(part.tokens / window).toFixed(4)}
+                />
+              }
+              onMouseEnter={() => onActive(part.label)}
+              onMouseLeave={() => onActive(null)}
+            />
+            <TooltipContent>
+              {part.label} · {part.tokens.toLocaleString()} tokens ·{" "}
+              {shareLabel(part.tokens, total)}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+        {remainder && (
+          <span className="min-w-0 flex-1 rounded-full bg-muted-foreground/20" />
+        )}
+        {threshold > 0 && (
+          <span
+            className="pointer-events-none absolute inset-y-[-3px] w-0 border-l border-dashed border-foreground/70"
+            style={{
+              left: `calc((100% - ${gaps}px) * ${thresholdShare} + ${gapsBeforeThreshold * SEGMENT_GAP_PX}px)`,
+            }}
+            data-testid="compaction-threshold"
+            data-position={thresholdShare.toFixed(4)}
+          />
+        )}
+      </div>
+    </TooltipProvider>
   );
 }
 
-function InputLegend({ parts, total }: { parts: InputPart[]; total: number }) {
+function InputLegend({
+  parts,
+  total,
+  active,
+  onActive,
+}: { parts: InputPart[]; total: number } & Highlight) {
   return (
     <div
-      className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-1 text-xs"
+      className="-mx-1.5 text-xs"
       role="table"
       aria-label="Input token estimates"
       data-testid="input-breakdown"
@@ -171,9 +209,21 @@ function InputLegend({ parts, total }: { parts: InputPart[]; total: number }) {
         <span role="columnheader">Share</span>
       </div>
       {parts.map((part) => (
-        <div className="contents" role="row" key={part.label}>
+        <div
+          className={cn(
+            "flex items-center gap-3 rounded-md px-1.5 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            active === part.label && "bg-accent",
+          )}
+          role="row"
+          key={part.label}
+          tabIndex={0}
+          onMouseEnter={() => onActive(part.label)}
+          onMouseLeave={() => onActive(null)}
+          onFocus={() => onActive(part.label)}
+          onBlur={() => onActive(null)}
+        >
           <span
-            className="flex min-w-0 items-center gap-2 text-muted-foreground"
+            className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground"
             role="rowheader"
           >
             <span
@@ -185,12 +235,42 @@ function InputLegend({ parts, total }: { parts: InputPart[]; total: number }) {
           <span className="text-right tabular-nums" role="cell">
             {part.tokens.toLocaleString()}
           </span>
-          <span className="text-right tabular-nums text-muted-foreground" role="cell">
-            {formatPercent(total > 0 ? (part.tokens / total) * 100 : 0)}
+          <span
+            className="w-11 text-right tabular-nums text-muted-foreground"
+            role="cell"
+          >
+            {shareLabel(part.tokens, total)}
           </span>
         </div>
       ))}
     </div>
+  );
+}
+
+function InputBreakdown({
+  parts,
+  total,
+  window,
+  threshold,
+}: {
+  parts: InputPart[];
+  total: number;
+  window: number;
+  threshold: number;
+}) {
+  const [active, setActive] = useState<string | null>(null);
+  return (
+    <>
+      <InputBar
+        parts={parts}
+        total={total}
+        window={window}
+        threshold={threshold}
+        active={active}
+        onActive={setActive}
+      />
+      <InputLegend parts={parts} total={total} active={active} onActive={setActive} />
+    </>
   );
 }
 
@@ -429,8 +509,12 @@ export function SessionContext({
         )}
         {lastRequest ? (
           <>
-            <InputBar parts={parts} window={window} threshold={threshold} />
-            <InputLegend parts={parts} total={lastRequest.estimatedInputTokens} />
+            <InputBreakdown
+              parts={parts}
+              total={lastRequest.estimatedInputTokens}
+              window={window}
+              threshold={threshold}
+            />
             {loadingDetails && (
               <p className="text-xs text-muted-foreground">
                 Loading message breakdown…

@@ -366,13 +366,13 @@ describe("session context meter (#1618)", () => {
     });
     const segments = within(bar).getAllByTestId("context-segment");
     expect(
-      segments.map((segment) => [segment.getAttribute("title"), segment.dataset.share]),
+      segments.map((segment) => [segment.dataset.part, segment.dataset.share]),
     ).toEqual([
-      ["Tool definitions: 8,000 tokens", "0.0080"],
-      ["Messages & instructions: 12,000 tokens", "0.0120"],
-      ["Attached documents: 400 tokens", "0.0004"],
-      ["Output schema: 36 tokens", "0.0000"],
-      ["Request settings: 50 tokens", "0.0001"],
+      ["Tool definitions", "0.0080"],
+      ["Messages & instructions", "0.0120"],
+      ["Attached documents", "0.0004"],
+      ["Output schema", "0.0000"],
+      ["Request settings", "0.0001"],
     ]);
     for (const segment of segments) expect(segment).toHaveClass("min-w-[3px]");
     const rows = within(
@@ -391,8 +391,72 @@ describe("session context meter (#1618)", () => {
     });
     const tick = within(bar).getByTestId("compaction-threshold");
     expect(tick).toHaveAttribute("data-position", "0.7500");
-    expect(tick).toHaveAttribute("title", "Compaction threshold: 750,000 tokens");
+    expect(tick).toHaveClass("pointer-events-none");
     expect(screen.getByTestId("context-footer")).toHaveTextContent(/^1M window$/);
+  });
+
+  it("links each segment to its legend row on hover and focus", async () => {
+    render(
+      <SessionContext
+        context={context({
+          lastRequest: lastRequest({
+            estimatedInputTokens: 20_000,
+            components: {
+              messages: 8_723,
+              toolSchemas: 11_277,
+              documents: 0,
+              additionalParameters: 0,
+              outputSchema: 0,
+            },
+          }),
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const [tools, messages] = screen.getAllByTestId("context-segment");
+    const table = screen.getByRole("table", { name: "Input token estimates" });
+    const toolsRow = within(table).getByRole("row", { name: /^Tool definitions/ });
+    const messagesRow = within(table).getByRole("row", {
+      name: /^Messages & instructions/,
+    });
+    expect(tools).not.toHaveClass("opacity-40");
+    expect(messages).not.toHaveClass("opacity-40");
+
+    await userEvent.hover(tools);
+    expect(
+      await screen.findByText("Tool definitions · 11,277 tokens · 56.4%"),
+    ).toBeVisible();
+    expect(toolsRow).toHaveClass("bg-accent");
+    expect(messagesRow).not.toHaveClass("bg-accent");
+    expect(tools).not.toHaveClass("opacity-40");
+    expect(messages).toHaveClass("opacity-40");
+    await userEvent.unhover(tools);
+    expect(toolsRow).not.toHaveClass("bg-accent");
+    expect(messages).not.toHaveClass("opacity-40");
+
+    await userEvent.hover(messagesRow);
+    expect(tools).toHaveClass("opacity-40");
+    expect(messagesRow).toHaveClass("bg-accent");
+    await userEvent.unhover(messagesRow);
+
+    act(() => toolsRow.focus());
+    expect(toolsRow).toHaveAttribute("tabindex", "0");
+    expect(messages).toHaveClass("opacity-40");
+    expect(toolsRow).toHaveClass("bg-accent");
+    act(() => toolsRow.blur());
+    expect(messages).not.toHaveClass("opacity-40");
+  });
+
+  it("gives each segment a taller hit area than the bar", () => {
+    render(<SessionContext context={context({ lastRequest: lastRequest() })} />);
+    fireEvent.click(screen.getByTestId("context-meter"));
+    for (const segment of screen.getAllByTestId("context-segment")) {
+      expect(segment).toHaveClass(
+        "relative",
+        "before:absolute",
+        "before:inset-y-[-6px]",
+      );
+    }
   });
 
   it("keeps the explanatory notes in the info tooltip", async () => {
@@ -452,12 +516,12 @@ describe("session context meter (#1618)", () => {
     });
     expect(screen.queryByText("Loading message breakdown…")).not.toBeInTheDocument();
     expect(
-      screen.getAllByTestId("context-segment").map((segment) => segment.title),
+      screen.getAllByTestId("context-segment").map((segment) => segment.dataset.part),
     ).toEqual([
-      "Tool definitions: 20 tokens",
-      "Instructions & context: 100 tokens",
-      "User messages: 200 tokens",
-      "Assistant messages: 100 tokens",
+      "Tool definitions",
+      "Instructions & context",
+      "User messages",
+      "Assistant messages",
     ]);
   });
 
