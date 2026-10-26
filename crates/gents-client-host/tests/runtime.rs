@@ -24,6 +24,8 @@ use console::ConsoleChild as Child;
 
 #[path = "support/configured_actions.rs"]
 mod configured_actions;
+#[path = "support/editor_command_output.rs"]
+mod editor_command_output;
 #[path = "support/editor_delivery.rs"]
 mod editor_delivery;
 #[path = "support/editor_goal_recovery.rs"]
@@ -566,8 +568,26 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
         .transpose()?;
-    let cli = support::native_binary("gents")?;
-    let host_binary = support::native_binary("gents-client-host")?;
+    let current_cli = support::native_binary("gents")?;
+    let current_host_binary = support::native_binary("gents-client-host")?;
+    let predecessor = if std::env::var_os("GENTS_VSCODE_RETAINED_UPGRADE_VSIX").is_some() {
+        ensure!(
+            matches!(journey, Journey::EditorHistory) && cfg!(unix),
+            "retained package upgrades require the Unix history journey"
+        );
+        let binary = std::path::PathBuf::from(
+            std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST")
+                .context("retained upgrades require the packaged predecessor helper")?,
+        );
+        ensure!(binary.is_absolute() && binary.is_file());
+        Some(binary)
+    } else {
+        None
+    };
+    let host_binary = predecessor
+        .clone()
+        .unwrap_or_else(|| current_host_binary.clone());
+    let cli = predecessor.clone().unwrap_or_else(|| current_cli.clone());
     if journey.editor_scenario().is_some() {
         std::fs::write(
             root.join("AGENTS.md"),
@@ -662,6 +682,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     return action;
                 }
             }
+            if activity_profile && matches!(journey, Journey::EditorHistory) {
+                if let Some(action) = editor_command_output::reply(request) {
+                    return action;
+                }
+            }
             if let Some(options) = history {
                 if let Some(reply) = editor_history::reply(request, options) {
                     return reply;
@@ -747,15 +772,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         None,
     )?;
     let port = ports::allocate_port()?;
-    let mut runtime_command = Command::new(&cli);
-    runtime_command
-        .current_dir(root)
-        .env_remove("GENTS_SYSTEM_LOG")
-        .args(["server", "--home"])
-        .arg(&node_home)
-        .arg("--http-port")
-        .arg(port.to_string())
-        .arg("--no-codex-shim");
+    let mut runtime_command = runtime_server_command(&cli, root, &node_home, port);
     #[cfg(unix)]
     let mut runtime = runtime_command
         .stdin(Stdio::null())
@@ -785,13 +802,32 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .as_str()
         .context("runtime GraphQL endpoint")?;
     let paths = DesktopPaths::from_root(root.join("client"));
-    let seed = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+    let client_did = if predecessor.is_some() {
+        #[cfg(unix)]
+        {
+            paths.ensure_root_dirs().await?;
+            retained_schema_upgrade::prepare_file_store(&paths).await?;
+            gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
+                .await?
+                .did()
+                .to_owned()
+        }
+        #[cfg(not(unix))]
+        {
+            anyhow::bail!("retained package upgrades require a Unix predecessor")
+        }
+    } else {
+        let seed = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths.clone(),
+                ClientCoreOptions::local_only(),
+            )
             .await?,
-    );
-    let client_did = seed.node_identity().did().to_owned();
-    seed.shutdown().await?;
-    drop(seed);
+        );
+        let did = seed.node_identity().did().to_owned();
+        seed.shutdown().await?;
+        did
+    };
     let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
     if journey.editor_scenario().is_some() {
@@ -810,7 +846,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let mut host =
         console::ConsoleChild::spawn(host_command.as_std(), &root.join("client-host.log"))?;
     wait_listener(&mut host, &paths).await?;
-    let mut client = Attachment::start(&paths).await;
+    let mut client = Attachment::start_with_binary(&paths, &host_binary).await;
     let access = gents::ConfigAccess::Graphql(gents::config_client::GraphqlEndpoint::as_principal(
         graphql,
         identity.did(),
@@ -1529,7 +1565,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorHistory) {
         let options = history.context("history options")?;
-        let evidence = editor_history::populate(
+        let mut evidence = editor_history::populate(
             &mut client,
             &mut id,
             &access,
@@ -1541,6 +1577,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root,
         )
         .await?;
+        evidence["commandOutputProfile"] = json!(activity_profile && options.profile);
         std::fs::write(
             root.join("editor-history-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
@@ -1576,15 +1613,63 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }
             }))
         });
-        run_editor_journey(
-            root,
-            &paths,
-            &host_binary,
-            session,
-            provider.endpoint(),
-            "history",
-        )
-        .await?;
+        if predecessor.is_some() {
+            #[cfg(unix)]
+            {
+                client.close().await;
+                tokio::try_join!(
+                    run_editor_journey(
+                        root,
+                        &paths,
+                        &host_binary,
+                        session,
+                        provider.endpoint(),
+                        "history"
+                    ),
+                    retained_schema_upgrade::replace_when_requested(
+                        root,
+                        &paths,
+                        &client_did,
+                        &mut host,
+                        &current_host_binary,
+                        &mut runtime,
+                        &current_cli,
+                        &node_home,
+                        port,
+                        node_did
+                    ),
+                )?;
+                client = Attachment::start(&paths).await;
+                let rows = editor_history::verified_requests(
+                    &access,
+                    node_did,
+                    session,
+                    &client_did,
+                    evidence["completedRequests"]
+                        .as_u64()
+                        .context("seeded history request count")? as usize
+                        + 1,
+                )
+                .await?;
+                ensure!(
+                    rows.iter()
+                        .filter(|row| row.content.as_deref() == Some("History fixture turn 46"))
+                        .count()
+                        == 1,
+                    "the post-update message did not complete exactly once"
+                );
+            }
+        } else {
+            run_editor_journey(
+                root,
+                &paths,
+                &host_binary,
+                session,
+                provider.endpoint(),
+                "history",
+            )
+            .await?;
+        }
         if options.profile {
             let evidence = editor_history::verify_profile(
                 &mut client,
@@ -1594,6 +1679,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 session,
                 &client_did,
                 options,
+                activity_profile,
             )
             .await?;
             std::fs::write(
@@ -2460,6 +2546,19 @@ async fn exercise_message_edit(
         "editing mutated the original conversation"
     );
     Ok(client)
+}
+
+fn runtime_server_command(binary: &Path, root: &Path, home: &Path, port: u16) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(root)
+        .env_remove("GENTS_SYSTEM_LOG")
+        .args(["server", "--home"])
+        .arg(home)
+        .arg("--http-port")
+        .arg(port.to_string())
+        .arg("--no-codex-shim");
+    command
 }
 
 async fn run_editor_journey(

@@ -11,9 +11,6 @@ use tokio::sync::Semaphore;
 
 pub const PROMPT: &str = "Start the two related-work fixtures.";
 pub const REPLY: &str = "Both related sessions are running.";
-pub const ACTIVITY_PROMPT: &str = "Run the command-output activity profile.";
-pub const ACTIVITY_REPLY: &str = "The twelve command-output fixtures completed.";
-const ACTIVITY_COMMANDS: usize = 12;
 const WORKERS: [(&str, &str); 2] = [
     ("Inspect layout", "RELATED_LAYOUT_WORK"),
     ("Check history", "RELATED_HISTORY_WORK"),
@@ -48,36 +45,10 @@ impl Provider {
                     }
             })
         };
-        if self.profile_commands && has_user(ACTIVITY_PROMPT) {
-            for index in 0..ACTIVITY_COMMANDS {
-                let call = format!("activity-command-{index}");
-                if !messages
-                    .iter()
-                    .any(|message| message["role"] == "tool" && message["tool_call_id"] == call)
-                {
-                    let payload = "command-output-".repeat(64);
-                    let begin = if index == 0 {
-                        "printf 'ACTIVITY-0:ready\\n'; while [ ! -f activity-profile-continue ]; do sleep 0.05; done; "
-                    } else {
-                        ""
-                    };
-                    let end = if index == 0 {
-                        "; while [ ! -f activity-profile-finish ]; do sleep 0.05; done"
-                    } else {
-                        ""
-                    };
-                    let script = format!("{begin}i=0; while [ \"$i\" -lt 8 ]; do printf 'ACTIVITY-{index}:%s:%s\\n' \"$i\" '{payload}'; sleep 0.1; i=$((i+1)); done{end}");
-                    return Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
-                        &call,
-                        "bash_unrestricted",
-                        &json!({"command":"/bin/sh", "args":["-c", script], "timeout_secs":60})
-                            .to_string(),
-                    )));
-                }
+        if self.profile_commands {
+            if let Some(action) = super::editor_command_output::reply(request) {
+                return Some(action);
             }
-            return Some(ChatAction::Sse(fake_llm::completion_text_sse(
-                ACTIVITY_REPLY,
-            )));
         }
         for (index, (_, prompt)) in WORKERS.iter().enumerate() {
             if has_user(prompt) {
@@ -236,123 +207,14 @@ pub async fn verify(
     if profile_commands {
         let requests: Vec<_> = rows
             .iter()
-            .filter(|row| row.content.as_deref() == Some(ACTIVITY_PROMPT))
+            .filter(|row| {
+                row.content.as_deref() == Some(super::editor_command_output::ACTIVITY_PROMPT)
+            })
             .collect();
         let [request] = requests.as_slice() else {
             anyhow::bail!("the command profile must be admitted exactly once");
         };
-        gents::verify_request_receipt_signature(request)?;
-        ensure!(
-            request.session_id.as_deref() == Some(session)
-                && request.lifecycle_state
-                    == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed),
-            "the command profile did not complete in the parent session"
-        );
-        let document = request
-            .doc_id
-            .as_deref()
-            .context("activity request document")?;
-        let response = access.execute(&format!(
-            "{{ AgentToolCall(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, request_doc_id: {{_eq: \"{}\"}}}}) {{ _docID tool_call_id tool_name lifecycle_state }} }}",
-            escape(node), escape(session), escape(document)
-        )).await?;
-        let calls = response["data"]["AgentToolCall"]
-            .as_array()
-            .context("activity tool records")?;
-        ensure!(
-            calls.len() == ACTIVITY_COMMANDS,
-            "the profile must retain all twelve command records"
-        );
-        let page = gents_desktop_core::client::load_session_transcript_window_on(
-            access,
-            session,
-            Some(node),
-            request.requester_did.as_deref(),
-            gents_desktop_core::client::TranscriptWindow::Tip,
-            Some(80),
-        )
-        .await?;
-        let segments = page
-            .canonical_dependencies
-            .output_segments
-            .iter()
-            .map(
-                |row| gents_protocol::output::reconstruction::ObservedSegment {
-                    doc_id: &row.doc_id,
-                    segment: &row.segment,
-                },
-            )
-            .collect::<Vec<_>>();
-        let mut ids = rapidhash::RapidHashSet::default();
-        for call in calls {
-            let id = call["tool_call_id"]
-                .as_str()
-                .context("activity call identity")?;
-            ensure!(
-                (0..ACTIVITY_COMMANDS).any(|index| id == format!("activity-command-{index}"))
-                    && ids.insert(id),
-                "command profile reused or lost an invocation"
-            );
-            ensure!(
-                call["tool_name"] == "bash_unrestricted" && call["lifecycle_state"] == "completed",
-                "command profile failed to retain completed output: {call}"
-            );
-            let physical = call["_docID"].as_str().context("physical activity call")?;
-            let payloads = page
-                .store
-                .transcript_messages
-                .iter()
-                .chain(page.result_messages.iter())
-                .filter(|row| {
-                    row.message.node_did == node
-                        && row.message.session_id == session
-                        && row.message.request_doc_id.as_deref() == Some(document)
-                        && row.message.requester_did == request.requester_did
-                })
-                .flat_map(|row| &row.message.blocks)
-                .filter_map(|block| match block {
-                    gents_protocol::output::MessageBlock::ToolResult {
-                        tool_call_doc_id,
-                        parts,
-                        ..
-                    } if tool_call_doc_id == physical => Some(parts),
-                    _ => None,
-                })
-                .flatten()
-                .filter_map(|part| match part {
-                    gents_protocol::output::ToolResultPart::Text { text } => Some(text),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            let [payload] = payloads.as_slice() else {
-                anyhow::bail!("the activity command has no unique canonical text result: {id}");
-            };
-            ensure!(
-                gents_protocol::output::reconstruction::tool_output_reference_owned(
-                    &segments,
-                    &payload.output,
-                    document,
-                    physical
-                ),
-                "activity output crossed its request or physical tool owner"
-            );
-            let output = gents_protocol::output::reconstruction::reconstruct_stream(
-                &segments,
-                &[],
-                &[],
-                &payload.output,
-            )?
-            .text;
-            let index = id
-                .strip_prefix("activity-command-")
-                .context("activity command prefix")?;
-            ensure!(
-                output.contains(&format!("ACTIVITY-{index}:0:"))
-                    && output.contains(&format!("ACTIVITY-{index}:7:")),
-                "activity command did not retain its first and final output chunks"
-            );
-        }
-        activity = json!({"requestDocument":document,"completedCommands":calls.len(),"terminalOutputsRetained":true});
+        activity = super::editor_command_output::verify(access, node, session, request).await?;
     }
     let ui: Value =
         serde_json::from_slice(&std::fs::read(root.join("editor-related-work-ui.json"))?)?;

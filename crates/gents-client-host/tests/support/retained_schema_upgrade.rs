@@ -20,21 +20,7 @@ pub async fn exercise() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(directory.path().join("client"));
     paths.ensure_root_dirs().await?;
-    let prepare = paths.clone();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let record = StoreEncryption::prepare(
-            StoreKeyCustodyChoice::File,
-            prepare.store_key_path(),
-            prepare.node_data_dir(),
-        )?;
-        std::fs::write(
-            prepare.store_encryption_path(),
-            serde_json::to_vec(&record)?,
-        )?;
-        record.initialize(prepare.store_key_path(), prepare.node_data_dir())?;
-        Ok(())
-    })
-    .await??;
+    prepare_file_store(&paths).await?;
     let mut old = start(&previous, &paths).await?;
     let mut client = super::support::Attachment::start_with_binary(&paths, &previous).await;
     let snapshot = client.snapshot(1).await;
@@ -105,6 +91,97 @@ pub async fn exercise() -> Result<()> {
     ensure!(client.snapshot(3).await["client"]["clientDid"] == did);
     client.close().await;
     super::stop(&mut restarted).await?;
+    Ok(())
+}
+
+pub(super) async fn prepare_file_store(paths: &DesktopPaths) -> Result<()> {
+    let prepare = paths.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let record = StoreEncryption::prepare(
+            StoreKeyCustodyChoice::File,
+            prepare.store_key_path(),
+            prepare.node_data_dir(),
+        )?;
+        std::fs::write(
+            prepare.store_encryption_path(),
+            serde_json::to_vec(&record)?,
+        )?;
+        record.initialize(prepare.store_key_path(), prepare.node_data_dir())?;
+        Ok(())
+    })
+    .await??;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn replace_when_requested(
+    root: &Path,
+    paths: &DesktopPaths,
+    did: &str,
+    host: &mut Child,
+    current: &Path,
+    runtime: &mut Child,
+    current_cli: &Path,
+    node_home: &Path,
+    port: u16,
+    node_did: &str,
+) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !tokio::fs::try_exists(root.join("retained-upgrade-requested")).await? {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("old installed editor did not finish its retained-history checkpoint")??;
+    let key = blake3::hash(&tokio::fs::read(paths.store_key_path()).await?);
+    let custody = tokio::fs::read(paths.store_encryption_path()).await?;
+    super::stop(host).await?;
+    let before = schema(paths, did).await?;
+    ensure!(
+        before.version_id == "bafyreibbbdmb7au32traw5ufp6rqytb3jv63bmjflykfhize2u6bwvqiwe",
+        "the installed baseline did not retain the reported source lineage"
+    );
+    super::stop(runtime).await?;
+    let log_path = root.join("runtime-upgrade.log");
+    let output = tokio::fs::File::create(&log_path).await?.into_std().await;
+    let errors = tokio::fs::File::create(root.join("runtime-upgrade.err"))
+        .await?
+        .into_std()
+        .await;
+    let mut next_runtime = super::runtime_server_command(current_cli, root, node_home, port)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::from(errors))
+        .kill_on_drop(true)
+        .spawn()?;
+    let ready = super::wait_ready(&mut next_runtime, &log_path).await?;
+    ensure!(
+        ready["node_did"] == node_did,
+        "the update replaced the runtime identity"
+    );
+    let status = super::wait_for_status(&mut next_runtime, current_cli, node_home, port).await?;
+    ensure!(status["node_did"] == node_did && status["readiness_status"] == "ready");
+    *runtime = next_runtime;
+    *host = start(current, paths).await?;
+    ensure!(
+        blake3::hash(&tokio::fs::read(paths.store_key_path()).await?) == key,
+        "the paired update replaced the client key"
+    );
+    ensure!(
+        tokio::fs::read(paths.store_encryption_path()).await? == custody,
+        "the paired update replaced client key custody"
+    );
+    tokio::fs::write(
+        root.join("retained-upgrade-retired"),
+        serde_json::to_vec(&serde_json::json!({
+            "sourceSchemaVersion": before.version_id,
+            "clientKeyPreserved": true,
+            "clientCustodyPreserved": true,
+            "runtimeIdentityPreserved": true,
+        }))?,
+    )
+    .await?;
     Ok(())
 }
 
