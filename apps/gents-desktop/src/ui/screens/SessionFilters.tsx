@@ -126,9 +126,11 @@ export function Axis<V extends string>({
             >
               <Icon className={cn("size-4 shrink-0", tint)} />
               <span className="min-w-0 flex-1 truncate">{text}</span>
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {counts[v] ?? 0}
-              </span>
+              {(counts[v] ?? 0) > 0 && (
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {counts[v]}
+                </span>
+              )}
             </DropdownMenuCheckboxItem>
           ))}
         </DropdownMenuGroup>
@@ -226,9 +228,11 @@ function AgentAxis({
               <ComboboxItem key={id} value={id}>
                 <AgentInitials name={b.name} className="size-5 text-[9px]" />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {b.count}
-                </span>
+                {b.count > 0 && (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {b.count}
+                  </span>
+                )}
               </ComboboxItem>
             );
           }}

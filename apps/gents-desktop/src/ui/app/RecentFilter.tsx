@@ -148,9 +148,11 @@ function Axis({
             >
               {Icon && <Icon className={cn("size-4 shrink-0", tint)} />}
               <span className="min-w-0 flex-1 truncate">{text}</span>
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {count}
-              </span>
+              {count > 0 && (
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {count}
+                </span>
+              )}
             </DropdownMenuCheckboxItem>
           ),
         )}
