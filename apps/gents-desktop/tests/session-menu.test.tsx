@@ -23,6 +23,8 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({ AgentPicker: () => null }));
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
 vi.stubGlobal(
   "IntersectionObserver",
   class {
@@ -154,6 +156,7 @@ async function openRowMenu(title: string) {
 }
 
 beforeEach(() => {
+  toast.mockClear();
   resetListViews();
   resetPreferences();
 });
@@ -197,6 +200,27 @@ describe("a session's menu in the sessions list", () => {
     await again.u.click(within(again.menu).getByRole("menuitem", { name: "Unpin" }));
     expect(rowTitles()).toEqual(["First", "Second"]);
     expect(screen.queryByRole("img", { name: "Pinned" })).toBeNull();
+  });
+
+  it("says when it pins or unpins, and Undo puts a pin back where it was", async () => {
+    showList([first, second]);
+    const undo = () => act(() => toast.mock.lastCall![1].action.onClick());
+    for (const title of ["First", "Second"]) {
+      const { u, menu } = await openRowMenu(title);
+      await u.click(within(menu).getByRole("menuitem", { name: "Pin" }));
+      expect(toast).toHaveBeenLastCalledWith("Pinned", expect.anything());
+    }
+    expect(rowTitles()).toEqual(["First", "Second"]);
+
+    const { u, menu } = await openRowMenu("First");
+    await u.click(within(menu).getByRole("menuitem", { name: "Unpin" }));
+    expect(toast).toHaveBeenLastCalledWith("Unpinned", {
+      action: expect.objectContaining({ label: "Undo" }),
+    });
+    expect(rowTitles()).toEqual(["Second", "First"]);
+    undo();
+    expect(rowTitles()).toEqual(["First", "Second"]);
+    expect(screen.getAllByRole("img", { name: "Pinned" })).toHaveLength(2);
   });
 
   it("renames in the row, asking the session's own node", async () => {
@@ -506,9 +530,16 @@ describe("a session's menu in its header", () => {
     renderHeader(first);
     const { u, menu } = await openHeaderMenu();
     await u.click(within(menu).getByRole("menuitem", { name: "Pin" }));
+    expect(toast).toHaveBeenLastCalledWith("Pinned", expect.anything());
     const again = await openHeaderMenu();
     expect(
       within(again.menu).getByRole("menuitem", { name: "Unpin" }),
+    ).toBeInTheDocument();
+    await u.keyboard("{Escape}");
+    act(() => toast.mock.lastCall![1].action.onClick());
+    const after = await openHeaderMenu();
+    expect(
+      within(after.menu).getByRole("menuitem", { name: "Pin" }),
     ).toBeInTheDocument();
   });
 });

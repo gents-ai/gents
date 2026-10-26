@@ -96,9 +96,14 @@ export const preferences = {
   setFollowUp(followUp: FollowUp) {
     store.setState({ followUp });
   },
-  setPinned(sessionKey: string, pinned: boolean) {
+  /** pins at the end, or at `at`, where an undone unpin puts it back */
+  setPinned(sessionKey: string, pinned: boolean, at?: number) {
     const rest = store.getState().pinnedSessions.filter((key) => key !== sessionKey);
-    store.setState({ pinnedSessions: pinned ? [...rest, sessionKey] : rest });
+    if (!pinned) return store.setState({ pinnedSessions: rest });
+    const i = at === undefined || at < 0 ? rest.length : Math.min(at, rest.length);
+    store.setState({
+      pinnedSessions: [...rest.slice(0, i), sessionKey, ...rest.slice(i)],
+    });
   },
 };
 

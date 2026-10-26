@@ -103,7 +103,8 @@ export function SessionItems({
 }) {
   const { stores, actions } = useApp();
   const key = sessionKeyOf(session);
-  const pinned = usePinnedSessions().includes(key);
+  const pinnedKeys = usePinnedSessions();
+  const pinned = pinnedKeys.includes(key);
   const folder = folderOf(stores.chat.getState().folders, session.sessionId);
   const title = session.title ?? "Untitled session";
 
@@ -116,6 +117,13 @@ export function SessionItems({
       () => toast("Copied as Markdown"),
       (e: unknown) => toastFailure("copy the session", e),
     );
+  };
+  const pin = (next: boolean) => {
+    const at = pinnedKeys.indexOf(key);
+    preferences.setPinned(key, next);
+    toast(next ? "Pinned" : "Unpinned", {
+      action: { label: "Undo", onClick: () => preferences.setPinned(key, !next, at) },
+    });
   };
   const archive = (target: SessionSummary, archived: boolean) => {
     actions.setSessionArchived(target, archived).then(
@@ -142,7 +150,7 @@ export function SessionItems({
           Rename
         </Item>
       )}
-      <Item onClick={() => preferences.setPinned(key, !pinned)}>
+      <Item onClick={() => pin(!pinned)}>
         {pinned ? <PinOff /> : <Pin />}
         {pinned ? "Unpin" : "Pin"}
       </Item>
