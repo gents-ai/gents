@@ -138,7 +138,9 @@ const menuClosed = () => waitFor(() => expect(screen.queryByRole("menu")).toBeNu
 
 /* the Copy items sit in a submenu beside the menu */
 async function openCopy(u: ReturnType<typeof userEvent.setup>, menu: HTMLElement) {
-  await u.click(within(menu).getByRole("menuitem", { name: "Copy" }));
+  /* a pointer both hovers the submenu open and clicks it, which can close it again */
+  within(menu).getByRole("menuitem", { name: "Copy" }).focus();
+  await u.keyboard("{ArrowRight}");
   await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(1));
   return screen.getAllByRole("menu").at(-1)!;
 }
@@ -283,13 +285,17 @@ describe("a session's menu in the sessions list", () => {
         name: "Working directory",
       }),
     );
-    expect(await navigator.clipboard.readText()).toBe("/work/repo");
+    await waitFor(async () =>
+      expect(await navigator.clipboard.readText()).toBe("/work/repo"),
+    );
 
     ({ u, menu } = await openRowMenu("First"));
     await u.click(
       within(await openCopy(u, menu)).getByRole("menuitem", { name: "Session ID" }),
     );
-    expect(await navigator.clipboard.readText()).toBe("first");
+    await waitFor(async () =>
+      expect(await navigator.clipboard.readText()).toBe("first"),
+    );
 
     ({ u, menu } = await openRowMenu("Second"));
     expect(
