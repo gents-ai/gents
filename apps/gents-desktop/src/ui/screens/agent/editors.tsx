@@ -125,26 +125,36 @@ export function DraftActions({
       data-testid="draft-actions"
       data-floating={floating || undefined}
       onAnimationEnd={() => setMotion(null)}
-      className={`${pinned ? "sticky -bottom-px z-10" : ""} mb-3 border-t py-3 transition-colors ${floating ? "border-border bg-background" : "border-transparent"} ${motion === "entering" ? "animate-in fade-in-0 slide-in-from-bottom-full duration-200 ease-out" : motion === "leaving" ? "animate-out fade-out-0 slide-out-to-bottom-full duration-150 ease-in fill-mode-forwards" : ""}`}
+      className={`${pinned ? "sticky -bottom-px z-10" : ""} pb-4 ${motion === "entering" ? "animate-in fade-in-0 slide-in-from-bottom-full duration-200 ease-out" : motion === "leaving" ? "animate-out fade-out-0 slide-out-to-bottom-full duration-150 ease-in fill-mode-forwards" : ""}`}
     >
-      {error && (
-        <p role="alert" className="mb-3 text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <div className="flex justify-end gap-2">
-        <Button variant="quiet" disabled={!dirty || saving} onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button
-          variant="brand"
-          disabled={!dirty || saving}
-          onClick={() => {
-            if (!focusFirstProblem(problems, fields)) void onSave();
-          }}
-        >
-          {saving ? "Saving…" : saveLabel}
-        </Button>
+      <div
+        className={`flex flex-wrap items-center justify-end gap-x-3 gap-y-1 rounded-[1.75rem] border py-2.5 pr-2.5 pl-5 transition-[background-color,border-color,box-shadow] ${floating ? "border-border bg-raised/95 shadow-2xl shadow-black/60 backdrop-blur" : "border-transparent"}`}
+      >
+        {error ? (
+          <p role="alert" className="mr-auto min-w-0 text-sm text-destructive">
+            {error}
+          </p>
+        ) : (
+          dirty && (
+            <span className="mr-auto text-sm text-muted-foreground">
+              Unsaved changes
+            </span>
+          )
+        )}
+        <div className="flex gap-2">
+          <Button variant="quiet" disabled={!dirty || saving} onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            variant="brand"
+            disabled={!dirty || saving}
+            onClick={() => {
+              if (!focusFirstProblem(problems, fields)) void onSave();
+            }}
+          >
+            {saving ? "Saving…" : saveLabel}
+          </Button>
+        </div>
       </div>
     </div>
   );
