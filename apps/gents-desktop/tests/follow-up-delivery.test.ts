@@ -55,9 +55,12 @@ describe("a follow-up sent while a turn runs", () => {
   it("goes the way it was asked: queued after the turn or steered into it", async () => {
     for (const followUp of ["queue", "steer"] as const) {
       const { actions, sendChatMessage } = send(true);
-      await actions.sendMessage("and also this", undefined, [], followUp);
+      const attachments = [
+        { name: "note.txt", mediaType: "text/plain", data: "bm90ZQ==" },
+      ];
+      await actions.sendMessage("and also this", undefined, attachments, followUp);
       expect(sendChatMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ delivery: followUp }),
+        expect.objectContaining({ delivery: followUp, attachments }),
       );
     }
   });
