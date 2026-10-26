@@ -75,13 +75,21 @@ pub enum StoreKeyError {
     KeychainUnavailable { label: String },
     #[error("gents home {} is not initialized; run `gents init --home {}` first", home.display(), home.display())]
     HomeNotInitialized { home: PathBuf },
+    #[error("store upgrade custody does not match init.json")]
+    UpgradeCustodyMismatch,
+    #[error(transparent)]
+    Home(#[from] crate::home::HomeError),
+    #[error(transparent)]
+    Upgrade(#[from] upgrade::UpgradeError),
 }
 
 impl StoreKeyError {
     pub fn incompatible(&self) -> Option<&IncompatibleStore> {
         match self {
             Self::Incompatible(store) => Some(store),
-            Self::Storage(error) => error.incompatible(),
+            Self::Storage(error) | Self::Upgrade(upgrade::UpgradeError::StorageBackend(error)) => {
+                error.incompatible()
+            }
             _ => None,
         }
     }
@@ -314,7 +322,7 @@ pub fn home_key_file(home_dir: &Path) -> PathBuf {
 /// changing its documents or identity. The caller must hold the store lock,
 /// then call [`upgrade::finish`] only after its node opens and validates the
 /// encrypted store. Until then, the original plaintext store remains intact.
-pub async fn open_home_store_key(home_dir: &Path, data_path: &Path) -> anyhow::Result<StoreKey> {
+pub async fn open_home_store_key(home_dir: &Path, data_path: &Path) -> Result<StoreKey> {
     open_home_store_key_with_custody(home_dir, data_path, StoreKeyCustodyChoice::default()).await
 }
 
@@ -322,7 +330,7 @@ pub async fn open_home_store_key_with_custody(
     home_dir: &Path,
     data_path: &Path,
     choice: StoreKeyCustodyChoice,
-) -> anyhow::Result<StoreKey> {
+) -> Result<StoreKey> {
     let mut config =
         crate::home::read_init_config::<serde_json::Value, serde_json::Value>(home_dir)?
             .ok_or_else(|| StoreKeyError::HomeNotInitialized {
@@ -332,10 +340,9 @@ pub async fn open_home_store_key_with_custody(
     let pending = upgrade::pending_record(data_path)?;
     if let Some(record) = config.store_encryption.as_ref() {
         if let Some(pending) = pending.as_ref() {
-            anyhow::ensure!(
-                pending == record,
-                "store upgrade custody does not match init.json"
-            );
+            if pending != record {
+                return Err(StoreKeyError::UpgradeCustodyMismatch);
+            }
         }
         let key = record.initialize(&key_file, data_path)?;
         return Ok(key);

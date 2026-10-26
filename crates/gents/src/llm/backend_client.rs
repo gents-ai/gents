@@ -1,11 +1,79 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 use crate::backend_provider::BackendProviderKind;
 use crate::config::ResolvedAgent;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BackendClientError {
+    #[error(transparent)]
+    Http(#[from] rig::http_client::Error),
+    #[error("building OpenAI-compatible completion client for agent {agent_id} against {endpoint}")]
+    OpenAiCompatible {
+        agent_id: String,
+        endpoint: String,
+        #[source]
+        source: crate::inference_http::InferenceHttpError,
+    },
+    #[error("building OpenRouter completion client for agent {agent_id} against {endpoint}")]
+    OpenRouter {
+        agent_id: String,
+        endpoint: String,
+        #[source]
+        source: rig::http_client::Error,
+    },
+    #[error("building ChatGPT Codex completion client for agent {agent_id} against {endpoint}")]
+    ChatGptCodex {
+        agent_id: String,
+        endpoint: String,
+        #[source]
+        source: ClientBuildFailure<crate::chatgpt_codex::ChatGptCodexClientError>,
+    },
+    #[error("building Grok OAuth completion client for agent {agent_id} against {endpoint}")]
+    XaiGrok {
+        agent_id: String,
+        endpoint: String,
+        #[source]
+        source: ClientBuildFailure<crate::xai_grok_oauth::XaiGrokOAuthError>,
+    },
+    #[error("building Claude subscription completion client for agent {agent_id}")]
+    ClaudeSubscription {
+        agent_id: String,
+        #[source]
+        source: ClientBuildFailure<crate::claude_subscription::ClaudeSubscriptionError>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClientBuildFailure<E>
+where
+    E: std::error::Error + 'static,
+{
+    #[error("timed out after {timeout:?} building the {client} completion client")]
+    TimedOut {
+        timeout: Duration,
+        client: &'static str,
+    },
+    #[error(transparent)]
+    Build(E),
+}
+
+type Result<T, E = BackendClientError> = std::result::Result<T, E>;
+
+fn bounded<T, E>(
+    outcome: std::result::Result<std::result::Result<T, E>, tokio::time::error::Elapsed>,
+    timeout: Duration,
+    client: &'static str,
+) -> std::result::Result<T, ClientBuildFailure<E>>
+where
+    E: std::error::Error + 'static,
+{
+    outcome
+        .map_err(|_| ClientBuildFailure::TimedOut { timeout, client })?
+        .map_err(ClientBuildFailure::Build)
+}
 
 pub(crate) enum BackendClient {
     OpenAiChatCompletions(
@@ -81,7 +149,8 @@ impl BackendClient {
                 return messages_replay_issuer(BackendProviderKind::AnthropicApiKey)
             }
         }
-        .body(())?;
+        .body(())
+        .map_err(rig::http_client::Error::Protocol)?;
         Ok(
             gents_loop::rendered_request::transport::replay_issuer_for_destination(
                 self.provider_family(),
@@ -114,7 +183,9 @@ pub(crate) fn claude_subscription_replay_issuer(
 fn messages_replay_issuer(
     kind: BackendProviderKind,
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
-    let request = rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI).body(())?;
+    let request = rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI)
+        .body(())
+        .map_err(rig::http_client::Error::Protocol)?;
     Ok(
         gents_loop::rendered_request::transport::replay_issuer_for_destination(
             kind.as_str(),
@@ -146,10 +217,11 @@ pub(crate) async fn build_backend_client(
 ) -> Result<BackendClient> {
     match agent.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => {
-            let build_context = format!(
-                "building OpenAI-compatible completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
-            );
+            let build_context = |source| BackendClientError::OpenAiCompatible {
+                agent_id: agent.agent_id.to_string(),
+                endpoint: agent.backend_endpoint.clone(),
+                source,
+            };
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client = crate::inference_http::build_openai_chat_completions_client(
                     api_key,
@@ -160,7 +232,7 @@ pub(crate) async fn build_backend_client(
                         ),
                     ),
                 )
-                .with_context(|| build_context.clone())?;
+                .map_err(build_context)?;
                 Ok(BackendClient::OpenAiChatCompletions(client))
             } else {
                 let client = crate::inference_http::build_openai_responses_client(
@@ -176,15 +248,11 @@ pub(crate) async fn build_backend_client(
                     ),
                     Default::default(),
                 )
-                .with_context(|| build_context.clone())?;
+                .map_err(build_context)?;
                 Ok(BackendClient::OpenAiResponses(client))
             }
         }
         BackendProviderKind::OpenRouter => {
-            let build_context = format!(
-                "building OpenRouter completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
-            );
             let client: rig::providers::openrouter::Client<
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
                     crate::provider_http::ProviderHttpClient,
@@ -198,98 +266,95 @@ pub(crate) async fn build_backend_client(
                     >::default(),
                 )
                 .build()
-                .with_context(|| build_context.clone())?;
+                .map_err(|source| BackendClientError::OpenRouter {
+                    agent_id: agent.agent_id.to_string(),
+                    endpoint: agent.backend_endpoint.clone(),
+                    source,
+                })?;
             Ok(BackendClient::OpenRouter(client))
         }
         BackendProviderKind::ChatGptCodex => {
-            let client = tokio::time::timeout(
+            let client = bounded(
+                tokio::time::timeout(
+                    build_timeout,
+                    crate::chatgpt_codex::build_responses_client(
+                        node,
+                        agent.node_did(),
+                        agent.backend_auth.oauth_account_ref(),
+                        &agent.backend_endpoint,
+                        agent.service_tier,
+                    ),
+                )
+                .await,
                 build_timeout,
-                crate::chatgpt_codex::build_responses_client(
-                    node,
-                    agent.node_did(),
-                    agent.backend_auth.oauth_account_ref(),
-                    &agent.backend_endpoint,
-                    agent.service_tier,
-                ),
+                "ChatGPT Codex",
             )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "timed out after {build_timeout:?} building the ChatGPT Codex completion client"
-                )
-            })
-            .and_then(|result| result)
-            .with_context(|| {
-                format!(
-                    "building ChatGPT Codex completion client for agent {} against {}",
-                    agent.agent_id, agent.backend_endpoint
-                )
+            .map_err(|source| BackendClientError::ChatGptCodex {
+                agent_id: agent.agent_id.to_string(),
+                endpoint: agent.backend_endpoint.clone(),
+                source,
             })?;
             Ok(BackendClient::ChatGptCodex(client))
         }
         BackendProviderKind::XaiGrokOAuth => {
-            let build_context = format!(
-                "building Grok OAuth completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
-            );
-            let timeout_error = || {
-                anyhow::anyhow!(
-                    "timed out after {build_timeout:?} building the Grok OAuth completion client"
-                )
+            let build_context = |source| BackendClientError::XaiGrok {
+                agent_id: agent.agent_id.to_string(),
+                endpoint: agent.backend_endpoint.clone(),
+                source,
             };
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
-                let client = tokio::time::timeout(
+                let client = bounded(
+                    tokio::time::timeout(
+                        build_timeout,
+                        crate::xai_grok_oauth::build_chat_completions_client(
+                            node,
+                            agent.node_did(),
+                            agent.backend_auth.oauth_account_ref(),
+                            &agent.backend_endpoint,
+                        ),
+                    )
+                    .await,
                     build_timeout,
-                    crate::xai_grok_oauth::build_chat_completions_client(
-                        node,
-                        agent.node_did(),
-                        agent.backend_auth.oauth_account_ref(),
-                        &agent.backend_endpoint,
-                    ),
+                    "Grok OAuth",
                 )
-                .await
-                .map_err(|_| timeout_error())
-                .and_then(|result| result)
-                .with_context(|| build_context.clone())?;
+                .map_err(build_context)?;
                 Ok(BackendClient::XaiGrokChatCompletions(client))
             } else {
-                let client = tokio::time::timeout(
+                let client = bounded(
+                    tokio::time::timeout(
+                        build_timeout,
+                        crate::xai_grok_oauth::build_responses_client(
+                            node,
+                            agent.node_did(),
+                            agent.backend_auth.oauth_account_ref(),
+                            &agent.backend_endpoint,
+                        ),
+                    )
+                    .await,
                     build_timeout,
-                    crate::xai_grok_oauth::build_responses_client(
-                        node,
-                        agent.node_did(),
-                        agent.backend_auth.oauth_account_ref(),
-                        &agent.backend_endpoint,
-                    ),
+                    "Grok OAuth",
                 )
-                .await
-                .map_err(|_| timeout_error())
-                .and_then(|result| result)
-                .with_context(|| build_context.clone())?;
+                .map_err(build_context)?;
                 Ok(BackendClient::XaiGrokResponses(client))
             }
         }
         BackendProviderKind::ClaudeCliSubscription => {
-            let client = tokio::time::timeout(
+            let client = bounded(
+                tokio::time::timeout(
+                    build_timeout,
+                    crate::claude_subscription::ClaudeSubscriptionClient::build(
+                        node,
+                        agent.node_did(),
+                        agent.backend_auth.oauth_account_ref(),
+                    ),
+                )
+                .await,
                 build_timeout,
-                crate::claude_subscription::ClaudeSubscriptionClient::build(
-                    node,
-                    agent.node_did(),
-                    agent.backend_auth.oauth_account_ref(),
-                ),
+                "Claude subscription",
             )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "timed out after {build_timeout:?} building the Claude subscription completion client"
-                )
-            })
-            .and_then(|result| result.map_err(anyhow::Error::from))
-            .with_context(|| {
-                format!(
-                    "building Claude subscription completion client for agent {}",
-                    agent.agent_id
-                )
+            .map_err(|source| BackendClientError::ClaudeSubscription {
+                agent_id: agent.agent_id.to_string(),
+                source,
             })?;
             Ok(BackendClient::ClaudeSubscription(client))
         }

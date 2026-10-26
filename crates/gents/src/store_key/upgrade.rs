@@ -7,12 +7,70 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use storage::corekv::{IterOptions, Store};
 use storage::RegolithStore;
 
 use super::{StoreEncryption, StoreKey};
+
+#[derive(Debug, thiserror::Error)]
+pub enum UpgradeError {
+    #[error("syncing store upgrade directory")]
+    SyncDirectory(#[source] std::io::Error),
+    #[error("store upgrade path is a symlink: {}", path.display())]
+    SymlinkPath { path: PathBuf },
+    #[error("inspecting {}", path.display())]
+    Inspect {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading upgrade intent {}", path.display())]
+    ReadIntent {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("unsupported store encryption upgrade journal version")]
+    UnsupportedJournalVersion,
+    #[error("store upgrade encryption record changed")]
+    RecordChanged,
+    #[error("store upgrade requires a named data directory")]
+    UnnamedDataDirectory,
+    #[error("plaintext Regolith store is absent")]
+    PlaintextStoreAbsent,
+    #[error("unrecorded store upgrade artifacts exist beside {}", data.display())]
+    UnrecordedArtifacts { data: PathBuf },
+    #[error("store upgrade has no durable intent")]
+    NoDurableIntent,
+    #[error("inconsistent store upgrade paths for {}", data.display())]
+    InconsistentPaths { data: PathBuf },
+    #[error("store upgrade must begin before key creation")]
+    NotBegun,
+    #[error("inconsistent store encryption upgrade paths for {}", data.display())]
+    InconsistentEncryptionPaths { data: PathBuf },
+    #[error("store upgrade is not installed")]
+    NotInstalled,
+    #[error("encrypted store verification failed; original store retained")]
+    VerificationFailed,
+    #[cfg(not(unix))]
+    #[error("cannot preserve symlink {} during store upgrade", path.display())]
+    SymlinkUnsupported { path: PathBuf },
+    #[error("cannot preserve special file {} during store upgrade", path.display())]
+    SpecialFile { path: PathBuf },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Persist(#[from] tempfile::PersistError),
+    #[error(transparent)]
+    StorageBackend(#[from] crate::storage_backend::StorageBackendError),
+    #[error(transparent)]
+    Storage(#[from] storage::Error),
+}
+
+type Result<T, E = UpgradeError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,7 +152,7 @@ fn sync_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(path)?
         .sync_all()
-        .context("syncing store upgrade directory")?;
+        .map_err(UpgradeError::SyncDirectory)?;
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
@@ -103,15 +161,18 @@ fn sync_directory(path: &Path) -> Result<()> {
 fn exists(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            ensure!(
-                !metadata.file_type().is_symlink(),
-                "store upgrade path is a symlink: {}",
-                path.display()
-            );
+            if metadata.file_type().is_symlink() {
+                return Err(UpgradeError::SymlinkPath {
+                    path: path.to_path_buf(),
+                });
+            }
             Ok(true)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+        Err(source) => Err(UpgradeError::Inspect {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -121,11 +182,13 @@ fn load(data: &Path) -> Result<Option<Journal>> {
         return Ok(None);
     }
     let journal: Journal = serde_json::from_slice(&fs::read(&path)?)
-        .with_context(|| format!("reading upgrade intent {}", path.display()))?;
-    ensure!(
-        journal.version == 1,
-        "unsupported store encryption upgrade journal version"
-    );
+        .map_err(|source| UpgradeError::ReadIntent {
+            path: path.clone(),
+            source,
+        })?;
+    if journal.version != 1 {
+        return Err(UpgradeError::UnsupportedJournalVersion);
+    }
     Ok(Some(journal))
 }
 
@@ -165,25 +228,22 @@ pub fn retirement_entries(data: &Path) -> Result<Vec<PathBuf>> {
 /// the plaintext store once publication has begun; this journal owns recovery.
 pub fn begin(data: &Path, record: &StoreEncryption) -> Result<()> {
     if let Some(journal) = load(data)? {
-        ensure!(
-            journal.record == *record,
-            "store upgrade encryption record changed"
-        );
+        if journal.record != *record {
+            return Err(UpgradeError::RecordChanged);
+        }
         return Ok(());
     }
-    ensure!(
-        data.file_name().is_some(),
-        "store upgrade requires a named data directory"
-    );
-    ensure!(
-        exists(data)? && data.join("MANIFEST").is_file(),
-        "plaintext Regolith store is absent"
-    );
-    ensure!(
-        !exists(&staging_path(data))? && !exists(&retired_path(data))?,
-        "unrecorded store upgrade artifacts exist beside {}",
-        data.display()
-    );
+    if data.file_name().is_none() {
+        return Err(UpgradeError::UnnamedDataDirectory);
+    }
+    if !(exists(data)? && data.join("MANIFEST").is_file()) {
+        return Err(UpgradeError::PlaintextStoreAbsent);
+    }
+    if exists(&staging_path(data))? || exists(&retired_path(data))? {
+        return Err(UpgradeError::UnrecordedArtifacts {
+            data: data.to_path_buf(),
+        });
+    }
     crate::storage_backend::reject_legacy_store(data)?;
     save(
         data,
@@ -198,11 +258,15 @@ pub fn begin(data: &Path, record: &StoreEncryption) -> Result<()> {
 
 /// The original plaintext MANIFEST must not prevent first key creation here.
 pub fn key_store_path(data: &Path) -> Result<PathBuf> {
-    let journal = load(data)?.context("store upgrade has no durable intent")?;
+    let journal = load(data)?.ok_or(UpgradeError::NoDurableIntent)?;
     Ok(match action(data, journal.phase)? {
         Action::RecordInstalled | Action::Open => data.to_path_buf(),
         Action::Copy | Action::RetireSource | Action::Promote => staging_path(data),
-        Action::Refuse => bail!("inconsistent store upgrade paths for {}", data.display()),
+        Action::Refuse => {
+            return Err(UpgradeError::InconsistentPaths {
+                data: data.to_path_buf(),
+            })
+        }
     })
 }
 
@@ -235,11 +299,10 @@ pub async fn encrypt_existing_with_progress(
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
-    let mut journal = load(data)?.context("store upgrade must begin before key creation")?;
-    ensure!(
-        journal.record == *record,
-        "store upgrade encryption record changed"
-    );
+    let mut journal = load(data)?.ok_or(UpgradeError::NotBegun)?;
+    if journal.record != *record {
+        return Err(UpgradeError::RecordChanged);
+    }
     loop {
         match action(data, journal.phase)? {
             Action::Copy => {
@@ -269,10 +332,11 @@ pub async fn encrypt_existing_with_progress(
                 save(data, &journal, false)?;
             }
             Action::Open => return Ok(()),
-            Action::Refuse => bail!(
-                "inconsistent store encryption upgrade paths for {}",
-                data.display()
-            ),
+            Action::Refuse => {
+                return Err(UpgradeError::InconsistentEncryptionPaths {
+                    data: data.to_path_buf(),
+                })
+            }
         }
     }
 }
@@ -285,14 +349,12 @@ pub fn finish(data: &Path) -> Result<()> {
     let Some(journal) = load(data)? else {
         return Ok(());
     };
-    ensure!(
-        may_finish(journal.phase, true, true),
-        "store upgrade is not installed"
-    );
-    ensure!(
-        action(data, journal.phase)? == Action::Open,
-        "store upgrade is not installed"
-    );
+    if !may_finish(journal.phase, true, true) {
+        return Err(UpgradeError::NotInstalled);
+    }
+    if action(data, journal.phase)? != Action::Open {
+        return Err(UpgradeError::NotInstalled);
+    }
     let retired = retired_path(data);
     if exists(&retired)? {
         fs::remove_dir_all(&retired)?;
@@ -340,7 +402,7 @@ async fn copy_and_verify(
         copy_sidecars(data, stage)?;
         sync_directory(stage)?;
         sync_parent(stage)?;
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, UpgradeError>(())
     }
     .await;
     let closed = source.close().await;
@@ -418,7 +480,7 @@ async fn recheck_source(
             copy_sidecars(data, stage)?;
             sync_directory(stage)?;
         }
-        Ok::<_, anyhow::Error>(equal)
+        Ok::<_, UpgradeError>(equal)
     }
     .await;
     let closed = source.close().await;
@@ -433,10 +495,9 @@ async fn verify_values(
     destination: &dyn Store,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
-    ensure!(
-        values_equal(source, destination, progress).await?,
-        "encrypted store verification failed; original store retained"
-    );
+    if !values_equal(source, destination, progress).await? {
+        return Err(UpgradeError::VerificationFailed);
+    }
     Ok(())
 }
 
@@ -511,15 +572,13 @@ fn copy_entry(source: &Path, destination: &Path) -> Result<()> {
         #[cfg(unix)]
         std::os::unix::fs::symlink(fs::read_link(source)?, destination)?;
         #[cfg(not(unix))]
-        bail!(
-            "cannot preserve symlink {} during store upgrade",
-            source.display()
-        );
+        return Err(UpgradeError::SymlinkUnsupported {
+            path: source.to_path_buf(),
+        });
     } else {
-        bail!(
-            "cannot preserve special file {} during store upgrade",
-            source.display()
-        );
+        return Err(UpgradeError::SpecialFile {
+            path: source.to_path_buf(),
+        });
     }
     Ok(())
 }

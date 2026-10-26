@@ -20,7 +20,7 @@ use rig::wasm_compat::WasmCompatSend;
 const SESSION_ID_HEADER: &str = "x-session-id";
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum InferenceHttpError {
+pub enum InferenceHttpError {
     #[error("building OpenAI Responses client")]
     ResponsesClient(#[source] http_client::Error),
     #[error("building OpenAI Chat Completions client")]

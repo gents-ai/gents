@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use bytes::Bytes;
 use defra_node::EmbeddedNode;
 use futures::StreamExt as _;
@@ -85,10 +84,18 @@ pub fn grok_client_version_gate_guidance() -> String {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum XaiGrokOAuthError {
+pub enum XaiGrokOAuthError {
     #[error(transparent)]
     Bearer(#[from] crate::oauth_http::OAuthHttpError),
+    #[error(transparent)]
+    Header(#[from] XaiGrokHeaderError),
+    #[error("building Grok OAuth Responses client")]
+    BuildResponses(#[source] crate::inference_http::InferenceHttpError),
+    #[error("building Grok OAuth Chat Completions client")]
+    BuildChatCompletions(#[source] crate::inference_http::InferenceHttpError),
 }
+
+type Result<T, E = XaiGrokOAuthError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum XaiGrokHeaderError {
@@ -296,7 +303,7 @@ async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     node_did: &str,
     account_ref: Option<&str>,
-) -> std::result::Result<CapturingXaiGrokOAuthHttpClient, XaiGrokOAuthError> {
+) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
     let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
         node,
@@ -337,7 +344,7 @@ pub async fn build_responses_client(
         http,
         headers,
     )
-    .context("building Grok OAuth Responses client")
+    .map_err(XaiGrokOAuthError::BuildResponses)
 }
 
 pub async fn build_chat_completions_client(
@@ -353,7 +360,7 @@ pub async fn build_chat_completions_client(
         &endpoint,
         http,
     )
-    .context("building Grok OAuth Chat Completions client")
+    .map_err(XaiGrokOAuthError::BuildChatCompletions)
 }
 
 #[cfg(test)]

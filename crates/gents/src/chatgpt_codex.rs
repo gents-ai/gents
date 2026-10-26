@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
@@ -86,6 +85,16 @@ pub fn normalize_provider(provider: &str) -> String {
     } else {
         provider.to_string()
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ChatGptCodexClientError {
+    #[error(transparent)]
+    Bearer(#[from] crate::oauth_http::OAuthHttpError),
+    #[error(transparent)]
+    Header(#[from] ChatGptCodexHeaderError),
+    #[error("building ChatGPT Codex Responses client")]
+    Build(#[source] crate::inference_http::InferenceHttpError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -384,6 +393,7 @@ pub async fn build_responses_client(
             >,
         >,
     >,
+    ChatGptCodexClientError,
 > {
     let provider = CHATGPT_CODEX_PROVIDER;
     let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
@@ -415,7 +425,7 @@ pub async fn build_responses_client(
         http,
         headers,
     )
-    .context("building ChatGPT Codex Responses client")
+    .map_err(ChatGptCodexClientError::Build)
 }
 
 #[cfg(test)]
