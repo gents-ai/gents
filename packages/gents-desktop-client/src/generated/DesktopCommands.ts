@@ -109,6 +109,8 @@ import type { ScheduleRunRequest } from "./ScheduleRunRequest.js";
 import type { ScheduleSaveRequest } from "./ScheduleSaveRequest.js";
 import type { SessionArchiveReceipt } from "./SessionArchiveReceipt.js";
 import type { SessionArchiveRequest } from "./SessionArchiveRequest.js";
+import type { SessionContextDetails } from "./SessionContextDetails.js";
+import type { SessionContextDetailsRequest } from "./SessionContextDetailsRequest.js";
 import type { SessionForkBeforeRequest } from "./SessionForkBeforeRequest.js";
 import type { SessionForkResult } from "./SessionForkResult.js";
 import type { SessionGoalView } from "./SessionGoalView.js";
@@ -242,6 +244,7 @@ export type DesktopCommands = {
   desktop_schedule_run: { args: { request: ScheduleRunRequest }; result: TaskRunResult };
   desktop_schedule_save: { args: { request: ScheduleSaveRequest }; result: DesktopClientSnapshot };
   desktop_session_archive: { args: { request: SessionArchiveRequest }; result: SessionArchiveReceipt };
+  desktop_session_context_details: { args: { request: SessionContextDetailsRequest }; result: SessionContextDetails | null };
   desktop_session_fork_before_message: { args: { request: SessionForkBeforeRequest }; result: SessionForkResult };
   desktop_session_goal: { args: { nodeDid: string; sessionId: string }; result: SessionGoalView | null };
   desktop_session_history: { args: { request: SessionHistoryRequest }; result: SessionHistoryPage };

@@ -53,6 +53,7 @@ const COMMANDS: &[&str] = &[
     "desktop_set_selected_node",
     "desktop_observer_metrics",
     "desktop_session_snapshot",
+    "desktop_session_context_details",
     "desktop_session_hydration_retry",
     "desktop_session_live_delta",
     "desktop_session_rows",
