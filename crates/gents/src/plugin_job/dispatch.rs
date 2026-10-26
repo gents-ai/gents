@@ -257,8 +257,7 @@ pub async fn run_step0(
             )
             .await?
             .with_context(|| format!("job row {} does not exist", request.row_doc_id))?;
-            let row = read_step_row(&access, &request.row_doc_id).await?;
-            kill(&access, &mut target_lifecycle, &row, cause).await?;
+            kill(&access, &mut target_lifecycle, cause).await?;
         }
     }
     let settlement =

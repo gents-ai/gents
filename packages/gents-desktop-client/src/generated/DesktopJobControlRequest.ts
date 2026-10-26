@@ -2,6 +2,6 @@
 import type { JobControlKind } from "./JobControlKind.js";
 
 /**
- * Stops or pauses exactly the job row at `session_id:tool_call_id`.
+ * Stops or pauses the physical job row displayed by the client.
  */
-export type DesktopJobControlRequest = { sessionId: string, toolCallId: string, action: JobControlKind, };
+export type DesktopJobControlRequest = { nodeDid: string, toolCallDocId: string, action: JobControlKind, };

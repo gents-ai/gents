@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
-use futures::StreamExt;
+
+mod observation;
 
 /// Document invalidations are live-only; quiet and closed feeds still require
 /// bounded durable observation without resubmitting or cancelling the process.
@@ -93,12 +94,10 @@ impl DefraSessionHook {
         S: futures::Stream<Item = events::DocumentChangeBatch> + Unpin,
     {
         let collections = crate::collection_ids(&self.node, ["AgentToolCall", "AgentRequest"])?;
-        let mut rescan = tokio::time::interval_at(
+        let mut observation = observation::Observation::new(
             tokio::time::Instant::now() + BACKGROUND_TOOL_RESCAN_INTERVAL,
-            BACKGROUND_TOOL_RESCAN_INTERVAL,
+            true,
         );
-        rescan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut changes_open = true;
         loop {
             let lifecycle = self
                 .load_authorized_background_tool(caller, tool_call_id)
@@ -153,22 +152,22 @@ impl DefraSessionHook {
             let tool_doc_id = lifecycle
                 .doc_id()
                 .context("background observation requires physical tool identity")?;
-            let deadline = tokio::time::sleep(remaining);
-            tokio::pin!(deadline);
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = &mut deadline => break,
-                    _ = rescan.tick() => break,
-                    batch = changes.next(), if changes_open => {
-                        match batch {
-                            None => { changes_open = false; break; }
-                            Some(batch) if background_change_relevant(&batch, &collections[0], tool_doc_id, &collections[1], interruption.request_doc_id.as_deref()) => break,
-                            Some(_) => tokio::task::yield_now().await,
-                        }
-                    }
-                }
-            }
+            observation
+                .wait(
+                    &mut changes,
+                    tokio::time::Instant::now() + remaining,
+                    BACKGROUND_TOOL_RESCAN_INTERVAL,
+                    |batch| {
+                        background_change_relevant(
+                            batch,
+                            &collections[0],
+                            tool_doc_id,
+                            &collections[1],
+                            interruption.request_doc_id.as_deref(),
+                        )
+                    },
+                )
+                .await;
         }
     }
 

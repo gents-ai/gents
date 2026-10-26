@@ -57,7 +57,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
 /// Lean's `pluginJobRecover`; a `Step` receives every terminal, and the stall
 /// rule over that step's output (`is_stalled`, the admission owner) is the
 /// second. Returns the owner action and the row after it.
-fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
+pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
     let facts = RecoveryFacts {
         running: row.running,
         session_stopped: row.session_stopped,

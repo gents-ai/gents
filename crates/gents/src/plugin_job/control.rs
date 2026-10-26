@@ -251,13 +251,12 @@ pub(crate) async fn observe_live_children(
 pub async fn kill(
     access: &ConfigAccess,
     lifecycle: &mut ToolCallLifecycle,
-    job: &StepRow,
     cause: KillCause,
 ) -> Result<KillOutcome> {
     let lifecycle_ref: &ToolCallLifecycle = lifecycle;
     let (outcome, terminal) = access
         .transact_write("plugin_job.kill", |txn| {
-            Box::pin(kill_in_txn(txn, lifecycle_ref, job, cause))
+            Box::pin(kill_in_txn(txn, lifecycle_ref, cause))
         })
         .await?;
     if let Some(terminal) = terminal {
@@ -269,9 +268,16 @@ pub async fn kill(
 async fn kill_in_txn(
     txn: &ConfigApplyTxn<'_>,
     lifecycle: &ToolCallLifecycle,
-    job: &StepRow,
     cause: KillCause,
 ) -> Result<(KillOutcome, Option<PluginJobTerminal>)> {
+    let current = read_step_row_in_txn(
+        txn,
+        lifecycle
+            .doc_id()
+            .context("job row lacks physical identity")?,
+    )
+    .await?;
+    let job = &current;
     if job.state != JobState::Running {
         return Ok((
             KillOutcome {
@@ -365,11 +371,104 @@ pub async fn control(
             message: "job control is local-only in v1; stop or pause the job from its session (`workflow stop|pause <handle>`), the desktop, Grok or Codex".into(),
         });
     };
-    let mut lifecycle =
-        ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
-            .await
-            .map_err(unavailable)?
-            .ok_or(JobReadError::NotYetObservable)?;
+    let lifecycle = ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
+        .await
+        .map_err(unavailable)?
+        .ok_or(JobReadError::NotYetObservable)?;
+    control_lifecycle(access, scope, lifecycle, action).await
+}
+
+pub fn operator_control_authorized(
+    executing: &str,
+    requested: &str,
+    owner: &str,
+    actor: Option<&str>,
+) -> bool {
+    actor == Some(executing) && requested == executing && owner == executing
+}
+
+/// `actor` must be the DID authenticated by DefraDB at the transport boundary.
+pub async fn operator_control(
+    access: &ConfigAccess,
+    actor: Option<&str>,
+    request: &gents_protocol::job::OperatorJobControlRequest,
+) -> Result<JobControlOutcome, JobReadError> {
+    let executing_node_did = access
+        .local_node()
+        .and_then(|node| node.node_identity_did())
+        .ok_or(JobReadError::NotAuthorized)?;
+    if !operator_control_authorized(
+        executing_node_did,
+        &request.node_did,
+        executing_node_did,
+        actor,
+    ) {
+        return Err(JobReadError::NotAuthorized);
+    }
+    let view = super::view::load_job_view(
+        access,
+        None,
+        super::view::JobKey::RowDocId(request.tool_call_doc_id.clone()),
+    )
+    .await?;
+    if !operator_control_authorized(
+        executing_node_did,
+        &request.node_did,
+        &view.scope.node_did,
+        actor,
+    ) {
+        return Err(JobReadError::NotAuthorized);
+    }
+    control_by_doc_id(
+        access,
+        &ProcessControlScope {
+            request_id: String::new(),
+            session_id: view.scope.session_id,
+            node_did: view.scope.node_did,
+            requester_did: view.scope.requester_did,
+        },
+        &request.tool_call_doc_id,
+        request.action,
+    )
+    .await
+}
+
+pub async fn control_by_doc_id(
+    access: &ConfigAccess,
+    scope: &ProcessControlScope,
+    tool_call_doc_id: &str,
+    action: JobControlKind,
+) -> Result<JobControlOutcome, JobReadError> {
+    let unavailable = |error: anyhow::Error| JobReadError::Unavailable {
+        message: format!("{error:#}; retry when the node answers"),
+    };
+    let ConfigAccess::Local(node) = access else {
+        return Err(unavailable(anyhow::anyhow!(
+            "job control requires the local runtime"
+        )));
+    };
+    let lifecycle = ToolCallLifecycle::load_by_doc_id(
+        node.node().clone(),
+        tool_call_doc_id,
+        &scope.node_did,
+        &scope.session_id,
+        scope.requester_did.as_deref(),
+    )
+    .await
+    .map_err(unavailable)?
+    .ok_or(JobReadError::NotYetObservable)?;
+    control_lifecycle(access, scope, lifecycle, action).await
+}
+
+async fn control_lifecycle(
+    access: &ConfigAccess,
+    scope: &ProcessControlScope,
+    mut lifecycle: ToolCallLifecycle,
+    action: JobControlKind,
+) -> Result<JobControlOutcome, JobReadError> {
+    let unavailable = |error: anyhow::Error| JobReadError::Unavailable {
+        message: format!("{error:#}; retry when the node answers"),
+    };
     if !scope.authorizes(
         lifecycle.session_id(),
         lifecycle.node_did(),
@@ -380,10 +479,6 @@ pub async fn control(
     if lifecycle.kind() != ToolRowKind::PluginJob {
         return Err(JobReadError::NotAJob);
     }
-    let doc_id = lifecycle
-        .doc_id()
-        .ok_or_else(|| unavailable(anyhow::anyhow!("job row lacks physical identity")))?
-        .to_owned();
     let cause = match action {
         JobControlKind::Stop => KillCause::Stop,
         JobControlKind::Pause => KillCause::Pause,
@@ -391,11 +486,7 @@ pub async fn control(
     let (killed, terminal) = access
         .transact_write("plugin_job.control", |txn| {
             let lifecycle = &lifecycle;
-            let doc_id = &doc_id;
-            Box::pin(async move {
-                let row = read_step_row_in_txn(txn, doc_id).await?;
-                kill_in_txn(txn, lifecycle, &row, cause).await
-            })
+            Box::pin(async move { kill_in_txn(txn, lifecycle, cause).await })
         })
         .await
         .map_err(unavailable)?;
@@ -651,6 +742,20 @@ mod tests {
             .publish_background_receipt("started")
             .await
             .unwrap());
+        let doc_id = admission.tool.doc_id().unwrap().to_owned();
+        let mut pin = crate::tool_call_lifecycle::admission_fixture::fixture_job_pin();
+        pin.chain_root_doc_id = doc_id.clone();
+        ConfigAccess::transact_local_write(&admission.node, None, "test.control.physical_pin", |txn| {
+            let doc_id = doc_id.clone();
+            let pin = pin.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    &format!("mutation($pin: JSON) {{ update_AgentToolCall(docID: \"{}\", input: {{ job_pin: $pin }}) {{ _docID }} }}", escape_graphql_string(&doc_id)),
+                    &json!({"pin": pin}),
+                ).await?;
+                Ok(())
+            })
+        }).await.unwrap();
         super::super::driver::store_running_progress(&admission).await;
         admission
     }
@@ -676,10 +781,10 @@ mod tests {
             "purpose": "normal",
             "node_did": node_did,
             "requester_did": null,
-            "session_id": format!("child-session-{slot}"),
+            "session_id": crate::plugin_job::keys::job_session_id(admission.tool.doc_id().unwrap(), slot, 1),
             "agent_id": "general",
             "lifecycle_state": state,
-            "retry_key": job_spawn_key(ROOT, slot, 1),
+            "retry_key": job_spawn_key(admission.tool.doc_id().unwrap(), slot, 1),
             "created_at": "2026-01-01T00:00:00Z",
             "caused_by_parent_tool_call_doc_id": admission.tool.doc_id().unwrap(),
         });
@@ -747,14 +852,12 @@ mod tests {
         let admission = job_row("control-kill-rollback").await;
         let node_did = admission.tool.node_did().to_owned();
         let live = caused(&admission, "a", &node_did, "processing").await;
-        let job = row(JobState::Running, vec![child("a", JobChildState::Live)]);
         let access = access(&admission);
         let result: Result<()> = access
             .transact_write("test.control.kill_rollback", |txn| {
-                let (lifecycle, job) = (&admission.tool, &job);
+                let lifecycle = &admission.tool;
                 Box::pin(async move {
-                    let (killed, terminal) =
-                        kill_in_txn(txn, lifecycle, job, KillCause::Stop).await?;
+                    let (killed, terminal) = kill_in_txn(txn, lifecycle, KillCause::Stop).await?;
                     assert!(killed.won);
                     assert!(terminal.is_some_and(|terminal| terminal.won()));
                     anyhow::bail!("abort the staged kill")
@@ -789,17 +892,58 @@ mod tests {
             let mut admission = job_row(&format!("control-kill-{index}")).await;
             let node_did = admission.tool.node_did().to_owned();
             let live = caused(&admission, "a", &node_did, "processing").await;
-            let job = row(JobState::Running, vec![child("a", JobChildState::Live)]);
-            let outcome = kill(&access(&admission), &mut admission.tool, &job, cause)
+            let root = admission.tool.doc_id().unwrap().to_owned();
+            let outcome = kill(&access(&admission), &mut admission.tool, cause)
                 .await
                 .unwrap();
             assert_eq!(
                 outcome.killed,
-                vec![(job_spawn_key(ROOT, "a", 1), KillAction::InterruptCaused)]
+                vec![(job_spawn_key(&root, "a", 1), KillAction::InterruptCaused)]
             );
             assert!(interrupted(&admission, &live).await, "{cause:?}");
             assert_eq!(row_state(&admission).await, state, "{cause:?}");
             assert_eq!(output(&admission).await[field], value, "{cause:?}");
+            finish(admission).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn kill_reads_children_that_committed_after_the_recovery_snapshot() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_job_commit_kill_cases;
+        assert!(!cases.is_empty());
+        for (index, case) in cases.iter().enumerate() {
+            let cause = match case["cause"].as_str().unwrap() {
+                "stop" => KillCause::Stop,
+                "pause" => KillCause::Pause,
+                "deadline" => KillCause::Deadline,
+                "engineChanged" => KillCause::FailClosed(Refusal::EngineChanged),
+                "notAvailable" => KillCause::FailClosed(Refusal::NotAvailable),
+                other => panic!("unknown modeled kill cause {other}"),
+            };
+            let mut admission = job_row(&format!("kill-after-spawn-{index}")).await;
+            let access = access(&admission);
+            let doc = admission.tool.doc_id().unwrap().to_owned();
+            let stale = read_step_row(&access, &doc).await.unwrap();
+            assert!(stale.children.is_empty());
+            let did = admission.tool.node_did().to_owned();
+            let child = caused(&admission, "new", &did, "processing").await;
+            let committed = read_step_row(&access, &doc).await.unwrap();
+            assert_eq!(committed.children.len(), 1);
+            let killed = kill(&access, &mut admission.tool, cause).await.unwrap();
+            assert_eq!(
+                serde_json::to_value(killed.row.state).unwrap(),
+                case["row_state"]
+            );
+            let kills = killed
+                .killed
+                .iter()
+                .map(|(key, action)| {
+                    let key = gents_protocol::job::keys::decode_job_retry_key(key).unwrap();
+                    json!({"slot": key.0, "action": action})
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(serde_json::to_value(kills).unwrap(), case["kills"]);
+            assert!(interrupted(&admission, &child).await, "{cause:?}");
             finish(admission).await;
         }
     }
@@ -810,25 +954,14 @@ mod tests {
         let node_did = admission.tool.node_did().to_owned();
         let ended = caused(&admission, "a", &node_did, "completed").await;
         let settling = caused(&admission, "b", &node_did, "completed").await;
-        let job = row(
-            JobState::Running,
-            vec![
-                child("a", JobChildState::Completed),
-                child("b", JobChildState::Live),
-            ],
-        );
-        let outcome = kill(
-            &access(&admission),
-            &mut admission.tool,
-            &job,
-            KillCause::Stop,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            outcome.killed,
-            vec![(job_spawn_key(ROOT, "b", 1), KillAction::Settle)]
-        );
+        let outcome = kill(&access(&admission), &mut admission.tool, KillCause::Stop)
+            .await
+            .unwrap();
+        assert_eq!(outcome.killed.len(), 2);
+        assert!(outcome
+            .killed
+            .iter()
+            .all(|(_, action)| *action == KillAction::Settle));
         assert!(!interrupted(&admission, &ended).await);
         assert!(!interrupted(&admission, &settling).await);
         assert_eq!(row_state(&admission).await, "cancelled");
@@ -846,15 +979,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let job = row(JobState::Completed, vec![child("a", JobChildState::Live)]);
-        let outcome = kill(
-            &access(&admission),
-            &mut admission.tool,
-            &job,
-            KillCause::Stop,
-        )
-        .await
-        .unwrap();
+        let job = read_step_row(&access(&admission), admission.tool.doc_id().unwrap())
+            .await
+            .unwrap();
+        let outcome = kill(&access(&admission), &mut admission.tool, KillCause::Stop)
+            .await
+            .unwrap();
         assert_eq!(
             outcome,
             KillOutcome {
@@ -1067,8 +1197,7 @@ mod tests {
             .unwrap()
         };
         let mut loaded = load().await;
-        let job = row(JobState::Running, Vec::new());
-        kill(&access(&admission), &mut loaded, &job, KillCause::Deadline)
+        kill(&access(&admission), &mut loaded, KillCause::Deadline)
             .await
             .unwrap();
         let stored_receipt = || async {
@@ -1094,9 +1223,8 @@ mod tests {
                 ..evidence
             }
         );
-        let ended_job = row(JobState::TimedOut, Vec::new());
         let mut again = load().await;
-        kill(&access(&admission), &mut again, &ended_job, KillCause::Stop)
+        kill(&access(&admission), &mut again, KillCause::Stop)
             .await
             .unwrap();
         assert_eq!(stored_receipt().await, ended);

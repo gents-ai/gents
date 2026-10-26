@@ -14,8 +14,7 @@ import { useApp } from "../app/AppContext";
 const words = (value: string) => value.replace(/_/g, " ");
 
 export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
-  const { actions, drafts, stores, view } = useApp();
-  const sessionId = stores.selection.use.sessionId();
+  const { actions, drafts, view } = useApp();
   const state = tool.jobState;
   const progress = tool.jobProgress;
   const terminal =
@@ -24,9 +23,9 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
     state === "cancelled" ||
     state === "timed_out";
   const control = (action: JobControlKind) => {
-    if (!sessionId || !tool.toolCallId) return;
+    if (!tool.toolCallDocId || !tool.nodeDid) return;
     actions
-      .controlJob({ sessionId, toolCallId: tool.toolCallId, action })
+      .controlJob({ nodeDid: tool.nodeDid, toolCallDocId: tool.toolCallDocId, action })
       .catch((e: unknown) => toastFailure(action, e));
   };
   const answer = () => {
@@ -55,10 +54,20 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
         {progress && <span className="min-w-0 truncate">{progress.title}</span>}
         {state === "running" && (
           <span className="ml-auto flex gap-1">
-            <Button size="sm" variant="outline" onClick={() => control("pause")}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!tool.toolCallDocId || !tool.nodeDid}
+              onClick={() => control("pause")}
+            >
               Pause
             </Button>
-            <Button size="sm" variant="outline" onClick={() => control("stop")}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!tool.toolCallDocId || !tool.nodeDid}
+              onClick={() => control("stop")}
+            >
               Stop
             </Button>
           </span>

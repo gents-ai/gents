@@ -244,8 +244,8 @@ impl super::ToolCallLifecycle {
             if row.node_did.as_deref() != Some(node_did) || !is_background_tool_row(&row) {
                 continue;
             }
-            running_background.insert(row.tool_call_id.clone());
-            let registered = executions.contains(&row.tool_call_id).await;
+            running_background.insert(row.doc_id.clone());
+            let registered = executions.contains(&row.tool_call_id, &row.doc_id).await;
             let parent = match (
                 non_empty(row.request_doc_id.as_deref()),
                 non_empty(row.node_did.as_deref()),
@@ -387,7 +387,7 @@ impl super::ToolCallLifecycle {
                     continue;
                 }
             };
-            executions.forget_process_record(&row.tool_call_id);
+            executions.forget_process_record(&row.tool_call_id, &row.doc_id);
             if !updated {
                 continue;
             }
@@ -407,8 +407,10 @@ impl super::ToolCallLifecycle {
         // from a crash after settlement, or from a group that outlived its
         // settled row. Stop what is still proven owned, then forget it.
         for record in executions.process_record_list() {
-            if running_background.contains(&record.tool_call_id)
-                || executions.contains(&record.tool_call_id).await
+            if running_background.contains(&record.tool_call_doc_id)
+                || executions
+                    .contains(&record.tool_call_id, &record.tool_call_doc_id)
+                    .await
             {
                 continue;
             }
@@ -423,7 +425,7 @@ impl super::ToolCallLifecycle {
                 );
                 continue;
             }
-            executions.forget_process_record(&record.tool_call_id);
+            executions.forget_process_record(&record.tool_call_id, &record.tool_call_doc_id);
         }
 
         if !report.is_noop() {
@@ -474,7 +476,7 @@ impl super::ToolCallLifecycle {
                 (won, "failed", outcome.notification_reason())
             }
         };
-        executions.forget_process_record(&tool_call_id);
+        executions.forget_process_record(&tool_call_id, &doc_id);
         if won {
             if let Err(error) = crate::background_completion::append_background_tool_completion(
                 node,

@@ -33,11 +33,12 @@ function lineBoundsAt(
 
 const SELECTOR_LINE = /^\s*\/[\w.-]*\s*$/;
 
-export function slashSkillSuggestion(
+/** The slash word being typed at the caret, on a line that only selectors
+    precede, or null. */
+export function slashQueryAt(
   draft: string,
   caret: number,
-  skills: SkillView[],
-): SlashSkillSuggestion | null {
+): { query: string; lineStart: number; lineEnd: number } | null {
   const { start, end } = lineBoundsAt(draft, caret);
   const line = draft.slice(start, end);
   const match = /^\s*\/([\w.-]*)$/.exec(line.slice(0, caret - start));
@@ -51,8 +52,25 @@ export function slashSkillSuggestion(
     }
   }
 
-  const query = match[1].toLowerCase();
-  const items = skills
+  return { query: match[1].toLowerCase(), lineStart: start, lineEnd: end };
+}
+
+export function slashSkillSuggestion(
+  draft: string,
+  caret: number,
+  skills: SkillView[],
+): SlashSkillSuggestion | null {
+  const at = slashQueryAt(draft, caret);
+  if (!at) {
+    return null;
+  }
+
+  const items = matchingSkills(skills, at.query);
+  return items.length > 0 ? { ...at, items } : null;
+}
+
+export function matchingSkills(skills: SkillView[], query: string): SkillView[] {
+  return skills
     .filter((skill) => skill.enabled !== false)
     .filter((skill) => {
       const haystack =
@@ -60,10 +78,6 @@ export function slashSkillSuggestion(
       return query === "" || haystack.includes(query);
     })
     .slice(0, 8);
-
-  return items.length > 0
-    ? { query, lineStart: start, lineEnd: end, items }
-    : null;
 }
 
 export function applySkillSelection(

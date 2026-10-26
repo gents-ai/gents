@@ -159,8 +159,8 @@ theorem self_config_engine_refused (ctx : StepContext) (k : PackKind) (r : Recor
 
 /-- Validation: `dynamicTargets ⊆ agentTargets`, checked only when the mode
 is not `off`. The type default of `dynamicTargets` is the empty list. -/
-def Policy.valid (agentTargets : List Target) (p : Policy) : Bool :=
-  p.mode == .off || scopeLe p.dynamicTargets (.only agentTargets.toFinset fun _ => ())
+def Policy.valid (agentTargets : List String) (p : Policy) : Bool :=
+  p.mode == .off || decide (p.dynamicTargets ⊆ agentTargets)
 
 /-- A job block a pack ships in its Tools document. `targetsFrom` and
 `trusted` are pack coordinates. -/
@@ -311,15 +311,15 @@ theorem installed_job_refused_when_untrusted (ctx : StepContext) (job : Job) (ou
 /-- `Policy.valid` ignores `dynamicTargets` when the mode is `off`, bounds them
 by `agentTargets` otherwise, and the default empty list is valid for any
 `agentTargets`. -/
-theorem policy_subset_checked_only_when_dynamic (agentTargets : List Target) :
+theorem policy_subset_checked_only_when_dynamic (agentTargets : List String) :
     (∀ p : Policy, p.mode = .off → p.valid agentTargets = true) ∧
       (∀ p : Policy, p.mode ≠ .off → p.valid agentTargets = true →
-        ∀ t, p.dynamicTargets.permits t → t ∈ agentTargets) ∧
-      ∀ p : Policy, p.dynamicTargets = .only ∅ (fun _ => ()) → p.valid agentTargets = true := by
+        ∀ t ∈ p.dynamicTargets, t ∈ agentTargets) ∧
+      ∀ p : Policy, p.dynamicTargets = [] → p.valid agentTargets = true := by
   refine ⟨fun p h => by simp [Policy.valid, h], fun p h hv t ht => ?_, fun p h => ?_⟩
   · simp only [Policy.valid, Bool.or_eq_true, beq_iff_eq, h, false_or] at hv
-    simpa [EndpointScope.permits] using scopeLe_permits _ _ t hv ht
-  · simp [Policy.valid, h, scopeLe]
+    exact (of_decide_eq_true hv) ht
+  · simp [Policy.valid, h]
 
 theorem pack_job_block_requires_operator_install (via : InstallProvenance)
     (closure : List String) (b : PackJobBlock) (h : packJobBlockAdmissible via closure b = true) :
@@ -364,7 +364,8 @@ theorem targets_from_wiring_trusts_pack (pack : String) (packTargets : List Targ
         m.via = .operator →
         pin.origin = .installed ∧
           ∀ t, (effectiveTargets ctx pin).permits t ↔
-            ((ctx.live.meet pin.ceilingAtPin).targets.meet unitVM ctx.jobTargets).permits t := by
+            ((TargetResolution.scope ctx.bindings (ctx.live.meet pin.ceilingAtPin).targets).meet
+              unitVM ctx.jobTargets).permits t := by
   simp only [wireTargetsFrom, Prod.mk.injEq] at hw
   obtain ⟨rfl, rfl, rfl⟩ := hw
   have htrust : pack ∈ (p.trustedPacks.insert pack) := List.mem_insert_self _ _

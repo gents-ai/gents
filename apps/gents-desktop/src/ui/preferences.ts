@@ -13,11 +13,16 @@ export type NavMode = "hover" | "expanded" | "collapsed";
     with the reply filling in beneath it. */
 export type SentTurnPlacement = "follow" | "anchor";
 
+/** What a message sent while a turn runs does: it is folded into that turn
+    at its next safe step, or it waits for the turn to finish. */
+export type FollowUp = "steer" | "queue";
+
 export type Preferences = {
   theme: ThemePreference;
   nav: NavMode;
   zoom: number;
   sentTurn: SentTurnPlacement;
+  followUp: FollowUp;
 };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
@@ -27,6 +32,7 @@ const initial = (): Preferences => ({
   nav: "hover",
   zoom: 1,
   sentTurn: "anchor",
+  followUp: "steer",
 });
 
 export function restorePreferences(
@@ -51,6 +57,10 @@ export function restorePreferences(
       saved.sentTurn === "follow" || saved.sentTurn === "anchor"
         ? saved.sentTurn
         : defaults.sentTurn,
+    followUp:
+      saved.followUp === "steer" || saved.followUp === "queue"
+        ? saved.followUp
+        : defaults.followUp,
   };
 }
 
@@ -76,6 +86,9 @@ export const preferences = {
   },
   setSentTurn(sentTurn: SentTurnPlacement) {
     store.setState({ sentTurn });
+  },
+  setFollowUp(followUp: FollowUp) {
+    store.setState({ followUp });
   },
 };
 
@@ -106,5 +119,6 @@ export const useTheme = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
 export const zoomLevel = () => store.getState().zoom;
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
+export const useFollowUp = () => usePreferences((p) => p.followUp);
 
 export const resetPreferences = () => store.setState(initial(), true);

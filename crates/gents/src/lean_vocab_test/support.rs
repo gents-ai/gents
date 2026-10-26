@@ -76,10 +76,16 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_ancestry_cases: Vec<serde_json::Value>,
+    pub(crate) goal_request_scope_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_ancestry_cases: Vec<serde_json::Value>,
     pub(crate) goal_queue_assignment_cases: Vec<serde_json::Value>,
     pub(crate) goal_first_request_binding_cases: Vec<serde_json::Value>,
     pub(crate) goal_continuation_assignment_cases: Vec<serde_json::Value>,
+    pub(crate) plugin_job_commit_kill_cases: Vec<serde_json::Value>,
+    pub(crate) operator_job_control_cases: Vec<serde_json::Value>,
+    pub(crate) background_process_identity_cases: Vec<serde_json::Value>,
+    pub(crate) durable_observation_cases: Vec<serde_json::Value>,
+    pub(crate) plugin_target_resolution_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_assignment_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_receipt_cases: Vec<serde_json::Value>,
@@ -416,6 +422,34 @@ pub(crate) struct LeanPluginJobAdmissionCase {
     pub(crate) job: LeanPluginJobRow,
     pub(crate) output: LeanPluginJobOutput,
     pub(crate) expected: LeanPluginJobAdmissionExpected,
+    pub(crate) wire_trace: Option<LeanPluginJobWireRecoveryTrace>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWireRecoveryTrace {
+    pub(crate) spawn_wires: Vec<String>,
+    pub(crate) interruption: String,
+    pub(crate) read: LeanPluginJobDurableRead,
+    pub(crate) before: LeanPluginJobRecoveryRow,
+    pub(crate) after: LeanPluginJobRecoveryRow,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobDurableRead {
+    pub(crate) session_stopped: bool,
+    pub(crate) now_millis: u64,
+    pub(crate) available: bool,
+    pub(crate) progress_revision: u64,
+    pub(crate) step_in_flight: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWireBinding {
+    pub(crate) wire: String,
+    pub(crate) target: LeanPluginJobTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -705,7 +739,7 @@ pub(crate) struct LeanPluginJobScope {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobCeiling {
-    pub(crate) targets: LeanPluginJobScope,
+    pub(crate) targets: Vec<String>,
     pub(crate) max_live: u32,
     pub(crate) max_spawns: u32,
     pub(crate) max_messages_per_slot: u32,
@@ -882,7 +916,7 @@ pub(crate) enum LeanPluginJobOutput {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobPolicy {
     pub(crate) mode: String,
-    pub(crate) dynamic_targets: LeanPluginJobScope,
+    pub(crate) dynamic_targets: Vec<String>,
     pub(crate) trusted_packs: Vec<String>,
     pub(crate) project_roots: Vec<String>,
 }
@@ -923,7 +957,7 @@ pub(crate) enum LeanPluginJobAuthorityCase {
     },
     PolicyValid {
         name: String,
-        agent_targets: Vec<LeanPluginJobTarget>,
+        agent_targets: Vec<String>,
         policy: Box<LeanPluginJobPolicy>,
         expected: Box<LeanPluginJobValidExpected>,
     },
@@ -1364,6 +1398,7 @@ pub(crate) struct LeanPluginJobResumeTarget {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobContext {
     pub(crate) live: LeanPluginJobCeiling,
+    pub(crate) bindings: Vec<LeanPluginJobWireBinding>,
     pub(crate) available: bool,
     pub(crate) caller_targets: LeanPluginJobScope,
     pub(crate) job_targets: LeanPluginJobScope,

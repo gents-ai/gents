@@ -945,6 +945,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalToolContextCases".into(),
         ));
     }
+    if !snapshot.goal_request_scope_cases.is_empty() {
+        emitted.insert((
+            "goal_request_scope_cases".into(),
+            "GoalRequestScopeCases".into(),
+        ));
+    }
     if !snapshot.goal_request_ancestry_cases.is_empty() {
         emitted.insert((
             "goal_request_ancestry_cases".into(),
@@ -957,6 +963,31 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalQueueAssignmentCases".into(),
         ));
     }
+    assert!(!snapshot.plugin_job_commit_kill_cases.is_empty());
+    emitted.insert((
+        "plugin_job_commit_kill_cases".into(),
+        "PluginJobCommitKillCases".into(),
+    ));
+    assert!(!snapshot.operator_job_control_cases.is_empty());
+    emitted.insert((
+        "operator_job_control_cases".into(),
+        "OperatorJobControlCases".into(),
+    ));
+    assert!(!snapshot.background_process_identity_cases.is_empty());
+    emitted.insert((
+        "background_process_identity_cases".into(),
+        "BackgroundProcessIdentityCases".into(),
+    ));
+    assert!(!snapshot.durable_observation_cases.is_empty());
+    emitted.insert((
+        "durable_observation_cases".into(),
+        "DurableObservationCases".into(),
+    ));
+    assert!(!snapshot.plugin_target_resolution_cases.is_empty());
+    emitted.insert((
+        "plugin_target_resolution_cases".into(),
+        "PluginTargetResolutionCases".into(),
+    ));
     if !snapshot.goal_request_head_cases.is_empty() {
         emitted.insert((
             "goal_request_head_cases".to_string(),

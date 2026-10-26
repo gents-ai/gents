@@ -20,6 +20,7 @@ open ToolPolicy
 /-- Facts re-read in the step transaction. -/
 structure StepContext where
   live : Ceiling
+  bindings : List TargetResolution.Binding := []
   available : Bool
   /-- The caller's AgentTools target ceiling (the `agent_new` filter). -/
   callerTargets : EndpointScope Target Unit
@@ -71,8 +72,10 @@ structure StepContext where
 /-- Live ∩ pinned ceiling ∩ job targets ∩ the caller's ceiling, and the dynamic
 policy's targets for a dynamic origin. -/
 def effectiveTargets (ctx : StepContext) (pin : Pin) : EndpointScope Target Unit :=
-  ((ctx.live.meet pin.ceilingAtPin).targets.meet unitVM ctx.jobTargets).meet unitVM ctx.callerTargets
-  |> (if pin.origin = .dynamic then (·.meet unitVM ctx.policy.dynamicTargets) else id)
+  ((TargetResolution.scope ctx.bindings (ctx.live.meet pin.ceilingAtPin).targets).meet unitVM
+    ctx.jobTargets).meet unitVM ctx.callerTargets
+  |> (if pin.origin = .dynamic then
+    (·.meet unitVM (TargetResolution.scope ctx.bindings ctx.policy.dynamicTargets)) else id)
 
 inductive Refusal
   | terminal | notAvailable | engineChanged | policyDenied | stalled | depthExceeded | timedOut
@@ -492,9 +495,11 @@ theorem scopeLe_permits (a b : EndpointScope Target Unit) (t : Target) (h : scop
 
 theorem effectiveTargets_permits_iff (ctx : StepContext) (p : Pin) (t : Target) :
     (effectiveTargets ctx p).permits t ↔
-      ctx.live.targets.permits t ∧ p.ceilingAtPin.targets.permits t ∧ ctx.jobTargets.permits t ∧
-        ctx.callerTargets.permits t ∧ (p.origin = .dynamic → ctx.policy.dynamicTargets.permits t) := by
-  unfold effectiveTargets Ceiling.meet
+      (TargetResolution.scope ctx.bindings (ctx.live.meet p.ceilingAtPin).targets).permits t ∧
+        ctx.jobTargets.permits t ∧ ctx.callerTargets.permits t ∧
+        (p.origin = .dynamic →
+          (TargetResolution.scope ctx.bindings ctx.policy.dynamicTargets).permits t) := by
+  unfold effectiveTargets
   by_cases ho : p.origin = .dynamic <;> simp [ho, scope_meet_permits_iff, and_assoc]
 
 /-- Retry-key lookup finds exactly the children with that key. -/
@@ -714,35 +719,40 @@ theorem budget_ignores_repeated_key (ctx : StepContext) (job : Job) (e : Effects
   simp only [admitStep, admitJobOutput, admitEffects, admitNonJob, stepPin, StepOutput.pin,
     StepOutput.resume, engineChanged, resumePlaced, resumeAdmitted, resumeRefusal, stepRow_spawns, adoptedPin_spawns, hf, hmr]
 
-/-- An admitted spawn is permitted by the live, pinned, job and caller
-ceilings. -/
+/-- An admitted endpoint has one wire binding named in both raw ceilings;
+distinct aliases cannot independently satisfy the live and pinned halves. -/
 theorem admitted_targets_within_meet {ctx : StepContext} {job job' : Job} {e : Effects} {p : Pin}
     (h : admitStep ctx job (.effects e) = .ok job') (hp : stepPin ctx job (.effects e) = some p)
     {s : Spawn} (hs : s ∈ freshSpawns (stepRow ctx job (.effects e)) e.spawns) :
-    ctx.live.targets.permits s.target ∧ p.ceilingAtPin.targets.permits s.target ∧
+    ∃ binding ∈ ctx.bindings, TargetResolution.endpoint binding = s.target ∧
+      binding.wire ∈ ctx.live.targets ∧ binding.wire ∈ p.ceilingAtPin.targets ∧
       ctx.jobTargets.permits s.target ∧ ctx.callerTargets.permits s.target := by
-  obtain ⟨h1, h2, h3, h4, -⟩ :=
+  obtain ⟨h1, h2, h3, -⟩ :=
     (effectiveTargets_permits_iff ctx p s.target).mp (freshSpawns_mem_permitted h hp hs)
-  exact ⟨h1, h2, h3, h4⟩
+  obtain ⟨binding, member, bound, live, pinned⟩ :=
+    (TargetResolution.meet_scope_permits_iff ctx.bindings ctx.live.targets
+      p.ceilingAtPin.targets s.target).mp h1
+  exact ⟨binding, member, bound, live, pinned, h2, h3⟩
 
 /-- Wiring: once the job targets are within the caller's ceiling, an
 installed origin spawns exactly the live ∩ pinned ∩ job targets. -/
 theorem wiring_makes_job_targets_spawnable (ctx : StepContext) (p : Pin)
     (hw : scopeLe ctx.jobTargets ctx.callerTargets = true) (ho : p.origin = .installed) (t : Target) :
     (effectiveTargets ctx p).permits t ↔
-      ((ctx.live.meet p.ceilingAtPin).targets.meet unitVM ctx.jobTargets).permits t := by
+      ((TargetResolution.scope ctx.bindings (ctx.live.meet p.ceilingAtPin).targets).meet
+        unitVM ctx.jobTargets).permits t := by
   rw [effectiveTargets_permits_iff]
-  simp only [Ceiling.meet, scope_meet_permits_iff, ho, reduceCtorEq, false_implies, and_true]
+  simp only [scope_meet_permits_iff, ho, reduceCtorEq, false_implies, and_true]
   constructor
-  · exact fun ⟨h1, h2, h3, _⟩ => ⟨⟨h1, h2⟩, h3⟩
-  · exact fun ⟨⟨h1, h2⟩, h3⟩ => ⟨h1, h2, h3, scopeLe_permits _ _ _ hw h3⟩
+  · exact fun ⟨h1, h2, _⟩ => ⟨h1, h2⟩
+  · exact fun ⟨h1, h2⟩ => ⟨h1, h2, scopeLe_permits _ _ _ hw h2⟩
 
 theorem dynamic_origin_targets_within_dynamic_ceiling {ctx : StepContext} {job job' : Job}
     {e : Effects} {p : Pin} (h : admitStep ctx job (.effects e) = .ok job')
     (hp : stepPin ctx job (.effects e) = some p) (ho : p.origin = .dynamic) {s : Spawn}
     (hs : s ∈ freshSpawns (stepRow ctx job (.effects e)) e.spawns) :
-    ctx.policy.dynamicTargets.permits s.target :=
-  ((effectiveTargets_permits_iff ctx p s.target).mp (freshSpawns_mem_permitted h hp hs)).2.2.2.2 ho
+    (TargetResolution.scope ctx.bindings ctx.policy.dynamicTargets).permits s.target :=
+  ((effectiveTargets_permits_iff ctx p s.target).mp (freshSpawns_mem_permitted h hp hs)).2.2.2 ho
 
 /-- An absent job block is `Ceiling.empty`, which admits no spawn. -/
 theorem absent_job_block_is_empty_ceiling {ctx : StepContext} {job job' : Job} {e : Effects}
@@ -750,9 +760,8 @@ theorem absent_job_block_is_empty_ceiling {ctx : StepContext} {job job' : Job} {
     (hp : stepPin ctx job (.effects e) = some p) :
     freshSpawns (stepRow ctx job (.effects e)) e.spawns = [] := by
   refine List.eq_nil_iff_forall_not_mem.mpr fun s hs => ?_
-  have := (admitted_targets_within_meet h hp hs).1
-  rw [h_live] at this
-  exact this
+  obtain ⟨binding, _, _, live, _⟩ := admitted_targets_within_meet h hp hs
+  simp [h_live, Ceiling.empty] at live
 
 set_option maxHeartbeats 400000 in
 /-- Under the empty ceiling no step-0 pin is adopted, so a pinned step-0
@@ -794,7 +803,12 @@ theorem narrowing_applies_to_running_jobs (ctx : StepContext) (l : Ceiling) (hl 
     simp only [Ceiling.leB, Bool.and_eq_true] at hl
     rw [effectiveTargets_permits_iff] at ht ⊢
     obtain ⟨h1, h2⟩ := ht
-    exact ⟨scopeLe_permits _ _ _ hl.1.1.1.1.1 h1, h2⟩
+    have subset : TargetResolution.meetIds l.targets p.ceilingAtPin.targets ⊆
+        TargetResolution.meetIds ctx.live.targets p.ceilingAtPin.targets := by
+      intro wire member
+      rw [TargetResolution.meet_requires_same_wire] at member ⊢
+      exact ⟨(of_decide_eq_true hl.1.1.1.1.1) member.1, member.2⟩
+    exact ⟨TargetResolution.scope_mono ctx.bindings _ _ subset t h1, h2⟩
   · have hn : admitStep ctx job out = .error .notAvailable := by
       simp [admitStep, hr, ha]
     exact ⟨hn, by simp [settleStep, hn]⟩
@@ -1065,14 +1079,15 @@ theorem pinless_effects_refused (ctx : StepContext) (job : Job) (e : Effects)
 /-- The host backstop for a dynamic origin, whatever the dynamic mode: a spawn
 outside `policy.dynamicTargets` is refused `.policyDenied` and never admitted. -/
 theorem dynamic_wider_target_refused (ctx : StepContext) (p : Pin) (job : Job) (s : Spawn)
-    (ho : p.origin = .dynamic) (ht : ¬ ctx.policy.dynamicTargets.permits s.target) :
+    (ho : p.origin = .dynamic)
+    (ht : ¬ (TargetResolution.scope ctx.bindings ctx.policy.dynamicTargets).permits s.target) :
     spawnRefusal ctx p job s = some .policyDenied ∧
       ∀ e job', s ∈ freshSpawns (stepRow ctx job (.effects e)) e.spawns →
         stepPin ctx job (.effects e) = some p →
         admitStep ctx job (.effects e) ≠ .ok job' := by
   refine ⟨?_, fun e job' hs hp h => ht (dynamic_origin_targets_within_dynamic_ceiling h hp ho hs)⟩
   have hn : ¬ (effectiveTargets ctx p).permits s.target := fun h =>
-    ht (((effectiveTargets_permits_iff ctx p s.target).mp h).2.2.2.2 ho)
+    ht (((effectiveTargets_permits_iff ctx p s.target).mp h).2.2.2 ho)
   simp [spawnRefusal, hn]
 
 /-- An admitted `effects` step leaves a live child, an unobserved terminal, a

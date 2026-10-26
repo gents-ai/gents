@@ -29,9 +29,13 @@ import {
   pendingRows,
   removeEdit,
   separatedBySettings,
+  steerEdit,
+  steerRun,
   type PendingRow,
   type QueueEdit,
+  type QueueSteer,
 } from "@source-inc/gents-desktop-client";
+import { Hint } from "./Hint";
 import { useComposerEdit } from "./session/composerEdit";
 import { AutomatedInput } from "./TranscriptInputs";
 
@@ -55,14 +59,20 @@ export function useSessionQueue() {
           await actions.editPendingQueue({ ...edit, nodeDid, sessionId });
         }
       : undefined;
-  return { pending, queue: pending?.pendingQueue ?? null, onEdit };
+  const onSteer =
+    sessionId && nodeDid
+      ? async (steer: QueueSteer) => {
+          await actions.steerPendingMessage({ ...steer, nodeDid, sessionId });
+        }
+      : undefined;
+  return { pending, queue: pending?.pendingQueue ?? null, onEdit, onSteer };
 }
 
 /** The selected session's tray, reading its own queue, with a message just
     sent behind a running turn shown from the moment it is sent, until the
     queue lists it. */
 export function SelectedPendingTray() {
-  const { pending, queue, onEdit } = useSessionQueue();
+  const { pending, queue, onEdit, onSteer } = useSessionQueue();
   const edit = useComposerEdit();
   const local = useView((view) => view.pendingTurn);
   const localQueued = useView(
@@ -88,6 +98,7 @@ export function SelectedPendingTray() {
       queued={queued}
       queue={queue}
       onEdit={onEdit}
+      onSteer={onSteer}
       editingDocId={edit?.editingDocId ?? null}
       onBeginEdit={edit?.begin}
     />
@@ -98,12 +109,14 @@ export function PendingTray({
   queued,
   queue = null,
   onEdit,
+  onSteer,
   editingDocId = null,
   onBeginEdit,
 }: {
   queued: readonly PendingTurnView[];
   queue?: readonly PendingQueueEntryView[] | null;
   onEdit?: (edit: QueueEdit) => Promise<void>;
+  onSteer?: (steer: QueueSteer) => Promise<void>;
   editingDocId?: string | null;
   onBeginEdit?: (entry: PendingQueueEntryView) => void;
 }) {
@@ -124,6 +137,19 @@ export function PendingTray({
     } catch {
       // The action owner reports the failure; the runtime retains the queue.
       return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  /* the messages steered leave the queue for the running turn, so they show
+     as picked up rather than as an edit */
+  const steer = async (entry: PendingQueueEntryView) => {
+    if (!onSteer || !queue || locked) return;
+    setBusy(true);
+    try {
+      await onSteer(steerEdit(queue, entry));
+    } catch {
+      // The action owner reports the failure; the runtime retains the queue.
     } finally {
       setBusy(false);
     }
@@ -234,6 +260,10 @@ export function PendingTray({
             ) : (
               <MessageRow
                 row={row}
+                behindQueued={Boolean(
+                  row.entry &&
+                  queue?.slice(0, row.index).some((before) => before.steerable),
+                )}
                 own={Boolean(entry)}
                 draggable={draggable}
                 editing={beingEdited}
@@ -242,6 +272,8 @@ export function PendingTray({
                     locked,
                     onEdit: onBeginEdit ? () => onBeginEdit(entry) : null,
                     onRemove: () => void apply(removeEdit(queue!, entry)),
+                    steer: onSteer ? steerRun(queue!, row.index) : null,
+                    onSteer: () => void steer(entry),
                     up: canMove(position, position - 1)
                       ? () => void move(position, position - 1)
                       : null,
@@ -344,12 +376,15 @@ const SLOW_DIM = "disabled:delay-300";
 
 function MessageRow({
   row,
+  behindQueued,
   own,
   draggable,
   editing,
   actions,
 }: {
   row: Extract<PendingRow, { kind: "message" }>;
+  /** the runtime delivers in order, so a steer waits behind a queued message */
+  behindQueued: boolean;
   own: boolean;
   draggable: boolean;
   editing: boolean;
@@ -357,6 +392,9 @@ function MessageRow({
     locked: boolean;
     onEdit: (() => void) | null;
     onRemove: () => void;
+    /** the messages a steer sends, this one last; null when it can't */
+    steer: readonly PendingQueueEntryView[] | null;
+    onSteer: () => void;
     up: (() => void) | null;
     down: (() => void) | null;
     separated: boolean;
@@ -384,7 +422,13 @@ function MessageRow({
       )}
       <span
         className={cn("min-w-0 flex-1 truncate", editing && "text-muted-foreground")}
-        title="Applies at the next safe step"
+        title={
+          row.entry?.steerable
+            ? "Sends after the running turn finishes"
+            : behindQueued
+              ? "Waits for the queued message before it"
+              : "Steers in at the next step"
+        }
       >
         {row.turn.content}
         {row.turn.attachments?.length
@@ -396,6 +440,19 @@ function MessageRow({
       ) : (
         actions && (
           <span className="flex shrink-0 items-center">
+            {actions.steer && (
+              <Hint label={steerLabel(actions.steer.length)}>
+                <Button
+                  size="xs"
+                  variant="quiet"
+                  className={cn("px-2", SLOW_DIM)}
+                  disabled={actions.locked}
+                  onClick={actions.onSteer}
+                >
+                  Steer
+                </Button>
+              </Hint>
+            )}
             {actions.onEdit && (
               <Button
                 size="icon-xs"
@@ -462,3 +519,11 @@ function MessageRow({
     </div>
   );
 }
+
+const steerLabel = (sent: number) =>
+  "Send into the running turn at the next safe point" +
+  (sent > 2
+    ? `, with the ${sent - 1} messages before it`
+    : sent === 2
+      ? ", with the message before it"
+      : "");
