@@ -125,7 +125,7 @@ pub(super) async fn run(
             {
                 Ok(report) => Some(report),
                 Err(e) => {
-                    let message = format!("loading report: {}", ErrorChain(e.as_ref()));
+                    let message = format!("loading report: {}", ErrorChain(&e));
                     error = Some(error.map_or(message.clone(), |e| format!("{e}; {message}")));
                     None
                 }

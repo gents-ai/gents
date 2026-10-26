@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use gents_protocol::error_chain::find_source;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
-use crate::config_client::ConfigAccess;
+use crate::config_client::{
+    ConfigAccess, ConfigClientError, DesiredStateError, TransactionFailure,
+};
 use crate::document_config::{EvalSplit, EvalTier};
 use crate::graphql::escape_graphql_string;
 
@@ -22,6 +22,55 @@ pub enum EvalError {
     ProviderDown(#[from] super::runner::ProviderDown),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error("decoding {kind} {id:?}")]
+    DecodeDocument {
+        kind: String,
+        id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("create_{name}")]
+    CreateRecord {
+        name: &'static str,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("eval trial completion is write-once and is already set")]
+    AlreadyCompleted,
+    #[error("eval run invalidation is write-once and is already set")]
+    AlreadyInvalidated,
+    #[error("eval verdict feedback is only permitted on the train split")]
+    FeedbackOffTrain,
+    #[error("no eval run {run_id:?}")]
+    MissingRun { run_id: String },
+    #[error("no eval trial {trial_id:?}")]
+    MissingTrial { trial_id: String },
+    #[error("{field}")]
+    MissingField { field: &'static str },
+    #[error("unknown outcome_kind")]
+    UnknownOutcomeKind,
+    #[error("unknown provider_reason {value:?}")]
+    UnknownProviderReason { value: String },
+    #[error("decoding run origin")]
+    DecodeOrigin(#[source] serde_json::Error),
+    #[error("decoding invalidation")]
+    DecodeInvalidation(#[source] serde_json::Error),
+    #[error("decoding trial completion")]
+    DecodeCompletion(#[source] serde_json::Error),
+    #[error("decoding verdict tier")]
+    DecodeTier(#[source] serde_json::Error),
+    #[error("eval verdict {verdict_id:?} scored {score_bp} basis points, above the maximum {max}")]
+    ScoreAboveMaximum {
+        verdict_id: String,
+        score_bp: u32,
+        max: u32,
+    },
     #[error("{} has no parent directory", path.display())]
     NoParentDirectory { path: PathBuf },
     #[error("{} has no cell directory", path.display())]
@@ -299,45 +348,38 @@ pub struct VerdictDraft {
 
 pub type VerdictRecord = VerdictDraft;
 
-#[derive(Debug)]
-pub struct AlreadyCompleted;
-impl std::fmt::Display for AlreadyCompleted {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("eval trial completion is write-once and is already set")
+impl TransactionFailure for EvalError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            _ => None,
+        }
     }
 }
-impl std::error::Error for AlreadyCompleted {}
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
+
+/// Every eval error in a chain, outermost first, so a sentinel nested under a
+/// wrapper variant (for example a rejected write) still matches.
+fn eval_error_in<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> impl Iterator<Item = &'a EvalError> {
+    std::iter::successors(Some(error), |cause| cause.source())
+        .filter_map(|cause| cause.downcast_ref::<EvalError>())
+}
 
 pub fn already_completed(error: &(dyn std::error::Error + 'static)) -> bool {
-    find_source::<AlreadyCompleted>(error).is_some()
+    eval_error_in(error).any(|error| matches!(error, EvalError::AlreadyCompleted))
 }
-
-#[derive(Debug)]
-pub struct AlreadyInvalidated;
-impl std::fmt::Display for AlreadyInvalidated {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("eval run invalidation is write-once and is already set")
-    }
-}
-impl std::error::Error for AlreadyInvalidated {}
 
 pub fn already_invalidated<'a>(
     error: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a AlreadyInvalidated> {
-    find_source::<AlreadyInvalidated>(error)
+) -> Option<&'a EvalError> {
+    eval_error_in(error).find(|error| matches!(error, EvalError::AlreadyInvalidated))
 }
-
-#[derive(Debug)]
-pub struct FeedbackOffTrain;
-impl std::fmt::Display for FeedbackOffTrain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("eval verdict feedback is only permitted on the train split")
-    }
-}
-impl std::error::Error for FeedbackOffTrain {}
 
 pub fn feedback_off_train(error: &(dyn std::error::Error + 'static)) -> bool {
-    find_source::<FeedbackOffTrain>(error).is_some()
+    eval_error_in(error).any(|error| matches!(error, EvalError::FeedbackOffTrain))
 }
 
 fn now() -> String {
@@ -364,7 +406,7 @@ async fn create(
             })
         })
         .await
-        .with_context(|| format!("create_{name}"))
+        .map_err(|source| EvalError::CreateRecord { name, source })
 }
 
 async fn rows(
@@ -437,22 +479,35 @@ pub async fn load_run(
         .first()
         .map(|row| {
             Ok(RunRecord {
-                run_id: row["run_id"].as_str().context("run_id")?.into(),
+                run_id: row["run_id"]
+                    .as_str()
+                    .ok_or(EvalError::MissingField { field: "run_id" })?
+                    .into(),
                 owner: row["owner_node_did"]
                     .as_str()
-                    .context("owner_node_did")?
+                    .ok_or(EvalError::MissingField {
+                        field: "owner_node_did",
+                    })?
                     .into(),
                 evaluator_did: row["evaluator_did"]
                     .as_str()
-                    .context("evaluator_did")?
+                    .ok_or(EvalError::MissingField {
+                        field: "evaluator_did",
+                    })?
                     .into(),
                 origin: serde_json::from_value(row["origin"].clone())
-                    .context("decoding run origin")?,
-                created_at: row["created_at"].as_str().context("created_at")?.into(),
+                    .map_err(EvalError::DecodeOrigin)?,
+                created_at: row["created_at"]
+                    .as_str()
+                    .ok_or(EvalError::MissingField {
+                        field: "created_at",
+                    })?
+                    .into(),
                 invalidated: match &row["invalidated"] {
                     Value::Null => None,
                     value => Some(
-                        serde_json::from_value(value.clone()).context("decoding invalidation")?,
+                        serde_json::from_value(value.clone())
+                            .map_err(EvalError::DecodeInvalidation)?,
                     ),
                 },
             })
@@ -490,9 +545,11 @@ pub async fn invalidate_run(
                 let row = current["data"]["EvalRun"]
                     .as_array()
                     .and_then(|rows| rows.first())
-                    .with_context(|| format!("no eval run {run_id:?}"))?;
+                    .ok_or_else(|| EvalError::MissingRun {
+                        run_id: run_id.clone(),
+                    })?;
                 if !row["invalidated"].is_null() {
-                    return Err(anyhow::Error::new(AlreadyInvalidated));
+                    return Err(EvalError::AlreadyInvalidated);
                 }
                 txn.execute_with_variables(
                     &format!(
@@ -564,9 +621,11 @@ pub async fn complete_trial(
                 let row = current["data"]["EvalTrial"]
                     .as_array()
                     .and_then(|rows| rows.first())
-                    .with_context(|| format!("no eval trial {trial_id:?}"))?;
+                    .ok_or_else(|| EvalError::MissingTrial {
+                        trial_id: trial_id.clone(),
+                    })?;
                 if !row["completion"].is_null() {
-                    return Err(anyhow::Error::new(AlreadyCompleted));
+                    return Err(EvalError::AlreadyCompleted);
                 }
                 txn.execute_with_variables(
                     &format!(
@@ -620,7 +679,7 @@ pub async fn load_trials(
                     Value::Null => None,
                     value => Some(
                         serde_json::from_value(value.clone())
-                            .context("decoding trial completion")?,
+                            .map_err(EvalError::DecodeCompletion)?,
                     ),
                 },
             })
@@ -637,15 +696,16 @@ pub async fn append_verdict(
     draft: &VerdictDraft,
 ) -> Result<()> {
     if draft.feedback.is_some() && split != EvalSplit::Train {
-        return Err(anyhow::Error::new(FeedbackOffTrain));
+        return Err(EvalError::FeedbackOffTrain);
     }
     if let Some(bp) = draft.score_bp {
-        anyhow::ensure!(
-            bp <= super::scoring::SCORE_BP_MAX,
-            "eval verdict {verdict_id:?} scored {bp} basis points, above the maximum {max}",
-            verdict_id = draft.verdict_id,
-            max = super::scoring::SCORE_BP_MAX,
-        );
+        if bp > super::scoring::SCORE_BP_MAX {
+            return Err(EvalError::ScoreAboveMaximum {
+                verdict_id: draft.verdict_id.clone(),
+                score_bp: bp,
+                max: super::scoring::SCORE_BP_MAX,
+            });
+        }
     }
     let score_bp = match classify(draft.kind, draft.provider_reason) {
         EvidenceClass::NotEvidence | EvidenceClass::Unknown => None,
@@ -704,14 +764,17 @@ pub async fn load_verdicts(
                 stage_id: text("stage_id"),
                 check: text("check"),
                 check_version: text("check_version"),
-                tier: serde_json::from_value(row["tier"].clone())
-                    .context("decoding verdict tier")?,
-                kind: OutcomeKind::parse(&text("outcome_kind")).context("unknown outcome_kind")?,
+                tier: serde_json::from_value(row["tier"].clone()).map_err(EvalError::DecodeTier)?,
+                kind: OutcomeKind::parse(&text("outcome_kind"))
+                    .ok_or(EvalError::UnknownOutcomeKind)?,
                 provider_reason: row["provider_reason"]
                     .as_str()
                     .map(|value| {
-                        ProviderReason::parse(value)
-                            .with_context(|| format!("unknown provider_reason {value:?}"))
+                        ProviderReason::parse(value).ok_or_else(|| {
+                            EvalError::UnknownProviderReason {
+                                value: value.to_owned(),
+                            }
+                        })
                     })
                     .transpose()?,
                 score_bp: row["score_bp"].as_u64().map(|bp| bp as u32),
@@ -889,9 +952,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            already_invalidated(error.as_ref()).is_some(),
+            already_invalidated(&error).is_some(),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let again = load_run(&access, OWNER, "run-1").await.unwrap().unwrap();
         assert_eq!(
@@ -927,11 +990,7 @@ mod tests {
         let error = complete_trial(&access, OWNER, "trial-1", &rival_completion())
             .await
             .unwrap_err();
-        assert!(
-            already_completed(error.as_ref()),
-            "{}",
-            ErrorChain(error.as_ref())
-        );
+        assert!(already_completed(&error), "{}", ErrorChain(&error));
         let after = load_trials(&access, OWNER, "run-2").await.unwrap();
         let stored = after[0].completion.as_ref().expect("the trial completed");
         assert_eq!(stored.usage.output_tokens, None, "missing usage stays null");
@@ -1034,11 +1093,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(
-            feedback_off_train(error.as_ref()),
-            "{}",
-            ErrorChain(error.as_ref())
-        );
+        assert!(feedback_off_train(&error), "{}", ErrorChain(&error));
         append_verdict(
             &access,
             OWNER,
@@ -1089,9 +1144,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("10001"),
+            format!("{}", ErrorChain(&error)).contains("10001"),
             "the error names the offending score: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(
             load_verdicts(&access, OWNER, "r3")
@@ -1133,7 +1188,7 @@ mod tests {
         .await
         .unwrap();
         let error = load_verdicts(&access, OWNER, "r4").await.unwrap_err();
-        let rendered = format!("{}", ErrorChain(error.as_ref()));
+        let rendered = format!("{}", ErrorChain(&error));
         assert!(
             rendered.contains("unknown provider_reason") && rendered.contains("bogus"),
             "{rendered}"

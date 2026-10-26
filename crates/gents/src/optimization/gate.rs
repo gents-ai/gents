@@ -117,11 +117,8 @@ pub fn text_gate(
 }
 
 fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), StructuralRejection> {
-    let invalid = |error: anyhow::Error| {
-        reject(
-            "template_invalid",
-            format!("{}", ErrorChain(error.as_ref())),
-        )
+    let invalid = |error: &(dyn std::error::Error + 'static)| {
+        reject("template_invalid", format!("{}", ErrorChain(error)))
     };
     let mut config = baseline.config.clone();
     let task = config
@@ -135,23 +132,22 @@ fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), Struc
             )
         })?;
     task.prompt_template = text.to_owned();
-    task.validate().map_err(|error| invalid(error.into()))?;
-    let plan =
-        DesiredStateApplyPlan::from_pack_config(&config).map_err(|error| invalid(error.into()))?;
+    task.validate().map_err(|error| invalid(&error))?;
+    let plan = DesiredStateApplyPlan::from_pack_config(&config).map_err(|error| invalid(&error))?;
     let references = ConfigReferences::from_documents(
         &config.node.node_did,
         plan.documents()
             .iter()
             .map(|document| (document.collection, document.add.clone())),
     )
-    .map_err(|error| invalid(error.into()))?;
+    .map_err(|error| invalid(&error))?;
     plan.documents()
         .iter()
         .filter(|document| document.collection == Collection::Trigger)
         .try_for_each(|document| {
             references
                 .validate_document(Collection::Trigger, &document.add)
-                .map_err(|error| invalid(error.into()))
+                .map_err(|error| invalid(&error))
         })
 }
 

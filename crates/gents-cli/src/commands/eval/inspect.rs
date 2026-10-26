@@ -71,9 +71,9 @@ pub(super) async fn list(
                         .collect(),
                     None,
                 ),
-                Err(error) => match report_refused(error.as_ref()) {
+                Err(error) => match report_refused(&error) {
                     Some(refusal) => (Vec::new(), Some(refusal.to_string())),
-                    None => return Err(error),
+                    None => return Err(error.into()),
                 },
             };
         let (size_bytes, size_error) = run_size(ctx, &record.run_id);

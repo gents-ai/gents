@@ -1,14 +1,15 @@
 use std::path::Path;
 
-use anyhow::Result;
-
 use crate::config_client::ConfigAccess;
 use crate::document_config::EvalSplit;
+use crate::eval::documents::EvalError;
 use crate::eval::report::{load_report, EvalReport};
 use crate::eval::{
     append_verdict, complete_trial, create_trial, load_trials, TrialCompletion, TrialIdentity,
     TrialRecord, VerdictDraft,
 };
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
 
 #[async_trait::async_trait]
 pub trait Recorder: Send + Sync {

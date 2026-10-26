@@ -4,16 +4,15 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
-
-use crate::eval::documents::EvalError;
-
 use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalCase, EvalDefinition};
+use crate::eval::documents::EvalError;
 use crate::eval::{
     case_trial_score, latest_verdicts, load_run, load_trials, load_verdicts, pair_trials,
     PairedEvidence, TrialRecord, TrialScore, TrialUsage, VerdictRecord, VerdictView,
 };
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
 
 /// Everything one run wrote, read once.
 #[derive(Clone, Debug, PartialEq)]

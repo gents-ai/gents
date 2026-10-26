@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use anyhow::Result;
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError};
 use crate::defra_node::EmbeddedNode;
 use crate::eval::runner::embedded::executor::{documents_capture_query, usage_of};
 use crate::eval::runner::embedded::observe::request_evidence_from_query_data;
@@ -13,6 +12,8 @@ use crate::eval::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
 use crate::graphql::graphql_with_transaction_retry;
 use crate::Collection;
 use gents_protocol::error_chain::ErrorChain;
+
+type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
 const CONFIGURATION: [Collection; 11] = [
     Collection::Agent,
@@ -103,7 +104,7 @@ impl<'a> LiveObserver<'a> {
 }
 
 async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSet<String>> {
-    Ok(ConfigAccess::local(node.clone()).collection_names().await?)
+    ConfigAccess::local(node.clone()).collection_names().await
 }
 
 async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {

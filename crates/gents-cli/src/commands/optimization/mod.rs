@@ -122,9 +122,9 @@ pub(crate) async fn execute(
 }
 
 fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
-    let verbatim = job_refused(&error)
+    let verbatim = job_refused(error.as_ref())
         .map(ToString::to_string)
-        .or_else(|| promote_refused(&error).map(ToString::to_string));
+        .or_else(|| promote_refused(error.as_ref()).map(ToString::to_string));
     match verbatim {
         Some(text) => anyhow::anyhow!(text),
         None => crate::commands::eval::surface_refusal(error),

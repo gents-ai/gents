@@ -576,7 +576,7 @@ async fn execute_trial(
     };
     if let Err(error) = recorder.create_trial(owner, &identity).await {
         executor.discard(&spec.trial_id).await;
-        return Err(error);
+        return Err(error.into());
     }
     progress.slot_started(
         &planned.trial_id,
@@ -689,7 +689,7 @@ impl ViewWriter {
             Err(error) => {
                 tracing::debug!(
                     run_id,
-                    error = %ErrorChain(error.as_ref()),
+                    error = %ErrorChain(&error),
                     "eval run report was not derived for watchers"
                 );
                 return;
@@ -933,7 +933,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    use anyhow::anyhow;
     use serde_json::{json, Value};
 
     use super::*;
@@ -1396,7 +1395,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Recorder for GatingRecorder<'_> {
-        async fn create_trial(&self, owner: &str, identity: &TrialIdentity) -> Result<()> {
+        async fn create_trial(
+            &self,
+            owner: &str,
+            identity: &TrialIdentity,
+        ) -> Result<(), EvalError> {
             self.inner.create_trial(owner, identity).await
         }
 
@@ -1405,7 +1408,7 @@ mod tests {
             owner: &str,
             split: EvalSplit,
             draft: &VerdictDraft,
-        ) -> Result<()> {
+        ) -> Result<(), EvalError> {
             self.inner.append_verdict(owner, split, draft).await
         }
 
@@ -1414,7 +1417,7 @@ mod tests {
             owner: &str,
             trial_id: &str,
             completion: &TrialCompletion,
-        ) -> Result<()> {
+        ) -> Result<(), EvalError> {
             self.inner
                 .complete_trial(owner, trial_id, completion)
                 .await?;
@@ -1426,7 +1429,11 @@ mod tests {
             Ok(())
         }
 
-        async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>> {
+        async fn load_trials(
+            &self,
+            owner: &str,
+            run_id: &str,
+        ) -> Result<Vec<TrialRecord>, EvalError> {
             self.inner.load_trials(owner, run_id).await
         }
     }
@@ -1524,12 +1531,14 @@ mod tests {
             self
         }
 
-        fn enter(&self, method: &'static str, subject: &str) -> Result<()> {
+        fn enter(&self, method: &'static str, subject: &str) -> Result<(), EvalError> {
             let mut calls = self.calls.lock().expect("the recorder call log");
             calls.push((method, subject.to_owned()));
             let nth = calls.iter().filter(|(name, _)| *name == method).count() as u32;
             match self.fail_on {
-                Some((failing, at)) if failing == method && at == nth => Err(anyhow!("injected")),
+                Some((failing, at)) if failing == method && at == nth => {
+                    Err(std::io::Error::other("injected").into())
+                }
                 _ => Ok(()),
             }
         }
@@ -1541,7 +1550,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Recorder for FaultingRecorder<'_> {
-        async fn create_trial(&self, owner: &str, identity: &TrialIdentity) -> Result<()> {
+        async fn create_trial(
+            &self,
+            owner: &str,
+            identity: &TrialIdentity,
+        ) -> Result<(), EvalError> {
             self.enter("create_trial", &identity.trial_id)?;
             self.inner.create_trial(owner, identity).await
         }
@@ -1551,7 +1564,7 @@ mod tests {
             owner: &str,
             split: EvalSplit,
             draft: &VerdictDraft,
-        ) -> Result<()> {
+        ) -> Result<(), EvalError> {
             self.enter("append_verdict", &draft.trial_id)?;
             self.inner.append_verdict(owner, split, draft).await
         }
@@ -1561,12 +1574,16 @@ mod tests {
             owner: &str,
             trial_id: &str,
             completion: &TrialCompletion,
-        ) -> Result<()> {
+        ) -> Result<(), EvalError> {
             self.enter("complete_trial", trial_id)?;
             self.inner.complete_trial(owner, trial_id, completion).await
         }
 
-        async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>> {
+        async fn load_trials(
+            &self,
+            owner: &str,
+            run_id: &str,
+        ) -> Result<Vec<TrialRecord>, EvalError> {
             self.enter("load_trials", run_id)?;
             self.inner.load_trials(owner, run_id).await
         }
@@ -2403,7 +2420,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Recorder for MarkAfterComplete<'_> {
-        async fn create_trial(&self, owner: &str, identity: &TrialIdentity) -> Result<()> {
+        async fn create_trial(
+            &self,
+            owner: &str,
+            identity: &TrialIdentity,
+        ) -> Result<(), EvalError> {
             self.inner.create_trial(owner, identity).await
         }
 
@@ -2412,7 +2433,7 @@ mod tests {
             owner: &str,
             split: EvalSplit,
             draft: &VerdictDraft,
-        ) -> Result<()> {
+        ) -> Result<(), EvalError> {
             self.inner.append_verdict(owner, split, draft).await
         }
 
@@ -2421,7 +2442,7 @@ mod tests {
             owner: &str,
             trial_id: &str,
             completion: &TrialCompletion,
-        ) -> Result<()> {
+        ) -> Result<(), EvalError> {
             self.inner
                 .complete_trial(owner, trial_id, completion)
                 .await?;
@@ -2429,7 +2450,11 @@ mod tests {
             Ok(())
         }
 
-        async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>> {
+        async fn load_trials(
+            &self,
+            owner: &str,
+            run_id: &str,
+        ) -> Result<Vec<TrialRecord>, EvalError> {
             self.inner.load_trials(owner, run_id).await
         }
     }

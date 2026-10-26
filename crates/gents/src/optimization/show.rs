@@ -39,11 +39,11 @@ pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<Jo
     let origin = &job.origin;
     let definition = match load_definition(access, owner, &origin.definition.definition_id).await {
         Ok(definition) => Some(definition),
-        Err(error) if freeze_refused(error.as_ref()).is_some() => {
-            tracing::info!(job_id, error = %ErrorChain(error.as_ref()), "optimization job's definition is gone or invalid; decisions are not recomputed");
+        Err(error) if freeze_refused(&error).is_some() => {
+            tracing::info!(job_id, error = %ErrorChain(&error), "optimization job's definition is gone or invalid; decisions are not recomputed");
             None
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     let definition_changed = match &definition {
         Some(definition) => definition_ref(definition)? != origin.definition,

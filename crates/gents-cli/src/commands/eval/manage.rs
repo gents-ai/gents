@@ -222,12 +222,7 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
         let trials = match load_trials(&ctx.access, &ctx.owner, &record.run_id).await {
             Ok(trials) => trials,
             Err(error) => {
-                writeln!(
-                    out,
-                    "kept {}: {}",
-                    ErrorChain(error.as_ref()),
-                    record.run_id
-                )?;
+                writeln!(out, "kept {}: {}", ErrorChain(&error), record.run_id)?;
                 continue;
             }
         };

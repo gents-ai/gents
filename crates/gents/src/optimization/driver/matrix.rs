@@ -723,7 +723,7 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
         )
         .await
         .unwrap_err();
-        let reason = &super::job_refused(&error)
+        let reason = &super::job_refused(error.as_ref())
             .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())))
             .0;
         assert!(reason.contains("task target \"plan\""), "{reason}");
@@ -951,7 +951,7 @@ async fn a_resume_with_another_capture_list_is_refused() {
     let mut changed = request.clone();
     changed.captures.clear();
     let error = settle_err(&harness, &changed).await;
-    let refusal = crate::optimization::driver::job_refused(&error)
+    let refusal = crate::optimization::driver::job_refused(error.as_ref())
         .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
     assert!(refusal.0.contains("captures"), "{}", refusal.0);
     assert_eq!(journal(&harness, &request.job_id).await, before);
@@ -961,7 +961,7 @@ async fn a_resume_with_another_capture_list_is_refused() {
 async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
     let harness = Harness::new().await;
     let refusal = |error: anyhow::Error| {
-        crate::optimization::driver::job_refused(&error)
+        crate::optimization::driver::job_refused(error.as_ref())
             .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())))
             .0
             .clone()
@@ -1788,9 +1788,9 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
         .await
         .unwrap_err();
     assert!(
-        crate::eval::runner::freeze_refused(error.as_ref()).is_some(),
+        crate::eval::runner::freeze_refused(&error).is_some(),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     let outcome = settle(
         &harness,

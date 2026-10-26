@@ -216,7 +216,7 @@ where
         match observer.snapshot().await {
             Ok(snapshot) => spec.progress.live(snapshot),
             Err(error) => tracing::debug!(
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 trial_id = %spec.trial_id,
                 "eval trial live snapshot was not read"
             ),

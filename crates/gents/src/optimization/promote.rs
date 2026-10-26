@@ -36,8 +36,10 @@ impl std::fmt::Display for PromoteRefused {
 
 impl std::error::Error for PromoteRefused {}
 
-pub fn promote_refused(error: &anyhow::Error) -> Option<&PromoteRefused> {
-    error.downcast_ref::<PromoteRefused>()
+pub fn promote_refused<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a PromoteRefused> {
+    gents_protocol::error_chain::find_source::<PromoteRefused>(error)
 }
 
 fn refused(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
@@ -58,11 +60,11 @@ impl std::fmt::Display for ClosureDrift {
 
 impl std::error::Error for ClosureDrift {}
 
-fn drift_of(error: &anyhow::Error) -> Option<Vec<DriftedRef>> {
-    if let Some(drift) = error.downcast_ref::<ClosureDrift>() {
+fn drift_of(error: &(dyn std::error::Error + 'static)) -> Option<Vec<DriftedRef>> {
+    if let Some(drift) = gents_protocol::error_chain::find_source::<ClosureDrift>(error) {
         return Some(drift.0.clone());
     }
-    stale_expectation(error.as_ref()).map(|stale| {
+    stale_expectation(error).map(|stale| {
         stale
             .drifted
             .iter()
@@ -253,7 +255,7 @@ pub async fn promote(
             Ok(promotion)
         }
         Err(error) => {
-            let Some(drifted) = drift_of(&error) else {
+            let Some(drifted) = drift_of(error.as_ref()) else {
                 return Err(error);
             };
             let entry = JournalEntry::PromotionRefused {
@@ -607,8 +609,8 @@ mod tests {
         let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        let refusal =
-            promote_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
+        let refusal = promote_refused(error.as_ref())
+            .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(refusal.reason, "stale_closure");
         assert!(
             refusal.detail.contains("AgentContext"),
@@ -671,7 +673,7 @@ mod tests {
         let again = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        assert_eq!(promote_refused(&again).unwrap().reason, "not_ready");
+        assert_eq!(promote_refused(again.as_ref()).unwrap().reason, "not_ready");
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some(BASELINE_PROMPT)
@@ -696,7 +698,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(promote_refused(&error).unwrap().reason, "target_moved");
+        assert_eq!(
+            promote_refused(error.as_ref()).unwrap().reason,
+            "target_moved"
+        );
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some("An operator wrote this by hand.\n")
@@ -724,8 +729,8 @@ mod tests {
         let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        let refusal =
-            promote_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
+        let refusal = promote_refused(error.as_ref())
+            .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(refusal.reason, "stale_closure");
         assert!(refusal.detail.contains("Agent"), "{}", refusal.detail);
         assert_eq!(
@@ -765,8 +770,8 @@ mod tests {
         .expect("the promotion and the edit finished");
 
         let error = result.unwrap_err();
-        let refusal =
-            promote_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
+        let refusal = promote_refused(error.as_ref())
+            .unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert_eq!(refusal.reason, "stale_closure");
         assert!(refusal.detail.contains("Tools"), "{}", refusal.detail);
         assert_eq!(
@@ -804,7 +809,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(promote_refused(&foreign).unwrap().reason, "foreign_did");
+        assert_eq!(
+            promote_refused(foreign.as_ref()).unwrap().reason,
+            "foreign_did"
+        );
 
         let wrong = promote(
             harness.access(),
@@ -815,7 +823,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(promote_refused(&wrong).unwrap().reason, "wrong_digest");
+        assert_eq!(
+            promote_refused(wrong.as_ref()).unwrap().reason,
+            "wrong_digest"
+        );
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some(BASELINE_PROMPT),
@@ -836,7 +847,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(promote_refused(&error).unwrap().reason, "not_ready");
+        assert_eq!(promote_refused(error.as_ref()).unwrap().reason, "not_ready");
     }
 
     #[tokio::test]
@@ -847,7 +858,10 @@ mod tests {
         let unknown = promote(harness.access(), OWNER, "no-such-job", &digest, OWNER)
             .await
             .unwrap_err();
-        assert_eq!(promote_refused(&unknown).unwrap().reason, "unknown_job");
+        assert_eq!(
+            promote_refused(unknown.as_ref()).unwrap().reason,
+            "unknown_job"
+        );
 
         let job = load_job(harness.access(), OWNER, &request.job_id)
             .await
@@ -863,7 +877,10 @@ mod tests {
         let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        assert_eq!(promote_refused(&error).unwrap().reason, "rebuild_mismatch");
+        assert_eq!(
+            promote_refused(error.as_ref()).unwrap().reason,
+            "rebuild_mismatch"
+        );
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some(BASELINE_PROMPT)

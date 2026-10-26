@@ -224,7 +224,7 @@ async fn report_landed(
     let trials = match load_trials(&ctx.access, &ctx.owner, run_id).await {
         Ok(trials) => trials,
         Err(error) => {
-            tracing::warn!(run_id, error = %format!("{}", ErrorChain(error.as_ref())), "could not read the run's trials for progress");
+            tracing::warn!(run_id, error = %ErrorChain(&error), "could not read the run's trials for progress");
             return;
         }
     };

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::config_client::{
@@ -23,6 +23,8 @@ use crate::pack::{declared_paths, digest_declared_assets, PackInstallOptions, Pa
 use crate::tool_surface::BashMode;
 use crate::Collection;
 use gents_protocol::error_chain::ErrorChain;
+
+type Result<T, E = EvalError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug)]
 pub enum CellSource {
@@ -117,7 +119,7 @@ pub async fn freeze(
     access: &ConfigAccess,
     request: &RunRequest,
     isolation: Isolation,
-) -> Result<FrozenRun> {
+) -> anyhow::Result<FrozenRun> {
     validate_purpose(&request.purpose)?;
     validate_evaluator(&request.evaluator_did)?;
     validate_cell_identity(request)?;
@@ -208,7 +210,7 @@ pub(crate) async fn thaw(
         .await?
         .ok_or_else(|| refused(format!("no eval run {run_id:?} for {owner}")))?;
     if record.invalidated.is_some() {
-        return Err(refused(format!("run {run_id} is invalidated")).into());
+        return Err(refused(format!("run {run_id} is invalidated")));
     }
     let run_dir = runs_dir.join(run_id);
     let sidecar = read_sidecar(&run_dir)?.ok_or_else(|| {
@@ -233,8 +235,7 @@ pub(crate) async fn thaw(
             if definition_ref(&definition)?.digest != record.origin.definition.digest {
                 return Err(refused(format!(
                     "eval definition {definition_id:?} changed since run {run_id} froze it"
-                ))
-                .into());
+                )));
             }
             definition
         }
@@ -254,8 +255,7 @@ pub(crate) async fn thaw(
             return Err(refused(format!(
                 "cell {:?} materialized pack no longer digests to what run {run_id} froze",
                 spec.cell_id
-            ))
-            .into());
+            )));
         }
         let inference =
             inference_binding(access, owner, &spec.cell_id, &spec.inference_profile_id).await?;
@@ -375,8 +375,11 @@ where
         .await?;
     found
         .map(|(_, value)| {
-            serde_json::from_value(value)
-                .with_context(|| format!("decoding {} {id:?}", collection.graphql_type()))
+            serde_json::from_value(value).map_err(|source| EvalError::DecodeDocument {
+                kind: collection.graphql_type().to_owned(),
+                id: id.to_owned(),
+                source,
+            })
         })
         .transpose()
 }
@@ -461,7 +464,7 @@ pub(crate) struct LoadedPack {
     pub(crate) files: BTreeMap<String, Vec<u8>>,
 }
 
-pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> {
+pub(crate) fn load_pack(source: &CellSource, owner: &str) -> anyhow::Result<LoadedPack> {
     let options = PackInstallOptions {
         node_did: owner.to_owned(),
     };
@@ -490,7 +493,7 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
             let bytes = asset(&path)?.clone();
             Ok((path, bytes))
         })
-        .collect::<Result<BTreeMap<_, _>>>()?;
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
     Ok(LoadedPack {
         digest,
         config,
@@ -544,7 +547,7 @@ async fn validate_cell(
     cell: &CellRequest,
     isolation: Isolation,
     run_dir: &Path,
-) -> Result<(FrozenCell, LoadedPack)> {
+) -> anyhow::Result<(FrozenCell, LoadedPack)> {
     let pack = load_pack(&cell.source, &request.owner).map_err(|error| {
         refused(format!(
             "cell {:?} pack: {}",
@@ -677,8 +680,7 @@ async fn inference_binding(
             "backend {:?} authenticates with node_oauth; an eval run must not \
              spend the launching principal's subscription credential",
             backend.backend_id
-        ))
-        .into());
+        )));
     }
 
     Ok(InferenceBinding {
@@ -844,7 +846,7 @@ pub fn read_frozen_definition(
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(EvalError::ReadPath { path, source }.into()),
+        Err(source) => return Err(EvalError::ReadPath { path, source }),
     };
     let definition: EvalDefinition =
         serde_json::from_slice(&bytes).map_err(|source| EvalError::ParsePath {
@@ -856,8 +858,7 @@ pub fn read_frozen_definition(
             "{} no longer digests to the definition its run froze ({})",
             path.display(),
             frozen.digest
-        ))
-        .into());
+        )));
     }
     Ok(Some(definition))
 }
@@ -971,7 +972,7 @@ pub(crate) mod tests {
                         let (doc_id, _) =
                             read_desired_state_record_in_txn(txn, collection, OWNER, id)
                                 .await?
-                                .context("document to delete")?;
+                                .ok_or_else(|| anyhow::anyhow!("document to delete"))?;
                         txn.execute(&format!(
                             r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#,
                             name = collection.graphql_type(),
@@ -1171,14 +1172,9 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    fn refusal(error: &anyhow::Error) -> String {
-        freeze_refused(error.as_ref())
-            .unwrap_or_else(|| {
-                panic!(
-                    "expected a FreezeRefused, got {}",
-                    ErrorChain(error.as_ref())
-                )
-            })
+    fn refusal(error: &(dyn std::error::Error + 'static)) -> String {
+        freeze_refused(error)
+            .unwrap_or_else(|| panic!("expected a FreezeRefused, got {}", ErrorChain(error)))
             .0
             .clone()
     }
@@ -1264,7 +1260,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                refusal(&error).contains("evaluator DID"),
+                refusal(error.as_ref()).contains("evaluator DID"),
                 "{}",
                 ErrorChain(error.as_ref())
             );
@@ -1281,7 +1277,7 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &duplicate, Isolation::Embedded)
             .await
             .unwrap_err();
-        let reason = refusal(&error);
+        let reason = refusal(error.as_ref());
         assert!(
             reason.contains("baseline") && reason.contains("twice"),
             "{reason}"
@@ -1293,7 +1289,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("no cell"),
+            refusal(error.as_ref()).contains("no cell"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1304,7 +1300,7 @@ pub(crate) mod tests {
             let error = freeze(&launching.access, &unsafe_id, Isolation::Embedded)
                 .await
                 .unwrap_err();
-            let reason = refusal(&error);
+            let reason = refusal(error.as_ref());
             assert!(
                 reason.contains("cell_id") && reason.contains("path component"),
                 "{escaping:?}: {reason}"
@@ -1317,7 +1313,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("run_id"),
+            refusal(error.as_ref()).contains("run_id"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1362,7 +1358,7 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &overflowing, Isolation::Embedded)
             .await
             .unwrap_err();
-        let reason = refusal(&error);
+        let reason = refusal(error.as_ref());
         assert!(
             reason.contains("seed_base") && reason.contains("trials_per_case"),
             "{reason}"
@@ -1396,7 +1392,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("different origin"),
+            refusal(error.as_ref()).contains("different origin"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1413,7 +1409,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("nope"),
+            refusal(error.as_ref()).contains("nope"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1423,7 +1419,7 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &off_split, Isolation::Embedded)
             .await
             .unwrap_err();
-        let reason = refusal(&error);
+        let reason = refusal(error.as_ref());
         assert!(
             reason.contains("train-case") && reason.contains("split"),
             "{reason}"
@@ -1443,7 +1439,7 @@ pub(crate) mod tests {
             )
             .await
             .unwrap_err();
-            let reason = refusal(&error);
+            let reason = refusal(error.as_ref());
             assert!(
                 reason.contains("monitor-tools") && reason.contains(mode),
                 "{mode}: {reason}"
@@ -1515,7 +1511,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("node_oauth"),
+            refusal(error.as_ref()).contains("node_oauth"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1547,7 +1543,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("spare"),
+            refusal(error.as_ref()).contains("spare"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1591,7 +1587,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("invalidated"),
+            refusal(error.as_ref()).contains("invalidated"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1608,7 +1604,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                refusal(&error).contains(malformed),
+                refusal(error.as_ref()).contains(malformed),
                 "{}",
                 ErrorChain(error.as_ref())
             );
@@ -1655,7 +1651,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(
-            refusal(&error).contains("capture"),
+            refusal(error.as_ref()).contains("capture"),
             "{}",
             ErrorChain(error.as_ref())
         );
@@ -1703,7 +1699,7 @@ pub(crate) mod tests {
         assert!(
             refusal(&error).contains("no longer digests"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let error = thaw(
             &launching.access,
@@ -1717,7 +1713,7 @@ pub(crate) mod tests {
         assert!(
             refusal(&error).contains("no longer digests"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 

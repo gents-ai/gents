@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalDefinition, EvalSplit};
 use crate::eval::checks::CheckRegistry;
+use crate::eval::documents::EvalError;
 use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze;
 use crate::eval::runner::freeze::load_pack;
@@ -73,7 +74,7 @@ pub fn validate_job_id(job_id: &str) -> Result<()> {
     if job_id.trim().is_empty() {
         return Err(refused(format!("job_id {job_id:?} must not be blank")));
     }
-    freeze::directory_name("job_id", job_id).map_err(|error| as_job_refusal(error.into()))
+    freeze::directory_name("job_id", job_id).map_err(as_job_refusal)
 }
 
 pub fn job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf {
@@ -412,11 +413,11 @@ pub(crate) async fn load_definition(
     access: &ConfigAccess,
     owner: &str,
     definition_id: &str,
-) -> Result<EvalDefinition> {
+) -> Result<EvalDefinition, EvalError> {
     freeze::load_definition(access, owner, definition_id).await
 }
 
-pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef> {
+pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef, EvalError> {
     freeze::definition_ref(definition)
 }
 
@@ -450,18 +451,18 @@ impl std::fmt::Display for JobRefused {
 
 impl std::error::Error for JobRefused {}
 
-pub fn job_refused(error: &anyhow::Error) -> Option<&JobRefused> {
-    error.downcast_ref::<JobRefused>()
+pub fn job_refused<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a JobRefused> {
+    gents_protocol::error_chain::find_source::<JobRefused>(error)
 }
 
 fn refused(reason: impl Into<String>) -> anyhow::Error {
     anyhow::Error::from(JobRefused(reason.into()))
 }
 
-fn as_job_refusal(error: anyhow::Error) -> anyhow::Error {
-    match freeze_refused(error.as_ref()) {
+fn as_job_refusal(error: EvalError) -> anyhow::Error {
+    match freeze_refused(&error) {
         Some(refusal) => refused(refusal.0.clone()),
-        None => error,
+        None => error.into(),
     }
 }
 
@@ -1024,14 +1025,14 @@ pub async fn run_job(
 
     let definition = match load_definition(access, owner, &origin.definition.definition_id).await {
         Ok(definition) => definition,
-        Err(error) if freeze_refused(error.as_ref()).is_some() => {
-            tracing::warn!(job_id = %job_id, error = %ErrorChain(error.as_ref()), "optimization job's definition is gone or invalid");
+        Err(error) if freeze_refused(&error).is_some() => {
+            tracing::warn!(job_id = %job_id, error = %ErrorChain(&error), "optimization job's definition is gone or invalid");
             let state = JobState::Failed {
                 reason: "definition_changed".into(),
             };
             return finalize(access, &mut job, state).await;
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     if definition_ref(&definition)? != origin.definition {
         let state = JobState::Failed {
@@ -2050,7 +2051,7 @@ mod tests {
         .await
         .unwrap_err();
         let refusal =
-            job_refused(&error).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
+            job_refused(error.as_ref()).unwrap_or_else(|| panic!("{}", ErrorChain(error.as_ref())));
         assert!(refusal.0.contains("job_id"), "{}", refusal.0);
         assert!(std::fs::read_dir(home.path()).unwrap().next().is_none());
         assert!(proposer.calls.lock().unwrap().is_empty());
