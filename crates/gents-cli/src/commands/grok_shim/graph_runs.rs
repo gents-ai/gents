@@ -128,7 +128,13 @@ impl GraphRunCursor {
             &sink,
             now,
             load,
-            |error| error.downcast_ref::<GraphRunUnobservable>().is_some(),
+            |error| {
+                error.downcast_ref::<GraphRunUnobservable>().is_some()
+                    || matches!(
+                        error.downcast_ref::<gents::graph_pipeline::GraphPipelineError>(),
+                        Some(gents::graph_pipeline::GraphPipelineError::Unobservable(_))
+                    )
+            },
             unobserved,
             "graph run",
         )
