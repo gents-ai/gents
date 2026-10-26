@@ -73,13 +73,19 @@ enum Asked {
     Job(job_calls::Batch),
 }
 
-fn refused(started: Instant, fuel: u64, verdict: PluginVerdict, why: String) -> PluginOutcome {
+fn refused(
+    started: Instant,
+    now: Instant,
+    fuel: u64,
+    verdict: PluginVerdict,
+    why: String,
+) -> PluginOutcome {
     PluginOutcome {
         verdict,
         output: Value::Null,
         diagnostics: why,
         fuel_used: fuel,
-        wall_ms: elapsed_ms(started),
+        wall_ms: elapsed_ms(started, now),
     }
 }
 
@@ -120,12 +126,26 @@ fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
 }
 
 pub(super) async fn drive(
-    mut calls: HostCalls,
+    calls: HostCalls,
     input: Value,
     budget: PluginBudget,
     round: Round,
 ) -> Result<PluginOutcome> {
-    let started = Instant::now();
+    drive_with_clock(calls, input, budget, round, Instant::now).await
+}
+
+/// Clock observations must be monotonic; the production caller supplies `Instant::now`.
+pub(super) async fn drive_with_clock<C>(
+    mut calls: HostCalls,
+    input: Value,
+    budget: PluginBudget,
+    round: Round,
+    now: C,
+) -> Result<PluginOutcome>
+where
+    C: Fn() -> Instant + Send + Sync,
+{
+    let started = now();
     let mut deadline = started + budget.wall_clock;
     let reserve = budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
     let Value::Object(base) = calls.prepare_input(input)? else {
@@ -136,10 +156,11 @@ pub(super) async fn drive(
     let mut served = 0u32;
     let mut last_round = false;
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let remaining = deadline.saturating_duration_since(now());
         if remaining.is_zero() {
             return Ok(refused(
                 started,
+                now(),
                 fuel,
                 PluginVerdict::Timeout,
                 "the call used its whole wall-clock budget across request rounds".to_owned(),
@@ -149,6 +170,7 @@ pub(super) async fn drive(
         if fuel_left == Some(0) {
             return Ok(refused(
                 started,
+                now(),
                 fuel,
                 PluginVerdict::OutOfFuel,
                 "the call used its whole fuel budget across request rounds".to_owned(),
@@ -167,7 +189,7 @@ pub(super) async fn drive(
         if outcome.verdict != PluginVerdict::Success {
             return Ok(PluginOutcome {
                 fuel_used: fuel,
-                wall_ms: elapsed_ms(started),
+                wall_ms: elapsed_ms(started, now()),
                 ..outcome
             });
         }
@@ -175,16 +197,17 @@ pub(super) async fn drive(
             Ok(None) => {
                 return Ok(PluginOutcome {
                     fuel_used: fuel,
-                    wall_ms: elapsed_ms(started),
+                    wall_ms: elapsed_ms(started, now()),
                     ..outcome
                 });
             }
             Ok(Some(asked)) => asked,
-            Err(why) => return Ok(refused(started, fuel, PluginVerdict::BadOutput, why)),
+            Err(why) => return Ok(refused(started, now(), fuel, PluginVerdict::BadOutput, why)),
         };
         if last_round {
             return Ok(refused(
                 started,
+                now(),
                 fuel,
                 PluginVerdict::Timeout,
                 "the plugin asked for more requests after the call's request time ran out"
@@ -194,6 +217,7 @@ pub(super) async fn drive(
         if served == MAX_ROUNDS {
             return Ok(refused(
                 started,
+                now(),
                 fuel,
                 PluginVerdict::Failed,
                 format!("the plugin asked for more than {MAX_ROUNDS} rounds of requests"),
@@ -205,11 +229,11 @@ pub(super) async fn drive(
         let state = match asked {
             Asked::Tools(batch) => {
                 let session = calls.tools.as_mut().expect("parsed only when offered");
-                let serving = Instant::now();
+                let serving = now();
                 let results = session.serve(batch.requests).await;
-                deadline += serving.elapsed();
+                deadline += now().saturating_duration_since(serving);
                 if let Some(reason) = session.fatal.take() {
-                    return Ok(refused(started, fuel, PluginVerdict::Failed, reason));
+                    return Ok(refused(started, now(), fuel, PluginVerdict::Failed, reason));
                 }
                 object.insert("tool_results".to_owned(), Value::Object(results));
                 batch.state
@@ -249,7 +273,7 @@ pub(super) async fn drive(
                 batch.state
             }
         };
-        last_round = Instant::now() >= deadline - reserve;
+        last_round = now() >= deadline - reserve;
         if let Some(state) = state {
             object.insert("state".to_owned(), state);
         }
@@ -257,6 +281,6 @@ pub(super) async fn drive(
     }
 }
 
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+fn elapsed_ms(started: Instant, now: Instant) -> u64 {
+    u64::try_from(now.saturating_duration_since(started).as_millis()).unwrap_or(u64::MAX)
 }

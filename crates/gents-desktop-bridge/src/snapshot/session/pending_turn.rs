@@ -45,6 +45,7 @@ pub(super) fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> Re
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_pending_turn(
     store: &ClientStore,
     transcript_store: &ClientStore,
@@ -57,6 +58,22 @@ pub(super) fn build_pending_turn(
             && row.session_id.as_deref() == Some(session_id)
             && node_did.is_none_or(|node_did| request_matches_node(row, node_did))
     })?;
+    project_pending_turn(store, transcript_store, node_did, session_id, request)
+}
+
+/// Project the request selected by this snapshot, not a possibly older replica row.
+pub(super) fn project_pending_turn(
+    store: &ClientStore,
+    transcript_store: &ClientStore,
+    node_did: Option<&str>,
+    session_id: &str,
+    request: &AgentRequestRow,
+) -> Option<PendingTurnView> {
+    if request.session_id.as_deref() != Some(session_id)
+        || node_did.is_some_and(|node_did| !request_matches_node(request, node_did))
+    {
+        return None;
+    }
     if gents::lifecycle::retired_by_author(request) {
         return None;
     }
@@ -118,6 +135,7 @@ pub(super) fn build_pending_turn(
 
     Some(PendingTurnView {
         request_id: request.request_id.clone(),
+        started_goal_id: None,
         request_doc_id: request.doc_id.clone(),
         content: content.to_string(),
         captured_context: (!request_input.captured_context.is_empty())

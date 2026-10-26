@@ -115,6 +115,8 @@ export type {
   CommandDenialView,
   DesktopSessionSnapshot,
   SessionHydrationView,
+  SessionContextDetails,
+  SessionContextDetailsRequest,
   SessionLiveDeltaView,
   SessionLiveTextPatchView,
   SessionRowsView,
@@ -252,3 +254,8 @@ export type { ProviderRecoveryAction } from "./generated/ProviderRecoveryAction.
 export type { ProviderRecoveryResult } from "./generated/ProviderRecoveryResult.js";
 export type { ProviderRecoveryRequest } from "./generated/ProviderRecoveryRequest.js";
 export type { ProviderRecoveryApply } from "./generated/ProviderRecoveryApply.js";
+export type { RuntimePreparationOutcome } from "./generated/RuntimePreparationOutcome.js";
+export { RUNTIME_PREPARATION_VERSION } from "./generated/RuntimePreparationProtocol.js";
+export type { RuntimePreparationRefusal } from "./generated/RuntimePreparationRefusal.js";
+export type { RuntimePreparationReport } from "./generated/RuntimePreparationReport.js";
+export type { RuntimePreparationResult } from "./generated/RuntimePreparationResult.js";

@@ -70,26 +70,26 @@ const app = (
   />
 );
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    {window.__GENTS_MOBILE_PERFORMANCE__ ? (
-      <Profiler
-        id="desktop-app"
-        onRender={(id, phase, actualDuration, baseDuration, startTime, commitTime) => {
-          window.__GENTS_MOBILE_PERFORMANCE__?.recordCommit({
-            id,
-            phase,
-            actualDurationMs: actualDuration,
-            baseDurationMs: baseDuration,
-            startTimeMs: startTime,
-            commitTimeMs: commitTime,
-          });
-        }}
-      >
-        {app}
-      </Profiler>
-    ) : (
-      app
-    )}
-  </React.StrictMode>,
+/** Development Strict Mode replays mounts and inflates layout-read counts.
+Performance fixtures measure mounting without those development-only replays. */
+const tree = window.__GENTS_MOBILE_PERFORMANCE__ ? (
+  <Profiler
+    id="desktop-app"
+    onRender={(id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+      window.__GENTS_MOBILE_PERFORMANCE__?.recordCommit({
+        id,
+        phase,
+        actualDurationMs: actualDuration,
+        baseDurationMs: baseDuration,
+        startTimeMs: startTime,
+        commitTimeMs: commitTime,
+      });
+    }}
+  >
+    {app}
+  </Profiler>
+) : (
+  <React.StrictMode>{app}</React.StrictMode>
 );
+
+ReactDOM.createRoot(document.getElementById("root")!).render(tree);

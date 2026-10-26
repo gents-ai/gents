@@ -534,6 +534,7 @@ async fn install_documents_pack(
             .map(PackSource::archive)
             .collect::<Vec<_>>(),
         gents::pack::InstalledVia::Operator,
+        args.scope.graphql.is_none().then_some(home.as_path()),
         &|name| std::env::var(name).ok(),
     )
     .await?;

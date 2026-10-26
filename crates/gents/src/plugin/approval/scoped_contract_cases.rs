@@ -91,6 +91,7 @@ fn observe(
                 mode: policy::Mode::Ask,
                 review_task: None,
             },
+            command_grants: Vec::new(),
             dirs: if scope.workspace == expected.scope.workspace {
                 entries(target, folder, state)
             } else {

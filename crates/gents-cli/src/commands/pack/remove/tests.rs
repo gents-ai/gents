@@ -484,7 +484,19 @@ async fn demo_tools_rows(home: &Path) -> usize {
         .execute(r#"{ Tools(filter: {tools_id: {_eq: "demo-tools"}}) { _docID } }"#)
         .await
         .unwrap();
-    response["data"]["Tools"].as_array().unwrap().len()
+    let count = response["data"]["Tools"].as_array().unwrap().len();
+    if let Some(node) = access.local_node() {
+        node.shutdown().await;
+    }
+    count
+}
+
+#[tokio::test]
+async fn failed_document_removal_releases_its_node_before_the_next_command() {
+    let home = initialized_home().await;
+    let error = remove_pkg(home.path(), "gents/missing").await.unwrap_err();
+    assert!(format!("{error:#}").contains("gents/missing is not installed"));
+    assert_eq!(demo_tools_rows(home.path()).await, 0);
 }
 
 #[tokio::test]

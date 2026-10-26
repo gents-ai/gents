@@ -212,7 +212,24 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
         ).length;
         const unknown =
           entries.length - succeeded.length - failures.length - stopped;
-        const failedLabel = `${failures.length} ${failures.length === 1 ? "action failed" : "actions failed"}`;
+        const failedCommands = failures.filter(
+          (entry) =>
+            actionKind(entry) === "command" ||
+            (entry.tool.reconstruction.state === "ready" &&
+              entry.tool.presentation.kind === "command"),
+        ).length;
+        const failedActions = failures.length - failedCommands;
+        const failedLabel =
+          [
+            failedCommands
+              ? `${failedCommands} ${failedCommands === 1 ? "command" : "commands"}`
+              : null,
+            failedActions
+              ? `${failedActions} ${failedActions === 1 ? "action" : "actions"}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(", ") + " failed";
         const settledParts = [
           succeeded.length ? completedLabel(succeeded) : null,
           stopped
@@ -278,8 +295,8 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
               {caption}
             </span>
             {!running && failed && settledParts.length > 0 ? (
-              <span className="tool-activity-errors">
-                {failures.length} failed
+              <span className="tool-activity-errors" title={failedLabel}>
+                {failedLabel}
               </span>
             ) : null}
             <svg

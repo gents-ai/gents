@@ -215,6 +215,10 @@ impl ClientHost {
                     .map_err(backend_error)?;
                 encode(())
             }
+            ClientCommand::ProviderUsageRead { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                encode(crate::accounts::usage::read(&self.core, request).await?)
+            }
             ClientCommand::AccountsList { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
                 let access = self
@@ -547,6 +551,9 @@ impl ClientHost {
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
                 encode(())
             }
+            ClientCommand::WorkspacePermissionsForgetCommands { request } => {
+                encode(permissions::forget_commands(&self.core, request).await?)
+            }
             ClientCommand::WorkspacePermissionsSave { request } => {
                 encode(permissions::save(&self.core, request).await?)
             }
@@ -608,6 +615,9 @@ impl ClientHost {
                 )
                 .await?,
             ),
+            ClientCommand::SessionContextDetails { request } => {
+                encode(crate::commands::session_context_details(&self.core, request).await?)
+            }
             ClientCommand::SessionLiveDelta(args) => encode(
                 crate::snapshot::build_session_live_delta(
                     &self.core,

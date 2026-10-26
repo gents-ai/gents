@@ -1,6 +1,11 @@
+/// Identifies the complete runtime wrapper for display accounting, not authorization.
+pub(crate) fn is_tool_completion_text(text: &str) -> bool {
+    text.starts_with("<tool-completion tool_call_id=\"") && text.ends_with("\n</tool-completion>")
+}
+
 pub(crate) const NOTIFICATION_SUMMARY_BYTES: usize = 4000;
 
-pub(super) fn tool_completion_presentation(
+pub(crate) fn tool_completion_presentation(
     tool_call_id: &str,
     tool_name: &str,
     status: &str,
@@ -96,4 +101,17 @@ pub(super) fn xml_escape_text(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod context_accounting_tests {
+    use super::*;
+
+    #[test]
+    fn tool_completion_text_matches_the_rendered_notification() {
+        let (text, _) =
+            tool_completion_presentation("call", "shell", "complete", "done", None, 4000);
+        assert!(is_tool_completion_text(&text));
+        assert!(!is_tool_completion_text(&format!("User quotation: {text}")));
+    }
 }

@@ -448,9 +448,26 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct RoundClock(Arc<Mutex<std::time::Instant>>);
+
+    impl RoundClock {
+        fn new() -> Self {
+            Self(Arc::new(Mutex::new(std::time::Instant::now())))
+        }
+
+        fn now(&self) -> std::time::Instant {
+            *self.0.lock().unwrap()
+        }
+
+        fn advance(&self, milliseconds: u64) {
+            *self.0.lock().unwrap() += std::time::Duration::from_millis(milliseconds);
+        }
+    }
+
     #[tokio::test]
     async fn serving_children_is_not_charged_to_the_guest_clock() {
-        struct Slow;
+        struct Slow(RoundClock);
         impl ToolEffectDispatcher for Slow {
             fn call<'a>(
                 &'a self,
@@ -458,15 +475,19 @@ mod tests {
                 _: &'a str,
                 _: &'a str,
             ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
-                Box::pin(async {
-                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                let clock = self.0.clone();
+                Box::pin(async move {
+                    clock.advance(400);
                     Ok(ToolOutcome::Completed("\"slow\"".into()))
                 })
             }
         }
-        gents_loop::tool_effects::scope(Some(Arc::new(Slow)), async {
+        let clock = RoundClock::new();
+        gents_loop::tool_effects::scope(Some(Arc::new(Slow(clock.clone()))), async {
             let session = Session::for_call(true).unwrap();
-            let round: rounds::Round = Arc::new(|input, _| {
+            let guest_clock = clock.clone();
+            let round: rounds::Round = Arc::new(move |input, _| {
+                guest_clock.advance(10);
                 let output = match input.get("state") {
                     None => json!({"tool_calls":{"requests":[
                         {"id":"a","tool_name":"slow","arguments":{}},
@@ -485,7 +506,7 @@ mod tests {
                 wall_clock: std::time::Duration::from_millis(200),
                 ..PluginBudget::default()
             };
-            let result = rounds::drive(
+            let result = rounds::drive_with_clock(
                 rounds::HostCalls {
                     model: None,
                     http: None,
@@ -496,6 +517,7 @@ mod tests {
                 json!({}),
                 budget,
                 round,
+                || clock.now(),
             )
             .await
             .unwrap();
@@ -512,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_child_parked_on_operator_consent_is_not_charged_to_the_guest_clock() {
-        struct Asking(std::path::PathBuf, std::path::PathBuf);
+        struct Asking(std::path::PathBuf, std::path::PathBuf, RoundClock);
         impl ToolEffectDispatcher for Asking {
             fn call<'a>(
                 &'a self,
@@ -522,6 +544,7 @@ mod tests {
             ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
                 let home = self.0.clone();
                 let target = self.1.clone();
+                let clock = self.2.clone();
                 Box::pin(async move {
                     let resolved = crate::plugin::allowed::resolve(
                         &target.display().to_string(),
@@ -536,6 +559,7 @@ mod tests {
                         crate::pack::BindAccess::Read,
                         None,
                     );
+                    clock.advance(400);
                     let allowed = crate::plugin::approval::ask(
                         &home,
                         &request,
@@ -552,33 +576,24 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let target = outside.path().join("in.json");
         std::fs::write(&target, "{}").unwrap();
-        let answer_home = home.path().to_owned();
-        tokio::spawn(async move {
-            let started = tokio::time::Instant::now();
-            loop {
-                if let Some(request) = crate::plugin::approval::pending(&answer_home)
-                    .unwrap()
-                    .into_iter()
-                    .next()
-                {
-                    if started.elapsed() >= std::time::Duration::from_millis(400) {
-                        crate::plugin::approval::decide(
-                            &answer_home,
-                            &request.id,
-                            crate::plugin::approval::Answer::Once,
-                        )
-                        .unwrap();
-                        return;
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        });
+        let operator = crate::plugin::approval::testing::Operator::answer(
+            home.path(),
+            crate::plugin::approval::Answer::Once,
+        )
+        .await
+        .unwrap();
+        let clock = RoundClock::new();
         gents_loop::tool_effects::scope(
-            Some(Arc::new(Asking(home.path().to_owned(), target))),
+            Some(Arc::new(Asking(
+                home.path().to_owned(),
+                target,
+                clock.clone(),
+            ))),
             async {
                 let session = Session::for_call(true).unwrap();
-                let round: rounds::Round = Arc::new(|input, _| {
+                let guest_clock = clock.clone();
+                let round: rounds::Round = Arc::new(move |input, _| {
+                    guest_clock.advance(10);
                     let output = match input.get("state") {
                         None => json!({"tool_calls":{"requests":[
                             {"id":"gate","tool_name":"asking","arguments":{}}],"state":"done"}}),
@@ -596,7 +611,7 @@ mod tests {
                     wall_clock: std::time::Duration::from_millis(200),
                     ..PluginBudget::default()
                 };
-                let result = rounds::drive(
+                let result = rounds::drive_with_clock(
                     rounds::HostCalls {
                         model: None,
                         http: None,
@@ -607,6 +622,7 @@ mod tests {
                     json!({}),
                     budget,
                     round,
+                    || clock.now(),
                 )
                 .await
                 .unwrap();
@@ -620,6 +636,8 @@ mod tests {
             },
         )
         .await;
+        let prompt = operator.await.unwrap();
+        assert!(prompt.contains("team/plugin"), "{prompt}");
         assert!(
             crate::plugin::approval::pending(home.path())
                 .unwrap()

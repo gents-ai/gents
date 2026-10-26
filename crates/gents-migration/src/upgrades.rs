@@ -4,6 +4,18 @@ use crate::error::{Error, Result};
 use crate::expectation::CollectionExpectation;
 use crate::registry::{BaselineCollection, MigrationStep};
 
+const INFERENCE_CALL_ROOT: &str = "bafyreibbbdmb7au32traw5ufp6rqytb3jv63bmjflykfhize2u6bwvqiwe";
+const INFERENCE_CALL_TARGET: &str = "bafyreie6maihybat7mu2hbygehkkcsb7x6h5bcdcvg53ygjhfcoikfdfau";
+const INFERENCE_CALL_USAGE_PATCH: &str = r#"[
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"session_id","Kind":"String","Immutable":true}},
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"model_name","Kind":"String","Immutable":true}},
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"profile_id","Kind":"String","Immutable":true}},
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"cache_creation_input_tokens","Kind":"Int"}},
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"reasoning_output_tokens","Kind":"Int"}},
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"provider_total_tokens","Kind":"Int"}},
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"usage_completeness","Kind":"String"}}
+]"#;
+
 const PROFILE_ROOT: &str = "bafyreiat2uhx24kbgbm54lz7nt56vtjjsfttkiwop2ntii7qn2xtceehxi";
 const PROFILE_TARGET: &str = "bafyreieksrjdkg546ymilx5qrpbtciuyr3cwqyq25u52o64lobpoek3qqi";
 const TOOL_ROOT: &str = "bafyreiexmbjxfqyg6yhjst6r746spzge27f6mhh2moyrkawbmvtvba4mbi";
@@ -31,6 +43,22 @@ pub(crate) fn include_existing(
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
     for (name, root, target, id, patch, fields) in [
+        (
+            "InferenceCall",
+            INFERENCE_CALL_ROOT,
+            INFERENCE_CALL_TARGET,
+            "inference-call-add-provider-usage",
+            INFERENCE_CALL_USAGE_PATCH,
+            &[
+                "session_id",
+                "model_name",
+                "profile_id",
+                "cache_creation_input_tokens",
+                "reasoning_output_tokens",
+                "provider_total_tokens",
+                "usage_completeness",
+            ][..],
+        ),
         (
             "InferenceProfile",
             PROFILE_ROOT,

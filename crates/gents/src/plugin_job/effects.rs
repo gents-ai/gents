@@ -242,25 +242,32 @@ async fn stage_spawn(
     job: &JobContext<'_>,
     spawn: &JobSpawn,
 ) -> Result<AgentRequestCreate> {
-    let (node_did, agent_id, own) = job
+    let (node_did, agent_id) = super::admit::resolve_target(job.ctx, &spawn.target)
+        .cloned()
+        .context("spawn target is not a known AgentTarget id")?;
+    let own = job
         .ctx
         .target_hops
         .iter()
-        .find(|(pair, _)| pair.1 == spawn.target)
-        .map(|(pair, hop)| (pair.0.clone(), pair.1.clone(), *hop))
-        .context("spawn target is not in target_hops")?;
+        .find(|(pair, _)| pair.0 == node_did && pair.1 == agent_id)
+        .map_or(0, |(_, hop)| *hop);
     let hop = next_request_hop(
         RequestHopCause::CrossSession {
             cause_hop: job.row.caller_hop,
         },
         own,
     );
-    let cwd = spawn.cwd.clone().or_else(|| {
-        job.row
-            .pin
-            .as_ref()
-            .map(|pin| pin.cwd.clone())
-            .or_else(|| Some(job.row.caller_cwd.clone()))
+    let base = job
+        .row
+        .pin
+        .as_ref()
+        .map_or(&job.row.caller_cwd, |pin| &pin.cwd);
+    // Admission resolved a relative spawn cwd against the pinned cwd; the child
+    // gets that path, not one its own admission would resolve against the
+    // server process's cwd.
+    let cwd = Some(match &spawn.cwd {
+        Some(dir) => Path::new(base).join(dir).to_string_lossy().into_owned(),
+        None => base.clone(),
     });
     stage_request(
         txn,
@@ -776,6 +783,10 @@ mod tests {
             installed_trusted_sources: Vec::new(),
             max_hop: Some(8),
             target_hops: vec![((node_did.to_owned(), "general".to_owned()), 0)],
+            target_ids: vec![(
+                "general".to_owned(),
+                (node_did.to_owned(), "general".to_owned()),
+            )],
             live_background: 0,
             started_by_job: false,
             cwd_allowed: Vec::new(),
@@ -1127,6 +1138,25 @@ mod tests {
         let input = input_of(&rows[0]);
         assert_eq!(input["initial_title"]["text"], "Spawn Title");
         assert_eq!(input["cwd"], "/admitted");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn child_of_a_relative_cwd_gets_the_path_admission_checked() {
+        let harness = harness("job-stage-relative-cwd").await;
+        let kept = spawn(
+            "kept",
+            0,
+            "guest prompt",
+            "Spawn Title",
+            Some("review_seeded_bug"),
+        );
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        stage(&harness, &[kept], &effects, &harness.row)
+            .await
+            .unwrap();
+        let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        assert_eq!(input_of(&rows[0])["cwd"], "/work/review_seeded_bug");
         harness.close().await;
     }
 }

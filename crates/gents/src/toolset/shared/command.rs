@@ -18,6 +18,9 @@ pub use gents_loop::tool_policy::{
 };
 
 use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
+#[path = "command_temp.rs"]
+mod command_temp;
+
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(all(test, target_os = "macos"))]
 #[path = "command_protection_tests.rs"]
@@ -999,6 +1002,9 @@ async fn prepare_command_launch(
         .as_ref()
         .map(|grant| grant.root())
         .unwrap_or(&workspace_root);
+    if policy.mode == CommandExecutionMode::WorkspaceWrite {
+        command_temp::prepare(writable_root, &mut environment).map_err(command_guard_error)?;
+    }
     let protection = crate::plugin::approval::workspace::command_guard_home()
         .map_err(command_guard_error)?
         .map(|home| {

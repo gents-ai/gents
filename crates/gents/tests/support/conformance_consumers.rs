@@ -77,6 +77,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_installation_compatibility_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "serve_lifecycle::replacement::tests::generated_replacement_traces_match_authenticated_admission_and_release_guards",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/serve_lifecycle/replacement.rs",
+            module_path: "serve_lifecycle::replacement::tests",
+            function: "generated_replacement_traces_match_authenticated_admission_and_release_guards",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_request_coverage_uses_only_selected_physical_scope",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",
@@ -194,6 +201,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/toolset/title_audit_usage.rs",
             module_path: "toolset::title_audit_usage::tests",
             function: "generated_budget_recovery_cases_bind_signed_catalog_usage",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::approval::command_grant_contract_tests::generated_command_answers_preserve_scope_and_one_time_delivery",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/command_grant_contract_tests.rs",
+            module_path: "plugin::approval::command_grant_contract_tests",
+            function: "generated_command_answers_preserve_scope_and_one_time_delivery",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::approval::command_grant_contract_tests::generated_command_revocation_preserves_the_selected_mode",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/command_grant_contract_tests.rs",
+            module_path: "plugin::approval::command_grant_contract_tests",
+            function: "generated_command_revocation_preserves_the_selected_mode",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_policy::workspace_permissions::tests::generated_command_grant_lookups",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/workspace_permissions.rs",
+            module_path: "tool_policy::workspace_permissions::tests",
+            function: "generated_command_grant_lookups",
         },
         ConformanceConsumer::RustTest {
             id: "plugin::approval::workspace::tests::generated_workspace_permission_writes_preserve_selected_policy_versions",
@@ -2014,6 +2042,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/managed_exec/tests.rs",
             module_path: "managed_exec::tests",
             function: "managed_exec_state_machine_contract_is_complete",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::installation::tests::generated_plugin_reference_cases_validate_prepared_pack_resources",
+            package: "gents",
+            source_path: "crates/gents/src/pack/installation/tests.rs",
+            module_path: "pack::installation::tests",
+            function: "generated_plugin_reference_cases_validate_prepared_pack_resources",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::runtime::tests::startup_recovery::generated_snapshot_demotions_preserve_healthy_agents",
+            package: "gents",
+            source_path: "crates/gents/src/agent/runtime/tests/startup_recovery.rs",
+            module_path: "agent::runtime::tests::startup_recovery",
+            function: "generated_snapshot_demotions_preserve_healthy_agents",
         },
         ConformanceConsumer::RustTest {
             id: "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases",

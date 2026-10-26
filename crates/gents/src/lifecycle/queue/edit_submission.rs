@@ -54,6 +54,7 @@ pub async fn submit_pending_user_steer(
     session_id: &str,
     edit: PendingQueueEdit,
     request_doc_id: &str,
+    request_id: Option<&str>,
 ) -> Result<SessionInputEditReceipt> {
     anyhow::ensure!(
         edit.messages
@@ -81,6 +82,7 @@ pub async fn submit_pending_user_steer(
         signer.did(),
         &edit,
         Some(&deliveries),
+        request_id,
     )
     .await?;
     submit_prepared_edit(

@@ -14,6 +14,15 @@ mod file_key;
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
 
+/// An OS custody failure does not prove the recorded identity is absent and
+/// must never authorize creation of a replacement key.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("macOS could not access recorded identity {label} (Keychain error {code}); allow access and try again; the identity is unchanged")]
+pub struct IdentityKeyUnavailable {
+    pub label: String,
+    pub code: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAccount {
     pub host_id: String,
@@ -439,8 +448,11 @@ fn load_or_create_macos_keychain_raw_identity(
                 .map_err(anyhow::Error::from)
                 .with_context(|| format!("constructing macOS keychain identity {label}"))
         }
-        Err(code) => Err(anyhow!("macOS Keychain error {code}"))
-            .with_context(|| format!("reading macOS keychain identity {label}")),
+        Err(code) => Err(anyhow::Error::new(IdentityKeyUnavailable {
+            label: label.to_owned(),
+            code,
+        }))
+        .with_context(|| format!("reading macOS keychain identity {label}")),
     }
 }
 
@@ -564,7 +576,11 @@ fn find_macos_secure_enclave_key(label: &str) -> Result<Option<security_framewor
             return Err(missing_secure_enclave_entitlement_error(label));
         }
         Err(error) => {
-            return Err(anyhow::Error::from(error)).with_context(|| {
+            return Err(anyhow::Error::new(IdentityKeyUnavailable {
+                label: label.to_owned(),
+                code: error.code(),
+            }))
+            .with_context(|| {
                 format!("searching keychain for macOS Secure Enclave key label {label}")
             });
         }

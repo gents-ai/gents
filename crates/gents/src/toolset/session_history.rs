@@ -2,6 +2,8 @@ use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod context_calls;
+pub use context_calls::load_latest_session_context_calls;
 mod context_details;
 mod discovery;
 pub use context_details::{load_session_context_details, SessionContextDetails};
@@ -317,6 +319,29 @@ pub async fn load_session_request_doc_ids(
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<BTreeMap<String, String>> {
+    load_session_request_bindings(
+        access,
+        node_did,
+        requester_did,
+        session_id,
+        RequestBindings::All,
+    )
+    .await
+}
+
+enum RequestBindings<'a> {
+    All,
+    Physical(&'a [String]),
+    Page(Option<&'a str>),
+}
+
+async fn load_session_request_bindings(
+    access: &dyn crate::config_client::ConfigRead,
+    node_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+    selection: RequestBindings<'_>,
+) -> Result<BTreeMap<String, String>> {
     anyhow::ensure!(
         !node_did.trim().is_empty() && !session_id.trim().is_empty(),
         "session request selection requires a node and session"
@@ -324,17 +349,43 @@ pub async fn load_session_request_doc_ids(
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let data = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
+    let (physical_filter, limit) = match selection {
+        RequestBindings::All => (String::new(), None),
+        RequestBindings::Physical(ids) => {
+            if ids.is_empty() {
+                return Ok(BTreeMap::new());
+            }
+            let ids = ids
+                .iter()
+                .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (format!("_docID: {{_in: [{ids}]}},"), None)
+        }
+        RequestBindings::Page(after) => (
+            after
+                .map(|id| format!(r#"_docID: {{_gt: "{}"}},"#, escape_graphql_string(id)))
+                .unwrap_or_default(),
+            Some(context_calls::PAGE_SIZE),
+        ),
+    };
+    let filter = format!(
+        r#"
+                {physical_filter}
                 purpose: {{_eq: "normal"}},
                 node_did: {{_eq: "{}"}},
                 session_id: {{_eq: "{}"}},
                 requester_did: {{_eq: {requester}}}
-            }}) {{ _docID request_id }} }}"#,
-            escape_graphql_string(node_did.trim()),
-            escape_graphql_string(session_id.trim())
-        ))
+            "#,
+        escape_graphql_string(node_did.trim()),
+        escape_graphql_string(session_id.trim())
+    );
+    let query = match limit {
+        Some(limit) => format!("{{ AgentRequest(filter: {{{filter}}}, order: {{_docID: ASC}}, limit: {limit}) {{ _docID request_id }} }}"),
+        None => format!("{{ AgentRequest(filter: {{{filter}}}) {{ _docID request_id }} }}"),
+    };
+    let data = access
+        .execute_read(&query)
         .await
         .context("session accounting ownership")?;
     let requests: Vec<PhysicalRequestDocIdRow> = serde_json::from_value(
@@ -2071,7 +2122,7 @@ mod tests {
         let inserted = node.execute(&mutation).await;
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
         let details = load_session_context_details(
-            &node,
+            &crate::config_client::ConfigAccess::local(node.clone()),
             PIN_FIXED_DID,
             Some(PIN_FIXED_DID),
             "session-a",
@@ -2092,12 +2143,16 @@ mod tests {
             ),
             (PIN_FIXED_DID, Some(PIN_FIXED_DID), "session-b"),
         ] {
-            assert!(
-                load_session_context_details(&node, agent, requester, session, &context)
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(load_session_context_details(
+                &crate::config_client::ConfigAccess::local(node.clone()),
+                agent,
+                requester,
+                session,
+                &context
+            )
+            .await
+            .unwrap()
+            .is_none());
         }
         let mut missing_base_context = context.clone();
         missing_base_context.accounting.turn_index += 1;
@@ -2142,7 +2197,7 @@ mod tests {
         let inserted = node.execute(&mutation).await;
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
         assert!(load_session_context_details(
-            &node,
+            &crate::config_client::ConfigAccess::local(node.clone()),
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some(PIN_FIXED_DID),
             "session-a",
@@ -2184,7 +2239,7 @@ mod tests {
             let inserted = node.execute(&mutation).await;
             assert!(!inserted.has_errors(), "{:?}", inserted.errors);
             assert!(load_session_context_details(
-                &node,
+                &crate::config_client::ConfigAccess::local(node.clone()),
                 "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                 Some(PIN_FIXED_DID),
                 "session-a",
@@ -2196,7 +2251,7 @@ mod tests {
         }
         context.call_id = "foreign-call".into();
         assert!(load_session_context_details(
-            &node,
+            &crate::config_client::ConfigAccess::local(node.clone()),
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some(PIN_FIXED_DID),
             "session-a",

@@ -690,8 +690,8 @@ impl GoalSource {
                 }}
             }}"#,
             signed_fields = format_args!(
-                "{} failure_reason terminalized_at",
-                crate::request_admission::SIGNED_REQUEST_FIELDS
+                "{} terminalized_at",
+                crate::goal::request_selection_fields()
             ),
         );
         let response =
@@ -948,6 +948,8 @@ pub(crate) fn continuation_prompt(
     )
 }
 
+/// A closed invalidation feed does not establish that durable Goals finished.
+/// Runtime cancellation and snapshot-owner shutdown remain the termination owners.
 impl TriggerSource for GoalSource {
     fn next_fire(
         &mut self,
@@ -955,10 +957,6 @@ impl TriggerSource for GoalSource {
         Box::pin(async move {
             self.ensure_subscription();
             loop {
-                let subscription = self
-                    .subscription
-                    .as_mut()
-                    .expect("goal source subscription opened before polling");
                 let tick = tokio::select! {
                     biased;
                     _ = self.cancel.cancelled() => return None,
@@ -969,10 +967,15 @@ impl TriggerSource for GoalSource {
                         false
                     }
                     _ = self.rescan_tick.tick() => true,
-                    batch = subscription.recv() => {
+                    batch = async {
+                        match self.subscription.as_mut() {
+                            Some(subscription) => subscription.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
                         if batch.is_none() {
-                            tracing::warn!("goal source subscription channel closed; source exiting");
-                            return None;
+                            self.subscription = None;
+                            tracing::warn!("goal source subscription closed; continuing durable rescans");
                         }
                         false
                     }

@@ -3,6 +3,8 @@ import { expect, gotoHarness, test } from "./desktopTest";
 
 type Cost = {
   rects: number;
+  rowRects: number;
+  measuredRows: number;
   writes: number;
   /* rows drawn, and rows the transcript holds */
   rows: number;
@@ -25,6 +27,8 @@ async function cost(
     if (act === "scroll") document.elementFromPoint = () => null;
     const position = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
     let rects = 0;
+    let rowRects = 0;
+    const measuredRows = new Set<Element>();
     let writes = 0;
     let scrolls = 0;
     const onScroll = () => {
@@ -34,6 +38,10 @@ async function cost(
     const height = scroller.scrollHeight;
     Element.prototype.getBoundingClientRect = function (this: Element) {
       rects += 1;
+      if (this.matches("[data-row-key]")) {
+        rowRects += 1;
+        measuredRows.add(this);
+      }
       return rect.call(this);
     };
     Object.defineProperty(scroller, "scrollTop", {
@@ -67,6 +75,8 @@ async function cost(
       );
       return {
         rects,
+        rowRects,
+        measuredRows: measuredRows.size,
         writes,
         scrolls,
         rows: scroller.querySelectorAll("[data-row-key]").length,
@@ -96,10 +106,21 @@ async function scrollCost(viewport: Locator): Promise<Cost> {
 
 async function loadEveryPage(page: Page) {
   await page.getByTestId("transcript-panel").hover();
-  for (let i = 0; i < 40; i += 1) {
-    await page.mouse.wheel(0, -1500);
-    await page.waitForTimeout(150);
-  }
+  const expected = await page.evaluate(
+    () => window.__GENTS_MOBILE_PERFORMANCE__!.fixture.largeSessionTimelineItems,
+  );
+  await expect
+    .poll(
+      async () => {
+        const loaded = await scroller(page)
+          .locator("[data-transcript-list]")
+          .getAttribute("data-rows");
+        if (Number(loaded) < expected) await page.mouse.wheel(0, -1500);
+        return Number(loaded);
+      },
+      { timeout: 30_000, intervals: [150] },
+    )
+    .toBeGreaterThanOrEqual(expected);
   await page.waitForTimeout(600);
   await expect
     .poll(() =>

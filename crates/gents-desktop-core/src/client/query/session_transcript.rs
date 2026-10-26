@@ -136,6 +136,7 @@ fn insert_exact_segment(
 async fn load_page_canonical_dependencies(
     access: TranscriptAccess<'_>,
     page_headers: &[TranscriptMessageRow],
+    page_tools: &[AgentToolCallRow],
 ) -> Result<(CanonicalTranscriptDependencies, u64, usize)> {
     let mut dependencies = CanonicalTranscriptDependencies::default();
     let mut known_headers = BTreeMap::new();
@@ -272,6 +273,30 @@ async fn load_page_canonical_dependencies(
     }
 
     let mut sources_by_request = BTreeMap::new();
+    for tool in page_tools
+        .iter()
+        .filter(|tool| tool.lifecycle_state.as_deref() == Some("running"))
+    {
+        let (Some(tool_doc_id), Some(request_doc_id), Some(node_did)) = (
+            tool.doc_id.as_deref(),
+            tool.request_doc_id.as_deref(),
+            tool.node_did.as_deref(),
+        ) else {
+            continue;
+        };
+        sources_by_request
+            .entry((
+                request_doc_id.to_owned(),
+                node_did.to_owned(),
+                tool.requester_did.clone(),
+            ))
+            .or_insert_with(BTreeSet::new)
+            .insert(serde_json::to_string(
+                &gents_protocol::output::OutputSource::ToolCall {
+                    tool_call_doc_id: tool_doc_id.to_owned(),
+                },
+            )?);
+    }
     for closure in &closures {
         sources_by_request
             .entry((
@@ -827,6 +852,7 @@ async fn load_session_transcript_window_with_access(
                 .chain(result_messages.iter())
                 .cloned()
                 .collect::<Vec<_>>(),
+            &tool_calls,
         )
         .await?;
     /* the requests these rows belong to: rows name their request, and a

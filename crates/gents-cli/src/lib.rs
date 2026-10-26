@@ -393,6 +393,8 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 ];
 pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
+pub use commands::prepare_runtime::unlock_runtime_keys;
+
 /// Embedded editor launches must never trigger a system authentication dialog.
 /// Explicit credential access remains with the existing browser or store-unlock owner.
 pub fn run_cli_without_keychain_prompts() -> Result<()> {
@@ -446,6 +448,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Desktop { command } => commands::desktop::run(command).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args, runtime).await,
+        Command::PrepareRuntime(args) => commands::prepare_runtime::prepare(args, runtime).await,
         Command::Service { command } => {
             tokio::task::spawn_blocking(move || service_command(command))
                 .await

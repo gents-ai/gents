@@ -24,6 +24,8 @@ use console::ConsoleChild as Child;
 
 #[path = "support/configured_actions.rs"]
 mod configured_actions;
+#[path = "support/editor_command_output.rs"]
+mod editor_command_output;
 #[path = "support/editor_delivery.rs"]
 mod editor_delivery;
 #[path = "support/editor_goal_recovery.rs"]
@@ -44,6 +46,10 @@ mod editor_related_work;
 mod editor_retry;
 #[path = "support/editor_review.rs"]
 mod editor_review;
+#[path = "support/editor_steering.rs"]
+mod editor_steering;
+#[path = "support/editor_undo.rs"]
+mod editor_undo;
 #[path = "support/editor_workspace.rs"]
 mod editor_workspace;
 #[allow(dead_code)]
@@ -54,6 +60,11 @@ mod initialization;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
+#[cfg(unix)]
+#[path = "support/retained_schema_upgrade.rs"]
+mod retained_schema_upgrade;
+#[path = "support/runtime_replacement.rs"]
+mod runtime_replacement;
 #[path = "support/speech.rs"]
 mod speech;
 mod support;
@@ -64,10 +75,13 @@ use support::Attachment;
 #[derive(Clone, Copy)]
 enum Journey {
     Conversation,
+    RuntimeReplacement,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     Editor,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorSteering,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorGoalSteering,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorHistory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
@@ -87,6 +101,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorInventory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorUndo,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWork,
@@ -96,10 +112,15 @@ enum Journey {
 }
 
 impl Journey {
+    fn is_steering(self) -> bool {
+        matches!(self, Self::EditorSteering | Self::EditorGoalSteering)
+    }
+
     fn editor_scenario(self) -> Option<&'static str> {
         match self {
             Self::Editor => Some("full"),
             Self::EditorSteering => Some("steering"),
+            Self::EditorGoalSteering => Some("goal-steering"),
             Self::EditorHistory => Some("history"),
             Self::EditorGoalRecovery => Some("goals"),
             Self::EditorGoalRemoval => Some("goal-removal"),
@@ -109,6 +130,7 @@ impl Journey {
             Self::EditorReview => Some("review"),
             Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorInventory => Some("review-inventory"),
+            Self::EditorUndo => Some("undo"),
             Self::EditorWorkspace => Some("workspace"),
             Self::EditorRelatedWork => Some("related-work"),
             Self::EditorRelatedWorkFailure => Some("related-work-failure"),
@@ -171,6 +193,29 @@ async fn native_client_submits_signed_input_and_observes_live_and_durable_output
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_runtime_replacement_preserves_running_input_enrollment_and_transcript(
+) -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::RuntimeReplacement)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "runtime-replacement.err",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Goal).await.with_context(|| {
@@ -204,6 +249,20 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
         .await
         .with_context(|| {
             std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        })?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_pending_input_and_continues_the_same_goal() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorGoalSteering)
+        .await
+        .with_context(|| {
+            ["editor.log", "runtime.log", "runtime.err"]
+                .map(|name| std::fs::read_to_string(temp.path().join(name)).unwrap_or_default())
+                .join("\n")
         })?;
     copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
@@ -308,6 +367,31 @@ async fn editor_reviews_retained_file_images_without_reading_the_working_copy() 
             .join("\n")
         })?;
     copy_editor_evidence(temp.path(), "editor-review-canonical.json")
+}
+
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_restores_and_saves_recorded_edits_without_overwriting_later_changes() -> Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorUndo)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-undo-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -496,12 +580,37 @@ async fn editor_observes_related_worker_failure_without_losing_completed_work_or
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires GENTS_PREVIOUS_CLIENT_HOST with the packaged RC predecessor"]
+async fn retained_client_schema_upgrades_from_a_packaged_predecessor() -> Result<()> {
+    retained_schema_upgrade::exercise().await
+}
+
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
         .transpose()?;
-    let cli = support::native_binary("gents")?;
-    let host_binary = support::native_binary("gents-client-host")?;
+    let current_cli = support::native_binary("gents")?;
+    let current_host_binary = support::native_binary("gents-client-host")?;
+    let predecessor = if std::env::var_os("GENTS_VSCODE_RETAINED_UPGRADE_VSIX").is_some() {
+        ensure!(
+            matches!(journey, Journey::EditorHistory) && cfg!(unix),
+            "retained package upgrades require the Unix history journey"
+        );
+        let binary = std::path::PathBuf::from(
+            std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST")
+                .context("retained upgrades require the packaged predecessor helper")?,
+        );
+        ensure!(binary.is_absolute() && binary.is_file());
+        Some(binary)
+    } else {
+        None
+    };
+    let host_binary = predecessor
+        .clone()
+        .unwrap_or_else(|| current_host_binary.clone());
+    let cli = predecessor.clone().unwrap_or_else(|| current_cli.clone());
     if journey.editor_scenario().is_some() {
         std::fs::write(
             root.join("AGENTS.md"),
@@ -511,11 +620,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
+    let continuation_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let provider_continuation_gate = continuation_gate.clone();
     let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let goal_provider_gate = editor_goal_gate.clone();
     let goal_provider_hold = root.join("hold-goal-provider");
     let retry_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let provider_retry_attempts = Arc::clone(&retry_attempts);
+    let undo = Arc::new(editor_undo::Provider::default());
+    let provider_undo = Arc::clone(&undo);
     let goal_recovery = Arc::new(editor_goal_recovery::Provider::default());
     let provider_goal_recovery = Arc::clone(&goal_recovery);
     let goal_removal = Arc::new(editor_goal_removal::Provider::default());
@@ -525,10 +638,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let history_provider_gate = editor_history_gate.clone();
     let history_provider_hold = root.join("hold-history-provider");
-    let related_provider = Arc::new(editor_related_work::Provider::new(matches!(
-        journey,
-        Journey::EditorRelatedWorkFailure
-    )));
+    let activity_profile = std::env::var("GENTS_VSCODE_ACTIVITY_PROFILE").as_deref() == Ok("1");
+    ensure!(
+        !activity_profile || cfg!(unix),
+        "The command-output activity fixture requires a Unix shell."
+    );
+    let related_provider = Arc::new(editor_related_work::Provider::new(
+        matches!(journey, Journey::EditorRelatedWorkFailure),
+        activity_profile,
+    ));
     let provider_related = Arc::clone(&related_provider);
     let provider = FakeLlm::start_with_models(
         if journey.editor_scenario().is_some() {
@@ -548,6 +666,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 Journey::EditorRelatedWork | Journey::EditorRelatedWorkFailure
             ) {
                 if let Some(action) = provider_related.reply(request) {
+                    return action;
+                }
+            }
+            if matches!(journey, Journey::EditorUndo) {
+                if let Some(action) = provider_undo.reply(request, &emitted) {
                     return action;
                 }
             }
@@ -584,6 +707,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     return action;
                 }
             }
+            if activity_profile && matches!(journey, Journey::EditorHistory) {
+                if let Some(action) = editor_command_output::reply(request) {
+                    return action;
+                }
+            }
             if let Some(options) = history {
                 if let Some(reply) = editor_history::reply(request, options) {
                     return reply;
@@ -608,9 +736,23 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             {
                 return ChatAction::Sse(fake_llm::completion_text_sse(editor_workspace::REPLY));
             }
-            if matches!(journey, Journey::EditorSteering)
-                && request["messages"].to_string().contains(STEERING_INPUT)
+            if matches!(journey, Journey::EditorGoalSteering)
+                && editor_steering::has_completed_reply(request)
             {
+                return ChatAction::GatedSse(
+                    vec![(
+                        Duration::ZERO,
+                        format!(
+                            "data: {}\n\n",
+                            json!({"choices":[{"delta":{"content":"Goal continuation after steering"},"finish_reason":null}],"usage":null})
+                        ),
+                    )],
+                    provider_continuation_gate.clone(),
+                    fake_llm::completion_text_sse(" and finished."),
+                    emitted.clone(),
+                );
+            }
+            if journey.is_steering() && request["messages"].to_string().contains(STEERING_INPUT) {
                 return ChatAction::Sse(fake_llm::completion_text_sse(STEERING_REPLY));
             }
             ChatAction::GatedSse(
@@ -669,15 +811,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         None,
     )?;
     let port = ports::allocate_port()?;
-    let mut runtime_command = Command::new(&cli);
-    runtime_command
-        .current_dir(root)
-        .env_remove("GENTS_SYSTEM_LOG")
-        .args(["server", "--home"])
-        .arg(&node_home)
-        .arg("--http-port")
-        .arg(port.to_string())
-        .arg("--no-codex-shim");
+    let mut runtime_command = runtime_server_command(&cli, root, &node_home, port);
     #[cfg(unix)]
     let mut runtime = runtime_command
         .stdin(Stdio::null())
@@ -707,13 +841,32 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .as_str()
         .context("runtime GraphQL endpoint")?;
     let paths = DesktopPaths::from_root(root.join("client"));
-    let seed = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+    let client_did = if predecessor.is_some() {
+        #[cfg(unix)]
+        {
+            paths.ensure_root_dirs().await?;
+            retained_schema_upgrade::prepare_file_store(&paths).await?;
+            gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
+                .await?
+                .did()
+                .to_owned()
+        }
+        #[cfg(not(unix))]
+        {
+            anyhow::bail!("retained package upgrades require a Unix predecessor")
+        }
+    } else {
+        let seed = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths.clone(),
+                ClientCoreOptions::local_only(),
+            )
             .await?,
-    );
-    let client_did = seed.node_identity().did().to_owned();
-    seed.shutdown().await?;
-    drop(seed);
+        );
+        let did = seed.node_identity().did().to_owned();
+        seed.shutdown().await?;
+        did
+    };
     let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
     if journey.editor_scenario().is_some() {
@@ -732,12 +885,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let mut host =
         console::ConsoleChild::spawn(host_command.as_std(), &root.join("client-host.log"))?;
     wait_listener(&mut host, &paths).await?;
-    let mut client = Attachment::start(&paths).await;
+    let mut client = Attachment::start_with_binary(&paths, &host_binary).await;
     let access = gents::ConfigAccess::Graphql(gents::config_client::GraphqlEndpoint::as_principal(
         graphql,
         identity.did(),
     ));
-    if matches!(journey, Journey::Conversation) {
+    if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
         client
             .call(1, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -792,7 +945,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
         .context("runtime default agent")?;
-    if matches!(journey, Journey::Conversation | Journey::EditorDelivery) {
+    if matches!(
+        journey,
+        Journey::Conversation | Journey::RuntimeReplacement | Journey::EditorDelivery
+    ) {
         if matches!(journey, Journey::EditorDelivery) {
             client
                 .call(id, "client_connect_local", json!({"nodeHome":node_home}))
@@ -868,9 +1024,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         } else {
             "Return the fixture response.".to_owned()
         };
-    let receipt = if matches!(journey, Journey::Goal | Journey::EditorGoalRecovery) {
+    let receipt = if matches!(
+        journey,
+        Journey::Goal | Journey::EditorGoalRecovery | Journey::EditorGoalSteering
+    ) {
         client.call(id, "desktop_goal_control", json!({"request": {
             "nodeDid":node_did, "agentId":agent_id,
+            "cwd": journey.is_steering().then_some(root),
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
         }})).await
     } else {
@@ -880,7 +1040,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "desktop_chat_send",
                 json!({"request":{
                     "nodeDid":node_did,"agentId":agent_id,"content":content,"delivery":"queue",
-                    "cwd": matches!(journey, Journey::EditorSteering).then_some(root)
+                    "cwd": journey.is_steering().then_some(root)
                 }}),
             )
             .await
@@ -964,16 +1124,35 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("live output was not observed before provider completion")??;
-    if matches!(journey, Journey::EditorSteering) {
+    if matches!(journey, Journey::RuntimeReplacement) {
+        runtime_replacement::refuse_busy(&host_binary, &node_home).await?;
+        let unchanged = access.execute(&signed_query).await?;
+        let unchanged = &unchanged["data"]["AgentRequest"][0];
+        ensure!(
+            unchanged["_docID"] == original_doc_id,
+            "busy refusal replaced the input: {unchanged}"
+        );
+        ensure!(
+            !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+                unchanged["lifecycle_state"].as_str()
+            ),
+            "busy refusal terminated the input: {unchanged}"
+        );
+    }
+    if journey.is_steering() {
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
+        let continuation_path = root.join("finish-goal-steer-provider");
         let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            loop {
-                if completion_path.is_file() {
-                    completion_gate.add_permits(1);
-                    break;
-                }
+            while !completion_path.is_file() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            completion_gate.add_permits(1);
+            if matches!(journey, Journey::EditorGoalSteering) {
+                while !continuation_path.is_file() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                continuation_gate.add_permits(1);
             }
         }));
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
@@ -986,7 +1165,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &host_binary,
             session,
             provider.endpoint(),
-            "steering",
+            journey.editor_scenario().context("steering scenario")?,
         )
         .await?;
         id += 1;
@@ -1237,7 +1416,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         id += 1;
     }
     gate.add_permits(1);
-    let expected_reply = if matches!(journey, Journey::EditorSteering) {
+    let expected_reply = if journey.is_steering() {
         STEERING_REPLY
     } else {
         "First part and final part."
@@ -1290,6 +1469,27 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("the exact request's terminal answer was not observed")??;
+    if matches!(journey, Journey::RuntimeReplacement) {
+        runtime_replacement::Fixture {
+            root,
+            home: &node_home,
+            binary: &host_binary,
+            node_did,
+            agent_id,
+            session,
+            client_did: &client_did,
+            original_doc_id: &original_doc_id,
+            access: &access,
+        }
+        .replace_and_verify(&mut runtime, &mut client, &mut id)
+        .await.with_context(|| {
+            let requests: Vec<_> = provider.captured_chat_requests().iter().map(|request| json!({
+                "model":request["model"], "stream":request["stream"],
+                "userMessages":request["messages"].as_array().into_iter().flatten().filter(|message| message["role"] == "user").map(|message| message["content"].clone()).collect::<Vec<_>>(),
+            })).collect();
+            format!("provider observations: {}; completion gate permits: {}", json!(requests), gate.available_permits())
+        })?;
+    }
     let wrong_scope = client
         .try_call(
             id,
@@ -1384,22 +1584,29 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         user_rounds
             == if matches!(journey, Journey::EditorGoalRecovery) {
                 7
-            } else if matches!(journey, Journey::EditorSteering) {
+            } else if matches!(journey, Journey::EditorGoalSteering) {
+                3
+            } else if journey.is_steering() || matches!(journey, Journey::RuntimeReplacement) {
                 2
             } else {
                 1
             },
         "unexpected provider round count: {user_rounds}"
     );
-    if matches!(journey, Journey::EditorSteering) {
-        let evidence = verify_editor_steering(
+    if journey.is_steering() {
+        let evidence = editor_steering::verify(
             &access,
             &provider,
-            root,
-            node_did,
-            session,
-            &original_doc_id,
-            &client_did,
+            editor_steering::Context {
+                root,
+                node_did,
+                session,
+                original_doc_id: &original_doc_id,
+                client_did: &client_did,
+                goal_id: matches!(journey, Journey::EditorGoalSteering)
+                    .then(|| receipt["goalId"].as_str())
+                    .flatten(),
+            },
         )
         .await?;
         std::fs::write(
@@ -1409,7 +1616,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorHistory) {
         let options = history.context("history options")?;
-        let evidence = editor_history::populate(
+        let mut evidence = editor_history::populate(
             &mut client,
             &mut id,
             &access,
@@ -1421,6 +1628,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root,
         )
         .await?;
+        evidence["commandOutputProfile"] = json!(activity_profile && options.profile);
         std::fs::write(
             root.join("editor-history-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
@@ -1456,15 +1664,63 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }
             }))
         });
-        run_editor_journey(
-            root,
-            &paths,
-            &host_binary,
-            session,
-            provider.endpoint(),
-            "history",
-        )
-        .await?;
+        if predecessor.is_some() {
+            #[cfg(unix)]
+            {
+                client.close().await;
+                tokio::try_join!(
+                    run_editor_journey(
+                        root,
+                        &paths,
+                        &host_binary,
+                        session,
+                        provider.endpoint(),
+                        "history"
+                    ),
+                    retained_schema_upgrade::replace_when_requested(
+                        root,
+                        &paths,
+                        &client_did,
+                        &mut host,
+                        &current_host_binary,
+                        &mut runtime,
+                        &current_cli,
+                        &node_home,
+                        port,
+                        node_did
+                    ),
+                )?;
+                client = Attachment::start(&paths).await;
+                let rows = editor_history::verified_requests(
+                    &access,
+                    node_did,
+                    session,
+                    &client_did,
+                    evidence["completedRequests"]
+                        .as_u64()
+                        .context("seeded history request count")? as usize
+                        + 1,
+                )
+                .await?;
+                ensure!(
+                    rows.iter()
+                        .filter(|row| row.content.as_deref() == Some("History fixture turn 46"))
+                        .count()
+                        == 1,
+                    "the post-update message did not complete exactly once"
+                );
+            }
+        } else {
+            run_editor_journey(
+                root,
+                &paths,
+                &host_binary,
+                session,
+                provider.endpoint(),
+                "history",
+            )
+            .await?;
+        }
         if options.profile {
             let evidence = editor_history::verify_profile(
                 &mut client,
@@ -1474,6 +1730,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 session,
                 &client_did,
                 options,
+                activity_profile,
             )
             .await?;
             std::fs::write(
@@ -1518,6 +1775,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &client_did,
             root,
             matches!(journey, Journey::EditorRelatedWorkFailure),
+            activity_profile,
         )
         .await?;
         std::fs::write(
@@ -1692,6 +1950,63 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 serde_json::to_vec_pretty(&permissions)?,
             )?;
         }
+    }
+    if matches!(journey, Journey::EditorUndo) {
+        editor_undo::prepare(root)?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        ensure!(
+            client
+                .call(id, "client_runtime_is_local", json!({"nodeDid":node_did}))
+                .await
+                == false,
+            "Undo must authenticate retained images through the paired route"
+        );
+        id += 1;
+        let release = root.join("finish-undo-goal");
+        let held = Arc::clone(&undo);
+        let release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if release.is_file() {
+                    held.release();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        let result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "undo",
+        )
+        .await;
+        std::fs::write(
+            root.join("editor-undo-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        if root.join("editor-artifacts-path").is_file() {
+            copy_editor_evidence(root, "editor-undo-provider.json")?;
+        }
+        result?;
+        let evidence = editor_undo::verify(
+            &mut client,
+            &mut id,
+            &access,
+            root,
+            node_did,
+            &client_did,
+            &identity,
+            &provider,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-undo-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+        drop(release);
     }
     if matches!(journey, Journey::EditorGoalReplacement) {
         editor_goal_replacement::prepare(root)?;
@@ -1958,9 +2273,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     client.close().await;
     // Keep the replica available while the runtime drains its pending pushes.
-    stop(&mut runtime)
-        .await
-        .context("stopping the fixture runtime")?;
+    if !matches!(journey, Journey::RuntimeReplacement) {
+        stop(&mut runtime)
+            .await
+            .context("stopping the fixture runtime")?;
+    }
     stop(&mut host)
         .await
         .context("stopping the fixture client host")?;
@@ -2283,6 +2600,19 @@ async fn exercise_message_edit(
     Ok(client)
 }
 
+fn runtime_server_command(binary: &Path, root: &Path, home: &Path, port: u16) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(root)
+        .env_remove("GENTS_SYSTEM_LOG")
+        .args(["server", "--home"])
+        .arg(home)
+        .arg("--http-port")
+        .arg(port.to_string())
+        .arg("--no-codex-shim");
+    command
+}
+
 async fn run_editor_journey(
     root: &Path,
     paths: &DesktopPaths,
@@ -2339,154 +2669,6 @@ async fn run_editor_journey(
     let status = status.context("editor journey timed out")??;
     ensure!(status.success(), "editor journey exited with {status}");
     Ok(())
-}
-
-async fn verify_editor_steering(
-    access: &gents::ConfigAccess,
-    provider: &FakeLlm,
-    root: &Path,
-    node_did: &str,
-    session: &str,
-    original_doc_id: &str,
-    client_did: &str,
-) -> Result<Value> {
-    use gents_protocol::request_input::QueueDelivery;
-    use gents_protocol::request_lifecycle::RequestLifecycleState;
-
-    let result = access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
-        gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session), gents::SIGNED_REQUEST_FIELDS,
-    )).await?;
-    let rows: Vec<gents_protocol::row::AgentRequestRow> =
-        serde_json::from_value(result["data"]["AgentRequest"].clone())?;
-    ensure!(
-        rows.len() == 3,
-        "steering must retain one active row and two signed versions of the input: {result}"
-    );
-    for row in &rows {
-        gents::verify_request_receipt_signature(row)?;
-        ensure!(
-            row.admission_signer_did.as_deref() == Some(client_did)
-                && row.requester_did.as_deref() == Some(client_did),
-            "steering changed the enrolled author"
-        );
-    }
-    let active = rows
-        .iter()
-        .find(|row| row.doc_id.as_deref() == Some(original_doc_id))
-        .context("original request")?;
-    let input = |delivery| {
-        rows.iter().find(|row| {
-            row.content.as_deref() == Some(STEERING_INPUT)
-                && row
-                    .input
-                    .as_ref()
-                    .and_then(|input| input.queue.as_ref())
-                    .is_some_and(|queue| queue.delivery == delivery)
-        })
-    };
-    let queued = input(QueueDelivery::Queue).context("original queued input")?;
-    let steered = input(QueueDelivery::Steer).context("promoted input")?;
-    let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-steering-ui.json"))?)?;
-    let captured = &queued
-        .input
-        .as_ref()
-        .context("queued input")?
-        .captured_context;
-    ensure!(
-        captured.len() == 1
-            && steered.input.as_ref().map(|input| &input.captured_context) == Some(captured),
-        "Steer changed or dropped the queued capture"
-    );
-    let capture = serde_json::to_value(&captured[0])?;
-    ensure!(
-        capture["content"] == "queued captured unsaved context\n"
-            && capture["uri"] == ui["contextUri"]
-            && capture["kind"] == "selection"
-            && capture["source"] == "editor"
-            && capture["unsaved"] == true
-            && capture["version"].as_u64().is_some_and(|v| v > 1)
-            && capture["range"]["start"] == json!({"line":0,"character":0})
-            && capture["range"]["end"] == json!({"line":1,"character":0}),
-        "Steer did not retain the submitted editor observations"
-    );
-    ensure!(
-        active.lifecycle_state == Some(RequestLifecycleState::Completed)
-            && queued.lifecycle_state == Some(RequestLifecycleState::Superseded)
-            && steered.lifecycle_state == Some(RequestLifecycleState::Superseded)
-            && queued.superseded_by_request_doc_id == steered.doc_id
-            && steered.superseded_by_request_doc_id.as_deref() == Some(original_doc_id),
-        "the pending row must be promoted and consumed by the original physical request: {result}"
-    );
-    let rendered = access.execute(&format!(
-        r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id turn_index }} }}"#,
-        gents::graphql::escape_graphql_string(&active.request_id),
-    )).await?;
-    let rendered = rendered["data"]["RenderedRequest"]
-        .as_array()
-        .context("rendered steering requests")?;
-    ensure!(
-        rendered.len() == 2
-            && rendered
-                .iter()
-                .all(|row| row["request_doc_id"] == original_doc_id)
-            && rendered[0]["turn_index"] != rendered[1]["turn_index"],
-        "steering must continue the original capture exactly once: {rendered:?}"
-    );
-    let requests = provider.captured_chat_requests();
-    let provider_input_occurrences = requests
-        .iter()
-        .map(|body| body["messages"].to_string().matches(STEERING_INPUT).count())
-        .sum::<usize>();
-    let steered_rounds = requests
-        .iter()
-        .filter(|body| body["messages"].to_string().contains(STEERING_INPUT))
-        .collect::<Vec<_>>();
-    ensure!(
-        steered_rounds.len() == 1
-            && steered_rounds[0]["messages"]
-                .to_string()
-                .matches(STEERING_INPUT)
-                .count()
-                == 1,
-        "the provider must receive the promoted input exactly once: {requests:?}"
-    );
-    let capture_count = |body: &Value| {
-        body["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|message| message["role"] == "user")
-            .filter_map(|message| message["content"].as_array())
-            .flatten()
-            .filter_map(|part| part["text"].as_str())
-            .filter_map(|text| {
-                text.strip_prefix(
-                    "Editor context (captured text; URI identifies its editor location):\n",
-                )
-            })
-            .filter_map(|text| serde_json::from_str::<Value>(text).ok())
-            .filter(|value| value == &capture)
-            .count()
-    };
-    let captured_parts = capture_count(steered_rounds[0]);
-    let all_captured_parts = requests.iter().map(capture_count).sum::<usize>();
-    ensure!(
-        captured_parts == 1 && all_captured_parts == 1,
-        "the provider lost, duplicated or received the capture before Steer"
-    );
-    Ok(json!({
-        "nodeDid": node_did, "sessionId": session, "authorDid": client_did,
-        "activeRequestDocId": original_doc_id, "queuedRequestDocId": queued.doc_id,
-        "steeredRequestDocId": steered.doc_id, "activeState": active.lifecycle_state,
-        "queuedState": queued.lifecycle_state, "steeredState": steered.lifecycle_state,
-        "queuedReplacedBy": queued.superseded_by_request_doc_id,
-        "steeredConsumedBy": steered.superseded_by_request_doc_id,
-        "renderedRequests": rendered, "providerInputOccurrences": provider_input_occurrences,
-        "providerRequests": requests.len(),
-        "verifiedSignatures": rows.len(),
-        "context": capture, "providerCaptureOccurrences": all_captured_parts,
-    }))
 }
 
 async fn read_session(

@@ -102,6 +102,7 @@ pub async fn control_goal(
         captured_context: request.captured_context.unwrap_or_default(),
         ..Default::default()
     };
+    let starts_goal = matches!(operation, GoalOperation::Create { .. });
     let receipt = core
         .control_session_goal(
             &request.node_did,
@@ -114,7 +115,7 @@ pub async fn control_goal(
         )
         .await
         .map_err(BridgeError::classify_transport_error)?;
-    goal_control_result(session_id, receipt.outcome)
+    goal_control_result(session_id, starts_goal, receipt.outcome)
 }
 
 fn invalid_goal_argument(error: anyhow::Error) -> BridgeError {
@@ -123,6 +124,7 @@ fn invalid_goal_argument(error: anyhow::Error) -> BridgeError {
 
 fn goal_control_result(
     session_id: String,
+    starts_goal: bool,
     outcome: GoalControlOutcome,
 ) -> Result<GoalControlResult, BridgeError> {
     match outcome {
@@ -130,6 +132,7 @@ fn goal_control_result(
             goal_id,
             request_id,
         } => Ok(GoalControlResult {
+            started_goal_id: (starts_goal && request_id.is_some()).then(|| goal_id.clone()),
             goal_id,
             session_id,
             request_id,
@@ -155,10 +158,33 @@ mod tests {
     }
 
     #[test]
+    fn applied_creation_and_resumption_keep_distinct_opening_provenance() {
+        for (starts_goal, request_id, expected) in [
+            (true, Some("opening"), Some("goal")),
+            (false, Some("resumed"), None),
+            (false, None, None),
+            (true, None, None),
+        ] {
+            let result = goal_control_result(
+                "chat".into(),
+                starts_goal,
+                GoalControlOutcome::Applied {
+                    goal_id: "goal".into(),
+                    request_id: request_id.map(str::to_owned),
+                },
+            )
+            .unwrap();
+            assert_eq!(result.started_goal_id.as_deref(), expected);
+            assert_eq!(result.request_id.as_deref(), request_id);
+        }
+    }
+
+    #[test]
     fn goal_control_rejection_keeps_its_reason_and_code_in_host_and_tauri_payloads() {
         let reason = "wait for this session to finish before starting a goal";
         let error = goal_control_result(
             "chat".into(),
+            true,
             GoalControlOutcome::Rejected {
                 reason: reason.into(),
             },

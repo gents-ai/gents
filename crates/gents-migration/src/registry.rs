@@ -825,7 +825,54 @@ static INFERENCE_CALL_TERMINAL_WINDOW_FIELDS: &[OrdinaryIndexField<'static>] = &
     },
 ];
 
+static RENDERED_REQUEST_CALL_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "request_doc_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "turn_index",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "attempt",
+        descending: false,
+    },
+];
+
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        name: "InferenceCall_session_id_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "session_id",
+            descending: false,
+        }],
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        name: "InferenceCall_model_name_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "model_name",
+            descending: false,
+        }],
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        name: "InferenceCall_profile_id_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "profile_id",
+            descending: false,
+        }],
+    },
     OrdinaryIndex {
         collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
         name: "InferenceCall_kind_ended_at",
@@ -885,6 +932,11 @@ pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
         collection: gents_protocol::schemas::MAILBOX_ITEM_NAME,
         name: "MailboxItem_node_status_item_key",
         fields: MAILBOX_NODE_STATUS_ITEM_KEY_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::RENDERED_REQUEST_NAME,
+        name: "RenderedRequest_request_node_session_turn_attempt",
+        fields: RENDERED_REQUEST_CALL_FIELDS,
     },
 ];
 

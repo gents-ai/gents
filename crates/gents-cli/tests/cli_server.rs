@@ -2588,6 +2588,59 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trace_of_a_served_home_reads_only_as_its_home() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let caller_dir = tempdir.path().join("caller");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&caller_dir)?;
+    let model_name = format!("mock-trace-home-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            &format!("cli-trace-home-{}", Uuid::new_v4().simple()),
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    let (_serve, port, _) =
+        spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &[], &[])?;
+    let graphql = graphql_url(port);
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "home-trace-req", node_did: "{}", session_id: "home-trace-session", lifecycle_state: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&node_did)
+        ),
+    )
+    .await
+    .context("seeding the traced request")?;
+
+    let trace = ["trace", "timeline", "--graphql", &graphql];
+    let request = ["--request-id", "home-trace-req"];
+    let anonymous = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
+    assert!(anonymous.contains("probably denied"), "{anonymous}");
+
+    let served_home = home_dir.join(".gents");
+    let served_home = served_home.to_str().context("home path is not UTF-8")?;
+    let timeline = run_cli_json(
+        &caller_dir,
+        &[&trace[..], &["--home", served_home], &request[..]].concat(),
+    )?;
+    assert_eq!(
+        timeline.pointer("/request_id").and_then(Value::as_str),
+        Some("home-trace-req"),
+        "{timeline}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     use rmcp::model::CallToolRequestParams;
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;

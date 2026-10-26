@@ -3,7 +3,6 @@ use std::cmp::Reverse;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
 
@@ -131,30 +130,23 @@ pub(crate) fn session_summaries(
                 })
             });
             let candidate = exact_requests.next();
-            let request = if exact_requests.next().is_none() {
+            let exact = if exact_requests.next().is_none() {
                 candidate
             } else {
                 None
             };
-            let request = request.map(|request| {
-                let may_wait_or_fold = gents::lifecycle::folded_into(request).is_some()
-                    || matches!(
-                        request.lifecycle_state,
-                        Some(
-                            RequestLifecycleState::Pending
-                                | RequestLifecycleState::WorkspaceBindingPending
-                        )
-                    );
-                if !may_wait_or_fold {
-                    return request;
-                }
-                gents_desktop_core::client::session_turn_request(session_requests, request)
+            let request = exact.map(|request| {
+                gents_desktop_core::client::session_display_request(session_requests, request)
             });
             let lifecycle = request
                 .and_then(|request| request.lifecycle_state)
                 .or_else(|| indexed.map(|indexed| indexed.lifecycle_state));
-            let trigger_id = request.and_then(|request| request.caused_by_trigger_id.clone());
-            let trigger_kind = request.and_then(|request| request.caused_by_trigger_kind.clone());
+            let trigger_owner = request
+                .filter(|request| request.caused_by_trigger_id.is_some())
+                .or_else(|| exact.filter(|request| request.caused_by_trigger_id.is_some()));
+            let trigger_id = trigger_owner.and_then(|request| request.caused_by_trigger_id.clone());
+            let trigger_kind =
+                trigger_owner.and_then(|request| request.caused_by_trigger_kind.clone());
             let task_id = session
                 .provenance
                 .as_ref()

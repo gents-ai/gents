@@ -4,8 +4,11 @@ use tracing::instrument::WithSubscriber;
 pub(in crate::agent::daemon) struct InterruptionCapture(Arc<std::sync::Mutex<Vec<String>>>);
 
 impl InterruptionCapture {
+    /// Keep a global dispatcher registered so cross-thread interest rebuilds
+    /// include this scoped subscriber instead of the rebuilding thread's default.
     pub(in crate::agent::daemon) fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync {
         use tracing_subscriber::layer::SubscriberExt;
+        crate::test_support::enable_scoped_event_capture();
         tracing_subscriber::Registry::default().with(self.clone())
     }
 
@@ -33,6 +36,49 @@ where
             event.record(&mut SourceVisitor(&mut self.0.lock().unwrap()));
         }
     }
+}
+
+/// A fresh process excludes global subscribers installed by unrelated tests.
+#[test]
+fn interruption_capture_survives_interest_rebuild_on_another_thread() {
+    const FIXTURE: &str = "GENTS_INTERRUPTION_CAPTURE_FIXTURE";
+    if std::env::var_os(FIXTURE).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "agent::daemon::inference::tests::interruption_capture_survives_interest_rebuild_on_another_thread",
+                "--nocapture",
+            ])
+            .env(FIXTURE, "1")
+            .output()
+            .expect("run interruption capture in a fresh process");
+        assert!(
+            output.status.success(),
+            "isolated capture failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    fn emit() {
+        tracing::info!(
+            target: "gents::agent::daemon",
+            cancellation_source = "claimed",
+            "request interrupted"
+        );
+    }
+
+    let capture = InterruptionCapture::default();
+    tracing::subscriber::with_default(capture.subscriber(), || {
+        emit();
+        capture.assert_source("claimed");
+        capture.0.lock().unwrap().clear();
+        std::thread::spawn(tracing::callsite::rebuild_interest_cache)
+            .join()
+            .expect("rebuild tracing interest on an unrelated thread");
+        emit();
+    });
+    capture.assert_source("claimed");
 }
 
 #[derive(Clone)]

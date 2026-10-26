@@ -65,6 +65,43 @@ instance (s : ResolvedSnapshot) : Decidable s.wellFormed := by
   unfold wellFormed
   infer_instance
 
+/-- A tool surface that cannot be built makes its agent unavailable before
+publication. Other runnable agents and the default selection remain intact. -/
+def demote (s : ResolvedSnapshot) (agent : AgentId) : ResolvedSnapshot :=
+  { s with runnable := s.runnable.erase agent, unavailable := insert agent s.unavailable }
+
+theorem demote_preserves_other_agents (s : ResolvedSnapshot) (agent other : AgentId)
+    (h : other ≠ agent) :
+    other ∈ (s.demote agent).runnable ↔ other ∈ s.runnable := by
+  simp [demote, h]
+
+theorem demote_is_unavailable (s : ResolvedSnapshot) (agent : AgentId) :
+    agent ∈ (s.demote agent).unavailable ∧ agent ∉ (s.demote agent).runnable := by
+  simp [demote]
+
+theorem demote_idempotent (s : ResolvedSnapshot) (agent : AgentId) :
+    (s.demote agent).demote agent = s.demote agent := by
+  simp [demote]
+
+theorem demote_wellFormed (s : ResolvedSnapshot) (agent : AgentId)
+    (h : s.wellFormed) : (s.demote agent).wellFormed := by
+  rcases h with ⟨hDisjoint, hDependencies, hDefault⟩
+  refine ⟨?_, ?_, ?_⟩
+  · rw [Finset.disjoint_left]
+    intro other hRunnable hUnavailable
+    simp only [demote, Finset.mem_erase] at hRunnable
+    simp only [demote, Finset.mem_insert] at hUnavailable
+    rcases hUnavailable with rfl | hUnavailable
+    · exact hRunnable.1 rfl
+    · exact Finset.disjoint_left.mp hDisjoint hRunnable.2 hUnavailable
+  · exact fun _ hRunnable => hDependencies (Finset.mem_erase.mp hRunnable).2
+  · simp only [demote, Finset.mem_union, Finset.mem_erase, Finset.mem_insert]
+    rcases Finset.mem_union.mp hDefault with hRunnable | hUnavailable
+    · by_cases hSame : s.defaultAgent = agent
+      · exact Or.inr (Or.inl hSame)
+      · exact Or.inl ⟨hSame, hRunnable⟩
+    · exact Or.inr (Or.inr hUnavailable)
+
 end ResolvedSnapshot
 
 structure ActiveRuntimeSnapshot where

@@ -4,6 +4,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 mod command;
+mod command_grants;
+#[cfg(test)]
+pub(super) use command_grants::command_grant;
+pub use command_grants::revoke_commands;
+pub(super) use command_grants::{has_command_grant, remember_command, RememberedCommandGrant};
 mod context;
 mod file;
 mod review_task;
@@ -30,12 +35,15 @@ pub const STATUS_SUPPORT_FIELD: &str = "workspace_permissions";
 pub struct Support {
     pub contract_version: u32,
     pub workspace_sandbox: bool,
+    #[serde(default)]
+    pub remembered_commands: bool,
 }
 
 pub fn support() -> Support {
     Support {
         contract_version: CONTRACT_VERSION,
         workspace_sandbox: crate::toolset::workspace_write_sandbox_enforced(),
+        remembered_commands: true,
     }
 }
 
@@ -84,9 +92,18 @@ pub struct Settings {
     pub selection: Preference<ReviewTaskSelection>,
     #[serde(default)]
     pub dirs: Vec<crate::plugin::allowed::AllowedDir>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) command_grants: Vec<RememberedCommandGrant>,
 }
 
 impl Settings {
+    pub fn remembered_command_count(&self) -> usize {
+        self.command_grants
+            .iter()
+            .filter(|grant| grant.revision == self.selection.revision)
+            .count()
+    }
+
     pub fn scope(&self) -> Scope<WorkspaceKey> {
         Scope {
             workspace: self.workspace.clone(),
@@ -388,6 +405,11 @@ pub(crate) fn binding_route(
     };
     let action = action()?;
     let current = settings.scope();
+    let binding = Grant {
+        scope: current.clone(),
+        action: action.clone(),
+    };
+    let grant = has_command_grant(&settings, &binding)?.then(|| binding.clone());
     let input = Input {
         current: current.clone(),
         configured_workspace: settings.workspace,
@@ -395,7 +417,7 @@ pub(crate) fn binding_route(
         action: action.clone(),
         ceiling_allows: true,
         crosses_boundary: !covered,
-        grant: None,
+        grant,
     };
     let binding = Grant {
         scope: current,
@@ -481,6 +503,7 @@ pub fn save_mode(
         workspace: key.clone(),
         selection: selected.next,
         dirs: previous.map_or_else(Vec::new, |entry| entry.dirs.clone()),
+        command_grants: Vec::new(),
     };
     stored.entries.retain(|entry| entry.workspace != *key);
     stored.entries.push(settings.clone());
@@ -573,6 +596,7 @@ mod tests {
                         workspace: key.clone(),
                         selection,
                         dirs: Vec::new(),
+                        command_grants: Vec::new(),
                     })
                     .into_iter()
                     .collect(),
