@@ -92,6 +92,8 @@ pub struct TranscriptSpan {
 #[derive(Debug, Default)]
 pub struct CanonicalTranscriptDependencies {
     pub origin_headers: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
+    /// Exact source request metadata supplies attribution, never child turn membership.
+    pub origin_requests: Vec<AgentRequestRow>,
     pub output_segments: Vec<gents::session::canonical_rows::OutputSegmentRow>,
     pub denied_header_doc_ids: Vec<String>,
     pub denied_segment_doc_ids: Vec<String>,

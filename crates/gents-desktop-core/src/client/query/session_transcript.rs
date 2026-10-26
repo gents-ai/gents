@@ -370,6 +370,32 @@ async fn load_page_canonical_dependencies(
         }
     }
     dependencies.output_segments = records.into_values().collect();
+    let origin_request_docs = dependencies
+        .origin_headers
+        .iter()
+        .filter(|header| header.message.role == gents_protocol::output::MessageRole::User)
+        .filter_map(|header| header.message.request_doc_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !origin_request_docs.is_empty() {
+        let (requests, _) =
+            read_request_documents(access, &origin_request_docs, "fork input attribution").await?;
+        for request in &requests {
+            anyhow::ensure!(
+                dependencies.origin_headers.iter().any(|header| {
+                    header.message.request_doc_id == request.doc_id
+                        && request.node_did.as_deref() == Some(header.message.node_did.as_str())
+                        && request.session_id.as_deref() == Some(header.message.session_id.as_str())
+                        && request.requester_did == header.message.requester_did
+                }),
+                "fork input attribution crossed its source scope"
+            );
+        }
+        query_count += origin_request_docs.len().div_ceil(128) as u64;
+        queried_rows = queried_rows.saturating_add(requests.len());
+        dependencies.origin_requests = requests;
+    }
     Ok((dependencies, query_count, queried_rows))
 }
 

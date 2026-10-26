@@ -60,14 +60,14 @@ use timeline_page::insert_timeline_item_by_sequence;
 pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page_with_query};
 
 pub(super) fn message_is_runtime_control(
-    message: &TranscriptMessageRow,
+    message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
 ) -> bool {
     let request_input = input_request
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
-    gents::lifecycle::is_runtime_control_message(&request_input, &message.message.message_key)
+    gents::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
 }
 
 pub(super) fn request_origin_view(
@@ -121,14 +121,14 @@ pub(super) fn request_origin_view(
 
 pub(super) fn message_origin(
     store: &ClientStore,
-    message: &TranscriptMessageRow,
+    message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
 ) -> Option<RequestOriginView> {
-    if message.message.role != gents_protocol::output::MessageRole::User {
+    if message.role != gents_protocol::output::MessageRole::User {
         return None;
     }
     if gents::background_completion::is_background_completion_notification_message_key(
-        &message.message.message_key,
+        &message.message_key,
     ) {
         return Some(RequestOriginView::BackgroundCompletion);
     }
