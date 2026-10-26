@@ -5,17 +5,18 @@ mod commands;
 use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
+use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
-    AccountUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
-    CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
+    ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
+    CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
     InferenceBackendRecommendationRequest, InferenceDiscoveryFailure, InferenceDiscoveryRequest,
     InferenceDiscoveryResult, InferenceProbeRequest, InferenceProbeResult,
     InferenceRecommendationRequest, ProviderAccountDisconnectRequest, ProviderAccountRemoveRequest,
     ProviderAccountRenameRequest, ProviderAccountRetrySaveRequest, ProviderAccountView,
-    ProviderAccountsRequest, ProviderUsageReadRequest, SignInView, UsageWindowView,
+    ProviderAccountsRequest, SignInView,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;

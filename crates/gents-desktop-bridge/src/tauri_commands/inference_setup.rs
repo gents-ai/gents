@@ -4,9 +4,7 @@
 
 #[cfg(test)]
 use crate::accounts::usage::account_usage_views;
-pub(crate) use crate::accounts::usage::{
-    AccountUsageView, ProviderUsageReadRequest, UsageWindowView,
-};
+use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest};
 use crate::accounts::{observe_provider_accounts, retry_pending_credential};
 #[cfg(test)]
 use crate::accounts::{require_reachable_configuration, save_issued_credential};
