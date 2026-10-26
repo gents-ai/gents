@@ -1,8 +1,17 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use events::{DocumentChangeSubscription, EventName, Subscription};
+
+#[derive(Debug, thiserror::Error)]
+pub enum SubscriptionSourceError {
+    #[error(transparent)]
+    Node(Box<defra_node::Error>),
+    #[error("{name} schema is not installed")]
+    NotInstalled { name: String },
+}
+
+type Result<T, E = SubscriptionSourceError> = std::result::Result<T, E>;
 
 pub trait UpdateSubscriptionSource: Send + Sync {
     fn subscribe_updates(&self) -> Subscription;
@@ -48,9 +57,12 @@ pub fn collection_ids<'a>(
     names
         .into_iter()
         .map(|name| {
-            node.get_collection(name)?
+            node.get_collection(name)
+                .map_err(|error| SubscriptionSourceError::Node(Box::new(error)))?
                 .map(|collection| collection.collection_id)
-                .with_context(|| format!("{name} schema is not installed"))
+                .ok_or_else(|| SubscriptionSourceError::NotInstalled {
+                    name: name.to_owned(),
+                })
         })
         .collect()
 }

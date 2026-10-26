@@ -132,7 +132,7 @@ impl CallbackWorkers {
                     )
                     .await?;
                 }
-                anyhow::Ok(())
+                Ok::<_, super::CallbackError>(())
             }
             .await;
             if let Err(error) = result {
@@ -147,7 +147,7 @@ impl CallbackEngine {
         &self,
         invocation: &CallbackInvocationDoc,
         callback: &crate::document_config::Callback,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), super::CallbackError> {
         if let Some(workers) = &self.workers {
             if matches!(
                 callback.handler,

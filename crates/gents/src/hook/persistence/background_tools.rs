@@ -695,7 +695,7 @@ impl DefraSessionHook {
                 let result = background_invalid_tool_arguments_payload(
                     CANCEL_PROCESS_TOOL_NAME,
                     "/tool_call_id",
-                    format!("{}", ErrorChain(error.as_ref())),
+                    format!("{}", ErrorChain(&error)),
                 );
                 return self
                     .complete_control_tool_call(

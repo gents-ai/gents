@@ -9,7 +9,6 @@ use crate::graph_pipeline::{
     GraphPipelineError, GraphPlan, PackagePlan, PlannedPackageArtifact, RequiredSchemaDigest,
 };
 use crate::Collection;
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -97,6 +96,26 @@ pub enum GraphPackageInstallError {
     IdenticalInstallDiverged,
     #[error("package install requires graph owner authority")]
     ActorNotOwner,
+    #[error(transparent)]
+    Inference(#[from] crate::pack::InferenceError),
+    #[error(transparent)]
+    Compile(#[from] crate::graph_pipeline::GraphCompileError),
+    #[error(transparent)]
+    ParseSchema(#[from] query::QueryError),
+    #[error(transparent)]
+    SchemaContract(#[from] crate::config_client::SchemaContractError),
+    #[error("preview package schema {path:?}")]
+    PreviewSchema {
+        path: String,
+        #[source]
+        source: crate::config_client::SchemaInstallError,
+    },
+    #[error("publish package schema {path:?}")]
+    PublishSchema {
+        path: String,
+        #[source]
+        source: crate::config_client::SchemaInstallError,
+    },
 }
 
 impl From<crate::pack::ProvenanceError> for GraphPackageInstallError {
@@ -212,7 +231,7 @@ pub async fn default_graph_package_install_bindings(
     package: &LoadedGraphPackage,
     owner_did: &str,
     requested: &crate::pack::PackInferenceBindings,
-) -> anyhow::Result<GraphPackageInstallBindings> {
+) -> Result<GraphPackageInstallBindings> {
     validate_owner(access, owner_did).await?;
     let preview = crate::pack::preview_pack_inference_bindings(
         access,
@@ -428,7 +447,7 @@ pub(crate) async fn prepare_loaded_graph_package_install(
     access: &ConfigAccess,
     package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
-) -> anyhow::Result<PreparedGraphPackageInstall> {
+) -> Result<PreparedGraphPackageInstall> {
     prepare_package(access, package, options, None).await
 }
 
@@ -437,7 +456,7 @@ async fn prepare_package(
     package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
-) -> anyhow::Result<PreparedGraphPackageInstall> {
+) -> Result<PreparedGraphPackageInstall> {
     validate_owner(access, &options.node_did).await?;
     let preview = crate::pack::preview_pack_inference_bindings(
         access,
@@ -453,7 +472,7 @@ async fn prepare_package(
     )?;
     let intent = selected_intent(&config.graph_intents, graph_id)?;
     if intent.node_did != options.node_did {
-        return Err(GraphPackageInstallError::GraphOwnerMismatch.into());
+        return Err(GraphPackageInstallError::GraphOwnerMismatch);
     }
     let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
     let desired_state = DesiredStateApplyPlan::new(
@@ -489,9 +508,7 @@ async fn prepare_package(
     for path in &package.manifest.schemas {
         let collections = query::parse_sdl(package.asset_text(path)?)?;
         if collections.is_empty() {
-            return Err(
-                GraphPackageInstallError::SchemaWithoutCollection { path: path.clone() }.into(),
-            );
+            return Err(GraphPackageInstallError::SchemaWithoutCollection { path: path.clone() });
         }
         let mut collection_contract_digests = BTreeMap::new();
         for collection in collections {
@@ -503,7 +520,7 @@ async fn prepare_package(
                 )
                 .is_some()
             {
-                return Err(GraphPackageInstallError::SchemaRepeatsCollection.into());
+                return Err(GraphPackageInstallError::SchemaRepeatsCollection);
             }
         }
         schema_digests.push(RequiredSchemaDigest {
@@ -526,8 +543,7 @@ async fn prepare_package(
                     entry: entry.name.clone(),
                     collection: collection.clone(),
                     package: package.manifest.name.clone(),
-                }
-                .into());
+                });
             }
         }
     }
@@ -572,7 +588,7 @@ async fn prepare_package(
             .as_ref()
             .is_some_and(|active| active.digest == plan.digest)
     {
-        return Err(GraphPackageInstallError::IdenticalInstallDiverged.into());
+        return Err(GraphPackageInstallError::IdenticalInstallDiverged);
     }
     let desired = &desired_state;
     access
@@ -593,16 +609,16 @@ async fn prepare_package(
     })
 }
 
-async fn ensure_package_schemas(
-    access: &ConfigAccess,
-    package: &LoadedGraphPackage,
-) -> anyhow::Result<()> {
+async fn ensure_package_schemas(access: &ConfigAccess, package: &LoadedGraphPackage) -> Result<()> {
     let mut plans = Vec::new();
     for path in &package.manifest.schemas {
         let sdl = package.asset_text(path)?;
         let plan = crate::config_client::preview_schema_install(access, sdl)
             .await
-            .with_context(|| format!("preview package schema {path:?}"))?;
+            .map_err(|source| GraphPackageInstallError::PreviewSchema {
+                path: path.clone(),
+                source,
+            })?;
         plans.push((path, plan));
     }
     for (path, plan) in plans {
@@ -612,7 +628,10 @@ async fn ensure_package_schemas(
             &plan.artifact_digest,
         )
         .await
-        .with_context(|| format!("publish package schema {path:?}"))?;
+        .map_err(|source| GraphPackageInstallError::PublishSchema {
+            path: path.clone(),
+            source,
+        })?;
     }
     Ok(())
 }

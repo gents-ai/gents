@@ -850,7 +850,8 @@ fn generated_persistence_failure_policy_cases_match_hook_decisions() {
 
     for case in cases {
         let counters = hook_counters_for_test();
-        let error = anyhow::anyhow!("generated persistence failure for {}", case.name);
+        let error =
+            std::io::Error::other(format!("generated persistence failure for {}", case.name));
         let decision = decide_persistence_outcome(
             failure_policy_from_contract(&case.policy),
             &counters,
@@ -916,10 +917,10 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
             );
             let result = match case.mutation_result.as_str() {
                 "success" => Ok(()),
-                "failure" => Err(anyhow::anyhow!(
+                "failure" => Err(std::io::Error::other(format!(
                     "generated storage-observation failure for {}",
                     case.name
-                )),
+                ))),
                 other => panic!("unknown Lean mutation result {other:?}"),
             };
             let actual_result = hook.apply_persistence_policy(result, &case.name);

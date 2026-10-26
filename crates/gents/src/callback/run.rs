@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
@@ -71,6 +70,8 @@ pub enum CallbackRunError {
     #[error(transparent)]
     Journal(#[from] serde_json::Error),
 }
+
+type Result<T, E = super::CallbackError> = std::result::Result<T, E>;
 
 pub fn decode_journal(raw: Option<&str>) -> Result<Vec<ActionJournalEntry>, CallbackRunError> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -365,15 +366,13 @@ async fn persist_claimed_to_running(
             *invocation = row;
             Ok(())
         }
-        Some(row) => anyhow::bail!(
-            "CallbackInvocation {} could not persist claimed→running; state={}",
-            invocation.invocation_id,
-            row.lifecycle_state
-        ),
-        None => anyhow::bail!(
-            "CallbackInvocation {} disappeared during claimed→running",
-            invocation.invocation_id
-        ),
+        Some(row) => Err(super::CallbackError::PersistRunningRejected {
+            invocation_id: invocation.invocation_id.clone(),
+            state: row.lifecycle_state,
+        }),
+        None => Err(super::CallbackError::DisappearedDuringRunning {
+            invocation_id: invocation.invocation_id.clone(),
+        }),
     }
 }
 
@@ -460,7 +459,7 @@ async fn execute_running_invocation(
     let action = match plan
         .actions
         .first()
-        .ok_or_else(|| anyhow!("ActionPlan has no actions"))?
+        .ok_or(super::CallbackError::EmptyActionPlan)?
         .clone()
     {
         HostAction::CreateWorkspace(action) => action,
@@ -602,10 +601,10 @@ pub(super) async fn persist_journal(
     invocation.lifecycle_state = state.to_string();
     invocation.error = error.map(str::to_string);
     if !update_invocation(node, invocation, None).await? {
-        anyhow::bail!(
-            "CallbackInvocation {} persist matched no row (state={state})",
-            invocation.invocation_id
-        );
+        return Err(super::CallbackError::PersistMatchedNoRow {
+            invocation_id: invocation.invocation_id.clone(),
+            state: state.to_owned(),
+        });
     }
     Ok(())
 }
@@ -639,10 +638,9 @@ pub(super) async fn deny(
     );
     apply_planner_deny(invocation, reason);
     if !update_invocation(node, invocation, None).await? {
-        anyhow::bail!(
-            "CallbackInvocation {} deny persist matched no row",
-            invocation.invocation_id
-        );
+        return Err(super::CallbackError::DenyMatchedNoRow {
+            invocation_id: invocation.invocation_id.clone(),
+        });
     }
     Ok(())
 }
@@ -664,10 +662,9 @@ async fn succeed_then_emit_result(
         Some(workspace),
         Some(placement),
     ) {
-        anyhow::bail!(
-            "CallbackInvocation {} result docs are not ready",
-            invocation.invocation_id
-        );
+        return Err(super::CallbackError::ResultDocsNotReady {
+            invocation_id: invocation.invocation_id.clone(),
+        });
     }
     let correlation = correlation
         .filter(|value| !value.trim().is_empty())
@@ -838,7 +835,7 @@ pub async fn finish_succeeded_if_docs_ready(
     }
     let journal = decode_journal(invocation.action_journal.as_deref())?;
     let workspace_id = stored_action_plan(invocation)
-        .map_err(anyhow::Error::msg)?
+        .map_err(|reason| super::CallbackError::StoredActionPlan { reason })?
         .and_then(|plan| {
             plan.actions
                 .into_iter()

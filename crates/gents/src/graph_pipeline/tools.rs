@@ -16,18 +16,18 @@ pub const COMPILE_GRAPH_TOOL_NAME: &str = "compile_graph";
 pub const GRAPH_PIPELINE_TOOL_NAMES: [&str; 1] = [COMPILE_GRAPH_TOOL_NAME];
 
 #[derive(Debug)]
-pub struct GraphPipelineToolError(anyhow::Error);
+pub struct GraphPipelineToolError(super::GraphPipelineError);
 
 impl std::fmt::Display for GraphPipelineToolError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", ErrorChain(self.0.as_ref()))
+        write!(formatter, "{}", ErrorChain(&self.0))
     }
 }
 
 impl std::error::Error for GraphPipelineToolError {}
 
-impl From<anyhow::Error> for GraphPipelineToolError {
-    fn from(error: anyhow::Error) -> Self {
+impl From<super::GraphPipelineError> for GraphPipelineToolError {
+    fn from(error: super::GraphPipelineError) -> Self {
         Self(error)
     }
 }

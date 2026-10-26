@@ -15,6 +15,8 @@ use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_db;
 
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
 const SUMMARY: &str = "studio-1 host doc is stale vs runtime";
 const TARGET_PATHS: &str = "infra/hosts/studio-1/host.md";
@@ -87,7 +89,7 @@ async fn configure_action_trigger(
 async fn wait_for_runtime_snapshot<F>(
     node: &EmbeddedNode,
     node_did: &str,
-    runtime: &tokio::task::JoinHandle<anyhow::Result<()>>,
+    runtime: &tokio::task::JoinHandle<Result<(), BoxError>>,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -261,7 +263,7 @@ async fn boot_agent_with_action_trigger(
     task_id: &str,
     trigger_id: &str,
 ) -> (
-    tokio::task::JoinHandle<anyhow::Result<()>>,
+    tokio::task::JoinHandle<Result<(), BoxError>>,
     tokio::sync::watch::Sender<bool>,
 ) {
     let identity = Arc::new(test_identity(test_name));
@@ -288,7 +290,7 @@ async fn boot_agent_with_action_trigger(
     let default_agent_id = agent.default_agent_id().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
+    let handle = tokio::spawn(async move { agent.run(shutdown_rx).await.map_err(Into::into) });
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, &handle, |snapshot| {
         is_routed_ready_after(snapshot, 0)

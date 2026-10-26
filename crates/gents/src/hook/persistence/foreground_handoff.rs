@@ -125,9 +125,9 @@ impl DefraSessionHook {
                                 lifecycle
                                     .background_with_receipt(&receipt)
                                     .await
-                                    .map_err(anyhow::Error::from)
+                                    .map_err(crate::hook::HookError::from)
                             } else {
-                                Err(anyhow::anyhow!("foreground request already stopped"))
+                                Err(crate::hook::HookError::ForegroundStopped)
                             };
                             match admitted {
                                 Ok(()) => {

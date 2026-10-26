@@ -289,7 +289,9 @@ where
                 agent.tools.goal_creation_requested(),
             ),
         Err(error) => {
-            return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
+            return Err(
+                terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error.into()).await,
+            );
         }
     };
     hook.set_active_request_binding(

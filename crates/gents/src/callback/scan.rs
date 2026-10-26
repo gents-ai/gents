@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::event_delivery::EventConsumer;
 use serde_json::Value;
@@ -18,7 +17,9 @@ use super::documents::{
     load_event_source, strip_secret_fields, validate_callback_binding, CallbackBindingDoc,
     CallbackInvocationDoc,
 };
-use super::{CallbackEngine, LIFECYCLE_PENDING};
+use super::{CallbackEngine, CallbackError, LIFECYCLE_PENDING};
+
+type Result<T, E = CallbackError> = std::result::Result<T, E>;
 
 use crate::trigger_engine::event_delivery::source_scan::{load_doc_field, load_doc_ids};
 
@@ -149,7 +150,8 @@ impl CallbackEngine {
             &self.node_did,
             consumers.iter().map(|(id, _)| id.as_str()),
         )
-        .await?;
+        .await
+        .map_err(|error| CallbackError::GraphPipeline(Box::new(error)))?;
         if !live.is_empty() {
             for (consumer, field) in consumers {
                 let Some(field) = field else { continue };
@@ -374,19 +376,21 @@ impl CallbackEngine {
                 "callback.read_arrivals",
             )
             .await?;
-            let data = response.data.context("arrival query omitted data")?;
+            let data = response.data.ok_or(CallbackError::ArrivalOmittedData)?;
             let page = &data["_documentArrivals"];
             let entries = page["entries"]
                 .as_array()
-                .context("arrival query omitted entries")?;
+                .ok_or(CallbackError::ArrivalOmittedEntries)?;
             for entry in entries {
                 if self.cancel.is_cancelled() {
                     return Ok(());
                 }
                 let doc_id = entry["docID"]
                     .as_str()
-                    .context("arrival lacks document ID")?;
-                let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
+                    .ok_or(CallbackError::ArrivalMissingDocId)?;
+                let position = entry["cursor"]
+                    .as_str()
+                    .ok_or(CallbackError::ArrivalMissingCursor)?;
                 self.materialize_for_binding(binding, collection, doc_id, false)
                     .await?;
                 if !self.checkpoint(binding, collection, position).await? {
@@ -397,7 +401,7 @@ impl CallbackEngine {
             // The journal is drained only when a page makes no progress.
             let next = page["next"]
                 .as_str()
-                .context("arrival query omitted next cursor")?;
+                .ok_or(CallbackError::ArrivalOmittedNextCursor)?;
             if next != after && !self.checkpoint(binding, collection, next).await? {
                 return Ok(());
             }
@@ -466,19 +470,15 @@ impl CallbackEngine {
         }
         let event = load_event_source(&self.node, &binding.event_source_id, &binding.node_did)
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "CallbackBinding {} EventSource missing for owner",
-                    binding.binding_id
-                )
+            .ok_or_else(|| CallbackError::EventSourceMissing {
+                binding_id: binding.binding_id.clone(),
             })?;
         if event.source_collection != collection || event.group.is_some() != grouped {
             return Ok(false);
         }
-        anyhow::ensure!(
-            event.event_kind.as_deref().unwrap_or("created") == "created",
-            "callback EventSource requires supported created event kind"
-        );
+        if event.event_kind.as_deref().unwrap_or("created") != "created" {
+            return Err(CallbackError::UnsupportedEventKind);
+        }
 
         super::documents::reject_secret_bearing_callback_fields(
             &binding.binding_id,
@@ -487,7 +487,9 @@ impl CallbackEngine {
         )?;
         let callback = load_callback(&self.node, &binding.callback_id, &binding.node_did)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Callback {} missing for owner", binding.callback_id))?;
+            .ok_or_else(|| CallbackError::CallbackMissingForOwner {
+                callback_id: binding.callback_id.clone(),
+            })?;
         if !callback.enabled {
             return Ok(false);
         }
@@ -513,8 +515,7 @@ impl CallbackEngine {
         };
         let (key, input, origin) = if event.group.is_some() {
             delivery.validate_group()?;
-            let correlation =
-                correlation.ok_or_else(|| anyhow::anyhow!("callback group correlation missing"))?;
+            let correlation = correlation.ok_or(CallbackError::GroupCorrelationMissing)?;
             return self.materialize_group(binding, &event, &correlation).await;
         } else {
             let input = fetch_source_doc(
@@ -610,7 +611,7 @@ impl CallbackEngine {
         )?;
         let callback = load_callback(&self.node, &binding.callback_id, &binding.node_did)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("callback missing for owner"))?;
+            .ok_or(CallbackError::CallbackMissing)?;
         if !binding.enabled || !callback.enabled {
             return Ok(false);
         }
@@ -629,12 +630,12 @@ impl CallbackEngine {
         let available = SourceSchemaCache::default()
             .fields_for(&source.source_collection, &self.node)
             .await?;
-        anyhow::ensure!(
-            fields
-                .iter()
-                .all(|field| field == "_docID" || available.contains(field)),
-            "callback input field is not a scalar source field"
-        );
+        if !fields
+            .iter()
+            .all(|field| field == "_docID" || available.contains(field))
+        {
+            return Err(CallbackError::GroupFieldNotScalar);
+        }
         let input = Value::Array(
             docs.into_iter()
                 .map(|row| {
@@ -782,10 +783,11 @@ pub(super) async fn fetch_source_doc(
     let projected = binding.projected_fields()?;
     let available = cache.fields_for(collection, node).await?;
     for field in &projected {
-        anyhow::ensure!(
-            available.contains(field) || field == "_docID",
-            "callback input field {field} is not a safe scalar source field"
-        );
+        if !(available.contains(field) || field == "_docID") {
+            return Err(CallbackError::UnsafeSourceField {
+                field: field.clone(),
+            });
+        }
     }
     let fields = projected;
     let projection = fields.join("\n                    ");
@@ -809,22 +811,26 @@ pub(super) async fn fetch_source_doc(
         .and_then(|rows| rows.first())
         .cloned()
     else {
-        anyhow::bail!("source doc {source_doc_id} not found in {collection}");
+        return Err(CallbackError::SourceDocNotFound {
+            source_doc_id: source_doc_id.to_owned(),
+            collection: collection.to_owned(),
+        });
     };
     let actual = document_composite_version(&row, "fetch callback source")?.ok_or_else(|| {
-        anyhow::anyhow!("callback source {source_doc_id} has no composite version")
+        CallbackError::SourceMissingVersion {
+            source_doc_id: source_doc_id.to_owned(),
+        }
     })?;
     if let Some(expected) = expected_source_version {
         if actual.cid != expected {
-            anyhow::bail!(
-                "callback source {source_doc_id} changed after invocation: expected version {expected}, found {}",
-                actual.cid
-            );
+            return Err(CallbackError::SourceChanged {
+                source_doc_id: source_doc_id.to_owned(),
+                expected: expected.to_owned(),
+                found: actual.cid,
+            });
         }
     }
-    let object = row
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("callback source is not an object"))?;
+    let object = row.as_object().ok_or(CallbackError::SourceNotObject)?;
     let projected = fields
         .into_iter()
         .filter_map(|field| object.get(&field).cloned().map(|value| (field, value)))

@@ -1,4 +1,5 @@
 use super::*;
+use crate::hook::HookError;
 use anyhow::Context;
 
 impl DefraSessionHook {
@@ -16,11 +17,13 @@ impl DefraSessionHook {
         &self,
         caller: &ProcessControlScope,
         tool_call_id: &str,
-    ) -> anyhow::Result<ToolCallLifecycle> {
+    ) -> Result<ToolCallLifecycle, HookError> {
         let Some(lifecycle) =
             ToolCallLifecycle::load(self.node.clone(), &caller.session_id, tool_call_id).await?
         else {
-            anyhow::bail!("background tool call {tool_call_id} was not found");
+            return Err(HookError::BackgroundToolNotFound {
+                tool_call_id: tool_call_id.to_owned(),
+            });
         };
         if !caller.authorizes(
             lifecycle.session_id(),
@@ -28,7 +31,9 @@ impl DefraSessionHook {
             lifecycle.requester_did(),
         ) || lifecycle.await_mode() != AwaitMode::Background
         {
-            anyhow::bail!("background tool call {tool_call_id} is not manageable by this session");
+            return Err(HookError::BackgroundToolNotManageable {
+                tool_call_id: tool_call_id.to_owned(),
+            });
         }
         Ok(lifecycle)
     }
@@ -105,11 +110,14 @@ impl DefraSessionHook {
         mut lifecycle: ToolCallLifecycle,
         cause: CancelCause,
         completion_reason: &str,
-    ) -> anyhow::Result<(
-        ToolCallLifecycle,
-        bool,
-        Option<crate::managed_exec::ProcessStopOutcome>,
-    )> {
+    ) -> Result<
+        (
+            ToolCallLifecycle,
+            bool,
+            Option<crate::managed_exec::ProcessStopOutcome>,
+        ),
+        HookError,
+    > {
         let won_terminal_compare = if lifecycle.is_running() {
             lifecycle
                 .cancel_during_run_owned(cause, completion_reason)
@@ -120,7 +128,7 @@ impl DefraSessionHook {
         let process = if won_terminal_compare {
             let doc_id = lifecycle
                 .doc_id()
-                .context("cancelled background lifecycle lacks physical identity")?
+                .ok_or(HookError::CancelledLifecycleMissingIdentity)?
                 .to_owned();
             Some(
                 self.background_executions

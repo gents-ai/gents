@@ -85,7 +85,7 @@ pub use profile_switch::{
     SWITCH_COST,
 };
 pub(crate) use schema_contract::collection_schema_contract_digest;
-pub use schema_contract::SchemaFieldDelta;
+pub use schema_contract::{SchemaContractError, SchemaFieldDelta};
 pub use schema_install::{
     apply_additive_schema_install, apply_schema_install, preview_additive_schema_install,
     preview_schema_install, SchemaInstallError, SchemaInstallMismatch, SchemaInstallPlan,

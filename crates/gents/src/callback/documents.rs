@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
@@ -632,7 +631,7 @@ pub async fn load_callback_result(
 pub async fn create_pending_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
-) -> Result<CallbackInvocationDoc> {
+) -> Result<CallbackInvocationDoc, CallbackError> {
     if let Some(existing) = load_invocation_by_key(
         node,
         &invocation.idempotency_key,
@@ -658,16 +657,17 @@ pub async fn create_pending_invocation(
     });
     let variables = serde_json::json!({"input": input});
     let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
-    let written = crate::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "callback.create_invocation",
-        |txn| {
-            let variables = &variables;
-            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
-        },
-    )
-    .await;
+    let written: Result<_, crate::config_client::ConfigClientError> =
+        crate::config_client::ConfigAccess::transact_local_write(
+            node,
+            None,
+            "callback.create_invocation",
+            |txn| {
+                let variables = &variables;
+                Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+            },
+        )
+        .await;
     match written {
         Ok(_) => load_invocation_by_key(
             node,
@@ -675,7 +675,7 @@ pub async fn create_pending_invocation(
             &invocation.owner_node_did,
         )
         .await?
-        .ok_or_else(|| anyhow!("created CallbackInvocation missing after write")),
+        .ok_or(CallbackError::InvocationMissingAfterWrite),
         Err(error) => {
             if let Some(existing) = load_invocation_by_key(
                 node,
@@ -686,7 +686,7 @@ pub async fn create_pending_invocation(
             {
                 return Ok(existing);
             }
-            Err(error).context("create_CallbackInvocation")
+            Err(CallbackError::CreateInvocation(error))
         }
     }
 }
@@ -743,7 +743,7 @@ pub async fn update_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
-) -> Result<bool> {
+) -> Result<bool, CallbackError> {
     let mutation = update_invocation_mutation(invocation, expected_state);
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
@@ -790,7 +790,7 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
 pub async fn create_callback_result(
     node: &std::sync::Arc<EmbeddedNode>,
     result: &CallbackResultDoc,
-) -> Result<CallbackResultDoc> {
+) -> Result<CallbackResultDoc, CallbackError> {
     if let Some(existing) =
         load_callback_result(node, &result.invocation_id, &result.owner_node_did).await?
     {
@@ -806,14 +806,14 @@ pub async fn create_callback_result(
     {
         Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_node_did)
             .await?
-            .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
+            .ok_or(CallbackError::ResultMissingAfterWrite),
         Err(error) => {
             if let Some(existing) =
                 load_callback_result(node, &result.invocation_id, &result.owner_node_did).await?
             {
                 return Ok(existing);
             }
-            Err(error).context("create_CallbackResult")
+            Err(CallbackError::CreateResult(error))
         }
     }
 }
@@ -822,7 +822,7 @@ pub async fn load_repository_placement(
     node: &std::sync::Arc<EmbeddedNode>,
     repository_id: &str,
     owner: &str,
-) -> Result<Option<RepositoryPlacementRef>> {
+) -> Result<Option<RepositoryPlacementRef>, CallbackError> {
     let row: Option<crate::document_config::RepositoryPlacement> = load_config(
         node,
         crate::Collection::RepositoryPlacement,
@@ -842,7 +842,7 @@ pub async fn load_memory_workspace_docs(
     node: &EmbeddedNode,
     workspace_id: &str,
     owner: &str,
-) -> Result<MemoryWorkspaceDocuments> {
+) -> Result<MemoryWorkspaceDocuments, CallbackError> {
     let mut docs = MemoryWorkspaceDocuments::default();
     if let Some(workspace) = load_isolated_workspace(node, workspace_id, owner).await? {
         docs.write_isolated_workspace(workspace)?;
@@ -856,7 +856,7 @@ pub async fn load_memory_workspace_docs(
 pub async fn flush_workspace_docs(
     node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
-) -> Result<()> {
+) -> Result<(), CallbackError> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for workspace in docs.workspaces.values() {
         let mutation = isolated_workspace_upsert_mutation(workspace);
@@ -866,7 +866,10 @@ pub async fn flush_workspace_docs(
             &mutation,
         )
         .await
-        .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
+        .map_err(|source| CallbackError::PersistIsolatedWorkspace {
+            workspace_id: workspace.workspace_id.clone(),
+            source,
+        })?;
     }
     for placement in docs.placements.values() {
         let mutation = workspace_placement_upsert_mutation(placement, &now);
@@ -876,7 +879,10 @@ pub async fn flush_workspace_docs(
             &mutation,
         )
         .await
-        .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
+        .map_err(|source| CallbackError::PersistWorkspacePlacement {
+            workspace_id: placement.workspace_id.clone(),
+            source,
+        })?;
     }
     Ok(())
 }

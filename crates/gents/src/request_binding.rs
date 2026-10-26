@@ -11,7 +11,7 @@ use crate::graphql::{
 use crate::watcher::{AgentRequest, WatcherError};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RequestBindingError {
+pub enum RequestBindingError {
     #[error(transparent)]
     Config(#[from] ConfigClientError),
     #[error(transparent)]

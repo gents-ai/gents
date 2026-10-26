@@ -26,9 +26,9 @@ pub use action_plan::{
 pub use documents::{
     isolated_workspace_upsert_mutation, repository_placement_upsert_mutation,
     workspace_binding_upsert_mutation, workspace_cleanup_docs_mutation,
-    workspace_placement_upsert_mutation, workspace_receipt_create_mutation, IsolatedWorkspaceDoc,
-    MemoryWorkspaceDocuments, ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments,
-    WorkspacePlacementDoc, WorkspaceReceiptDoc,
+    workspace_placement_upsert_mutation, workspace_receipt_create_mutation, DocumentsError,
+    IsolatedWorkspaceDoc, MemoryWorkspaceDocuments, ProvisioningObservation, WorkspaceBindingDoc,
+    WorkspaceDocuments, WorkspacePlacementDoc, WorkspaceReceiptDoc,
 };
 pub use executor::{
     execute_cleanup_workspace_plan, execute_create_workspace_plan,
@@ -47,7 +47,7 @@ pub use journal::{
     ActionJournalState,
 };
 pub use path_capability::{PathCapabilityError, WorkspacePathCapability};
-pub use quickstart::provision_read_only_workspace;
+pub use quickstart::{provision_read_only_workspace, QuickstartError};
 pub use runtime::cleanup_workspace;
 pub(crate) use runtime::{
     integrate_on_integrator_success, materialize_workspace_binding,

@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::{
     graphql_input_literal, graphql_rows_from_response, graphql_string_list_literal,
@@ -21,6 +20,8 @@ use super::{
 };
 
 const TRIGGER_PREFIX: &str = "graph-trigger-";
+
+type Result<T, E = GraphPipelineError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GraphPipelineError {
@@ -181,6 +182,126 @@ pub enum GraphPipelineError {
     RevisionDigestMissing,
     #[error("graph revision plan failed immutable identity verification")]
     RevisionPlanUnverified,
+    #[error("visible GraphRevision {digest:?} is missing or ambiguous")]
+    VisibleRevisionAmbiguous { digest: String },
+    #[error("visible GraphRevision {digest:?} is owned by another node")]
+    VisibleRevisionForeign { digest: String },
+    #[error(
+        "visible GraphRevision {digest:?} status {status:?} is inconsistent with its active pointer or nonterminal run pin"
+    )]
+    VisibleRevisionStatusInconsistent { digest: String, status: String },
+    #[error("visible GraphRevision {digest:?} has incomplete artifacts")]
+    VisibleRevisionIncomplete { digest: String },
+    #[error("visible GraphRevision is missing plan_json")]
+    VisibleRevisionPlanJsonMissing,
+    #[error("visible GraphRevision {digest:?} failed immutable identity verification")]
+    VisibleRevisionUnverified { digest: String },
+    #[error("package schema {namespace:?} has no pinned runtime contract")]
+    PackageSchemaUnpinned { namespace: String },
+    #[error("package schema {namespace:?} collection {collection:?} is not locally ready")]
+    PackageSchemaNotReady {
+        namespace: String,
+        collection: String,
+    },
+    #[error(
+        "package schema {namespace:?} collection {collection:?} does not match its pinned contract: expected {expected}, observed {observed}"
+    )]
+    PackageSchemaMismatch {
+        namespace: String,
+        collection: String,
+        expected: String,
+        observed: String,
+    },
+    #[error(
+        "package artifact {} {owner:?}/{logical_id:?} is missing",
+        collection.graphql_type()
+    )]
+    PackageArtifactMissing {
+        collection: crate::Collection,
+        owner: String,
+        logical_id: String,
+    },
+    #[error(
+        "package artifact {} {owner:?}/{logical_id:?} drifted: expected {expected}, observed {observed}",
+        collection.graphql_type()
+    )]
+    PackageArtifactDrifted {
+        collection: crate::Collection,
+        owner: String,
+        logical_id: String,
+        expected: String,
+        observed: String,
+    },
+    #[error("refusing to materialize a GraphPlan with an invalid digest")]
+    MaterializeDigestInvalid,
+    #[error("stored graph revision does not match compiled plan identity")]
+    StoredRevisionMismatch,
+    #[error("incomplete graph revision is not in validated state")]
+    IncompleteRevisionNotValidated,
+    #[error("approved task {task_id:?} is missing or disabled")]
+    ApprovedTaskMissing { task_id: String },
+    #[error("materialized revision disappeared inside transaction")]
+    MaterializedRevisionDisappeared,
+    #[error("GraphRevision is missing _docID")]
+    RevisionDocIdMissing,
+    #[error("GraphDefinition is missing node_did")]
+    DefinitionNodeDidMissing,
+    #[error("v1 graph runs may only be started by the graph owner")]
+    RunNotOwner,
+    #[error("graph is disabled")]
+    GraphDisabled,
+    #[error("graph has no active revision")]
+    NoActiveRevision,
+    #[error("active graph revision changed after preflight: expected {expected:?}, observed {observed:?}")]
+    ActiveRevisionChanged { expected: String, observed: String },
+    #[error("unknown graph entry")]
+    UnknownEntry,
+    #[error("entry {entry_name} prepares its input on the host; start it through its package")]
+    EntryPreparesOnHost { entry_name: String },
+    #[error("entry {entry_name} does not declare a host prepare step")]
+    EntryWithoutPrepare { entry_name: String },
+    #[error("graph entry input must be a JSON object")]
+    GraphEntryInputNotObject,
+    #[error("entry input may not override the run correlation field")]
+    CorrelationOverride,
+    #[error("plugin {plugin} is not pinned to an artifact digest")]
+    PluginNotPinned { plugin: String },
+    #[error("graph plan has no node {node_id:?}")]
+    PlanNodeMissing { node_id: String },
+    #[error(transparent)]
+    SchemaContract(#[from] crate::config_client::SchemaContractError),
+    #[error(transparent)]
+    DesiredState(Box<crate::config_client::DesiredStateError>),
+    #[error(transparent)]
+    Provenance(Box<crate::pack::ProvenanceError>),
+    #[error(transparent)]
+    EventSource(Box<crate::trigger_engine::event_source::EventSourceError>),
+    #[error(transparent)]
+    TriggerEngine(Box<crate::trigger_engine::TriggerEngineError>),
+}
+
+impl From<crate::config_client::DesiredStateError> for GraphPipelineError {
+    fn from(error: crate::config_client::DesiredStateError) -> Self {
+        Self::DesiredState(Box::new(error))
+    }
+}
+
+impl From<crate::pack::ProvenanceError> for GraphPipelineError {
+    fn from(error: crate::pack::ProvenanceError) -> Self {
+        Self::Provenance(Box::new(error))
+    }
+}
+
+impl From<crate::trigger_engine::event_source::EventSourceError> for GraphPipelineError {
+    fn from(error: crate::trigger_engine::event_source::EventSourceError) -> Self {
+        Self::EventSource(Box::new(error))
+    }
+}
+
+impl From<crate::trigger_engine::TriggerEngineError> for GraphPipelineError {
+    fn from(error: crate::trigger_engine::TriggerEngineError) -> Self {
+        Self::TriggerEngine(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for GraphPipelineError {
@@ -189,6 +310,15 @@ impl crate::config_client::TransactionFailure for GraphPipelineError {
             Self::Config(error) => Some(error),
             Self::GraphqlResponse(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::DesiredState(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error.as_ref())
+            }
+            Self::Provenance(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error.as_ref())
+            }
+            Self::EventSource(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error.as_ref())
             }
             _ => None,
         }
@@ -442,13 +572,13 @@ pub(crate) async fn load_visible_package_artifact_ids(
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
     ConfigAccess::transact_local_readonly(node, None, "graph_pipeline.visible_artifacts", |txn| {
         Box::pin(async move {
-            Ok(load_visible_package_artifact_ids_in_txn(
+            load_visible_package_artifact_ids_in_txn(
                 txn,
                 node_did,
                 active_revision_digests,
                 pinned_revision_digests,
             )
-            .await?)
+            .await
         })
     })
     .await
@@ -514,32 +644,41 @@ async fn load_visible_package_artifact_ids_for_revision(
         .await?;
     let revisions = rows(&response, "GraphRevision");
     if revisions.len() != 1 {
-        anyhow::bail!("visible GraphRevision {digest:?} is missing or ambiguous");
+        return Err(GraphPipelineError::VisibleRevisionAmbiguous {
+            digest: digest.to_owned(),
+        });
     }
     let revision = &revisions[0];
     if revision.get("owner_did").and_then(Value::as_str) != Some(node_did) {
-        anyhow::bail!("visible GraphRevision {digest:?} is owned by another node");
+        return Err(GraphPipelineError::VisibleRevisionForeign {
+            digest: digest.to_owned(),
+        });
     }
     let status = revision
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if !revision_visibility_authorized(status, active_pointer, run_pin) {
-        anyhow::bail!(
-            "visible GraphRevision {digest:?} status {status:?} is inconsistent with its active pointer or nonterminal run pin"
-        );
+        return Err(GraphPipelineError::VisibleRevisionStatusInconsistent {
+            digest: digest.to_owned(),
+            status: status.to_owned(),
+        });
     }
     if revision.get("artifacts_complete").and_then(Value::as_bool) != Some(true) {
-        anyhow::bail!("visible GraphRevision {digest:?} has incomplete artifacts");
+        return Err(GraphPipelineError::VisibleRevisionIncomplete {
+            digest: digest.to_owned(),
+        });
     }
     let plan: GraphPlan = serde_json::from_str(
         revision
             .get("plan_json")
             .and_then(Value::as_str)
-            .context("visible GraphRevision is missing plan_json")?,
+            .ok_or(GraphPipelineError::VisibleRevisionPlanJsonMissing)?,
     )?;
     if plan.digest != digest || !verify_graph_plan_digest(&plan) {
-        anyhow::bail!("visible GraphRevision {digest:?} failed immutable identity verification");
+        return Err(GraphPipelineError::VisibleRevisionUnverified {
+            digest: digest.to_owned(),
+        });
     }
     let Some(package) = plan.package else {
         return Ok(BTreeSet::new());
@@ -559,24 +698,25 @@ async fn verify_package_schemas_in_txn(
 ) -> Result<()> {
     for schema in &package.required_schema_digests {
         if schema.collection_contract_digests.is_empty() {
-            anyhow::bail!(
-                "package schema {:?} has no pinned runtime contract",
-                schema.namespace
-            );
+            return Err(GraphPipelineError::PackageSchemaUnpinned {
+                namespace: schema.namespace.clone(),
+            });
         }
         for (collection, expected_digest) in &schema.collection_contract_digests {
-            let live = txn.collection_version(collection).await?.with_context(|| {
-                format!(
-                    "package schema {:?} collection {collection:?} is not locally ready",
-                    schema.namespace
-                )
+            let live = txn.collection_version(collection).await?.ok_or_else(|| {
+                GraphPipelineError::PackageSchemaNotReady {
+                    namespace: schema.namespace.clone(),
+                    collection: collection.clone(),
+                }
             })?;
             let live_digest = crate::config_client::collection_schema_contract_digest(&live)?;
             if &live_digest != expected_digest {
-                anyhow::bail!(
-                    "package schema {:?} collection {collection:?} does not match its pinned contract: expected {expected_digest}, observed {live_digest}",
-                    schema.namespace,
-                );
+                return Err(GraphPipelineError::PackageSchemaMismatch {
+                    namespace: schema.namespace.clone(),
+                    collection: collection.clone(),
+                    expected: expected_digest.clone(),
+                    observed: live_digest,
+                });
             }
         }
     }
@@ -596,21 +736,21 @@ async fn verify_package_artifacts_in_txn(
             &artifact.logical_id,
         )
         .await?
-        .with_context(|| {
-            format!(
-                "package artifact {} {owner_did:?}/{:?} is missing",
-                artifact.collection.graphql_type(),
-                artifact.logical_id
-            )
+        .ok_or_else(|| GraphPipelineError::PackageArtifactMissing {
+            collection: artifact.collection,
+            owner: owner_did.to_owned(),
+            logical_id: artifact.logical_id.clone(),
         })?;
         let observed = crate::pack::pack_artifact_document_digest(&live)?;
-        anyhow::ensure!(
-            observed == artifact.content_digest,
-            "package artifact {} {owner_did:?}/{:?} drifted: expected {}, observed {observed}",
-            artifact.collection.graphql_type(),
-            artifact.logical_id,
-            artifact.content_digest
-        );
+        if observed != artifact.content_digest {
+            return Err(GraphPipelineError::PackageArtifactDrifted {
+                collection: artifact.collection,
+                owner: owner_did.to_owned(),
+                logical_id: artifact.logical_id.clone(),
+                expected: artifact.content_digest.clone(),
+                observed,
+            });
+        }
     }
     Ok(())
 }
@@ -643,7 +783,7 @@ pub(super) fn graph_publication_denial(
 pub(crate) async fn fence_graph_root_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     super::run::fence_root_workspace_in_txn(txn, request).await
 }
 
@@ -925,7 +1065,7 @@ pub async fn materialize_graph_revision(
     plan: &GraphPlan,
 ) -> Result<MaterializedRevision> {
     if !verify_graph_plan_digest(plan) {
-        anyhow::bail!("refusing to materialize a GraphPlan with an invalid digest");
+        return Err(GraphPipelineError::MaterializeDigestInvalid);
     }
     digest_hex(&plan.digest)?;
     let plan_json = serde_json::to_string(plan)?;
@@ -973,7 +1113,7 @@ pub(crate) async fn materialize_graph_revision_in_txn(
     plan: &GraphPlan,
 ) -> Result<MaterializedRevision> {
     if !verify_graph_plan_digest(plan) {
-        anyhow::bail!("refusing to materialize a GraphPlan with an invalid digest");
+        return Err(GraphPipelineError::MaterializeDigestInvalid);
     }
     let plan_json = serde_json::to_string(plan)?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -990,7 +1130,9 @@ async fn materialize_in_txn(
     match query_graph_definition(txn, owner_did, &plan.graph_id).await? {
         Some(definition) => {
             if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-                anyhow::bail!("graph {:?} belongs to a different node", plan.graph_id);
+                return Err(GraphPipelineError::GraphOwnedByOtherNode {
+                    graph_id: plan.graph_id.clone(),
+                });
             }
         }
         None => {
@@ -1016,13 +1158,13 @@ async fn materialize_in_txn(
             || revision.get("owner_did").and_then(Value::as_str) != Some(owner_did)
             || revision.get("plan_json").and_then(Value::as_str) != Some(plan_json)
         {
-            anyhow::bail!("stored graph revision does not match compiled plan identity");
+            return Err(GraphPipelineError::StoredRevisionMismatch);
         }
         if revision.get("artifacts_complete").and_then(Value::as_bool) == Some(true) {
-            return Ok(materialization_receipt(plan)?);
+            return materialization_receipt(plan);
         }
         if revision.get("status").and_then(Value::as_str) != Some("validated") {
-            anyhow::bail!("incomplete graph revision is not in validated state");
+            return Err(GraphPipelineError::IncompleteRevisionNotValidated);
         }
     } else {
         create_document(
@@ -1055,7 +1197,9 @@ async fn materialize_in_txn(
         .collect::<Vec<_>>();
     let enabled_tasks = query_enabled_task_ids(txn, owner_did, &task_ids).await?;
     if let Some(missing) = task_ids.iter().find(|id| !enabled_tasks.contains(*id)) {
-        anyhow::bail!("approved task {missing:?} is missing or disabled");
+        return Err(GraphPipelineError::ApprovedTaskMissing {
+            task_id: missing.clone(),
+        });
     }
 
     let routes = super::routes::planned_routes(plan)?;
@@ -1106,11 +1250,11 @@ async fn materialize_in_txn(
 
     let revision = query_graph_revision(txn, &plan.digest)
         .await?
-        .context("materialized revision disappeared inside transaction")?;
+        .ok_or(GraphPipelineError::MaterializedRevisionDisappeared)?;
     let revision_doc_id = revision
         .get("_docID")
         .and_then(Value::as_str)
-        .context("GraphRevision is missing _docID")?;
+        .ok_or(GraphPipelineError::RevisionDocIdMissing)?;
     update_document(
         txn,
         "GraphRevision",
@@ -1125,7 +1269,7 @@ async fn materialize_in_txn(
     )
     .await?;
 
-    Ok(materialization_receipt(plan)?)
+    materialization_receipt(plan)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1169,12 +1313,16 @@ async fn planned_route_documents(
         } => {
             let digest = digest
                 .as_deref()
-                .with_context(|| format!("plugin {plugin} is not pinned to an artifact digest"))?;
+                .ok_or_else(|| GraphPipelineError::PluginNotPinned {
+                    plugin: plugin.clone(),
+                })?;
             let outputs = &plan
                 .nodes
                 .iter()
                 .find(|node| node.node_id == target_node)
-                .with_context(|| format!("graph plan has no node {target_node:?}"))?
+                .ok_or_else(|| GraphPipelineError::PlanNodeMissing {
+                    node_id: target_node.to_owned(),
+                })?
                 .output_ports;
             let introspected = txn
                 .execute(&crate::trigger_engine::event_source::source_fields_query(
@@ -1595,32 +1743,33 @@ async fn start_run_in_txn(txn: &ConfigApplyTxn<'_>, run: StartRun<'_>) -> Result
     } = run;
     let definition = query_graph_definition(txn, caller_did, graph_id)
         .await?
-        .context("graph does not exist")?;
+        .ok_or(GraphPipelineError::GraphMissing)?;
     let owner_did = definition
         .get("node_did")
         .and_then(Value::as_str)
-        .context("GraphDefinition is missing node_did")?;
+        .ok_or(GraphPipelineError::DefinitionNodeDidMissing)?;
     if owner_did != caller_did {
-        anyhow::bail!("v1 graph runs may only be started by the graph owner");
+        return Err(GraphPipelineError::RunNotOwner);
     }
     if definition.get("enabled").and_then(Value::as_bool) != Some(true) {
-        anyhow::bail!("graph is disabled");
+        return Err(GraphPipelineError::GraphDisabled);
     }
     let digest = definition
         .get("active_revision_digest")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .context("graph has no active revision")?;
+        .ok_or(GraphPipelineError::NoActiveRevision)?;
     if let Some(expected) = expected_revision_digest {
         if expected != digest {
-            anyhow::bail!(
-                "active graph revision changed after preflight: expected {expected:?}, observed {digest:?}"
-            );
+            return Err(GraphPipelineError::ActiveRevisionChanged {
+                expected: expected.to_owned(),
+                observed: digest.to_owned(),
+            });
         }
     }
     let revision = query_graph_revision(txn, digest)
         .await?
-        .context("active graph revision is missing")?;
+        .ok_or(GraphPipelineError::ActiveRevisionMissing)?;
     let plan = verified_revision_plan(&revision, graph_id, owner_did)?;
     if !revision_gate_decision(
         revision
@@ -1636,7 +1785,7 @@ async fn start_run_in_txn(txn: &ConfigApplyTxn<'_>, run: StartRun<'_>) -> Result
     )
     .may_start
     {
-        anyhow::bail!("active graph revision is not runnable");
+        return Err(GraphPipelineError::ActiveRevisionNotRunnable);
     }
     if let Some(package) = plan.package.as_ref() {
         verify_package_schemas_in_txn(txn, package).await?;
@@ -1646,31 +1795,33 @@ async fn start_run_in_txn(txn: &ConfigApplyTxn<'_>, run: StartRun<'_>) -> Result
         .entries
         .iter()
         .find(|entry| entry.name == entry_name)
-        .context("unknown graph entry")?;
+        .ok_or(GraphPipelineError::UnknownEntry)?;
     validate_collection_identifier(&entry.collection)?;
 
     let mut input = match origin {
         EntryInputOrigin::Operator => {
-            anyhow::ensure!(
-                entry.prepare.is_none(),
-                "entry {entry_name} prepares its input on the host; start it through its package"
-            );
+            if entry.prepare.is_some() {
+                return Err(GraphPipelineError::EntryPreparesOnHost {
+                    entry_name: entry_name.to_owned(),
+                });
+            }
             crate::graph_pipeline::admit_operator_input(entry, input.clone())?
         }
         EntryInputOrigin::Prepared => {
-            anyhow::ensure!(
-                entry.prepare.is_some(),
-                "entry {entry_name} does not declare a host prepare step"
-            );
+            if entry.prepare.is_none() {
+                return Err(GraphPipelineError::EntryWithoutPrepare {
+                    entry_name: entry_name.to_owned(),
+                });
+            }
             match input {
                 Value::Object(object) => object.clone(),
-                _ => anyhow::bail!("graph entry input must be a JSON object"),
+                _ => return Err(GraphPipelineError::GraphEntryInputNotObject),
             }
         }
     };
     if let Some(existing) = input.get(&entry.correlation_field) {
         if existing.as_str() != Some(run_id) {
-            anyhow::bail!("entry input may not override the run correlation field");
+            return Err(GraphPipelineError::CorrelationOverride);
         }
     }
     input.insert(
@@ -2647,7 +2798,7 @@ mod tests {
         assert!(
             error.to_string().contains("prepares its input on the host"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let runs = node.execute("{ GraphRun { run_id } }").await;
         assert!(!runs.has_errors(), "{:?}", runs.errors);
@@ -2700,7 +2851,7 @@ mod tests {
                 .to_string()
                 .contains("does not declare a host prepare step"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         node.shutdown().await;
     }
@@ -2750,7 +2901,7 @@ mod tests {
         assert!(
             error.to_string().contains("does not satisfy its schema"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
 
         let run = start_graph_run(

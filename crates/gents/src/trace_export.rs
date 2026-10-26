@@ -1,5 +1,4 @@
 use crate::llm::message::{AssistantContent, Message};
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::transcript::{present_message, PersistedMessagePresentation};
@@ -185,7 +184,11 @@ pub fn latency_ms(started_at: Option<&str>, completed_at: Option<&str>) -> Optio
 pub enum TraceExportError {
     #[error("serializing canonical trace message")]
     SerializeMessage(#[source] serde_json::Error),
+    #[error(transparent)]
+    History(#[from] crate::session::HistoryError),
 }
+
+type Result<T, E = TraceExportError> = std::result::Result<T, E>;
 
 pub fn raw_message_json(message: &Message) -> Result<Value, TraceExportError> {
     serde_json::to_value(message).map_err(TraceExportError::SerializeMessage)

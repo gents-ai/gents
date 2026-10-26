@@ -76,6 +76,56 @@ pub enum HookError {
     AdmissionRequestMissing { request_doc_id: String },
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
+    #[error("active AgentRequest {request_id} not found")]
+    ActiveRequestNotFound { request_id: String },
+    #[error(transparent)]
+    Session(#[from] crate::session::SessionError),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+    #[error(transparent)]
+    ToolCallQuery(Box<crate::tool_call_lifecycle::query::ToolCallQueryError>),
+    #[error(transparent)]
+    Transition(Box<crate::tool_call_lifecycle::TransitionError>),
+    #[error(transparent)]
+    BackgroundTools(Box<crate::background_tools::BackgroundToolsError>),
+    #[error(transparent)]
+    LiveOutput(#[from] gents_loop::live_output::LiveOutputError),
+    #[error(transparent)]
+    SerializeOutputPage(serde_json::Error),
+    #[error("plugin child has no physical identity")]
+    PluginChildMissingIdentity,
+    #[error("plugin child disappeared before interruption settlement")]
+    PluginChildDisappeared,
+    #[error("plugin child did not durably terminalize")]
+    PluginChildNotTerminal,
+    #[error("tool admission rejection must carry a failed outcome")]
+    AdmissionOutcomeNotFailed,
+    #[error("background tool call {tool_call_id} was not found")]
+    BackgroundToolNotFound { tool_call_id: String },
+    #[error("background tool call {tool_call_id} is not manageable by this session")]
+    BackgroundToolNotManageable { tool_call_id: String },
+    #[error("cancelled background lifecycle lacks physical identity")]
+    CancelledLifecycleMissingIdentity,
+    #[error("on_tool_result: persisted AgentToolCall _docID missing for tool_call_id={internal_call_id}")]
+    ToolResultDocIdMissing { internal_call_id: String },
+    #[error("on_tool_result: no in-flight lifecycle for tool_call_id={internal_call_id}")]
+    ToolResultLifecycleMissing { internal_call_id: String },
+    #[error("{message}")]
+    PluginEffectSettlement { message: String },
+    #[error("foreground request already stopped")]
+    ForegroundStopped,
+}
+
+impl From<crate::tool_call_lifecycle::TransitionError> for HookError {
+    fn from(error: crate::tool_call_lifecycle::TransitionError) -> Self {
+        Self::Transition(Box::new(error))
+    }
+}
+
+impl From<crate::tool_call_lifecycle::query::ToolCallQueryError> for HookError {
+    fn from(error: crate::tool_call_lifecycle::query::ToolCallQueryError) -> Self {
+        Self::ToolCallQuery(Box::new(error))
+    }
 }
 
 impl HookError {
@@ -92,6 +142,10 @@ impl crate::config_client::TransactionFailure for HookError {
         match self {
             Self::Access(error) | Self::CountBackgrounded { source: error, .. } => Some(error),
             Self::ToolCallLifecycle(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::ToolCallQuery(error) => error.config_client_error(),
+            Self::Transition(error) => error.config_client_error(),
+            Self::BackgroundTools(error) => error.config_client_error(),
             _ => None,
         }
     }
@@ -367,7 +421,7 @@ impl BackgroundExecutionRegistry {
         node_did: &str,
         requester_did: Option<&str>,
         tool_call_id: &str,
-    ) -> anyhow::Result<Option<serde_json::Value>> {
+    ) -> Result<Option<serde_json::Value>, HookError> {
         let caller = crate::background_tools::ProcessControlScope {
             request_id: String::new(),
             session_id: session_id.to_owned(),
@@ -382,10 +436,11 @@ impl BackgroundExecutionRegistry {
             0,
             usize::MAX,
         )
-        .await?;
+        .await
+        .map_err(|error| HookError::BackgroundTools(Box::new(error)))?;
         Ok(match result {
             crate::background_tools::ReadToolOutputOutcome::Found(page) => {
-                Some(serde_json::to_value(page)?)
+                Some(serde_json::to_value(page).map_err(HookError::SerializeOutputPage)?)
             }
             _ => None,
         })
@@ -753,7 +808,7 @@ impl DefraSessionHook {
         node_did: &str,
         requester_did: Option<&str>,
         failure_policy: FailurePolicy,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, HookError> {
         session::require_session(&node, node_did, session_id, requester_did).await?;
         let max_seq = session::max_sequence(&node, session_id, node_did, requester_did).await?;
         let background_executions = BackgroundExecutionRegistry::default();
@@ -866,11 +921,19 @@ impl DefraSessionHook {
         self.counters.successes.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn decide_persistence_outcome(&self, context: &str, error: &anyhow::Error) -> PolicyDecision {
+    fn decide_persistence_outcome(
+        &self,
+        context: &str,
+        error: &(dyn std::error::Error + 'static),
+    ) -> PolicyDecision {
         decide_persistence_outcome(self.failure_policy, &self.counters, context, error)
     }
 
-    fn on_persistence_error(&self, context: &str, error: &anyhow::Error) -> HookAction {
+    fn on_persistence_error(
+        &self,
+        context: &str,
+        error: &(dyn std::error::Error + 'static),
+    ) -> HookAction {
         match self.decide_persistence_outcome(context, error) {
             PolicyDecision::Continue => HookAction::Continue,
             PolicyDecision::Terminate(reason) => HookAction::Terminate { reason },
@@ -880,7 +943,7 @@ impl DefraSessionHook {
     fn on_tool_persistence_error(
         &self,
         context: &str,
-        error: &anyhow::Error,
+        error: &(dyn std::error::Error + 'static),
     ) -> ToolCallHookAction {
         self.counters.failures.fetch_add(1, Ordering::Relaxed);
         tracing::error!(error = %error, context = %context, "tool call persistence failed; dispatch denied");
@@ -897,12 +960,14 @@ impl DefraSessionHook {
         &self,
         request_id: Option<String>,
         requester_did: Option<String>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), HookError> {
         let request_doc_id = match request_id.as_deref() {
             Some(request_id) => Some(
                 self.request_doc_id_for_request(request_id)
                     .await?
-                    .ok_or_else(|| anyhow::anyhow!("active AgentRequest {request_id} not found"))?,
+                    .ok_or_else(|| HookError::ActiveRequestNotFound {
+                        request_id: request_id.to_owned(),
+                    })?,
             ),
             None => None,
         };
@@ -962,7 +1027,10 @@ impl DefraSessionHook {
         Ok(Some(doc_id))
     }
 
-    async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
+    async fn request_doc_id_for_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<String>, HookError> {
         Ok(crate::request_binding::resolve_request_doc_id(self.node.as_ref(), request_id).await?)
     }
 
@@ -1016,7 +1084,7 @@ impl DefraSessionHook {
         self.background_live_outputs.remove(tool_call_id).await;
     }
 
-    pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {
+    pub(crate) async fn timeout_expired_tool_calls(&self) -> Result<usize, HookError> {
         let lifecycles = {
             let now = Utc::now();
             let mut map = self.in_flight_lifecycles.lock().await;
@@ -1051,12 +1119,12 @@ impl DefraSessionHook {
                 Some(&gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { deadline_at: None }),
             )
             .await
-            .map_err(anyhow::Error::msg)?;
+            .map_err(|message| HookError::PluginEffectSettlement { message })?;
         }
         Ok(count)
     }
 
-    pub async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
+    pub async fn cancel_in_flight_tool_calls(&self) -> Result<usize, HookError> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;
             map.drain()
@@ -1065,7 +1133,7 @@ impl DefraSessionHook {
         };
 
         let mut cancelled = 0;
-        let mut first_error: Option<anyhow::Error> = None;
+        let mut first_error: Option<HookError> = None;
         for mut lifecycle in lifecycles {
             let applied = match lifecycle.interrupt_disposition() {
                 InterruptDisposition::Cancel if lifecycle.is_running() => lifecycle
@@ -1093,7 +1161,7 @@ impl DefraSessionHook {
             )
             .await
             {
-                first_error.get_or_insert(anyhow::Error::msg(error));
+                first_error.get_or_insert(HookError::PluginEffectSettlement { message: error });
             }
         }
         first_error.map_or(Ok(cancelled), Err)
@@ -1104,7 +1172,7 @@ impl DefraSessionHook {
         &self,
         result: &str,
         failure_class: crate::tool_call_lifecycle::FailureClass,
-    ) -> anyhow::Result<usize> {
+    ) -> Result<usize, HookError> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;
             map.drain()
@@ -1119,7 +1187,7 @@ impl DefraSessionHook {
         Ok(count)
     }
 
-    pub async fn close(&self) -> anyhow::Result<()> {
+    pub async fn close(&self) -> Result<(), HookError> {
         let session_id = self.state.lock().await.session_id.clone();
         if let Some(id) = session_id {
             session::close_session(
@@ -1133,11 +1201,10 @@ impl DefraSessionHook {
         Ok(())
     }
 
-    pub fn apply_persistence_policy(
-        &self,
-        result: anyhow::Result<()>,
-        context: &str,
-    ) -> anyhow::Result<()> {
+    pub fn apply_persistence_policy<E>(&self, result: Result<(), E>, context: &str) -> Result<(), E>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
         match result {
             Ok(()) => {
                 self.record_success();
@@ -1247,25 +1314,22 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             return Ok(());
         };
         self.effect_tool_calls.lock().await.remove(internal_id);
-        let result: anyhow::Result<()> = async {
+        let result: Result<(), HookError> = async {
             let mut current = ToolCallLifecycle::load_by_doc_id(
                 self.node.clone(),
                 binding
                     .doc_id()
-                    .ok_or_else(|| anyhow::anyhow!("plugin child has no physical identity"))?,
+                    .ok_or(HookError::PluginChildMissingIdentity)?,
                 binding.node_did(),
                 binding.session_id(),
                 binding.requester_did(),
             )
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("plugin child disappeared before interruption settlement")
-            })?;
+            .ok_or(HookError::PluginChildDisappeared)?;
             let Some(outcome) = interruption else {
-                anyhow::ensure!(
-                    current.is_terminal(),
-                    "plugin child did not durably terminalize"
-                );
+                if !current.is_terminal() {
+                    return Err(HookError::PluginChildNotTerminal);
+                }
                 crate::tool_call_lifecycle::query::load_tool_call_result(
                     &crate::config_client::ConfigAccess::local(self.node.clone()),
                     current.doc_id().expect("loaded physical child"),
@@ -1303,12 +1367,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         if result.is_ok() {
             self.effect_lifecycles.lock().await.remove(internal_id);
         }
-        result.map_err(|error| {
-            format!(
-                "cannot settle plugin effect: {}",
-                ErrorChain(error.as_ref())
-            )
-        })
+        result.map_err(|error| format!("cannot settle plugin effect: {}", ErrorChain(&error)))
     }
 
     async fn pending_steering_inputs(
@@ -1443,7 +1502,7 @@ fn decide_persistence_outcome(
     failure_policy: FailurePolicy,
     counters: &HookCounters,
     context: &str,
-    error: &anyhow::Error,
+    error: &(dyn std::error::Error + 'static),
 ) -> PolicyDecision {
     counters.failures.fetch_add(1, Ordering::Relaxed);
     match failure_policy {

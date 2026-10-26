@@ -375,11 +375,11 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            ErrorChain(conflict.as_ref())
+            ErrorChain(&conflict)
                 .to_string()
                 .contains("stored graph revision does not match compiled plan identity"),
             "unexpected foreign-owner conflict: {}",
-            ErrorChain(conflict.as_ref())
+            ErrorChain(&conflict)
         );
         node.shutdown().await;
     }

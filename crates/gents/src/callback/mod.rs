@@ -2,7 +2,6 @@ use rapidhash::{RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
@@ -94,6 +93,105 @@ pub enum CallbackError {
         #[source]
         source: crate::config_client::ConfigClientError,
     },
+    #[error("created CallbackInvocation missing after write")]
+    InvocationMissingAfterWrite,
+    #[error("create_CallbackInvocation")]
+    CreateInvocation(#[source] crate::config_client::ConfigClientError),
+    #[error("created CallbackResult missing after write")]
+    ResultMissingAfterWrite,
+    #[error("create_CallbackResult")]
+    CreateResult(#[source] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Documents(#[from] crate::workspace::DocumentsError),
+    #[error("persist IsolatedWorkspace {workspace_id}")]
+    PersistIsolatedWorkspace {
+        workspace_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error("persist WorkspacePlacement {workspace_id}")]
+    PersistWorkspacePlacement {
+        workspace_id: String,
+        #[source]
+        source: crate::config_client::ConfigClientError,
+    },
+    #[error(transparent)]
+    Run(#[from] run::CallbackRunError),
+    #[error("CallbackInvocation {invocation_id} could not persist claimed→running; state={state}")]
+    PersistRunningRejected {
+        invocation_id: String,
+        state: String,
+    },
+    #[error("CallbackInvocation {invocation_id} disappeared during claimed→running")]
+    DisappearedDuringRunning { invocation_id: String },
+    #[error("ActionPlan has no actions")]
+    EmptyActionPlan,
+    #[error("CallbackInvocation {invocation_id} persist matched no row (state={state})")]
+    PersistMatchedNoRow {
+        invocation_id: String,
+        state: String,
+    },
+    #[error("CallbackInvocation {invocation_id} deny persist matched no row")]
+    DenyMatchedNoRow { invocation_id: String },
+    #[error("CallbackInvocation {invocation_id} result docs are not ready")]
+    ResultDocsNotReady { invocation_id: String },
+    #[error("{reason}")]
+    StoredActionPlan { reason: String },
+    #[error(transparent)]
+    EventDelivery(#[from] crate::trigger_engine::event_delivery::EventDeliveryError),
+    #[error(transparent)]
+    EventSource(Box<crate::trigger_engine::event_source::EventSourceError>),
+    #[error(transparent)]
+    Cursor(#[from] crate::config_client::event_source_cursor::EventSourceCursorError),
+    #[error(transparent)]
+    GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
+    #[error("arrival query omitted data")]
+    ArrivalOmittedData,
+    #[error("arrival query omitted entries")]
+    ArrivalOmittedEntries,
+    #[error("arrival lacks document ID")]
+    ArrivalMissingDocId,
+    #[error("arrival lacks cursor")]
+    ArrivalMissingCursor,
+    #[error("arrival query omitted next cursor")]
+    ArrivalOmittedNextCursor,
+    #[error("CallbackBinding {binding_id} EventSource missing for owner")]
+    EventSourceMissing { binding_id: String },
+    #[error("callback EventSource requires supported created event kind")]
+    UnsupportedEventKind,
+    #[error("Callback {callback_id} missing for owner")]
+    CallbackMissingForOwner { callback_id: String },
+    #[error("callback group correlation missing")]
+    GroupCorrelationMissing,
+    #[error("callback missing for owner")]
+    CallbackMissing,
+    #[error("callback input field is not a scalar source field")]
+    GroupFieldNotScalar,
+    #[error("callback input field {field} is not a safe scalar source field")]
+    UnsafeSourceField { field: String },
+    #[error("source doc {source_doc_id} not found in {collection}")]
+    SourceDocNotFound {
+        source_doc_id: String,
+        collection: String,
+    },
+    #[error("callback source {source_doc_id} has no composite version")]
+    SourceMissingVersion { source_doc_id: String },
+    #[error(
+        "callback source {source_doc_id} changed after invocation: expected version {expected}, found {found}"
+    )]
+    SourceChanged {
+        source_doc_id: String,
+        expected: String,
+        found: String,
+    },
+    #[error("callback source is not an object")]
+    SourceNotObject,
+}
+
+impl From<crate::trigger_engine::event_source::EventSourceError> for CallbackError {
+    fn from(error: crate::trigger_engine::event_source::EventSourceError) -> Self {
+        Self::EventSource(Box::new(error))
+    }
 }
 
 impl From<crate::config_client::DesiredStateError> for CallbackError {
@@ -112,6 +210,22 @@ impl crate::config_client::TransactionFailure for CallbackError {
             Self::DesiredState(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error.as_ref())
             }
+            Self::EventDelivery(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::EventSource(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error.as_ref())
+            }
+            Self::Cursor(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::GraphPipeline(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error.as_ref())
+            }
+            Self::CreateInvocation(error)
+            | Self::CreateResult(error)
+            | Self::PersistIsolatedWorkspace { source: error, .. }
+            | Self::PersistWorkspacePlacement { source: error, .. } => Some(error),
             _ => None,
         }
     }
@@ -149,7 +263,7 @@ pub async fn run_callback_engine(
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     cancel: CancellationToken,
-) -> Result<()> {
+) -> Result<(), CallbackError> {
     let mut engine = CallbackEngine::new(node, node_did.clone(), ceiling.clone(), cancel.clone());
     engine.plugins = plugins;
     engine.workers = Some(workers::CallbackWorkers::new(

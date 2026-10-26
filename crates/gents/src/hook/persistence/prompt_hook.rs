@@ -1,5 +1,5 @@
 use super::*;
-use crate::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
+use crate::hook::{decide_persistence_outcome, FailurePolicy, HookError, PolicyDecision};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookOwnedTool {
@@ -171,7 +171,9 @@ impl DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(error) => self.on_tool_persistence_error(route.persistence_context(), &error),
+                Err(error) => {
+                    self.on_tool_persistence_error(route.persistence_context(), error.as_ref())
+                }
             };
         }
 
@@ -189,11 +191,13 @@ impl DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(error) => self.on_tool_persistence_error("persist job tool call", &error),
+                Err(error) => {
+                    self.on_tool_persistence_error("persist job tool call", error.as_ref())
+                }
             };
         }
 
-        let result: anyhow::Result<()> = async {
+        let result: Result<(), HookError> = async {
             let (session_id, request_id, deadline_at, _seq) =
                 self.ensure_assistant_turn_sequence().await?;
             let mut lc = self
@@ -285,14 +289,14 @@ impl DefraSessionHook {
         args: &str,
         outcome: &crate::tool_call_lifecycle::ToolOutcome,
     ) -> HookAction {
-        let result: anyhow::Result<()> = async {
+        let result: Result<(), HookError> = async {
             let crate::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 denial,
                 text,
             } = outcome
             else {
-                anyhow::bail!("tool admission rejection must carry a failed outcome");
+                return Err(HookError::AdmissionOutcomeNotFailed);
             };
             let (session_id, request_id, deadline_at, _seq) =
                 self.ensure_assistant_turn_sequence().await?;
@@ -344,7 +348,7 @@ impl DefraSessionHook {
             .lock()
             .await
             .contains_key(internal_call_id);
-        let persist_result: anyhow::Result<HookAction> = async {
+        let persist_result: Result<HookAction, HookError> = async {
             if matches!(
                 outcome,
                 ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled
@@ -357,8 +361,13 @@ impl DefraSessionHook {
 
                 if let Some(mut lc) = lifecycle {
                     let receipt = if let Some(doc_id) = lc.doc_id() {
-                        self.background_live_outputs.registry.plugin_receipt(doc_id).await
-                    } else { None };
+                        self.background_live_outputs
+                            .registry
+                            .plugin_receipt(doc_id)
+                            .await
+                    } else {
+                        None
+                    };
                     lc.stage_plugin_receipt(receipt);
                     let output_doc_id = lc.doc_id().map(str::to_owned);
                     match outcome {
@@ -400,10 +409,8 @@ impl DefraSessionHook {
                     .get(internal_call_id)
                     .and_then(|lifecycle| lifecycle.doc_id())
                     .map(str::to_string)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "on_tool_result: persisted AgentToolCall _docID missing for tool_call_id={internal_call_id}"
-                        )
+                    .ok_or_else(|| HookError::ToolResultDocIdMissing {
+                        internal_call_id: internal_call_id.to_owned(),
                     })?
             };
 
@@ -414,10 +421,9 @@ impl DefraSessionHook {
                     None,
                     tool_call_id.as_deref(),
                 );
-                anyhow::ensure!(
-                    state.session_id.is_some(),
-                    "session hook missing session id"
-                );
+                if state.session_id.is_none() {
+                    return Err(HookError::MissingSessionId);
+                }
             }
 
             let mut lc = self
@@ -425,40 +431,63 @@ impl DefraSessionHook {
                 .lock()
                 .await
                 .remove(internal_call_id)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "on_tool_result: no in-flight lifecycle for tool_call_id={internal_call_id}"
-                    )
+                .ok_or_else(|| HookError::ToolResultLifecycleMissing {
+                    internal_call_id: internal_call_id.to_owned(),
                 })?;
 
             lc.stage_plugin_receipt(
-                self.background_live_outputs.registry.plugin_receipt(&tool_call_doc_id).await
+                self.background_live_outputs
+                    .registry
+                    .plugin_receipt(&tool_call_doc_id)
+                    .await,
             );
             lc.stage_deferred_writes(
-                self.background_live_outputs.registry.deferred_writes(&tool_call_doc_id).await
+                self.background_live_outputs
+                    .registry
+                    .deferred_writes(&tool_call_doc_id)
+                    .await,
             );
 
-            let presentation = self.background_live_outputs.registry
+            let presentation = self
+                .background_live_outputs
+                .registry
                 .take_prepared_presentation(&tool_call_doc_id, result)
                 .await?;
 
             let bounded = presentation
                 .is_none()
-                .then(|| bounded_tool_result_with_presentation(tool_name, result, &self.truncation_limits))
+                .then(|| {
+                    bounded_tool_result_with_presentation(
+                        tool_name,
+                        result,
+                        &self.truncation_limits,
+                    )
+                })
                 .and_then(|(bounded, presentation)| Some((bounded, presentation?)));
             match (outcome, bounded) {
-                (ToolOutcome::Failed { denial: Some(denial), .. }, _) => {
+                (
+                    ToolOutcome::Failed {
+                        denial: Some(denial),
+                        ..
+                    },
+                    _,
+                ) => {
                     lc.fail_with_command_denial(result, denial).await?;
                 }
                 (ToolOutcome::Completed(_), Some((bounded, presentation))) => {
-                    lc.complete_raw_with_presentation(result, &bounded, presentation).await?;
+                    lc.complete_raw_with_presentation(result, &bounded, presentation)
+                        .await?;
                 }
                 (ToolOutcome::Failed { class, .. }, Some((bounded, presentation))) => {
-                    lc.fail_raw_with_presentation(result, &bounded, *class, presentation).await?;
+                    lc.fail_raw_with_presentation(result, &bounded, *class, presentation)
+                        .await?;
                 }
-                (ToolOutcome::Completed(_), None) => lc.complete_with_presentation(result, presentation).await?,
+                (ToolOutcome::Completed(_), None) => {
+                    lc.complete_with_presentation(result, presentation).await?
+                }
                 (ToolOutcome::Failed { class, .. }, None) => {
-                    lc.fail_with_presentation(result, *class, presentation).await?;
+                    lc.fail_with_presentation(result, *class, presentation)
+                        .await?;
                 }
                 (ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled, _) => {
                     unreachable!("managed terminals returned above")

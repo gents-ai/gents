@@ -45,7 +45,7 @@ async fn prepare_package_refuses_a_write_collection_the_package_does_not_declare
         .await
         .map(|_| ())
         .unwrap_err();
-    let message = format!("{}", ErrorChain(error.as_ref()));
+    let message = format!("{}", ErrorChain(&error));
     assert!(message.contains("NotDeclaredCollection"), "{message}");
     assert!(message.contains("review"), "{message}");
 }

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use super::documents::{update_invocation, CallbackInvocationDoc};
@@ -28,7 +27,7 @@ pub async fn claim_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     invocation: &CallbackInvocationDoc,
-) -> Result<Option<CallbackInvocationDoc>> {
+) -> Result<Option<CallbackInvocationDoc>, super::CallbackError> {
     if invocation.owner_node_did != node_did {
         return Ok(None);
     }

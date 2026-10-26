@@ -36,6 +36,12 @@ pub enum EntryError {
     },
     #[error("{} is not a Git work tree", path.display())]
     NotWorkTree { path: PathBuf },
+    #[error(transparent)]
+    Overlay(#[from] crate::workspace::overlay::OverlayError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Quickstart(#[from] crate::workspace::QuickstartError),
     #[error("entry {entry_name:?} read_only_workspace requires an earlier git_diff")]
     ReadOnlyWorkspaceNeedsDiff { entry_name: String },
     #[error("persisting prepared entry documents")]
@@ -117,7 +123,7 @@ fn resolve_repository(
     base: &str,
     head: &str,
     process_root: Option<&Path>,
-) -> anyhow::Result<(PathBuf, String, String)> {
+) -> Result<(PathBuf, String, String)> {
     let canonical =
         std::fs::canonicalize(repo).map_err(|source| EntryError::CanonicalizeRepository {
             path: repo.to_path_buf(),
@@ -127,8 +133,7 @@ fn resolve_repository(
     if git_output(&canonical, &["rev-parse", "--is-inside-work-tree"])? != "true" {
         return Err(EntryError::NotWorkTree {
             path: canonical.clone(),
-        }
-        .into());
+        });
     }
     // Git discovers enclosing repositories. A permitted subdirectory must not
     // grant review access to the rest of a repository outside the ceiling.
@@ -172,7 +177,7 @@ fn collect_git_diff(
     unified_context_lines: u32,
     rename_similarity_percent: u8,
     host_root: Option<&Path>,
-) -> anyhow::Result<GitDiffFacts> {
+) -> Result<GitDiffFacts> {
     let (repository, base_sha, head_sha) = resolve_repository(repository, base, head, host_root)?;
     let name_status = git_output(
         &repository,
@@ -314,7 +319,7 @@ async fn collect_host_facts(
     admitted: &Map<String, Value>,
     host_steps: &[HostInput],
     host_root: Option<&Path>,
-) -> anyhow::Result<Map<String, Value>> {
+) -> Result<Map<String, Value>> {
     let mut host = Map::new();
     let mut git_diff: Option<GitDiffFacts> = None;
     for step in host_steps {

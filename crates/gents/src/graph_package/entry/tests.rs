@@ -13,7 +13,7 @@ fn review_cannot_escape_ceiling_through_enclosing_repository() {
     assert!(
         error.to_string().contains("escapes operator tool root"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 

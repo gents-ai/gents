@@ -14,7 +14,6 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::GraphqlError;
 use gents_protocol::job::DataWrite;
@@ -67,6 +66,29 @@ pub enum CallbackPluginError {
     PluginWrites(#[from] crate::application_write::PluginWritesError),
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
+}
+
+/// Display text becomes the invocation's persisted failure reason.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PluginOutputError {
+    #[error("the plugin must return an object keyed by output name")]
+    NotKeyedObject,
+    #[error("the plugin returned unknown output {name:?}")]
+    UnknownOutput { name: String },
+    #[error("{error}")]
+    Collection { error: String },
+    #[error("output {name:?} takes an array of documents")]
+    NotArray { name: String },
+    #[error("the plugin did not return required output {name:?}")]
+    MissingRequired { name: String },
+    #[error("output {name:?} takes objects")]
+    NotObject { name: String },
+    #[error("the source document carries no correlation for the outputs")]
+    MissingCorrelation,
+    #[error("the plugin changed {field:?}, which the runtime writes")]
+    CorrelationChanged { field: String },
+    #[error("plugin writes must be [{{op, collection, doc_id?, fields, on_conflict?}}]: {error}")]
+    Writes { error: serde_json::Error },
 }
 
 impl crate::config_client::TransactionFailure for CallbackPluginError {
@@ -140,19 +162,21 @@ pub(crate) fn output_documents(
     output: &Value,
     outputs: &[PortSpec],
     correlation: Option<&str>,
-) -> Result<Vec<(String, Value)>, String> {
+) -> Result<Vec<(String, Value)>, PluginOutputError> {
     let per_port: Vec<(&PortSpec, Option<&Value>)> = match outputs {
         [] => return Ok(Vec::new()),
         [only] => vec![(only, Some(output))],
         many => {
-            let object = output.as_object().ok_or_else(|| {
-                "the plugin must return an object keyed by output name".to_owned()
-            })?;
+            let object = output
+                .as_object()
+                .ok_or(PluginOutputError::NotKeyedObject)?;
             if let Some(unknown) = object
                 .keys()
                 .find(|key| !many.iter().any(|port| &port.name == *key))
             {
-                return Err(format!("the plugin returned unknown output {unknown:?}"));
+                return Err(PluginOutputError::UnknownOutput {
+                    name: unknown.clone(),
+                });
             }
             many.iter()
                 .map(|port| (port, object.get(&port.name)))
@@ -161,41 +185,41 @@ pub(crate) fn output_documents(
     };
     let mut documents = Vec::new();
     for (port, value) in per_port {
-        writable_output_collection(&port.collection)
-            .map_err(|error| ErrorChain(&error).to_string())?;
+        writable_output_collection(&port.collection).map_err(|error| {
+            PluginOutputError::Collection {
+                error: ErrorChain(&error).to_string(),
+            }
+        })?;
         let rows: Vec<&Value> = match (&port.cardinality, value) {
             (_, None | Some(Value::Null)) => Vec::new(),
             (PortCardinality::One, Some(value)) => vec![value],
             (PortCardinality::Many, Some(Value::Array(items))) => items.iter().collect(),
             (PortCardinality::Many, Some(_)) => {
-                return Err(format!(
-                    "output {:?} takes an array of documents",
-                    port.name
-                ))
+                return Err(PluginOutputError::NotArray {
+                    name: port.name.clone(),
+                })
             }
         };
         if port.required && rows.is_empty() {
-            return Err(format!(
-                "the plugin did not return required output {:?}",
-                port.name
-            ));
+            return Err(PluginOutputError::MissingRequired {
+                name: port.name.clone(),
+            });
         }
         for row in rows {
-            let mut document: Map<String, Value> = row
-                .as_object()
-                .cloned()
-                .ok_or_else(|| format!("output {:?} takes objects", port.name))?;
-            let correlation = correlation.ok_or_else(|| {
-                "the source document carries no correlation for the outputs".to_owned()
-            })?;
+            let mut document: Map<String, Value> =
+                row.as_object()
+                    .cloned()
+                    .ok_or_else(|| PluginOutputError::NotObject {
+                        name: port.name.clone(),
+                    })?;
+            let correlation = correlation.ok_or(PluginOutputError::MissingCorrelation)?;
             if document
                 .get(&port.correlation_field)
                 .is_some_and(|value| value.as_str() != Some(correlation))
             {
-                return Err(format!(
-                    "the plugin changed {:?}, which the runtime writes",
-                    port.correlation_field
-                ));
+                return Err(PluginOutputError::CorrelationChanged {
+                    field: port.correlation_field.clone(),
+                });
             }
             document.insert(
                 port.correlation_field.clone(),
@@ -214,15 +238,11 @@ pub(super) struct PluginHandler<'a> {
     pub outputs: &'a [PortSpec],
 }
 
-fn take_writes(output: &mut Value) -> Result<Vec<DataWrite>, String> {
+fn take_writes(output: &mut Value) -> Result<Vec<DataWrite>, PluginOutputError> {
     let Some(writes) = output.as_object_mut().and_then(|o| o.remove("writes")) else {
         return Ok(Vec::new());
     };
-    serde_json::from_value(writes).map_err(|error| {
-        format!(
-            "plugin writes must be [{{op, collection, doc_id?, fields, on_conflict?}}]: {error}"
-        )
-    })
+    serde_json::from_value(writes).map_err(|error| PluginOutputError::Writes { error })
 }
 
 pub(super) async fn execute(
@@ -233,7 +253,7 @@ pub(super) async fn execute(
     plugins: &PluginExecutor,
     journal: Vec<ActionJournalEntry>,
     data_node: Option<&Arc<EmbeddedNode>>,
-) -> Result<()> {
+) -> Result<(), super::CallbackError> {
     if let Some(journal) = crate::workspace::recover_running(&journal) {
         return persist_journal(
             node,
