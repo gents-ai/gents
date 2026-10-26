@@ -317,7 +317,7 @@ mod instruction_tests {
             home.path(),
             archive.manifest(),
             archive.digest(),
-            |path| Ok(archive.asset(path)?),
+            |path| archive.asset(path),
             false,
         )
         .unwrap();

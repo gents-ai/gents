@@ -723,7 +723,7 @@ impl PluginExecutor {
         tools: Option<super::tool_calls::Session>,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
-    ) -> std::result::Result<PluginCall, PluginAttemptError> {
+    ) -> std::result::Result<PluginCall, Box<PluginAttemptError>> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
             let coordinate = receipt.coordinate.clone();
@@ -831,7 +831,7 @@ impl PluginExecutor {
             })
         }
         .await;
-        result.map_err(|error| PluginAttemptError { error, receipt })
+        result.map_err(|error| Box::new(PluginAttemptError { error, receipt }))
     }
 
     fn admit(&self, record: &InstalledPlugin) -> Result<Arc<Admitted>> {
@@ -935,7 +935,7 @@ fn receipt_of(
             (Ok(call), receipt)
         }
         Err(Attempted::Ran(attempt)) => (Err(attempt.error), attempt.receipt),
-        Err(Attempted::Refused(error)) => (Err(error), refused),
+        Err(Attempted::Refused(error)) => (Err(*error), refused),
     }
 }
 
@@ -943,27 +943,27 @@ fn receipt_of(
 /// running has none.
 enum Attempted {
     Ran(Box<PluginAttemptError>),
-    Refused(PluginRunError),
+    Refused(Box<PluginRunError>),
 }
 
 impl Attempted {
     fn into_error(self) -> PluginRunError {
         match self {
             Self::Ran(attempt) => attempt.error,
-            Self::Refused(error) => error,
+            Self::Refused(error) => *error,
         }
     }
 }
 
 impl From<PluginRunError> for Attempted {
     fn from(error: PluginRunError) -> Self {
-        Self::Refused(error)
+        Self::Refused(Box::new(error))
     }
 }
 
-impl From<PluginAttemptError> for Attempted {
-    fn from(attempt: PluginAttemptError) -> Self {
-        Self::Ran(Box::new(attempt))
+impl From<Box<PluginAttemptError>> for Attempted {
+    fn from(attempt: Box<PluginAttemptError>) -> Self {
+        Self::Ran(attempt)
     }
 }
 

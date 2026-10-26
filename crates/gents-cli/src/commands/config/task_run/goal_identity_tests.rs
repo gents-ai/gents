@@ -178,9 +178,9 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
         let row = lookup_request_by_retry_key(&access, signer.did(), &fire.fire_key).await?;
         if let Err(error) = admitted {
             assert!(
-                format!("{}", ErrorChain(error.as_ref())).contains("Task Goal assignment changed"),
+                format!("{}", ErrorChain(&error)).contains("Task Goal assignment changed"),
                 "{}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
             assert!(row.is_none(), "{case}");
             let persisted = access

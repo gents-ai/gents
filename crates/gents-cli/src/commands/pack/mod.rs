@@ -1357,7 +1357,7 @@ mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| Ok(()),
+            |_| Ok::<_, anyhow::Error>(()),
         )
         .unwrap();
         let before = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
@@ -1385,7 +1385,7 @@ mod tests {
             |_| anyhow::bail!("local publication rejected"),
         )
         .unwrap_err();
-        assert!(ErrorChain(error.as_ref())
+        assert!(ErrorChain(&error)
             .to_string()
             .contains("local publication rejected"));
         assert_eq!(

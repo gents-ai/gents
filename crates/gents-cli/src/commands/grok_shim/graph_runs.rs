@@ -1200,8 +1200,12 @@ mod tests {
                         loads.fetch_add(1, Ordering::SeqCst);
                         let access = &access;
                         async move {
-                            load_graph_run_view_with_access(access, "did:test:intruder", &run_id)
-                                .await
+                            Ok(load_graph_run_view_with_access(
+                                access,
+                                "did:test:intruder",
+                                &run_id,
+                            )
+                            .await?)
                         }
                     })
                     .await

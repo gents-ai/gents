@@ -9,7 +9,7 @@ use crate::config::ResolvedAgent;
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BackendClientError {
     #[error(transparent)]
-    Http(#[from] rig::http_client::Error),
+    Http(Box<rig::http_client::Error>),
     #[error(
         "building OpenAI-compatible completion client for agent {agent_id} against {endpoint}"
     )]
@@ -17,14 +17,14 @@ pub(crate) enum BackendClientError {
         agent_id: String,
         endpoint: String,
         #[source]
-        source: crate::inference_http::InferenceHttpError,
+        source: Box<crate::inference_http::InferenceHttpError>,
     },
     #[error("building OpenRouter completion client for agent {agent_id} against {endpoint}")]
     OpenRouter {
         agent_id: String,
         endpoint: String,
         #[source]
-        source: rig::http_client::Error,
+        source: Box<rig::http_client::Error>,
     },
     #[error("building ChatGPT Codex completion client for agent {agent_id} against {endpoint}")]
     ChatGptCodex {
@@ -38,14 +38,20 @@ pub(crate) enum BackendClientError {
         agent_id: String,
         endpoint: String,
         #[source]
-        source: ClientBuildFailure<crate::xai_grok_oauth::XaiGrokOAuthError>,
+        source: Box<ClientBuildFailure<crate::xai_grok_oauth::XaiGrokOAuthError>>,
     },
     #[error("building Claude subscription completion client for agent {agent_id}")]
     ClaudeSubscription {
         agent_id: String,
         #[source]
-        source: ClientBuildFailure<crate::claude_subscription::ClaudeSubscriptionError>,
+        source: Box<ClientBuildFailure<crate::claude_subscription::ClaudeSubscriptionError>>,
     },
+}
+
+impl From<rig::http_client::Error> for BackendClientError {
+    fn from(error: rig::http_client::Error) -> Self {
+        Self::Http(Box::new(error))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -222,7 +228,7 @@ pub(crate) async fn build_backend_client(
             let build_context = |source| BackendClientError::OpenAiCompatible {
                 agent_id: agent.agent_id.to_string(),
                 endpoint: agent.backend_endpoint.clone(),
-                source,
+                source: Box::new(source),
             };
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client = crate::inference_http::build_openai_chat_completions_client(
@@ -271,7 +277,7 @@ pub(crate) async fn build_backend_client(
                 .map_err(|source| BackendClientError::OpenRouter {
                     agent_id: agent.agent_id.to_string(),
                     endpoint: agent.backend_endpoint.clone(),
-                    source,
+                    source: Box::new(source),
                 })?;
             Ok(BackendClient::OpenRouter(client))
         }
@@ -302,7 +308,7 @@ pub(crate) async fn build_backend_client(
             let build_context = |source| BackendClientError::XaiGrok {
                 agent_id: agent.agent_id.to_string(),
                 endpoint: agent.backend_endpoint.clone(),
-                source,
+                source: Box::new(source),
             };
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client = bounded(
@@ -356,7 +362,7 @@ pub(crate) async fn build_backend_client(
             )
             .map_err(|source| BackendClientError::ClaudeSubscription {
                 agent_id: agent.agent_id.to_string(),
-                source,
+                source: Box::new(source),
             })?;
             Ok(BackendClient::ClaudeSubscription(client))
         }

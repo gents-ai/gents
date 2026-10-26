@@ -343,7 +343,7 @@ mod tests {
             home.path(),
             &manifest,
             archive.digest(),
-            |path| Ok(archive.asset(path)?),
+            |path| archive.asset(path),
             false,
         )
         .unwrap();
@@ -389,7 +389,7 @@ mod tests {
             home.path(),
             &manifest,
             archive.digest(),
-            |path| Ok(archive.asset(path)?),
+            |path| archive.asset(path),
             false,
         )
         .unwrap();
@@ -486,7 +486,7 @@ mod tests {
             home.path(),
             &manifest,
             archive.digest(),
-            |path| Ok(archive.asset(path)?),
+            |path| archive.asset(path),
             false,
         )
         .unwrap();

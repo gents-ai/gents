@@ -169,7 +169,7 @@ mod filesystem_tests {
             "inference_profiles":[{"profile_id":"profile","backend_id":"backend","model_name":"model"}],
             "agents":[{"agent_id":"agent","context_id":"context","inference_profile_id":"profile"}],
             "tasks":[{"task_id":"task","agent_id":"agent","prompt_template":"  {{args.name}}\n"}]
-        }),None,&|name|(name=="NOT_EXPANDED").then(||"${NOT_EXPANDED}".into()),&|_,_,_|unreachable!()).unwrap()
+        }),None,&|name|(name=="NOT_EXPANDED").then(||"${NOT_EXPANDED}".into()),&|_,_,_| -> anyhow::Result<String> { unreachable!() }).unwrap()
     }
 
     #[cfg(unix)]
