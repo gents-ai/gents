@@ -418,6 +418,25 @@ pub(crate) struct LeanPluginJobAdmissionCase {
     pub(crate) job: LeanPluginJobRow,
     pub(crate) output: LeanPluginJobOutput,
     pub(crate) expected: LeanPluginJobAdmissionExpected,
+    pub(crate) wire_trace: Option<LeanPluginJobWireRecoveryTrace>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWireRecoveryTrace {
+    pub(crate) bindings: Vec<LeanPluginJobWireBinding>,
+    pub(crate) live_ids: Vec<String>,
+    pub(crate) pinned_ids: Vec<String>,
+    pub(crate) spawn_wires: Vec<String>,
+    pub(crate) before: LeanPluginJobRecoveryRow,
+    pub(crate) after: LeanPluginJobRecoveryRow,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWireBinding {
+    pub(crate) wire: String,
+    pub(crate) target: LeanPluginJobTarget,
 }
 
 #[derive(Debug, Deserialize)]
