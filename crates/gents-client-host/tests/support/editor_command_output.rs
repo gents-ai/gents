@@ -31,7 +31,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
                 .iter()
                 .any(|message| message["role"] == "tool" && message["tool_call_id"] == call)
             {
-                let payload = "command-output-".repeat(64);
+                let payload = "command-output-".repeat(if index == 0 { 2048 } else { 64 });
                 let begin = if index == 0 {
                     "printf 'ACTIVITY-0:ready\\n'; while [ ! -f activity-profile-continue ]; do sleep 0.05; done; "
                 } else {
@@ -170,6 +170,12 @@ pub async fn verify(
         let index = id
             .strip_prefix("activity-command-")
             .context("activity command prefix")?;
+        if index == "0" {
+            ensure!(
+                output.len() > gents::truncation::TruncationLimits::default().max_bytes,
+                "the live command fixture did not exceed the displayed tail limit"
+            );
+        }
         ensure!(
             output.contains(&format!("ACTIVITY-{index}:0:"))
                 && output.contains(&format!("ACTIVITY-{index}:7:")),
@@ -177,6 +183,6 @@ pub async fn verify(
         );
     }
     Ok(
-        json!({"requestDocument":document,"completedCommands":calls.len(),"terminalOutputsRetained":true}),
+        json!({"requestDocument":document,"completedCommands":calls.len(),"terminalOutputsRetained":true,"largeOutputRetained":true}),
     )
 }
