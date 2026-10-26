@@ -575,7 +575,7 @@ impl super::ToolCallLifecycle {
                 Err(error) => tracing::warn!(
                     doc_id = %row.doc_id,
                     tool_call_id = row.tool_call_id.as_deref().unwrap_or(""),
-                    error = %error,
+                    error = %format_args!("{error:#}"),
                     "failed to redrive background completion side effects"
                 ),
             }
