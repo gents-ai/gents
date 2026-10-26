@@ -16,7 +16,7 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::plugin::job_calls::job_state;
 use crate::plugin_job::admit::StepChild;
-use crate::plugin_job::input::{chain_of, derive_children};
+use crate::plugin_job::input::{chain_of, derive_children, derive_children_for_jobs};
 use crate::plugin_job::keys::job_spawn_key;
 use crate::tool_call_lifecycle::ToolCallState;
 
@@ -321,24 +321,18 @@ pub async fn list_jobs(
                 .map_err(unavailable)?,
         );
     }
-    let rows: BTreeSet<String> = chains.into_iter().flatten().collect();
-    let result_bytes = jobs
+    let scopes: Vec<_> = chains
         .iter()
-        .map(|job| job.pin.ceiling_at_pin.result_bytes)
-        .max();
-    let pairs = match result_bytes {
-        Some(result_bytes) => {
-            let rows: Vec<String> = rows.into_iter().collect();
-            derive_children(access, &rows, result_bytes)
-                .await
-                .map_err(unavailable)?
-        }
-        None => Vec::new(),
-    };
+        .zip(&jobs)
+        .map(|(chain, job)| (chain.as_slice(), job.pin.ceiling_at_pin.result_bytes))
+        .collect();
+    let children = derive_children_for_jobs(access, &scopes)
+        .await
+        .map_err(unavailable)?;
     let mut views = Vec::new();
-    for job in jobs {
+    for (job, pairs) in jobs.into_iter().zip(children) {
         let outcome = outcome_of(access, &job).await?;
-        let children = children_of(&job.pin, pairs.clone());
+        let children = children_of(&job.pin, pairs);
         views.push(assemble(job, outcome, children));
     }
     views.sort_by(|left, right| {
@@ -876,6 +870,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repeated_script_runs_keep_their_children_and_controls_separate() {
+        let mut job = new().await;
+        let first = pinned_job_row(&mut job, "call-1").await;
+        let second = pinned_job_row(&mut job, "call-2").await;
+        child(&job, &first, "first-child", "review", 0, "First review").await;
+        child(&job, &second, "second-child", "review", 0, "Second review").await;
+
+        let views = list_jobs(&job.access, &every_job()).await.unwrap();
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].pin.script_id, views[1].pin.script_id);
+        for (row, request_id, title) in [
+            (&first, "first-child", "First review"),
+            (&second, "second-child", "Second review"),
+        ] {
+            let listed = views.iter().find(|view| &view.row_doc_id == row).unwrap();
+            let shown = view(&job, row).await.unwrap();
+            assert_eq!(listed.children, shown.children);
+            assert_eq!(listed.children.len(), 1);
+            assert_eq!(listed.children[0].request_id, request_id);
+            assert_eq!(listed.children[0].title, title);
+            assert_eq!(listed.children[0].slot, "review");
+            assert_eq!(listed.children[0].attempt, 0);
+        }
+
+        for (row, other) in [(&first, &second), (&second, &first)] {
+            let before = view(&job, other).await.unwrap();
+            settle_row(&job, row, Settlement::Control(JobControlKind::Stop)).await;
+            assert_eq!(view(&job, row).await.unwrap().state, JobState::Cancelled);
+            assert_eq!(view(&job, other).await.unwrap(), before);
+            assert_eq!(list_jobs(&job.access, &every_job()).await.unwrap().len(), 2);
+        }
+        job.node.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn list_jobs_excludes_non_job_rows() {
         let mut job = new().await;
         job.row("workflow", "call-1", json!({"argv": ["run"]}))
@@ -889,7 +918,8 @@ mod tests {
     #[tokio::test]
     async fn list_jobs_query_count_is_independent_of_job_count() {
         let mut job = new().await;
-        pinned_job_row(&mut job, "call-1").await;
+        let first = pinned_job_row(&mut job, "call-1").await;
+        child(&job, &first, "first-child", "review", 0, "First review").await;
         let count = |job: &Job| {
             let queries = Arc::new(AtomicUsize::new(0));
             let access = job.access.clone();
@@ -904,8 +934,10 @@ mod tests {
         };
 
         let one = count(&job).await;
-        pinned_job_row(&mut job, "call-2").await;
-        pinned_job_row(&mut job, "call-3").await;
+        let second = pinned_job_row(&mut job, "call-2").await;
+        let third = pinned_job_row(&mut job, "call-3").await;
+        child(&job, &second, "second-child", "review", 0, "Second review").await;
+        child(&job, &third, "third-child", "review", 0, "Third review").await;
         let three = count(&job).await;
 
         assert!(one > 0);
