@@ -254,6 +254,10 @@ pub enum ClientCommand {
     Enroll { request: EnrollmentStatusRequest },
     #[serde(rename = "desktop_session_snapshot")]
     SessionSnapshot(SessionSnapshotArgs),
+    #[serde(rename = "desktop_session_context_details")]
+    SessionContextDetails {
+        request: crate::types::SessionContextDetailsRequest,
+    },
     #[serde(rename = "desktop_session_live_delta")]
     SessionLiveDelta(SessionLiveDeltaArgs),
     #[serde(rename = "desktop_session_rows")]
@@ -346,6 +350,7 @@ impl ClientCommand {
         "desktop_client_snapshot",
         "desktop_peer_enroll_status",
         "desktop_session_snapshot",
+        "desktop_session_context_details",
         "desktop_session_live_delta",
         "desktop_session_rows",
         "desktop_session_goal",
@@ -389,6 +394,7 @@ impl ClientCommand {
                 | Self::WorkspacePermissions { .. }
                 | Self::ApprovalPending { .. }
                 | Self::SessionSnapshot(_)
+                | Self::SessionContextDetails { .. }
                 | Self::SessionLiveDelta(_)
                 | Self::SessionGoal(_)
                 | Self::SessionProvenance { .. }

@@ -1,11 +1,20 @@
 use gents_protocol::message::{Message, Text, UserContent};
 
+const REMINDER_PREFIX: &str = "<system-reminder>\n";
+const REMINDER_SUFFIX: &str = "\n</system-reminder>";
+
 pub fn system_reminder(text: &str) -> Message {
     Message::User {
         content: vec![UserContent::Text(Text {
-            text: format!("<system-reminder>\n{}\n</system-reminder>", text),
+            text: format!("{REMINDER_PREFIX}{text}{REMINDER_SUFFIX}"),
         })],
     }
+}
+
+/// Recognizes the wire envelope for display classification, not authorship or authorization.
+pub fn is_system_reminder(text: &str) -> bool {
+    text.strip_prefix(REMINDER_PREFIX)
+        .is_some_and(|body| body.ends_with(REMINDER_SUFFIX))
 }
 
 pub fn continuation_checkpoint_reminder(checkpoints: &str) -> String {

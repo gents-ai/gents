@@ -38,3 +38,5 @@ export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.j
 export type { RequestTurnView } from "../generated/RequestTurnView.js";
 
 export type { ChatSubmissionQuery } from "../generated/ChatSubmissionQuery.js";
+export type { SessionContextDetails } from "../generated/SessionContextDetails.js";
+export type { SessionContextDetailsRequest } from "../generated/SessionContextDetailsRequest.js";

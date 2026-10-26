@@ -317,3 +317,13 @@ pub async fn desktop_pending_message_steer(
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
+
+#[tauri::command]
+pub async fn desktop_session_context_details(
+    request: crate::types::SessionContextDetailsRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<gents::toolset::SessionContextDetails>, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::session_context_details(&core, request).await
+}
