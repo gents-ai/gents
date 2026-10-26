@@ -142,3 +142,22 @@ describe("action presentation", () => {
     },
   );
 });
+
+it.each([
+  ["get_goal", "Checking goal"],
+  ["update_goal", "Updating goal"],
+  ["create_goal", "Setting goal"],
+  ["gents.get_goal", "Checking goal"],
+])("uses readable active text for %s", (toolName, expected) => {
+  const tool = {
+    ...pair()[1]!,
+    toolName,
+    presentation: {
+      kind: "generic" as const,
+      summary: toolName,
+      input: null,
+      output: null,
+    },
+  };
+  expect(runningAction({ tool })).toBe(expected);
+});

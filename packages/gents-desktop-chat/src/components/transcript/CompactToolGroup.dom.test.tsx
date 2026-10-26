@@ -53,7 +53,7 @@ it("opens the actual failed action from mixed history while retaining every chro
     />,
   );
   const summary = screen.getByRole("button", {
-    name: /View actions: Ran 2 commands.*1 command failed/,
+    name: /View actions: Ran 3 commands.*1 command failed/,
   });
   fireEvent.click(summary);
   const dialog = screen.getByRole("dialog", { name: /Actions 4/ });
@@ -162,8 +162,9 @@ it.each([
         ]}
       />,
     );
+    const total = `Ran ${1 + commands} ${commands ? "commands" : "command"}${actions ? ", explored files" : ""}`;
     const summary = screen.getByRole("button", {
-      name: `View actions: Ran 1 command · ${label}`,
+      name: `View actions: ${total} · ${label}`,
     });
     expect(
       summary.querySelector(".tool-activity-errors")?.getAttribute("title"),
@@ -173,7 +174,7 @@ it.each([
     );
     expect(
       summary.querySelector(".tool-activity-label")?.getAttribute("title"),
-    ).toBe(`Ran 1 command · ${label}`);
+    ).toBe(`${total} · ${label}`);
   },
 );
 

@@ -231,7 +231,9 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             .filter(Boolean)
             .join(", ") + " failed";
         const settledParts = [
-          succeeded.length ? completedLabel(succeeded) : null,
+          succeeded.length + failures.length
+            ? completedLabel([...succeeded, ...failures])
+            : null,
           stopped
             ? `${stopped} ${stopped === 1 ? "action stopped" : "actions stopped"}`
             : null,
