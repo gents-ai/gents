@@ -98,7 +98,7 @@ describe("session context meter (#1618)", () => {
       "Next model call: 500,000-token window, compaction at 400,000 tokens",
     );
     const usage = screen.getByTestId("context-usage");
-    expect(usage).toHaveTextContent("420 / 102k · 0.4%");
+    expect(usage).toHaveTextContent("~420 / 102k · 0.4%");
     expect(usage).toHaveAttribute(
       "title",
       "0.4% of compaction threshold; 420 of 102,400 estimated tokens",
@@ -136,7 +136,9 @@ describe("session context meter (#1618)", () => {
     const details = screen.getByTestId("context-details");
     await waitFor(() => expect(details).toHaveFocus());
     expect(screen.queryByText(/Latest assembled model input/)).toBeNull();
-    expect(screen.getByTestId("context-usage")).toHaveTextContent("78.5k / 786k · 10%");
+    expect(screen.getByTestId("context-usage")).toHaveTextContent(
+      "~78.5k / 786k · 10%",
+    );
     expect(screen.getByTestId("last-context-dispatch")).toHaveTextContent(
       "No compaction needed for this model call",
     );
@@ -208,17 +210,17 @@ describe("session context meter (#1618)", () => {
     );
     expect(screen.getByTestId("context-meter")).toHaveTextContent("50%");
     fireEvent.click(screen.getByTestId("context-meter"));
-    await screen.findByRole("row", { name: "User messages 100 10%" });
+    await screen.findByRole("row", { name: "User messages 100 10.0%" });
     const table = screen.getByRole("table", { name: "Input token estimates" });
     for (const [label, tokens, share] of [
-      ["Instructions & context", "300", "30%"],
-      ["User messages", "100", "10%"],
-      ["Assistant messages", "50", "5%"],
-      ["Tool calls", "80", "8%"],
-      ["Tool results", "240", "24%"],
-      ["Other message data", "10", "1%"],
-      ["Tool definitions", "200", "20%"],
-      ["Request settings", "20", "2%"],
+      ["Instructions & context", "300", "30.0%"],
+      ["User messages", "100", "10.0%"],
+      ["Assistant messages", "50", "5.0%"],
+      ["Tool calls", "80", "8.0%"],
+      ["Tool results", "240", "24.0%"],
+      ["Other message data", "10", "1.0%"],
+      ["Tool definitions", "200", "20.0%"],
+      ["Request settings", "20", "2.0%"],
     ]) {
       const row = within(table).getByRole("row", {
         name: `${label} ${tokens} ${share}`,
@@ -299,7 +301,7 @@ describe("session context meter (#1618)", () => {
     expect(dispatch).toHaveTextContent(
       "Input compacted before this model call · 480 → 420 tokens",
     );
-    expect(screen.getByTestId("context-usage")).toHaveTextContent("420 / 400k · 0.1%");
+    expect(screen.getByTestId("context-usage")).toHaveTextContent("~420 / 400k · 0.1%");
   });
 
   it("shows durable session compaction estimates and leaves absent evidence unclaimed", () => {
@@ -358,7 +360,7 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-meter")).toHaveTextContent("2.7%");
     fireEvent.click(screen.getByTestId("context-meter"));
     const usage = screen.getByTestId("context-usage");
-    expect(usage).toHaveTextContent("20.5k / 750k · 2.7%");
+    expect(usage).toHaveTextContent("~20.5k / 750k · 2.7%");
     expect(usage).toHaveAttribute(
       "title",
       "2.7% of compaction threshold; 20,486 of 750,000 estimated tokens",
@@ -383,7 +385,7 @@ describe("session context meter (#1618)", () => {
     expect(rows.slice(1).map((row) => row.textContent)).toEqual([
       "Tool definitions8,00039.1%",
       "Messages & instructions12,00058.6%",
-      "Attached documents4002%",
+      "Attached documents4002.0%",
       "Output schema360.2%",
       "Request settings500.2%",
     ]);

@@ -104,7 +104,7 @@ function inputParts(input: LastRequest, details: SessionContextDetails | null) {
 const SEGMENT_GAP_PX = 4;
 
 function shareLabel(tokens: number, total: number) {
-  return formatPercent(total > 0 ? (tokens / total) * 100 : 0);
+  return `${(total > 0 ? (tokens / total) * 100 : 0).toFixed(1)}%`;
 }
 
 type Highlight = { active: string | null; onActive: (label: string | null) => void };
@@ -489,7 +489,7 @@ export function SessionContext({
               percentageLabel
             ) : (
               <>
-                {compactTokens(used)} / {compactTokens(threshold)} ·{" "}
+                ~{compactTokens(used)} / {compactTokens(threshold)} ·{" "}
                 <span className="font-semibold text-heading">{percentageLabel}</span>
               </>
             )}
