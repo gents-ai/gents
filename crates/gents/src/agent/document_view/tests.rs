@@ -552,7 +552,7 @@ async fn seed_automation(
                     &serde_json::json!({"input":input}),
                 ).await?;
             }
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     }).await.expect("seed replicated automation documents");
 }

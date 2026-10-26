@@ -133,7 +133,7 @@ async fn config_apply_txn_round_trip_against_recorder() {
                 )
                 .await?;
                 assert!(recorder_in_tx.committed_state().is_empty());
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

@@ -252,14 +252,14 @@ impl GraphRunQuery for EmbeddedNode {
 #[async_trait::async_trait]
 impl GraphRunQuery for ConfigAccess {
     async fn execute_graph_query(&self, query: &str) -> Result<Value> {
-        self.execute(query).await
+        Ok(self.execute(query).await?)
     }
 }
 
 #[async_trait::async_trait]
 impl GraphRunQuery for ConfigApplyTxn<'_> {
     async fn execute_graph_query(&self, query: &str) -> Result<Value> {
-        self.execute(query).await
+        Ok(self.execute(query).await?)
     }
 }
 

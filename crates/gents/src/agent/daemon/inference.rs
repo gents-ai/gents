@@ -305,8 +305,9 @@ where
                     | -> std::pin::Pin<
                         Box<
                             dyn std::future::Future<
-                                    Output = anyhow::Result<
+                                    Output = Result<
                                         crate::agent::loop_stream::TurnCompactionOutcome,
+                                        crate::agent::loop_stream::TurnCompactionError,
                                     >,
                                 > + Send,
                         >,
@@ -320,11 +321,12 @@ where
                             let provider_view = crate::agent::loop_stream::provider_view_tagged(
                                 compaction_request.messages,
                             )
-                            .map_err(anyhow::Error::new)?;
+                            .map_err(compactor_failure)?;
                             options.max_compacted_prefix_messages =
                                 crate::agent::loop_stream::replay_compaction_prefix_bound(
                                     &provider_view, &compaction_request.required,
-                                )?;
+                                )
+                                .map_err(crate::compaction::CompactionError::from)?;
                             let native_messages = crate::agent::loop_stream::provider_messages(
                                 provider_profile,
                                 &provider_view,
@@ -346,7 +348,8 @@ where
                                     &request.doc_id,
                                     &request_commit_cid,
                                 )
-                                .await?;
+                                .await
+                                .map_err(compactor_failure)?;
                             let (result, producer_join) = admission::scope_call_with_join(
                                 CallKind::Compaction,
                                 1,
@@ -375,24 +378,31 @@ where
                                         crate::agent::loop_stream::TurnCompactionOutcome::CannotFit,
                                     );
                                 }
-                                anyhow::ensure!(
-                                    result.provider_messages()? == provider_values,
-                                    "repaired provider view disagrees with source-index projection"
-                                );
+                                if result
+                                    .provider_messages()
+                                    .map_err(crate::compaction::CompactionError::from)?
+                                    != provider_values
+                                {
+                                    return Err(compactor_failure(
+                                        "repaired provider view disagrees with source-index projection",
+                                    ));
+                                }
                                 return Ok(
                                     crate::agent::loop_stream::TurnCompactionOutcome::ProviderViewRepaired {
                                         messages: provider_view,
                                     },
                                 );
                             };
-                            anyhow::ensure!(
-                                exact
-                                    .compacted_prefix
-                                    .iter()
-                                    .chain(exact.retained_suffix)
-                                    .eq(provider_values.iter()),
-                                "exact reduction split disagrees with source-index provider view"
-                            );
+                            if !exact
+                                .compacted_prefix
+                                .iter()
+                                .chain(exact.retained_suffix)
+                                .eq(provider_values.iter())
+                            {
+                                return Err(compactor_failure(
+                                    "exact reduction split disagrees with source-index provider view",
+                                ));
+                            }
                             let split = exact.compacted_prefix.len();
                             let native = crate::agent::loop_stream::association_reduction(
                                 provider_profile,
@@ -431,9 +441,10 @@ where
                                 },
                                 exact,
                             )
-                            .await?;
+                            .await
+                            .map_err(compactor_failure)?;
                             Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
-                                messages: row.checkpoint_tagged_messages()?,
+                                messages: row.checkpoint_tagged_messages().map_err(compactor_failure)?,
                                 reduction_key: row.reduction_key,
                             })
                         })
@@ -632,7 +643,7 @@ where
                                                 }
                                                 Err(error) => return Err(error),
                                             }
-                                            processor.persist_received_partial_turn("persist received assistant turn during graceful shutdown").await?;
+                                            processor.persist_received_partial_turn("persist received assistant turn during graceful shutdown").await.map_err(processor_failure)?;
                                             Ok(true)
                                         },
                                     ).await {
@@ -658,7 +669,7 @@ where
                                     drop(stream);
                                     let output_result = processor
                                         .persist_received_partial_turn("persist interrupted assistant turn")
-                                        .await;
+                                        .await.map_err(processor_failure);
                                     if let Err(error) =
                                         persistence_hook.cancel_in_flight_tool_calls().await
                                     {
@@ -717,11 +728,11 @@ where
                                     ).await;
                                     match item {
                                         Some(Some(item)) => {
-                                            flush_failure = flushed.err();
+                                            flush_failure = flushed.err().map(processor_failure);
                                             Some(item)
                                         }
-                                        Some(None) => { flushed?; None }
-                                        None => { flushed?; continue }
+                                        Some(None) => { flushed.map_err(processor_failure)?; None }
+                                        None => { flushed.map_err(processor_failure)?; continue }
                                     }
                                 }
                                 result = await_with_request_deadline(
@@ -751,7 +762,7 @@ where
                                                 .persist_received_partial_turn(
                                                     "persist deadline-expired assistant turn",
                                                 )
-                                                .await;
+                                                .await.map_err(processor_failure);
                                             if let Err(sweep_error) =
                                                 persistence_hook.timeout_expired_tool_calls().await
                                             {
@@ -773,7 +784,7 @@ where
                                 Some(item) => item,
                                 None => break,
                             };
-                            let processed = match processor.process_item(item).await {
+                            let processed = match processor.process_item(item).await.map_err(processor_failure) {
                                 Ok(processed) => processed,
                                 Err(error) => {
                                     drop(stream);
@@ -792,7 +803,7 @@ where
                                 }
                                 let retained = processor
                                     .persist_received_partial_turn("persist received assistant turn after flush failure")
-                                    .await;
+                                    .await.map_err(processor_failure);
                                 return Err(match retained {
                                     Ok(_) => error,
                                     Err(retention_error) => retention_error.context(format!(
@@ -812,7 +823,7 @@ where
                                     .persist_received_partial_turn(
                                         "persist deadline-expired assistant turn",
                                     )
-                                    .await;
+                                    .await.map_err(processor_failure);
                                 drop(stream);
                                 if let Err(sweep_error) =
                                     persistence_hook.timeout_expired_tool_calls().await
@@ -843,7 +854,7 @@ where
                         if let Some(error) = stream_error {
                             let _ = processor
                                 .persist_received_partial_turn("persist errored assistant turn")
-                                .await?;
+                                .await.map_err(processor_failure)?;
                             let error_reason = stream_failure_reason(
                                 &error.to_string(),
                                 error.cause(),
@@ -857,7 +868,7 @@ where
                         if processor.final_text.is_none() {
                             processor
                                 .persist_received_partial_turn("persist unterminated assistant turn")
-                                .await
+                                .await.map_err(processor_failure)
                                 .context("persisting received provider audit after stream EOF")?;
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 "provider stream ended without an explicit terminal response"
@@ -903,7 +914,7 @@ where
                                 .persist_received_partial_turn(
                                     "persist deadline-expired assistant turn",
                                 )
-                                .await
+                                .await.map_err(processor_failure)
                                 .context("persisting received provider audit after request deadline")?;
                             return Err(error);
                         }
@@ -956,6 +967,26 @@ where
         let outcome = outcome?;
 
         Ok(outcome)
+    }
+}
+
+/// Runtime storage and consistency failures inside the turn compactor; typed
+/// compaction failures pass through `?` so the loop can refuse them.
+fn compactor_failure(
+    error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+) -> crate::agent::loop_stream::TurnCompactionError {
+    crate::agent::loop_stream::TurnCompactionError::Compactor(error.into())
+}
+
+/// The processor's writer, hook and lifecycle variants carry this runtime's
+/// own errors; unwrap them so daemon classifiers see the original chain.
+fn processor_failure(error: crate::agent::stream_processor::StreamProcessorError) -> anyhow::Error {
+    use crate::agent::stream_processor::StreamProcessorError;
+    match error {
+        StreamProcessorError::Writer(source)
+        | StreamProcessorError::Hook(source)
+        | StreamProcessorError::Lifecycle(source) => anyhow::Error::from_boxed(source),
+        error => error.into(),
     }
 }
 

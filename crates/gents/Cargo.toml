@@ -58,6 +58,7 @@ futures = "0.3"
 # match a case's declared glob under the trial workspace.
 glob = "0.3"
 hostname.workspace = true
+lens.workspace = true
 identity.workspace = true
 k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 # keyring 3 has no default store. Without a native feature, Entry is a

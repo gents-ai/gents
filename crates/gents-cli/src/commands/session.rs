@@ -140,11 +140,14 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigA
     fs::create_dir_all(data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let claim = gents::home::lock_store(home, data_dir).map_err(|error| {
-        match error.downcast_ref::<gents::home::StoreLockHeld>() {
-            Some(_) => error.context(
+        let held = error.lock_held().is_some();
+        let error = anyhow::Error::from(error);
+        if held {
+            error.context(
                 "the home's store is in use; to fork against the running runtime, rerun with --graphql",
-            ),
-            None => error,
+            )
+        } else {
+            error
         }
     })?;
     let builder = crate::persistent_node_builder_with_stored_identity(home, data_dir).await?;
@@ -153,7 +156,7 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigA
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
     let node = Arc::new(node);
-    ConfigAccess::claimed_local(node, claim)
+    Ok(ConfigAccess::claimed_local(node, claim)?)
 }
 
 async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {

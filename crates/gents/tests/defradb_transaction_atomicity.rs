@@ -128,7 +128,7 @@ async fn committed_transaction_persists_both_writes() -> Result<()> {
             Box::pin(async move {
                 let left = ensure_no_errors(txn.execute(&write_left("commit", 1)).await?)?;
                 let right = ensure_no_errors(txn.execute(&write_right("commit", 2)).await?)?;
-                Ok((left, right))
+                Ok::<_, anyhow::Error>((left, right))
             })
         },
     )
@@ -242,7 +242,7 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
                 }
                 let second = ensure_no_errors(txn.execute(&write_right("visible", 2)).await?)?;
                 assert_acknowledged(&second, "TxnAtomicityRight")?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     );
@@ -391,7 +391,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
                 ensure_no_errors(txn.execute(&write_note("root-a", "note-1", "seed")).await?)?;
                 ensure_no_errors(txn.execute(&write_note("root-a", "note-2", "seed")).await?)?;
                 ensure_no_errors(txn.execute(&write_note("root-b", "note-1", "seed")).await?)?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )
@@ -479,7 +479,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()
         |txn: &ConfigApplyTxn<'_>| {
             Box::pin(async move {
                 ensure_no_errors(txn.execute(&write_unique("existing", "seed")).await?)?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )
@@ -493,7 +493,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()
             Box::pin(async move {
                 let inserted = read_then_insert_unique(txn, "existing").await?;
                 ensure_no_errors(txn.execute(&write_left("other-write", 1)).await?)?;
-                Ok(inserted)
+                Ok::<_, anyhow::Error>(inserted)
             })
         },
     )

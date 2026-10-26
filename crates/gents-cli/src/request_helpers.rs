@@ -533,9 +533,11 @@ pub(crate) async fn submit_prepared_agent_request_committed(
         .map_err(anyhow::Error::msg)?;
     access
         .write_with_receipt("cli.request.submit", &mutation, || async {
-            Ok(matching_prepared_receipt(graphql, &prepared.create)
-                .await?
-                .is_some())
+            Ok::<_, anyhow::Error>(
+                matching_prepared_receipt(graphql, &prepared.create)
+                    .await?
+                    .is_some(),
+            )
         })
         .await
         .with_context(|| {

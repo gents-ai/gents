@@ -1471,7 +1471,7 @@ mod tests {
                         &mut effects,
                     )
                     .await?;
-                    Ok(effects)
+                    Ok::<_, anyhow::Error>(effects)
                 })
             },
         )

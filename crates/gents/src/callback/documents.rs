@@ -411,7 +411,7 @@ pub async fn load_invocation(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
     );
-    first_row(&response, "CallbackInvocation")
+    Ok(first_row(&response, "CallbackInvocation")?)
 }
 
 pub async fn load_invocation_by_key(
@@ -436,7 +436,7 @@ pub async fn load_invocation_by_key(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
     );
-    first_row(&response, "CallbackInvocation")
+    Ok(first_row(&response, "CallbackInvocation")?)
 }
 
 pub async fn list_recoverable_invocations(
@@ -512,7 +512,7 @@ pub async fn list_recent_failed(
         crate::graphql::graphql_with_transaction_retry(node, &query, "callback.list_failed")
             .await
             .context("query recent failed CallbackInvocation")?;
-    rows(&response, "CallbackInvocation")
+    Ok(rows(&response, "CallbackInvocation")?)
 }
 
 pub(crate) fn succeeded_repair_cutoff(now: chrono::DateTime<chrono::Utc>) -> String {
@@ -586,7 +586,7 @@ async fn query_owner_invocations(
     let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation states")
         .await
         .with_context(|| format!("query CallbackInvocation states {states}"))?;
-    rows(&response, "CallbackInvocation")
+    Ok(rows(&response, "CallbackInvocation")?)
 }
 
 pub async fn load_callback_result(
@@ -611,7 +611,7 @@ pub async fn load_callback_result(
         rows::<Value>(&response, "CallbackResult").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
     );
-    first_row(&response, "CallbackResult")
+    Ok(first_row(&response, "CallbackResult")?)
 }
 
 pub async fn create_pending_invocation(
@@ -888,7 +888,7 @@ pub(crate) async fn load_isolated_workspace(
         rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
     );
-    first_row(&response, "IsolatedWorkspace")
+    Ok(first_row(&response, "IsolatedWorkspace")?)
 }
 
 pub(crate) async fn load_workspace_placement(
@@ -913,5 +913,5 @@ pub(crate) async fn load_workspace_placement(
         rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
     );
-    first_row(&response, "WorkspacePlacement")
+    Ok(first_row(&response, "WorkspacePlacement")?)
 }

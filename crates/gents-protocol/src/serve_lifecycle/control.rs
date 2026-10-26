@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use anyhow::{ensure, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,6 +9,44 @@ use crate::enrollment::canonical_domain_payload;
 
 pub const RUNTIME_CONTROL_VERSION: u8 = 1;
 pub const RUNTIME_CONTROL_PATH: &str = "/runtime/operator/control";
+
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeControlError {
+    #[error("unsupported runtime control version")]
+    UnsupportedVersion,
+    #[error("runtime control requires a node DID")]
+    MissingNodeDid,
+    #[error("invalid runtime control nonce")]
+    InvalidNonce,
+    #[error("invalid observed runtime build")]
+    InvalidObservedBuild,
+    #[error("runtime receipt differs from the requested node or command")]
+    ReceiptMismatch,
+    #[error("invalid runtime receipt build")]
+    InvalidReceiptBuild,
+    #[error("invalid runtime receipt signature length")]
+    InvalidReceiptSignatureLength,
+    #[error("runtime receipt outcome differs from its command")]
+    ReceiptOutcomeMismatch,
+    #[error(transparent)]
+    ParseTimestamp(#[from] chrono::ParseError),
+    #[error("runtime control timestamp is in the future")]
+    FutureTimestamp,
+    #[error("runtime control timestamp expired")]
+    ExpiredTimestamp,
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+}
+
+type Result<T, E = RuntimeControlError> = std::result::Result<T, E>;
+
+fn ensure(condition: bool, error: RuntimeControlError) -> Result<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -40,28 +77,28 @@ impl RuntimeControlCommand {
     }
 
     pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
-        ensure!(
+        ensure(
             self.version == RUNTIME_CONTROL_VERSION,
-            "unsupported runtime control version"
-        );
-        ensure!(
+            RuntimeControlError::UnsupportedVersion,
+        )?;
+        ensure(
             self.node_did.starts_with("did:") && !self.node_did.chars().any(char::is_whitespace),
-            "runtime control requires a node DID"
-        );
-        ensure!(
+            RuntimeControlError::MissingNodeDid,
+        )?;
+        ensure(
             (16..=128).contains(&self.nonce.len())
                 && self
                     .nonce
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
-            "invalid runtime control nonce"
-        );
+            RuntimeControlError::InvalidNonce,
+        )?;
         validate_time(&self.issued_at, now)?;
         if let RuntimeOperation::Retire { expected_build } = &self.operation {
-            ensure!(
+            ensure(
                 valid_build(expected_build),
-                "invalid observed runtime build"
-            );
+                RuntimeControlError::InvalidObservedBuild,
+            )?;
         }
         Ok(())
     }
@@ -106,18 +143,21 @@ impl RuntimeControlReceipt {
     }
 
     pub fn validate_for(&self, command: &RuntimeControlCommand, now: DateTime<Utc>) -> Result<()> {
-        ensure!(
+        ensure(
             self.version == RUNTIME_CONTROL_VERSION
                 && self.node_did == command.node_did
                 && self.command_nonce == command.nonce
                 && self.command_digest == command.digest()?,
-            "runtime receipt differs from the requested node or command"
-        );
-        ensure!(valid_build(&self.build), "invalid runtime receipt build");
-        ensure!(
+            RuntimeControlError::ReceiptMismatch,
+        )?;
+        ensure(
+            valid_build(&self.build),
+            RuntimeControlError::InvalidReceiptBuild,
+        )?;
+        ensure(
             self.signature.len() == 64,
-            "invalid runtime receipt signature length"
-        );
+            RuntimeControlError::InvalidReceiptSignatureLength,
+        )?;
         validate_time(&self.observed_at, now)?;
         let matches_operation = match (&command.operation, self.disposition) {
             (RuntimeOperation::Observe, RuntimeControlDisposition::Observed) => true,
@@ -133,10 +173,10 @@ impl RuntimeControlReceipt {
             (_, RuntimeControlDisposition::Stopping) => self.retiring,
             _ => false,
         };
-        ensure!(
+        ensure(
             matches_operation,
-            "runtime receipt outcome differs from its command"
-        );
+            RuntimeControlError::ReceiptOutcomeMismatch,
+        )?;
         Ok(())
     }
 }
@@ -171,14 +211,14 @@ fn valid_build(build: &str) -> bool {
 
 fn validate_time(value: &str, now: DateTime<Utc>) -> Result<()> {
     let issued = DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc);
-    ensure!(
+    ensure(
         issued <= now + Duration::seconds(5),
-        "runtime control timestamp is in the future"
-    );
-    ensure!(
+        RuntimeControlError::FutureTimestamp,
+    )?;
+    ensure(
         now - issued <= Duration::seconds(60),
-        "runtime control timestamp expired"
-    );
+        RuntimeControlError::ExpiredTimestamp,
+    )?;
     Ok(())
 }
 

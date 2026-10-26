@@ -181,7 +181,9 @@ where
             ])
         })
         .collect::<Vec<_>>();
-    crate::rendered_request::sha256_canonical_json(&serde_json::json!(projection))
+    Ok(crate::rendered_request::sha256_canonical_json(
+        &serde_json::json!(projection),
+    )?)
 }
 
 pub(crate) async fn load_prompt_compaction_state(

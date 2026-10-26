@@ -182,7 +182,7 @@ async fn insert(
             "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}",
         ), &serde_json::json!({"input":input})).await })
     }).await?;
-    gents::graphql::created_doc_id(&response, collection)
+    Ok(gents::graphql::created_doc_id(&response, collection)?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

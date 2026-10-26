@@ -678,6 +678,8 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
 }
 
 impl StreamWriter for DefraStreamWriter {
+    type Error = anyhow::Error;
+
     async fn mark_pending_output(&self, doc_id: &str, output: PendingOutput) -> Result<bool> {
         self.buffers
             .lock()

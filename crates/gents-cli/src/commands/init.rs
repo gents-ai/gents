@@ -94,7 +94,7 @@ pub(crate) fn lock_init_store_for_user(
     let Some(home) = home else {
         fs::create_dir_all(data_dir)
             .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-        return gents::home::lock_store(home_dir, data_dir);
+        return Ok(gents::home::lock_store(home_dir, data_dir)?);
     };
     let data_dir = overwrite_data_dir(home_dir, &home, data_dir)?;
     fs::create_dir_all(&data_dir)
@@ -112,7 +112,7 @@ pub(crate) fn lock_init_store_for_user(
     dangerously_overwrite_home(&home, lock.path())?;
     if let Some(record) = overwritten_encryption {
         if let Err(error) = record.delete_key(&gents::store_key::home_key_file(&home)) {
-            tracing::warn!(home = %home.display(), error = %format!("{error:#}"),
+            tracing::warn!(home = %home.display(), error = %gents_protocol::error_chain::ErrorChain(&error),
                 "could not remove the overwritten home's store key");
         }
     }
@@ -755,7 +755,7 @@ async fn initialize_home_store(
     };
     stored.store_encryption = Some(record.clone());
     write_init_config(home, stored)?;
-    record.initialize(&key_file, data_path)
+    Ok(record.initialize(&key_file, data_path)?)
 }
 
 fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<HomeIdentity> {

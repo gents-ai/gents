@@ -371,7 +371,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                                 None,
                             )
                             .await?;
-                            Ok(())
+                            Ok::<_, anyhow::Error>(())
                         })
                     },
                 )
@@ -1973,7 +1973,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
                 let mutation = mutation.clone();
                 Box::pin(async move {
                     txn.execute(&mutation).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )

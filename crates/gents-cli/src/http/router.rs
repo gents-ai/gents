@@ -1021,7 +1021,7 @@ mod tests {
                             "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
                     }),
                 ).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
         let runtime = gents::Gents::builder()

@@ -1218,7 +1218,7 @@ fn aggregate_inference_usage(rows: &[InferenceDetailRow]) -> Result<SessionToken
     let observations = rows
         .iter()
         .map(|row| row.usage.observation())
-        .collect::<Result<Vec<_>>>();
+        .collect::<Result<Vec<_>, _>>();
     let calls_with_usage = rows
         .iter()
         .filter(|row| {

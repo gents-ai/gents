@@ -799,7 +799,7 @@ async fn serve_foreground(
             Ok(access) => access,
             Err(error) => {
                 node.shutdown().await;
-                return Err(error);
+                return Err(error.into());
             }
         };
     *store_lifetime = Some(store_access.clone());
@@ -810,9 +810,7 @@ async fn serve_foreground(
     let serve_result: Result<()> = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
         if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
-            return Err(gents::storage_backend::classify_store_error(
-                error, &data_dir,
-            ));
+            return Err(gents::storage_backend::classify_store_error(error, &data_dir).into());
         }
         gents::store_key::upgrade::finish(&data_dir)?;
         let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
@@ -1825,7 +1823,7 @@ mod grok_shim_tests {
             Ok(_) => panic!("an insecure key must not load"),
             Err(error) => error,
         };
-        let store = gents::storage_backend::incompatible_store(&error, Path::new(""))
+        let store = gents::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
             .expect("typed refusal");
         assert_eq!(
             store.kind,

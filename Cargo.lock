@@ -4639,6 +4639,7 @@ dependencies = [
  "k256",
  "keyring",
  "kovan-map",
+ "lens",
  "libc",
  "memmap2",
  "minijinja",
@@ -4944,6 +4945,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "ts-rs",
@@ -5045,7 +5047,6 @@ dependencies = [
 name = "gents-loop"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "async-stream",
  "async-trait",
  "base64 0.22.1",
@@ -5089,7 +5090,6 @@ dependencies = [
 name = "gents-migration"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "crypto",
  "defra-core",
  "defra-node",
@@ -5112,7 +5112,6 @@ dependencies = [
 name = "gents-protocol"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "axum",
  "base64 0.22.1",
  "bs58",
@@ -5127,6 +5126,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "ts-rs",

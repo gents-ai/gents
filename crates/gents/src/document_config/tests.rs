@@ -720,7 +720,7 @@ async fn tools_document_round_trips_write_tools() {
                     merged.write_tools, *decls,
                     "write_tools must expand from the referenced surface through the desired-state owner"
                 );
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
@@ -1324,7 +1324,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
                     == crate::Collection::InferenceBackend
                     && id == "good"));
                 assert!(!refs.documents().any(|((_, id), _)| id == "bad"));
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

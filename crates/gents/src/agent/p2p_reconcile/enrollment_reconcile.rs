@@ -893,13 +893,13 @@ fn enrollment_route_matches_fence(
 
 async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &str) -> Result<()> {
     let mutation = delete_enrollment_route_mutation(peer_id);
-    crate::config_client::ConfigAccess::write_local_response(
+    Ok(crate::config_client::ConfigAccess::write_local_response(
         node,
         "p2p.retract_enrollment_route_fenced",
         &mutation,
     )
     .await
-    .map(|_| ())
+    .map(|_| ())?)
 }
 
 fn upsert_enrollment_route_mutation(

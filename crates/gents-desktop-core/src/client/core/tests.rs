@@ -146,7 +146,10 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(error) => panic!("shutdown did not release the claim: {error:#}"),
+                Err(error) => panic!(
+                    "shutdown did not release the claim: {}",
+                    gents_protocol::error_chain::ErrorChain(&error)
+                ),
             }
         }
     })
@@ -1340,7 +1343,7 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         Err(error) => error,
     };
     assert_eq!(
-        gents::storage_backend::incompatible_store(&error, paths.node_data_dir())
+        gents::storage_backend::incompatible_store(error.as_ref(), paths.node_data_dir())
             .map(|store| store.kind),
         Some(gents::storage_backend::IncompatibleStoreKind::MissingStoreKey)
     );

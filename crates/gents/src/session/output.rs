@@ -303,13 +303,13 @@ impl ReadAccess<'_, '_> {
         operation: &str,
     ) -> Result<Vec<serde_json::Value>> {
         if let Self::Txn(txn) = self {
-            return txn
+            return Ok(txn
                 .cursor_rows(
                     "AgentOutputSegment",
                     AGENT_OUTPUT_SEGMENT_FIELDS,
                     &super::canonical_rows::request_output_segments_filter(request_doc_id),
                 )
-                .await;
+                .await?);
         }
         let response = self
             .query(&request_output_segments_query(request_doc_id), operation)
@@ -323,7 +323,7 @@ impl ReadAccess<'_, '_> {
                 crate::graphql::graphql_response_with_transaction_retry(node, document, operation)
                     .await?
             }
-            Self::Txn(txn) => return txn.execute(document).await,
+            Self::Txn(txn) => return Ok(txn.execute(document).await?),
             Self::Config(access) => {
                 let value = access.execute(document).await?;
                 anyhow::ensure!(
@@ -1702,14 +1702,14 @@ fn replay_capture_key(
         turn_index,
         attempt,
     } = coordinate;
-    gents_loop::rendered_request::capture_key(
+    Ok(gents_loop::rendered_request::capture_key(
         node_did,
         session_id,
         request_doc_id,
         &capture_scope.to_string(),
         usize::try_from(turn_index)?,
         attempt,
-    )
+    )?)
 }
 
 /// Batched `capture_key` read for the pass's selected coordinates: one chunked

@@ -439,7 +439,7 @@ async fn retain_fork_fixture_capture(
             txn.execute_with_variables(
                 "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
                 &json!({"input": input})).await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
 }

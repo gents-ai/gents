@@ -1407,7 +1407,7 @@ async fn assemble_durable_enrollment_documents(
             .await;
         let verified = match verified {
             Ok(verified) => verified,
-            Err(error) if candidate.server_peer == request.server_peer => return Err(error),
+            Err(error) if candidate.server_peer == request.server_peer => return Err(error.into()),
             Err(_) => continue,
         };
         if verified || candidate.server_peer == request.server_peer {

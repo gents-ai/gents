@@ -652,7 +652,7 @@ pub async fn adopt_step0(
                         )
                         .await?
                         {
-                            return Ok(Adopted::Refused(refusal, resumed_by));
+                            return Ok::<_, anyhow::Error>(Adopted::Refused(refusal, resumed_by));
                         }
                     }
                     let mut out = output.clone();

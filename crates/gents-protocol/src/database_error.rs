@@ -68,13 +68,17 @@ impl std::error::Error for GraphqlFailure {
     }
 }
 
-pub fn is_storage_full(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| cause.is::<StorageFull>())
+pub fn is_storage_full(error: &(dyn std::error::Error + 'static)) -> bool {
+    crate::error_chain::find_source::<StorageFull>(error).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("outer operation")]
+    struct Outer(#[source] GraphqlFailure);
 
     #[test]
     fn generated_storage_failures_preserve_recovery_evidence() {
@@ -82,13 +86,12 @@ mod tests {
         let cases = contract["storage_failure_cases"].as_array().unwrap();
         assert!(!cases.is_empty());
         for case in cases {
-            let error = anyhow::Error::new(GraphqlFailure::new(
+            let error = Outer(GraphqlFailure::new(
                 "test",
                 serde_json::json!([{
                     "message": case["message"], "extensions": { "code": case["code"] }
                 }]),
-            ))
-            .context("outer operation");
+            ));
             assert_eq!(is_storage_full(&error), case["full"].as_bool().unwrap());
             #[cfg(feature = "native")]
             if is_storage_full(&error) {

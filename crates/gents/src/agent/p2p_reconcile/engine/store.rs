@@ -143,7 +143,7 @@ impl GraphqlPairingStateStore {
         }"#;
         let response =
             graphql_with_transaction_retry(&self.node, query, "query PeerPairingApplied").await?;
-        rows::<AppliedStateRow>(&response, "PeerPairingApplied")
+        Ok(rows::<AppliedStateRow>(&response, "PeerPairingApplied")?)
     }
 }
 
@@ -297,13 +297,13 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     current: delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }}
                 }}"#
             );
-            return crate::config_client::ConfigAccess::write_local_response(
+            return Ok(crate::config_client::ConfigAccess::write_local_response(
                 &self.node,
                 "p2p.delete_pairing_applied",
                 &mutation,
             )
             .await
-            .map(|_| ());
+            .map(|_| ())?);
         }
 
         let peer_id = escape_graphql_string(peer_id);
@@ -343,13 +343,13 @@ impl PairingStateStore for GraphqlPairingStateStore {
             )
         };
         let mutation = format!("mutation {{ {delete_duplicates} {save} }}");
-        crate::config_client::ConfigAccess::write_local_response(
+        Ok(crate::config_client::ConfigAccess::write_local_response(
             &self.node,
             "p2p.save_pairing_applied",
             &mutation,
         )
         .await
-        .map(|_| ())
+        .map(|_| ())?)
     }
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {

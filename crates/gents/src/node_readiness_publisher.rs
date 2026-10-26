@@ -830,7 +830,7 @@ async fn persist_candidate(
 }
 
 fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
-    if crate::graphql::is_storage_full(error) {
+    if crate::graphql::is_storage_full(error.as_ref()) {
         return true;
     }
     #[cfg(test)]

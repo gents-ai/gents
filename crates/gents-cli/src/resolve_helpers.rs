@@ -92,7 +92,7 @@ fn resolve_backend_provider_kind(
     preset: Option<BackendPresetArg>,
 ) -> Result<BackendProviderKind> {
     match normalize_optional_string(explicit) {
-        Some(value) => BackendProviderKind::parse_optional(Some(&value)),
+        Some(value) => Ok(BackendProviderKind::parse_optional(Some(&value))?),
         None => Ok(
             preset.map_or_else(BackendProviderKind::default, |candidate| {
                 candidate.provider_kind()

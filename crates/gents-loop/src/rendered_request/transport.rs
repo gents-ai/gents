@@ -2,6 +2,7 @@ use std::fmt;
 use std::future::Future;
 
 use bytes::Bytes;
+use gents_protocol::error_chain::ErrorChain;
 use rig::http_client::{
     self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
 };
@@ -10,6 +11,14 @@ use sha2::{Digest, Sha256};
 
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
+
+#[derive(Debug, thiserror::Error)]
+enum TransportError {
+    #[error("{message}")]
+    UnexplainedSend { message: String },
+    #[error("{message}")]
+    CaptureFailed { message: String },
+}
 
 /// Persist the exact provider body before sending; a failed capture refuses
 /// the request (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`).
@@ -144,9 +153,11 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 "refusing provider send: a completion body reached the transport with no armed \
                  rendered-request capture"
             );
-            return Err(http_client::Error::Instance(
-                anyhow::anyhow!(scope::unexplained_send_message(scope.context(), &path)).into(),
-            ));
+            return Err(http_client::Error::Instance(Box::new(
+                TransportError::UnexplainedSend {
+                    message: scope::unexplained_send_message(scope.context(), &path),
+                },
+            )));
         }
         CaptureDecision::Capture {
             scope,
@@ -204,7 +215,8 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             scope.mark_claimed_durable(&claimed, body_fingerprint);
             Ok(())
         }
-        Err((stage, error)) => {
+        Err(error) => {
+            let stage = error.stage();
             // Never log the payload.
             tracing::error!(
                 capture_scope = %capture_scope,
@@ -213,19 +225,20 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 turn_index,
                 attempt,
                 stage = stage.as_str(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(&error),
                 "refusing provider send: rendered-request capture failed"
             );
-            Err(http_client::Error::Instance(
-                anyhow::anyhow!(scope::capture_failure_message(
-                    stage,
-                    &capture_scope,
-                    turn_index,
-                    attempt,
-                    &error,
-                ))
-                .into(),
-            ))
+            Err(http_client::Error::Instance(Box::new(
+                TransportError::CaptureFailed {
+                    message: scope::capture_failure_message(
+                        stage,
+                        &capture_scope,
+                        turn_index,
+                        attempt,
+                        &error,
+                    ),
+                },
+            )))
         }
     }
 }
@@ -434,7 +447,7 @@ mod tests {
     use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
-        RenderedRequestContext,
+        RenderedRequestContext, RenderedRequestError,
     };
 
     fn context() -> RenderedRequestContext {
@@ -468,7 +481,13 @@ mod tests {
     }
 
     fn failing_sink() -> RenderedRequestCaptureSink {
-        Arc::new(|_| Box::pin(async { anyhow::bail!("injected capture failure") }))
+        Arc::new(|_| {
+            Box::pin(async {
+                Err(RenderedRequestError::Sink(
+                    "injected capture failure".into(),
+                ))
+            })
+        })
     }
 
     fn trace() -> AssemblyTrace {

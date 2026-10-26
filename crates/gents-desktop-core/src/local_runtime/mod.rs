@@ -284,7 +284,7 @@ struct GraphqlResponse {
 }
 
 pub fn default_node_home() -> Result<PathBuf> {
-    gents::home::default_home_dir()
+    Ok(gents::home::default_home_dir()?)
 }
 
 pub fn runtime_status_url(server_address: &str) -> Result<String> {

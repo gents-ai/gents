@@ -55,5 +55,5 @@ pub(crate) fn graphql_string_list_literal(values: &[String]) -> String {
 }
 
 pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<String> {
-    shared_extract_mutation_doc_id(response, collection_name)
+    Ok(shared_extract_mutation_doc_id(response, collection_name)?)
 }

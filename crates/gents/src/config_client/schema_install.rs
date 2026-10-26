@@ -1,16 +1,71 @@
 use std::collections::BTreeMap;
 
-use anyhow::{ensure, Context, Result};
+type Result<T, E = SchemaInstallError> = std::result::Result<T, E>;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::schema_contract::{collection_schema_field_delta, SchemaFieldDelta};
+use super::schema_contract::{
+    collection_schema_field_delta, SchemaContractError, SchemaFieldDelta,
+};
 use super::{collection_schema_contract_digest, ConfigAccess};
 
 #[derive(Debug, thiserror::Error)]
 #[error("existing collection {collection:?} does not match requested schema")]
-pub(crate) struct SchemaInstallMismatch {
+pub struct SchemaInstallMismatch {
     pub collection: String,
+    #[source]
+    pub source: Option<SchemaContractError>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaInstallPlanError {
+    #[error("declared schema collections are not published")]
+    NotPublished,
+    #[error("collection {collection:?} is missing declared fields {pending}")]
+    MissingFields { collection: String, pending: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaInstallError {
+    #[error(transparent)]
+    Parse(#[from] query::QueryError),
+    #[error(transparent)]
+    Contract(#[from] SchemaContractError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Mismatch(#[from] SchemaInstallMismatch),
+    #[error(transparent)]
+    Plan(#[from] SchemaInstallPlanError),
+    #[error("schema declares no collection")]
+    NoCollections,
+    #[error("schema repeats collection {collection:?}")]
+    RepeatedCollection { collection: String },
+    #[error("schema mixes existing collections {existing:?} and missing collections {missing:?}. Preview/install the missing collections separately; do not repeat existing definitions in that installation")]
+    MixedCollections {
+        existing: Vec<String>,
+        missing: Vec<String>,
+    },
+    #[error("schema artifact changed; preview again")]
+    ArtifactChanged,
+    #[error("published schema is not discoverable")]
+    NotDiscoverable,
+}
+
+/// The install mismatch anywhere in `error`'s chain, including through
+/// [`SchemaInstallError`], which wraps it transparently.
+pub fn schema_install_mismatch<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a SchemaInstallMismatch> {
+    use gents_protocol::error_chain::find_source;
+    find_source::<SchemaInstallMismatch>(error).or_else(|| {
+        match find_source::<SchemaInstallError>(error)? {
+            SchemaInstallError::Mismatch(mismatch) => Some(mismatch),
+            _ => None,
+        }
+    })
 }
 
 /// Schema publication is node-wide and does not grant document read/write ACP.
@@ -23,17 +78,17 @@ pub struct SchemaInstallPlan {
 }
 
 impl SchemaInstallPlan {
-    pub fn require_satisfied(&self) -> Result<()> {
-        ensure!(
-            !self.requires_publication,
-            "declared schema collections are not published"
-        );
+    pub fn require_satisfied(&self) -> Result<(), SchemaInstallPlanError> {
+        if self.requires_publication {
+            return Err(SchemaInstallPlanError::NotPublished);
+        }
         for (collection, delta) in &self.field_deltas {
-            ensure!(
-                delta.pending.is_empty(),
-                "collection {collection:?} is missing declared fields {:?}",
-                delta.pending
-            );
+            if !delta.pending.is_empty() {
+                return Err(SchemaInstallPlanError::MissingFields {
+                    collection: collection.clone(),
+                    pending: format!("{:?}", delta.pending),
+                });
+            }
         }
         Ok(())
     }
@@ -56,31 +111,36 @@ async fn preview_schema(
     additive: bool,
 ) -> Result<SchemaInstallPlan> {
     let expected = query::parse_sdl(sdl)?;
-    ensure!(!expected.is_empty(), "schema declares no collection");
+    if expected.is_empty() {
+        return Err(SchemaInstallError::NoCollections);
+    }
     let mut contracts = BTreeMap::new();
     let mut missing = Vec::new();
     let mut existing = Vec::new();
     let mut field_deltas = BTreeMap::new();
     for collection in expected {
         let digest = collection_schema_contract_digest(&serde_json::to_value(&collection)?)?;
-        ensure!(
-            contracts
-                .insert(collection.name.clone(), digest.clone())
-                .is_none(),
-            "schema repeats collection {:?}",
-            collection.name
-        );
+        if contracts
+            .insert(collection.name.clone(), digest.clone())
+            .is_some()
+        {
+            return Err(SchemaInstallError::RepeatedCollection {
+                collection: collection.name.clone(),
+            });
+        }
         match access.collection_version(&collection.name).await? {
             Some(live) => {
                 existing.push(collection.name.clone());
                 let delta =
                     collection_schema_field_delta(&serde_json::to_value(&collection)?, &live)
-                        .with_context(|| SchemaInstallMismatch {
+                        .map_err(|source| SchemaInstallMismatch {
                             collection: collection.name.clone(),
+                            source: Some(source),
                         })?;
                 if !additive && (!delta.pending.is_empty() || !delta.extra.is_empty()) {
                     return Err(SchemaInstallMismatch {
                         collection: collection.name,
+                        source: None,
                     }
                     .into());
                 }
@@ -89,10 +149,9 @@ async fn preview_schema(
             None => missing.push(collection.name),
         }
     }
-    ensure!(
-        missing.is_empty() || existing.is_empty(),
-        "schema mixes existing collections {existing:?} and missing collections {missing:?}. Preview/install the missing collections separately; do not repeat existing definitions in that installation"
-    );
+    if !missing.is_empty() && !existing.is_empty() {
+        return Err(SchemaInstallError::MixedCollections { existing, missing });
+    }
     Ok(SchemaInstallPlan {
         artifact_digest: format!("sha256:{:x}", Sha256::digest(sdl.as_bytes())),
         collection_contracts: contracts,
@@ -127,18 +186,16 @@ async fn apply_schema(
     additive: bool,
 ) -> Result<SchemaInstallPlan> {
     let plan = preview_schema(access, sdl, additive).await?;
-    ensure!(
-        plan.artifact_digest == expected_digest,
-        "schema artifact changed; preview again"
-    );
+    if plan.artifact_digest != expected_digest {
+        return Err(SchemaInstallError::ArtifactChanged);
+    }
     if plan.requires_publication {
         access.add_schema(sdl).await?;
     }
     let observed = preview_schema(access, sdl, additive).await?;
-    ensure!(
-        !observed.requires_publication,
-        "published schema is not discoverable"
-    );
+    if observed.requires_publication {
+        return Err(SchemaInstallError::NotDiscoverable);
+    }
     if plan.requires_publication {
         observed.require_satisfied()?;
     }

@@ -154,7 +154,7 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
                     drop(guard);
                     break;
                 }
-                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                Err(error) if error.lock_held().is_some() => {
                     tokio::time::sleep(Duration::from_millis(10)).await
                 }
                 Err(error) => panic!("unexpected client lock error: {error}"),
@@ -221,7 +221,7 @@ async fn closing_editor_input_releases_an_unready_installation() {
                     drop(guard);
                     break;
                 }
-                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                Err(error) if error.lock_held().is_some() => {
                     tokio::time::sleep(Duration::from_millis(10)).await
                 }
                 Err(error) => panic!("unexpected client lock error: {error}"),

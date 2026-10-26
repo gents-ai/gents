@@ -601,7 +601,7 @@ pub(crate) async fn run_command(
                 captured_channel(&stderr_raw, &stderr),
             )
             .await
-            .map_err(ToolError::from)?;
+            .map_err(|error| ToolError::from(anyhow::Error::from(error)))?;
     }
     if output.metadata.ok {
         Ok(rendered)

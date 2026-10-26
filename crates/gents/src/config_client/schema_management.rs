@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use super::{graphql_api_base, ConfigAccess};
+use super::{graphql_api_base, ConfigAccess, ConfigClientError};
+
+type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
 impl ConfigAccess {
     pub async fn collection_versions(&self) -> Result<Vec<Value>> {
@@ -13,7 +14,7 @@ impl ConfigAccess {
                             .await?
                             .into_iter()
                             .map(|v| serde_json::to_value(v).map_err(Into::into))
-                            .collect()
+                            .collect::<Result<_>>()
                     })
                     .await
             }
@@ -90,21 +91,20 @@ impl ConfigAccess {
     ) -> Result<Value> {
         config.validate_for_http()?;
         match self {
-            Self::Local(local) => {
-                local
-                    .run_owned(move |node| async move {
-                        Ok(json!({"lensId":node.set_migration(config).await?.to_string()}))
-                    })
-                    .await
-            }
-            Self::Graphql(_) => {
-                self.schema_request(
+            Self::Local(local) => Ok(local
+                .run_owned(move |node| async move {
+                    Ok::<_, ConfigClientError>(
+                        json!({"lensId":node.set_migration(config).await?.to_string()}),
+                    )
+                })
+                .await?),
+            Self::Graphql(_) => Ok(self
+                .schema_request(
                     reqwest::Method::POST,
                     "lens/set",
                     Some(serde_json::to_value(config)?),
                 )
-                .await
-            }
+                .await?),
         }
     }
 
@@ -143,9 +143,7 @@ impl ConfigAccess {
                     })
                     .await
             }
-            Self::Graphql(_) => anyhow::bail!(
-                "the pinned DefraDB HTTP API does not expose collection materialization; use the schema tool on the runtime node"
-            ),
+            Self::Graphql(_) => Err(ConfigClientError::MaterializeUnsupported),
         }
     }
 
@@ -156,7 +154,7 @@ impl ConfigAccess {
         body: Option<Value>,
     ) -> Result<Value> {
         let Self::Graphql(endpoint) = self else {
-            anyhow::bail!("schema HTTP request requires an HTTP endpoint")
+            return Err(ConfigClientError::SchemaEndpointRequired);
         };
         let url = format!("{}/{}", graphql_api_base(endpoint.url())?, route);
         let client = super::graphql::http_client().await?;
@@ -166,17 +164,22 @@ impl ConfigAccess {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("schema operation at {url}"))?;
+        let response =
+            request
+                .send()
+                .await
+                .map_err(|source| ConfigClientError::SchemaOperation {
+                    url: url.clone(),
+                    source,
+                })?;
         let status = response.status();
         let bytes = response.bytes().await?;
-        anyhow::ensure!(
-            status.is_success(),
-            "schema operation failed ({status}): {}",
-            String::from_utf8_lossy(&bytes)
-        );
+        if !status.is_success() {
+            return Err(ConfigClientError::SchemaOperationStatus {
+                status,
+                body: String::from_utf8_lossy(&bytes).into_owned(),
+            });
+        }
         if bytes.is_empty() {
             Ok(Value::Null)
         } else {

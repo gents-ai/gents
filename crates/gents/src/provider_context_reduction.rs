@@ -432,7 +432,7 @@ pub(crate) async fn persist(
                     compacted_tokens = input.compacted_tokens,
                 );
                 txn.execute(&mutation).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )
@@ -949,13 +949,15 @@ enum StoredCheckpoint {
 
 fn encode_checkpoint(checkpoint: &[Message], summary: &str) -> Result<String> {
     let prefix_len = usize::from(!summary.trim().is_empty());
-    crate::rendered_request::canonical_json_string(&serde_json::to_value(CheckpointPrefix {
-        version: 1,
-        prefix: checkpoint
-            .get(..prefix_len)
-            .context("checkpoint is missing its rendered summary")?
-            .to_vec(),
-    })?)
+    Ok(crate::rendered_request::canonical_json_string(
+        &serde_json::to_value(CheckpointPrefix {
+            version: 1,
+            prefix: checkpoint
+                .get(..prefix_len)
+                .context("checkpoint is missing its rendered summary")?
+                .to_vec(),
+        })?,
+    )?)
 }
 
 fn decode_checkpoint(encoded: &str, suffix: &[Message], summary: &str) -> Result<Vec<Message>> {

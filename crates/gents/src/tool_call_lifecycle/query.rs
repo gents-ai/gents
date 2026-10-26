@@ -488,7 +488,7 @@ mod tests {
                 assert_eq!(after.accepted_header_doc_id, before.accepted_header_doc_id);
                 assert_eq!(after.execution_generation, before.execution_generation);
                 assert_eq!(after.arguments, before.arguments);
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

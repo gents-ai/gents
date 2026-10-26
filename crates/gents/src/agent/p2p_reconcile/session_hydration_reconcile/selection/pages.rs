@@ -35,12 +35,13 @@ pub(super) async fn load_rows(
     collection: SessionHydrationCollection,
     filter: &str,
 ) -> Result<Vec<serde_json::Value>> {
-    txn.cursor_rows(
-        hydration_collection_name(collection),
-        fields(collection),
-        filter,
-    )
-    .await
+    Ok(txn
+        .cursor_rows(
+            hydration_collection_name(collection),
+            fields(collection),
+            filter,
+        )
+        .await?)
 }
 
 /// Additional scope fields beside `session_id` make DefraDB choose the node

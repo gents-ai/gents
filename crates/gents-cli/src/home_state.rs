@@ -44,11 +44,11 @@ pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
-    gents::home::write_init_config(home_dir, state)
+    Ok(gents::home::write_init_config(home_dir, state)?)
 }
 
 pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
-    gents::home::read_init_config(home_dir)
+    Ok(gents::home::read_init_config(home_dir)?)
 }
 
 /// Load and register the signer recorded by an initialized home; every

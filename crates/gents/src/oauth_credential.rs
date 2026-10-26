@@ -491,7 +491,10 @@ pub async fn upsert_oauth_credential(
     let response =
         crate::config_client::ConfigAccess::write_local(node, "oauth_credential.upsert", &mutation)
             .await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &response,
+        "OAuthCredential",
+    )?)
 }
 
 pub async fn upsert_oauth_credential_on(
@@ -500,7 +503,10 @@ pub async fn upsert_oauth_credential_on(
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
     let response = access.write("oauth_credential.upsert", &mutation).await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &response,
+        "OAuthCredential",
+    )?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1713,7 +1719,9 @@ impl DbCredentialBearer {
                 }
             }
         }
-        Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
+        Err(last_error
+            .expect("persist_with_retry ran at least one failing attempt")
+            .into())
     }
 
     fn auth_error(

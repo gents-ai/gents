@@ -821,15 +821,17 @@ mod tests {
         let error = rig::agent::StreamingError::Completion(
             rig::completion::CompletionError::ProviderError("boom".to_string()),
         );
-        let expected = format!(
-            "{:#}",
-            anyhow::Error::new(rig::agent::StreamingError::Completion(
+        let expected =
+            gents_protocol::error_chain::ErrorChain(&rig::agent::StreamingError::Completion(
                 rig::completion::CompletionError::ProviderError("boom".to_string()),
-            ),)
-        );
+            ))
+            .to_string();
         let native = loop_stream_error(error);
         assert_eq!(native.to_string(), "CompletionError: ProviderError: boom");
-        assert_eq!(format!("{:#}", anyhow::Error::new(native)), expected);
+        assert_eq!(
+            gents_protocol::error_chain::ErrorChain(&native).to_string(),
+            expected
+        );
     }
 
     fn native_tool_call(arguments: Value) -> message::ToolCall {

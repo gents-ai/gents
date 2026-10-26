@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::config_client::{ConfigAccess, ReceiptWriteError};
 use gents_protocol::graphql::{escape_graphql_string, GraphqlRequestOptions};
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequestRow;
@@ -115,8 +115,6 @@ impl std::fmt::Display for DeliveryUnconfirmed {
 
 impl std::error::Error for DeliveryUnconfirmed {}
 
-/// Error context attached to every receipt read, so an unreadable receipt is
-/// recognisable after `write_with_receipt` wraps it.
 const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
 
 impl UnresolvedSubmission {
@@ -272,34 +270,27 @@ pub(super) async fn commit_signed_submission(
 async fn reconcile_commit_failure(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
-    error: anyhow::Error,
+    error: ReceiptWriteError,
 ) -> Result<SubmittedRequest> {
     if gents::graphql::is_storage_full(&error) {
-        return Err(pending.outcome_unknown(Some(error)));
+        return Err(pending.outcome_unknown(Some(error.into())));
     }
-    let receipt_unreadable = error
-        .chain()
-        .any(|cause| cause.to_string() == RECEIPT_READ_CONTEXT);
-    if !receipt_unreadable && owner_rejected(&error) {
+    // The owner processed the mutation and answered with GraphQL errors; an
+    // unreadable receipt proves nothing about delivery.
+    if matches!(&error, ReceiptWriteError::Write(write) if write.is_graphql_rejection()) {
         match owner_receipt(access, &pending.create).await {
             Ok(true) => return Ok(pending.result),
-            Ok(false) if !reports_existing_request(&error) => return Err(error),
+            Ok(false) if !reports_existing_request(&error) => return Err(error.into()),
             _ => {}
         }
     }
-    Err(pending.outcome_unknown(Some(error)))
-}
-
-/// The owner processed the mutation and answered with GraphQL errors.
-fn owner_rejected(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().starts_with("graphql returned errors:"))
+    Err(pending.outcome_unknown(Some(error.into())))
 }
 
 /// A rejection that implies the owner already holds a request with this id.
-fn reports_existing_request(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
+/// The wording is DefraDB's error body, which carries no structured code.
+fn reports_existing_request(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
         let text = cause.to_string().to_ascii_lowercase();
         text.contains("already exists") || text.contains("duplicate")
     })
@@ -713,7 +704,7 @@ mod tests {
                     unknown.pending.create.admission.signature,
                     pending.create.admission.signature
                 );
-                assert!(gents::graphql::is_storage_full(&error));
+                assert!(gents::graphql::is_storage_full(error.as_ref()));
                 assert_eq!(
                     server.received_requests().await.unwrap().len(),
                     1,
@@ -826,7 +817,7 @@ mod tests {
         let error = reconcile_commit_failure(
             &access,
             pending.clone(),
-            anyhow::anyhow!("native operation abandoned after send"),
+            ReceiptWriteError::Write(gents::config_client::ConfigClientError::StoreClaimHeld),
         )
         .await
         .expect_err("a local post-send failure does not prove rejection");

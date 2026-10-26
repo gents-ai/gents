@@ -370,7 +370,7 @@ async fn load_prefix_items(
         kind.as_str(),
     );
     let response = graphql_with_transaction_retry(node, &query, "load mailbox item prefix").await?;
-    rows(&response, MAILBOX_COLLECTION)
+    Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
 pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Option<MailboxItem>> {
@@ -821,7 +821,7 @@ pub async fn list_mailbox_items(
         escape_graphql_string(requester_did)
     );
     let response = graphql_with_transaction_retry(node, &query, "list mailbox items").await?;
-    rows(&response, MAILBOX_COLLECTION)
+    Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
 pub async fn dismiss_mailbox_item(

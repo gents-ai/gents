@@ -102,7 +102,7 @@ impl<'a> LiveObserver<'a> {
 }
 
 async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSet<String>> {
-    ConfigAccess::local(node.clone()).collection_names().await
+    Ok(ConfigAccess::local(node.clone()).collection_names().await?)
 }
 
 async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {

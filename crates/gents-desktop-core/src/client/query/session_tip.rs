@@ -746,7 +746,7 @@ mod tests {
                         }
                     }
                     let explain = |query: &str| query.replacen("query DesktopRequestPromptOwnership", "query DesktopRequestPromptOwnership @explain(type: execute)", 1);
-                    Ok(serde_json::json!({
+                    Ok::<_, anyhow::Error>(serde_json::json!({
                         "session_headers": 2_112, "owner_headers": 64, "requests": 32,
                         "timings": timings, "decoder_ms_per_1000": decoder_timings,
                         "unique_plan": txn.execute(&explain(&unique)).await?,

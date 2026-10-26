@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use gents::identity::{
     load_file_identity, load_or_create_file_identity, register_ed25519_signing_identity,
-    NodeIdentity, ServiceAccount,
+    IdentityError, NodeIdentity, ServiceAccount,
 };
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
@@ -100,13 +100,18 @@ impl PrincipalIdentity {
         &self.private_key_bytes
     }
 
-    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
-        RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("loading node identity for {}", self.did))?
+    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
+        let identity = RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
+            .map_err(|source| IdentityError::LoadNodeIdentity {
+            did: self.did.clone(),
+            source,
+        })?;
+        identity
             .sign(payload)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("signing payload as {}", self.did))
+            .map_err(|source| IdentityError::SignPayloadAs {
+                did: self.did.clone(),
+                source,
+            })
     }
 }
 
@@ -116,27 +121,37 @@ impl NodeIdentity for PrincipalIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
         PrincipalIdentity::sign(self, payload)
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+    async fn verify(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, IdentityError> {
         let (key_type, public_key_bytes) = if did == self.did {
             (crypto::KeyType::Ed25519, self.public_key_bytes.clone())
         } else if did.starts_with("did:key:") {
-            crypto::parse_did_key(did)
-                .map_err(anyhow::Error::from)
-                .with_context(|| format!("parsing did:key public key from DID {did}"))?
+            crypto::parse_did_key(did).map_err(|source| IdentityError::ParseDidKey {
+                did: did.to_owned(),
+                source,
+            })?
         } else {
-            anyhow::bail!("no public key registered for DID {did}");
+            return Err(IdentityError::NoPublicKey {
+                did: did.to_owned(),
+            });
         };
 
         let public_key = crypto::public_key_from_bytes(key_type, &public_key_bytes)
-            .map_err(anyhow::Error::from)?;
+            .map_err(IdentityError::Crypto)?;
         public_key
             .verify(payload, signature)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("verifying payload for {did}"))
+            .map_err(|source| IdentityError::VerifyPayload {
+                did: did.to_owned(),
+                source,
+            })
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {

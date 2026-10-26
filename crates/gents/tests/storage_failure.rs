@@ -85,7 +85,7 @@ async fn storage_full_http_transactions_stop_without_replaying_or_discarding_con
                                 "mutation { create_StorageProbe(input: {value: 1}) { _docID } }",
                             )
                             .await?;
-                            Ok(())
+                            Ok::<_, gents::config_client::ConfigClientError>(())
                         })
                     },
                 ),
@@ -93,7 +93,11 @@ async fn storage_full_http_transactions_stop_without_replaying_or_discarding_con
             .await
             .unwrap()
             .unwrap_err();
-            assert!(gents::graphql::is_storage_full(&error), "{error:#}");
+            assert!(
+                gents::graphql::is_storage_full(&error),
+                "{}",
+                gents_protocol::error_chain::ErrorChain(&error)
+            );
             assert_eq!(counts.begins.load(Ordering::SeqCst), 1);
             let entered = usize::from(!fail_begin);
             assert_eq!(counts.writes.load(Ordering::SeqCst), entered);

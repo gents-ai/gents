@@ -146,9 +146,12 @@ fn title_max_tokens(
     }
 }
 
-fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
-    error.is::<crate::agent::loop_stream::OneShotProviderFailure>()
-        || error.is::<crate::agent::loop_stream::OneShotNoVisibleOutput>()
+fn title_attempt_is_retryable(error: &crate::agent::loop_stream::OneShotError) -> bool {
+    matches!(
+        error,
+        crate::agent::loop_stream::OneShotError::ProviderFailure(_)
+            | crate::agent::loop_stream::OneShotError::NoVisibleOutput(_)
+    )
 }
 
 struct TitleGeneration<'a> {
@@ -527,9 +530,10 @@ where
                 Ok(Err(error)) => {
                     flush_received_title_partial("provider error").await?;
                     if !title_attempt_is_retryable(&error) {
-                        return Err(error.context("title audit provider/output invariant failed"));
+                        return Err(anyhow::Error::from(error)
+                            .context("title audit provider/output invariant failed"));
                     }
-                    last_error = Some(error);
+                    last_error = Some(anyhow::Error::from(error));
                 }
                 Err(_) => {
                     flush_received_title_partial("provider timeout").await?;

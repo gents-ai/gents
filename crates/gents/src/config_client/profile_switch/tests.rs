@@ -214,7 +214,7 @@ impl Fixture {
                             records.insert(id.to_owned(), value);
                         }
                     }
-                    Ok(records)
+                    Ok::<_, anyhow::Error>(records)
                 })
             })
             .await

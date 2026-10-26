@@ -589,7 +589,7 @@ async fn load_receipts(
     );
     let response =
         graphql_with_transaction_retry(node, &query, "load WorkspaceReceipt for seal").await?;
-    crate::graphql::rows(&response, "WorkspaceReceipt")
+    Ok(crate::graphql::rows(&response, "WorkspaceReceipt")?)
 }
 
 async fn load_isolated_workspace_doc(

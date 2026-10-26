@@ -102,7 +102,10 @@ struct NodeSink<'a> {
 
 impl QuerySink for NodeSink<'_> {
     async fn execute(&self, query: &str) -> Result<defra_node::QueryResponse> {
-        graphql_with_transaction_retry(self.node, query, "grok canonical message projection").await
+        Ok(
+            graphql_with_transaction_retry(self.node, query, "grok canonical message projection")
+                .await?,
+        )
     }
 }
 

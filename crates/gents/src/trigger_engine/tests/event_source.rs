@@ -433,7 +433,7 @@ async fn persist_event_bindings(
                     "task_id":trigger.task_id,"enabled":true,"concurrency":trigger.concurrency,
                     "source":{"kind":"event","event_source_id":trigger.trigger_id}}}),
             ).await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })).await.unwrap();
     }
 }
@@ -1493,7 +1493,7 @@ async fn create_event_trigger_doc(
                 &serde_json::json!({"input":input}),
             )
             .await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

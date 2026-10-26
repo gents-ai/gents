@@ -39,7 +39,7 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
                 Box::pin(async move {
                     entered.notify_one();
                     release.notified().await;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )

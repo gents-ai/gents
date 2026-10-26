@@ -58,7 +58,7 @@ impl ReductionEngine for BackendScopedReductionEngine {
         configured_keep_recent: usize,
         messages: &[crate::llm::message::Message],
         admission: ReductionAdmission,
-    ) -> anyhow::Result<usize> {
+    ) -> Result<usize, CompactionError> {
         self.inner
             .retention_target(configured_keep_recent, messages, admission)
     }
@@ -69,7 +69,7 @@ impl ReductionEngine for BackendScopedReductionEngine {
         context_window: usize,
         options: &'a ReductionOptions,
         admission: ReductionAdmission,
-    ) -> BoxFuture<'a, anyhow::Result<ReductionResult>> {
+    ) -> BoxFuture<'a, Result<ReductionResult, CompactionError>> {
         let work = self
             .inner
             .reduce(messages, context_window, options, admission);

@@ -119,7 +119,7 @@ impl Delivery {
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
-                    Ok(
+                    Ok::<_, anyhow::Error>(
                         crate::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
                             owner,

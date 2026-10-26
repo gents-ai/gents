@@ -83,7 +83,10 @@ impl CountingRead {
 
 #[async_trait::async_trait]
 impl gents::config_client::ConfigRead for CountingRead {
-    async fn execute_read(&self, document: &str) -> anyhow::Result<serde_json::Value> {
+    async fn execute_read(
+        &self,
+        document: &str,
+    ) -> Result<serde_json::Value, gents::config_client::ConfigClientError> {
         self.queries
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.execute_read(document).await

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +5,24 @@ use crate::enrollment::canonical_domain_payload;
 use crate::file_changes::{FileChangeImages, FileImage, ImageFailure};
 use crate::file_image_hydration::FileImageScope;
 use crate::session_hydration::HydrationRequest;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FileInventoryError {
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("file inventory demand has an empty reference")]
+    EmptyReference,
+    #[error("file inventory demand has an invalid continuation")]
+    InvalidContinuation,
+    #[error("file inventory receipt does not match its demand")]
+    ReceiptDemandMismatch,
+    #[error("initial file inventory demand did not start at zero")]
+    InitialOffset,
+    #[error("file inventory receipt does not match its continuation")]
+    ReceiptContinuationMismatch,
+}
+
+type Result<T, E = FileInventoryError> = std::result::Result<T, E>;
 
 pub const FILE_INVENTORY_PAGE_LIMIT: usize = 64;
 pub const FILE_INVENTORY_OPERATOR_PATH: &str = "/file-inventory/operator/page";
@@ -144,29 +161,29 @@ pub struct FileInventoryPageDemand {
 impl FileInventoryPageDemand {
     pub fn validate_reference(&self) -> Result<()> {
         let request = &self.admission.request;
-        anyhow::ensure!(
-            [
-                self.attempt_id.as_str(),
-                &self.admission.session_doc_id,
-                &request.request_key,
-                &request.peer_id,
-                &request.requester_did,
-                &request.node_did,
-                &request.session_id,
-            ]
-            .iter()
-            .all(|value| !value.is_empty()),
-            "file inventory demand has an empty reference"
-        );
+        if [
+            self.attempt_id.as_str(),
+            &self.admission.session_doc_id,
+            &request.request_key,
+            &request.peer_id,
+            &request.requester_did,
+            &request.node_did,
+            &request.session_id,
+        ]
+        .iter()
+        .any(|value| value.is_empty())
+        {
+            return Err(FileInventoryError::EmptyReference);
+        }
         if let Some(cursor) = &self.cursor {
-            anyhow::ensure!(
-                cursor.binding.admission == self.admission
-                    && !cursor.binding.digest.is_empty()
-                    && cursor.offset != 0
-                    && cursor.offset % FILE_INVENTORY_PAGE_LIMIT as u64 == 0
-                    && cursor.offset < cursor.binding.coverage.entries,
-                "file inventory demand has an invalid continuation"
-            );
+            if !(cursor.binding.admission == self.admission
+                && !cursor.binding.digest.is_empty()
+                && cursor.offset != 0
+                && cursor.offset % FILE_INVENTORY_PAGE_LIMIT as u64 == 0
+                && cursor.offset < cursor.binding.coverage.entries)
+            {
+                return Err(FileInventoryError::InvalidContinuation);
+            }
         }
         Ok(())
     }
@@ -183,20 +200,20 @@ impl FileInventoryPageDemand {
     }
 
     pub fn validate_page_reference(&self, receipt: &FileInventoryPageReceipt) -> Result<()> {
-        anyhow::ensure!(
-            receipt.request_key == self.derive_request_key()?
-                && receipt.page.binding.admission == self.admission,
-            "file inventory receipt does not match its demand"
-        );
+        if receipt.request_key != self.derive_request_key()?
+            || receipt.page.binding.admission != self.admission
+        {
+            return Err(FileInventoryError::ReceiptDemandMismatch);
+        }
         match &self.cursor {
-            None => anyhow::ensure!(
-                receipt.page.offset == 0,
-                "initial file inventory demand did not start at zero"
-            ),
-            Some(cursor) => anyhow::ensure!(
-                receipt.page.binding == cursor.binding && receipt.page.offset == cursor.offset,
-                "file inventory receipt does not match its continuation"
-            ),
+            None if receipt.page.offset != 0 => return Err(FileInventoryError::InitialOffset),
+            Some(cursor)
+                if receipt.page.binding != cursor.binding
+                    || receipt.page.offset != cursor.offset =>
+            {
+                return Err(FileInventoryError::ReceiptContinuationMismatch)
+            }
+            _ => {}
         }
         Ok(())
     }

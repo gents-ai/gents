@@ -128,6 +128,13 @@ decoders and native adapters translate representations, not redefine policy.
   HTTP GraphQL from feature code, and never add another retry loop or access
   wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
   access, not complete enforcement; its allowlist only shrinks.
+- Owner and library interfaces (DefraDB access, storage, identity and home
+  owners, protocol validation, the owned loop's trait and callback seams) return
+  module-owned `thiserror` enums, and classifiers match those enums or the
+  owner's classifier, never message text or a downcast past a transparent
+  variant. Application code (commands, tool handlers, daemon glue, tests) may use
+  `anyhow` with context. `owner_interfaces_use_thiserror` lists the owner
+  modules. Print typed error chains with `gents_protocol::error_chain::ErrorChain`.
 - Request context (identity, signing, ACP bypass, transaction handles, the
   requester or session, trace or request IDs) travels with the task or message
   as an explicit argument or field, never in `thread_local!` or `task_local!`.

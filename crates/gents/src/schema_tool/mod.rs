@@ -485,7 +485,7 @@ impl SchemaTool {
                 let recovery = if error.is::<SchemaDigestMismatch>() {
                     json!({"tool":"schema","args":preview_call(args)})
                 } else if let Some(mismatch) =
-                    error.downcast_ref::<crate::config_client::SchemaInstallMismatch>()
+                    crate::config_client::schema_install_mismatch(error.as_ref())
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
                 } else if error.is::<SchemaSdlFailure>() {

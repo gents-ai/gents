@@ -1,11 +1,15 @@
+use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-use super::{AdmissionJoin, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext};
+use super::{
+    AdmissionJoin, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
+    RenderedRequestError,
+};
 use crate::loop_stream::RenderedRequestSink;
 use crate::provider_audit::{
-    AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
+    AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
     ProviderAuditObservation, ProviderAuditReceiver, ProviderAuditSender,
 };
 
@@ -239,13 +243,14 @@ pub fn auxiliary_output_sink() -> Option<AuxiliaryOutputSink> {
     current_scope()?.auxiliary_output_sink.clone()
 }
 
-pub async fn emit_auxiliary_output(observation: AuxiliaryOutputObservation) -> anyhow::Result<()> {
-    let scope =
-        current_scope().ok_or_else(|| anyhow::anyhow!("auxiliary output has no request scope"))?;
+pub async fn emit_auxiliary_output(
+    observation: AuxiliaryOutputObservation,
+) -> Result<(), AuxiliaryOutputError> {
+    let scope = current_scope().ok_or(AuxiliaryOutputError::NoRequestScope)?;
     let sink = scope
         .auxiliary_output_sink
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("auxiliary output has no canonical sink"))?
+        .ok_or(AuxiliaryOutputError::NoCanonicalSink)?
         .clone();
     let identity = (
         observation.capture_scope,
@@ -256,25 +261,22 @@ pub async fn emit_auxiliary_output(observation: AuxiliaryOutputObservation) -> a
         let state = scope.lock();
         match &observation.event {
             AuxiliaryOutputEvent::AttemptStarted => {
-                anyhow::ensure!(
-                    state.active_auxiliary.is_none(),
-                    "auxiliary attempt already active"
-                );
+                if state.active_auxiliary.is_some() {
+                    return Err(AuxiliaryOutputError::AttemptAlreadyActive);
+                }
             }
             AuxiliaryOutputEvent::OutputObligationPending { .. }
             | AuxiliaryOutputEvent::FinalText(_)
                 if state.active_auxiliary.is_none() =>
             {
-                anyhow::ensure!(
-                    state.last_auxiliary == Some(identity),
-                    "auxiliary reminder changed source"
-                );
+                if state.last_auxiliary != Some(identity) {
+                    return Err(AuxiliaryOutputError::ReminderChangedSource);
+                }
             }
             _ => {
-                anyhow::ensure!(
-                    state.active_auxiliary == Some(identity),
-                    "auxiliary output changed source"
-                );
+                if state.active_auxiliary != Some(identity) {
+                    return Err(AuxiliaryOutputError::OutputChangedSource);
+                }
             }
         }
     }
@@ -299,7 +301,7 @@ pub async fn emit_auxiliary_output(observation: AuxiliaryOutputObservation) -> a
     Ok(())
 }
 
-pub async fn flush_received_auxiliary_partial() -> anyhow::Result<bool> {
+pub async fn flush_received_auxiliary_partial() -> Result<bool, AuxiliaryOutputError> {
     let Some(scope) = current_scope() else {
         return Ok(false);
     };
@@ -311,20 +313,19 @@ pub async fn flush_received_auxiliary_partial() -> anyhow::Result<bool> {
         let audit = state
             .audit
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("active auxiliary has no audit receiver"))?;
-        anyhow::ensure!(
-            audit.capture_scope == identity.0.to_string()
-                && audit.turn_index == identity.1
-                && audit.attempt == identity.2,
-            "active auxiliary audit receiver changed source"
-        );
+            .ok_or(AuxiliaryOutputError::NoAuditReceiver)?;
+        if !(audit.capture_scope == identity.0.to_string()
+            && audit.turn_index == identity.1
+            && audit.attempt == identity.2)
+        {
+            return Err(AuxiliaryOutputError::AuditReceiverChangedSource);
+        }
         (identity, Arc::clone(&audit.receiver))
     };
     while let Some(audit) = crate::provider_audit::try_recv_one(&receiver) {
-        anyhow::ensure!(
-            (audit.capture_scope, audit.turn, audit.attempt) == identity,
-            "queued auxiliary audit changed source"
-        );
+        if (audit.capture_scope, audit.turn, audit.attempt) != identity {
+            return Err(AuxiliaryOutputError::QueuedAuditChangedSource);
+        }
         emit_auxiliary_output(AuxiliaryOutputObservation {
             capture_scope: identity.0,
             turn: identity.1,
@@ -431,7 +432,7 @@ pub fn ambient_arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
                     "armed rendered-request capture"
                 );
             }
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), RenderedRequestError>(())
         })
     })
 }
@@ -453,6 +454,28 @@ pub async fn scope_request_if_configured<T>(
     match scope_from_factory(context, factory) {
         Some(scope) => scope_request(scope, future).await,
         None => future.await,
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CaptureBodyError {
+    #[error(transparent)]
+    DecodeBody(serde_json::Error),
+    #[error(transparent)]
+    ParseCaptureScope(gents_protocol::rendered_request::CaptureScopeParseError),
+    #[error(transparent)]
+    BuildFact(RenderedRequestError),
+    #[error(transparent)]
+    Persist(RenderedRequestError),
+}
+
+impl CaptureBodyError {
+    pub fn stage(&self) -> CaptureFailureStage {
+        match self {
+            Self::DecodeBody(_) => CaptureFailureStage::DecodeBody,
+            Self::ParseCaptureScope(_) | Self::BuildFact(_) => CaptureFailureStage::BuildFact,
+            Self::Persist(_) => CaptureFailureStage::Persist,
+        }
     }
 }
 
@@ -480,15 +503,15 @@ pub async fn capture_body(
     provider_endpoint: Option<String>,
     provider_route_path_sha256: Option<String>,
     body: &[u8],
-) -> std::result::Result<(), (CaptureFailureStage, anyhow::Error)> {
-    let request_json: serde_json::Value = serde_json::from_slice(body)
-        .map_err(|error| (CaptureFailureStage::DecodeBody, anyhow::Error::from(error)))?;
+) -> Result<(), CaptureBodyError> {
+    let request_json: serde_json::Value =
+        serde_json::from_slice(body).map_err(CaptureBodyError::DecodeBody)?;
     let components = super::RenderedRequestComponents::from_provider_body(request_json, source);
     let admission_join = (scope.admission_join_lookup)(&pending.capture_scope);
     let capture_kind = pending
         .capture_scope
         .parse::<gents_protocol::rendered_request::CaptureScope>()
-        .map_err(|error| (CaptureFailureStage::BuildFact, anyhow::Error::from(error)))?
+        .map_err(CaptureBodyError::ParseCaptureScope)?
         .kind;
     let mut context = scope.context().clone();
     if matches!(
@@ -509,13 +532,13 @@ pub async fn capture_body(
         components,
         admission_join,
     )
-    .map_err(|error| (CaptureFailureStage::BuildFact, error))?;
+    .map_err(CaptureBodyError::BuildFact)?;
 
     let capture_key = rendered.capture_key.clone();
     let request_id = rendered.request_id.clone();
     (scope.sink())(rendered)
         .await
-        .map_err(|error| (CaptureFailureStage::Persist, error))?;
+        .map_err(CaptureBodyError::Persist)?;
 
     tracing::debug!(
         capture_key = %capture_key,
@@ -543,12 +566,13 @@ pub fn capture_failure_message(
     capture_scope: &str,
     turn_index: usize,
     attempt: u32,
-    error: &anyhow::Error,
+    error: &(dyn std::error::Error + 'static),
 ) -> String {
     format!(
         "rendered-request capture failed at stage {} for scope {capture_scope} turn {turn_index} \
-         attempt {attempt}; the provider call was not issued: {error:#}",
-        stage.as_str()
+         attempt {attempt}; the provider call was not issued: {}",
+        stage.as_str(),
+        ErrorChain(error)
     )
 }
 

@@ -60,32 +60,42 @@ impl std::fmt::Debug for MediaPcmClip {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MediaPcmError {
+    #[error("Speech audio exceeds the supported format or clip limit.")]
+    OutOfBounds,
+    #[error("Speech audio is not valid base64 PCM.")]
+    InvalidBase64,
+    #[error("Speech audio must contain bounded mono signed 16-bit PCM.")]
+    InvalidPcm,
+}
+
 impl MediaPcmClip {
-    fn bytes(&self) -> anyhow::Result<Vec<u8>> {
+    fn bytes(&self) -> Result<Vec<u8>, MediaPcmError> {
         use base64::Engine;
-        anyhow::ensure!(
-            (8_000..=192_000).contains(&self.sample_rate)
-                && self.pcm.len() <= MAX_PCM_BYTES.div_ceil(3) * 4,
-            "Speech audio exceeds the supported format or clip limit."
-        );
+        if !((8_000..=192_000).contains(&self.sample_rate)
+            && self.pcm.len() <= MAX_PCM_BYTES.div_ceil(3) * 4)
+        {
+            return Err(MediaPcmError::OutOfBounds);
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&self.pcm)
-            .map_err(|_| anyhow::anyhow!("Speech audio is not valid base64 PCM."))?;
-        anyhow::ensure!(
-            !bytes.is_empty()
-                && bytes.len().is_multiple_of(2)
-                && bytes.len() <= MAX_PCM_BYTES
-                && bytes.len() / 2 <= self.sample_rate as usize * MAX_SECONDS as usize,
-            "Speech audio must contain bounded mono signed 16-bit PCM."
-        );
+            .map_err(|_| MediaPcmError::InvalidBase64)?;
+        if !(!bytes.is_empty()
+            && bytes.len().is_multiple_of(2)
+            && bytes.len() <= MAX_PCM_BYTES
+            && bytes.len() / 2 <= self.sample_rate as usize * MAX_SECONDS as usize)
+        {
+            return Err(MediaPcmError::InvalidPcm);
+        }
         Ok(bytes)
     }
 
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> Result<(), MediaPcmError> {
         self.bytes().map(drop)
     }
 
-    pub fn samples(&self) -> anyhow::Result<Vec<i16>> {
+    pub fn samples(&self) -> Result<Vec<i16>, MediaPcmError> {
         let bytes = self.bytes()?;
         let (pairs, _) = bytes.as_chunks::<2>();
         Ok(pairs.iter().map(|pair| i16::from_le_bytes(*pair)).collect())

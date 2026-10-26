@@ -261,7 +261,8 @@ async fn render_cli_outcome(
                 captured_channel(&stdout_raw, &stdout),
                 captured_channel(&stderr_raw, &stderr),
             )
-            .await?;
+            .await
+            .map_err(anyhow::Error::from)?;
     }
     if let Some(cause) = terminal_cause {
         return Err(LocalToolError::reported_failure(

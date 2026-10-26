@@ -112,7 +112,7 @@ pub(super) async fn p2p_probe_get(
     graphql: &gents::config_client::GraphqlEndpoint,
     url: &str,
 ) -> Value {
-    let request = p2p_http_client().and_then(|client| graphql.authorize(client.get(url)));
+    let request = p2p_http_client().and_then(|client| Ok(graphql.authorize(client.get(url))?));
     let response = match request {
         Ok(request) => crate::http_get_json::<Value>(request).await,
         Err(error) => Err(error),
