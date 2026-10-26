@@ -310,5 +310,4 @@ mod tests {
         core.shutdown().await.unwrap();
         server.verify().await;
     }
-
 }
