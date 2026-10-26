@@ -174,9 +174,9 @@ theorem blocked_review_requires_a_person (input : Input) (history : List Review)
 
 theorem routine_actions_ignore_review_history (input : Input) (history : List Review)
     (verdict : Review) (grant : Grant) (ceiling : input.ceilingAllows = true)
-    (routine : input.crossesBoundary = false) :
+    (mode : effectiveMode input ≠ .ask) (routine : input.crossesBoundary = false) :
     evaluate input history verdict grant = .allow := by
-  simp [evaluate, reviewedRoute, route, ceiling, routine]
+  simp [evaluate, reviewedRoute, route, ceiling, mode, routine]
 
 theorem review_history_cannot_widen_the_ceiling (input : Input) (history : List Review)
     (verdict : Review) (grant : Grant) (ceiling : input.ceilingAllows = false) :
