@@ -560,7 +560,7 @@ pub(crate) async fn assignment_request_id_in_txn(
 }
 
 pub(super) async fn load_session_requests(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &impl crate::config_client::ConfigRead,
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
@@ -568,7 +568,7 @@ pub(super) async fn load_session_requests(
     let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
     let response = txn
-        .execute(&format!(
+        .execute_read(&format!(
             r#"{{ AgentRequest(filter: {{
         node_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
     }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#

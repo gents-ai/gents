@@ -338,6 +338,71 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
 }
 
 #[tokio::test]
+async fn inference_settings_read_survives_a_concurrent_projection_replacement() {
+    use identity::Identity as _;
+
+    let (core, directory) = crate::tests::support::boot_core().await;
+    let server = wiremock::MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    let home = directory.path().join("runtime");
+    std::fs::create_dir_all(&home).unwrap();
+    let key_path = home.join("node.key");
+    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let did = identity.did().unwrap().to_string();
+    std::fs::write(
+        home.join("init.json"),
+        json!({"node_name":"Local", "node_did":did, "key_path":key_path}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("runtime.json"),
+        json!({"node_name":"Local", "node_did":did, "graphql":graphql, "p2p_transport":"iroh"})
+            .to_string(),
+    )
+    .unwrap();
+    core.persist_local_standard_peer(
+        "Local",
+        "iroh://unavailable-runtime",
+        &did,
+        &graphql,
+        &home.to_string_lossy(),
+    )
+    .await
+    .unwrap();
+    let data = json!({"data":{
+        "nodes":[{"node_did":did, "display_name":"Current settings"}],
+        "agents":[], "inference_backends":[], "inference_profiles":[],
+        "runtimes":[], "node_readiness":[], "contexts":[], "tools":[],
+        "inference_sampling":[], "inference_execution":[], "tasks":[],
+        "schedules":[], "triggers":[], "skills":[], "compactions":[],
+        "tool_service_registries":[], "event_sources":[], "agent_targets":[],
+        "datastore_tool_surfaces":[], "chain_key_bindings":[], "sessions":[], "requests":[]
+    }});
+    let store = core.store().clone();
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/v0/graphql"))
+        .respond_with(move |_: &wiremock::Request| {
+            store.replace_snapshot(gents_desktop_core::client::ClientStore::default());
+            wiremock::ResponseTemplate::new(200).set_body_json(&data)
+        })
+        .mount(&server)
+        .await;
+    let result = ClientHost::new(core.clone())
+        .execute(
+            protocol::ClientCommand::InferenceSetupState {
+                node_did: did.clone(),
+            },
+            &super::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await;
+    core.shutdown().await.unwrap();
+    let settings = result.unwrap();
+    assert_eq!(settings["nodeDid"], did);
+    assert_eq!(settings["node"]["displayName"], "Current settings");
+}
+
+#[tokio::test]
 async fn passive_snapshots_keep_the_runtime_identity_locked() {
     use identity::Identity as _;
 

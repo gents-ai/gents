@@ -26,7 +26,7 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONTROL_RECEIPT: usize = 64 * 1024;
 
 mod unlock;
-pub use unlock::unlock_runtime_keys;
+pub use unlock::{prepare_runtime_after_unlock, unlock_runtime_keys};
 
 #[cfg(test)]
 mod tests;
@@ -106,7 +106,8 @@ pub(crate) async fn prepare(args: ServeArgs, runtime: tokio::runtime::Handle) ->
 }
 
 async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
-    let _keychain_prompt_guard = crate::process_resources::prevent_keychain_prompts(true)?;
+    let _keychain_prompt_guard =
+        crate::process_resources::prevent_keychain_prompts(!args.keychain_startup_approval)?;
     crate::process_resources::prepare()?;
     anyhow::ensure!(
         args.data_dir.is_none(),
@@ -273,7 +274,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     args.home = Some(home);
     args.http_addr = Some(address);
     args.http_port = Some(port);
-    args.no_keychain_prompts = true;
+    args.no_keychain_prompts = !args.keychain_startup_approval;
     args.no_codex_shim = true;
     args.grok_shim = false;
     super::serve::serve_prepared(
