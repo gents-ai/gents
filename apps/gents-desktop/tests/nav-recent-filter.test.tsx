@@ -72,7 +72,9 @@ describe("the side nav's recent sessions filter", () => {
     expect(recentTitles()).toEqual(["Busy", "Done"]);
 
     await u.click(screen.getByRole("button", { name: "Filter recent sessions" }));
-    await u.click(await screen.findByRole("menuitem", { name: /State/ }));
+    /* a pointer both hovers the submenu open and clicks it, which can close it again */
+    (await screen.findByRole("menuitem", { name: /State/ })).focus();
+    await u.keyboard("{ArrowRight}");
     await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(1));
     const states = within(screen.getAllByRole("menu").at(-1)!);
     for (const item of states.getAllByRole("menuitemcheckbox")) {
