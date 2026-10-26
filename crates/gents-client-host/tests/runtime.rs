@@ -44,6 +44,8 @@ mod editor_related_work;
 mod editor_retry;
 #[path = "support/editor_review.rs"]
 mod editor_review;
+#[path = "support/editor_undo.rs"]
+mod editor_undo;
 #[path = "support/editor_workspace.rs"]
 mod editor_workspace;
 #[allow(dead_code)]
@@ -90,6 +92,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorInventory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorUndo,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWork,
@@ -112,6 +116,7 @@ impl Journey {
             Self::EditorReview => Some("review"),
             Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorInventory => Some("review-inventory"),
+            Self::EditorUndo => Some("undo"),
             Self::EditorWorkspace => Some("workspace"),
             Self::EditorRelatedWork => Some("related-work"),
             Self::EditorRelatedWorkFailure => Some("related-work-failure"),
@@ -336,6 +341,31 @@ async fn editor_reviews_retained_file_images_without_reading_the_working_copy() 
     copy_editor_evidence(temp.path(), "editor-review-canonical.json")
 }
 
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_restores_and_saves_recorded_edits_without_overwriting_later_changes() -> Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorUndo)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-undo-canonical.json")
+}
+
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_pages_real_file_captures_across_reload_and_new_activity() -> Result<()> {
@@ -542,6 +572,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let goal_provider_hold = root.join("hold-goal-provider");
     let retry_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let provider_retry_attempts = Arc::clone(&retry_attempts);
+    let undo = Arc::new(editor_undo::Provider::default());
+    let provider_undo = Arc::clone(&undo);
     let goal_recovery = Arc::new(editor_goal_recovery::Provider::default());
     let provider_goal_recovery = Arc::clone(&goal_recovery);
     let goal_removal = Arc::new(editor_goal_removal::Provider::default());
@@ -574,6 +606,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 Journey::EditorRelatedWork | Journey::EditorRelatedWorkFailure
             ) {
                 if let Some(action) = provider_related.reply(request) {
+                    return action;
+                }
+            }
+            if matches!(journey, Journey::EditorUndo) {
+                if let Some(action) = provider_undo.reply(request, &emitted) {
                     return action;
                 }
             }
@@ -1760,6 +1797,63 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 serde_json::to_vec_pretty(&permissions)?,
             )?;
         }
+    }
+    if matches!(journey, Journey::EditorUndo) {
+        editor_undo::prepare(root)?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        ensure!(
+            client
+                .call(id, "client_runtime_is_local", json!({"nodeDid":node_did}))
+                .await
+                == false,
+            "Undo must authenticate retained images through the paired route"
+        );
+        id += 1;
+        let release = root.join("finish-undo-goal");
+        let held = Arc::clone(&undo);
+        let release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if release.is_file() {
+                    held.release();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        let result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "undo",
+        )
+        .await;
+        std::fs::write(
+            root.join("editor-undo-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        if root.join("editor-artifacts-path").is_file() {
+            copy_editor_evidence(root, "editor-undo-provider.json")?;
+        }
+        result?;
+        let evidence = editor_undo::verify(
+            &mut client,
+            &mut id,
+            &access,
+            root,
+            node_did,
+            &client_did,
+            &identity,
+            &provider,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-undo-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+        drop(release);
     }
     if matches!(journey, Journey::EditorGoalReplacement) {
         editor_goal_replacement::prepare(root)?;

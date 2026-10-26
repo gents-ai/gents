@@ -32,6 +32,8 @@ fn artifact_description_does_not_open_a_client_store() {
         serde_json::json!(gents_desktop_bridge::host::protocol::ClientCommand::NAMES)
     );
     assert_eq!(metadata["transportSupported"], cfg!(any(unix, windows)));
+    assert_eq!(metadata["editorCheckpointVersion"], 1);
+    assert_eq!(metadata["editorCheckpointSupported"], cfg!(unix));
     assert!(output.stderr.is_empty());
     assert!(!home.exists());
 }
