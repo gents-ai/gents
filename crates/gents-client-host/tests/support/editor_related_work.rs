@@ -253,7 +253,7 @@ pub async fn verify(
             .as_deref()
             .context("activity request document")?;
         let response = access.execute(&format!(
-            "{{ AgentToolCall(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, request_doc_id: {{_eq: \"{}\"}}}}) {{ _docID tool_call_id tool_name lifecycle_state terminal_output }} }}",
+            "{{ AgentToolCall(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, request_doc_id: {{_eq: \"{}\"}}}}) {{ _docID tool_call_id tool_name lifecycle_state }} }}",
             escape(node), escape(session), escape(document)
         )).await?;
         let calls = response["data"]["AgentToolCall"]
@@ -263,6 +263,26 @@ pub async fn verify(
             calls.len() == ACTIVITY_COMMANDS,
             "the profile must retain all twelve command records"
         );
+        let page = gents_desktop_core::client::load_session_transcript_window_on(
+            access,
+            session,
+            Some(node),
+            request.requester_did.as_deref(),
+            gents_desktop_core::client::TranscriptWindow::Tip,
+            Some(80),
+        )
+        .await?;
+        let segments = page
+            .canonical_dependencies
+            .output_segments
+            .iter()
+            .map(
+                |row| gents_protocol::output::reconstruction::ObservedSegment {
+                    doc_id: &row.doc_id,
+                    segment: &row.segment,
+                },
+            )
+            .collect::<Vec<_>>();
         let mut ids = rapidhash::RapidHashSet::default();
         for call in calls {
             let id = call["tool_call_id"]
@@ -274,10 +294,62 @@ pub async fn verify(
                 "command profile reused or lost an invocation"
             );
             ensure!(
-                call["tool_name"] == "bash_unrestricted"
-                    && call["lifecycle_state"] == "completed"
-                    && !call["terminal_output"].is_null(),
+                call["tool_name"] == "bash_unrestricted" && call["lifecycle_state"] == "completed",
                 "command profile failed to retain completed output: {call}"
+            );
+            let physical = call["_docID"].as_str().context("physical activity call")?;
+            let payloads = page
+                .store
+                .transcript_messages
+                .iter()
+                .chain(page.result_messages.iter())
+                .filter(|row| {
+                    row.message.node_did == node
+                        && row.message.session_id == session
+                        && row.message.request_doc_id.as_deref() == Some(document)
+                        && row.message.requester_did == request.requester_did
+                })
+                .flat_map(|row| &row.message.blocks)
+                .filter_map(|block| match block {
+                    gents_protocol::output::MessageBlock::ToolResult {
+                        tool_call_doc_id,
+                        parts,
+                        ..
+                    } if tool_call_doc_id == physical => Some(parts),
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|part| match part {
+                    gents_protocol::output::ToolResultPart::Text { text } => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [payload] = payloads.as_slice() else {
+                anyhow::bail!("the activity command has no unique canonical text result: {id}");
+            };
+            ensure!(
+                gents_protocol::output::reconstruction::tool_output_reference_owned(
+                    &segments,
+                    &payload.output,
+                    document,
+                    physical
+                ),
+                "activity output crossed its request or physical tool owner"
+            );
+            let output = gents_protocol::output::reconstruction::reconstruct_stream(
+                &segments,
+                &[],
+                &[],
+                &payload.output,
+            )?
+            .text;
+            let index = id
+                .strip_prefix("activity-command-")
+                .context("activity command prefix")?;
+            ensure!(
+                output.contains(&format!("ACTIVITY-{index}:0:"))
+                    && output.contains(&format!("ACTIVITY-{index}:7:")),
+                "activity command did not retain its first and final output chunks"
             );
         }
         activity = json!({"requestDocument":document,"completedCommands":calls.len(),"terminalOutputsRetained":true});
