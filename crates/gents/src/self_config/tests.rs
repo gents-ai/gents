@@ -990,6 +990,45 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
 }
 
 #[tokio::test]
+async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let config_path = dir.join("pack_config.json");
+    let mut pack_config: Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    pack_config["tools"][0]["integrations"] = json!({"plugins": [{"plugin": "acme/missing"}]});
+    std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
+    let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
+    let (node, _did, tools) = pack_tool("pack-unresolved-plugin", plugins).await;
+    let error = format!(
+        "{:#}",
+        config_call(
+            &tools,
+            &[
+                "pack",
+                "preview",
+                "install",
+                "fixture/documents_fixture",
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(
+        error.contains("acme/missing") && error.contains("fixture-worker-tools"),
+        "{error}"
+    );
+    let written = node
+        .execute(r#"{ Tools(filter: {tools_id: {_eq: "fixture-worker-tools"}}) { tools_id } }"#)
+        .await;
+    assert!(written.data.unwrap()["Tools"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     let node = build_agent_node().await;
     let identity = node_identity("graph-tools");

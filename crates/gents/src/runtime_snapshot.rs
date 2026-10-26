@@ -312,6 +312,36 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
+    /// Applies the unavailable-agent cascades that resolution runs for agents it
+    /// rejects: drop local agent targets of the agent, and mark its tasks,
+    /// schedules and event triggers unavailable.
+    pub(crate) fn demote_agent(&mut self, agent_id: &str, reason: UnavailableAgent) {
+        self.agents.remove(agent_id);
+        self.tool_surfaces.remove(agent_id);
+        self.unavailable_agents.insert(agent_id.to_string(), reason);
+
+        let active_agent_ids = self.agents.keys().cloned().collect::<RapidHashSet<_>>();
+        for surface in self.tool_surfaces.values_mut() {
+            Arc::make_mut(surface).retain_agent_targets(&self.local_did, &active_agent_ids);
+        }
+        self.active_tasks
+            .retain(|_, task| task.agent_id != agent_id);
+        self.active_schedules.retain(|trigger_id, schedule| {
+            let keep = schedule.task.agent_id != agent_id;
+            if !keep {
+                self.unavailable_schedules.insert(trigger_id.clone());
+            }
+            keep
+        });
+        self.active_event_triggers.retain(|trigger_id, event| {
+            let keep = event.task.agent_id != agent_id;
+            if !keep {
+                self.unavailable_event_triggers.insert(trigger_id.clone());
+            }
+            keep
+        });
+    }
+
     #[cfg(test)]
     pub(crate) fn activate(
         self,

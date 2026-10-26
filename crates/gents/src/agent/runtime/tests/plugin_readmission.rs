@@ -57,7 +57,7 @@ fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIde
 }
 
 #[tokio::test]
-async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
+async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("plugin-readmission"));
@@ -141,6 +141,47 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
         readmitted.active_generation >= 3,
         "the Tools write and the install each applied a generation: {readmitted:?}"
     );
+
+    crate::plugin::store::remove_record(plugin_home.path(), "fixture", "list_files").unwrap();
+    crate::pack::record_plugin_store_change(
+        &crate::config_client::ConfigAccess::local(node.clone()),
+        &node_did,
+        plugin_home.path(),
+        &pack.coordinate,
+        None,
+    )
+    .await
+    .unwrap();
+    let removed = wait_for_agent_state(
+        node.as_ref(),
+        &node_did,
+        &agent_id,
+        AgentReadinessState::Unavailable,
+        Some(AgentReadinessUnavailableReason::ExecutorStartFailed),
+    )
+    .await;
+    assert_eq!(removed.process_state, NodeReadinessProcessState::Ready);
+    assert!(removed.active_generation > readmitted.active_generation);
+
+    let pack = install_fixture_plugin(plugin_home.path());
+    crate::pack::record_plugin_store_change(
+        &crate::config_client::ConfigAccess::local(node.clone()),
+        &node_did,
+        plugin_home.path(),
+        &pack.coordinate,
+        Some(&pack),
+    )
+    .await
+    .unwrap();
+    let restored = wait_for_agent_state(
+        node.as_ref(),
+        &node_did,
+        &agent_id,
+        AgentReadinessState::Ready,
+        None,
+    )
+    .await;
+    assert!(restored.active_generation > removed.active_generation);
 
     let _ = shutdown_tx.send(true);
     tokio::time::timeout(READINESS_DEADLOCK_GUARD, run)

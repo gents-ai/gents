@@ -202,6 +202,7 @@ async fn install_pack_dir(db: &TestDb, plugin_home: &Path, dir: &Path) {
         &PackInferenceBindings::new(),
         &[],
         InstalledVia::Operator,
+        Some(plugin_home),
         &|_| None,
     )
     .await
