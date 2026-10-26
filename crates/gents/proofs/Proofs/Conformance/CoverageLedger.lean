@@ -1780,6 +1780,11 @@ def caseCoverage : List CoverageEntry :=
       "hook::tests::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_request_scope_cases"
+      "GoalRequestScopeCases"
+      "goal::request_assignment::scope_tests::generated_ancestry_scope_cases_use_the_lean_composition")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_request_ancestry_cases"
       "GoalRequestAncestryCases"
       "goal::request_head::tests::generated_goal_ancestry_cases_keep_one_signed_goal")

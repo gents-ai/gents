@@ -167,6 +167,8 @@ def snapshotJson : String :=
       ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
     ++ "\"goal_tool_context_cases\":"
       ++ Conformance.GoalToolContextContracts.casesJson ++ ","
+    ++ "\"goal_request_scope_cases\":"
+      ++ Conformance.GoalRequestAncestryContracts.scopeCasesJson ++ ","
     ++ "\"goal_request_ancestry_cases\":"
       ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
     ++ "\"goal_queue_assignment_cases\":"
