@@ -1,5 +1,12 @@
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
@@ -49,6 +56,9 @@ type DraftLike = {
   reset: () => void;
 };
 
+/** Save and Cancel for a draft. While there is something to save they stay in
+    view at the foot of the scroller, and rest in place, without a background,
+    once the form's end is reached. */
 export function DraftActions({
   draft,
   fields,
@@ -69,8 +79,54 @@ export function DraftActions({
   saveLabel?: string;
 }) {
   const { saving } = draft;
+  const sticky = dirty || saving || !!error;
+  const barRef = useRef<HTMLDivElement>(null);
+  const [floating, setFloating] = useState(false);
+  /* arriving: it just became sticky and may slide up to the scroller's foot;
+     leaving: it was floating when the edits went, and slides back down first */
+  const [motion, setMotion] = useState<"arriving" | "entering" | "leaving" | null>(
+    null,
+  );
+  const [wasSticky, setWasSticky] = useState(sticky);
+  if (wasSticky !== sticky) {
+    setWasSticky(sticky);
+    setMotion(sticky ? "arriving" : floating && !reducedMotion() ? "leaving" : null);
+  }
+  const pinned = sticky || motion === "leaving";
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (motion !== "arriving" || !bar) return;
+    const stuck = bar.getBoundingClientRect().top;
+    bar.style.position = "static";
+    const resting = bar.getBoundingClientRect().top;
+    bar.style.position = "";
+    const lifted = resting - stuck > 1;
+    setFloating(lifted);
+    setMotion(lifted && !reducedMotion() ? "entering" : null);
+  }, [motion]);
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar || !pinned || typeof IntersectionObserver === "undefined") {
+      setFloating(false);
+      return;
+    }
+    /* stuck one pixel past the scroller's foot, so a floating bar is never
+       wholly in view and a resting one is */
+    const observer = new IntersectionObserver(
+      ([entry]) => setFloating(entry!.intersectionRatio < 1),
+      { threshold: 1 },
+    );
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [pinned]);
   return (
-    <div className="mb-6">
+    <div
+      ref={barRef}
+      data-testid="draft-actions"
+      data-floating={floating || undefined}
+      onAnimationEnd={() => setMotion(null)}
+      className={`${pinned ? "sticky -bottom-px z-10" : ""} mb-3 border-t py-3 transition-colors ${floating ? "border-border bg-background" : "border-transparent"} ${motion === "entering" ? "animate-in fade-in-0 slide-in-from-bottom-full duration-200 ease-out" : motion === "leaving" ? "animate-out fade-out-0 slide-out-to-bottom-full duration-150 ease-in fill-mode-forwards" : ""}`}
+    >
       {error && (
         <p role="alert" className="mb-3 text-sm text-destructive">
           {error}
@@ -93,6 +149,10 @@ export function DraftActions({
     </div>
   );
 }
+
+const reducedMotion = () =>
+  typeof matchMedia !== "undefined" &&
+  matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const blurOnEnter = (e: React.KeyboardEvent<HTMLElement>) => {
   if (e.key === "Enter" && !e.shiftKey) (e.target as HTMLElement).blur();
