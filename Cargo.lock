@@ -4824,6 +4824,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "defra-node",
  "futures",
  "futures-util",
  "gents",

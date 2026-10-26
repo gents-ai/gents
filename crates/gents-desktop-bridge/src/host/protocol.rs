@@ -82,6 +82,10 @@ pub enum ClientCommand {
     ConfigApply {
         request: Box<crate::types::ConfigComponentsApplyRequest>,
     },
+    #[serde(rename = "desktop_provider_usage_read")]
+    ProviderUsageRead {
+        request: crate::accounts::usage::ProviderUsageReadRequest,
+    },
     #[serde(rename = "client_provider_accounts_list")]
     AccountsList {
         request: crate::accounts::ProviderAccountsRequest,
@@ -321,6 +325,7 @@ impl ClientCommand {
         "client_inference_model_recommendation",
         "client_config_apply",
         "client_provider_accounts_list",
+        "desktop_provider_usage_read",
         "client_provider_account_sign_in",
         "client_provider_account_disconnect",
         "client_provider_account_rename",
@@ -380,6 +385,7 @@ impl ClientCommand {
                 | Self::InferenceModelsDiscover { .. }
                 | Self::InferenceModelRecommendation { .. }
                 | Self::AccountsList { .. }
+                | Self::ProviderUsageRead { .. }
                 | Self::ConfigCatalog { .. }
                 | Self::ConfigRead { .. }
                 | Self::ActionCatalog { .. }

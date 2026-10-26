@@ -266,6 +266,42 @@ fn inference_setup_state_uses_scoped_wire_arguments() {
 }
 
 #[test]
+fn provider_usage_read_uses_scoped_wire_arguments() {
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"desktop_provider_usage_read",
+        "args":{"request":{"nodeDid":"did:fixture", "refresh":false, "provider":null}}
+    }))
+    .unwrap();
+    assert!(command.is_cancellable());
+    assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+        "name":"desktop_provider_usage_read", "args":{"request":{"refresh":false}}
+    }))
+    .is_err());
+}
+
+#[tokio::test]
+async fn provider_usage_read_rejects_an_unconfigured_runtime() {
+    let (core, _dir) = crate::tests::support::boot_core().await;
+    let host = ClientHost::new(core.clone());
+    let error = host
+        .execute(
+            protocol::ClientCommand::ProviderUsageRead {
+                request: crate::accounts::usage::ProviderUsageReadRequest {
+                    node_did: "did:unconfigured".into(),
+                    refresh: false,
+                    provider: None,
+                },
+            },
+            &super::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    core.shutdown().await.unwrap();
+}
+
+#[test]
 fn agent_model_selection_is_scoped_and_not_cancellable() {
     let mut request = json!({
         "nodeDid":"did:fixture", "agentId":"agent", "backendId":"backend",
