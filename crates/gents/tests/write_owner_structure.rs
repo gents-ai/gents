@@ -1875,7 +1875,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents/src/hook/tests/goal_context.rs",
     "crates/gents/src/interrupt.rs",
     "crates/gents/src/interrupt/queue_tests.rs",
-    "crates/gents/src/lib.rs",
     "crates/gents/src/lifecycle.rs",
     "crates/gents/src/lifecycle/background_wake_recovery.rs",
     "crates/gents/src/lifecycle/canonical_recovery.rs",

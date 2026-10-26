@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -13,6 +14,7 @@ use gents::{
     default_agent_id_for_node, ensure_runtime_schemas, Collection, DocumentRuntimeOptions, Gents,
     InferenceBackend, KeyIdentity, McpPool, NodeIdentity, ToolCeiling, DEFAULT_MAX_TURNS,
 };
+use gents_protocol::error_chain::ErrorChain;
 use tokio::sync::watch;
 
 fn env_or(name: &str, default: &str) -> String {
@@ -34,7 +36,17 @@ fn env_or_u64(name: &str, default: u64) -> u64 {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {}", ErrorChain(&*error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
     let data_dir = PathBuf::from(env_or("GENTS_DATA_DIR", "./var/defradb"));
     let http_port = env_or_u16("GENTS_HTTP_PORT", 9191);

@@ -339,7 +339,10 @@ pub(crate) mod test_support {
         actor: &str,
         name: &str,
         options: &crate::graph_package::GraphPackageInstallBindings,
-    ) -> anyhow::Result<crate::graph_package::GraphPackageInstallReceipt> {
+    ) -> Result<
+        crate::graph_package::GraphPackageInstallReceipt,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         install_test_graph_package_explicit(access, actor, name, options, true).await
     }
 
@@ -349,7 +352,10 @@ pub(crate) mod test_support {
         name: &str,
         options: &crate::graph_package::GraphPackageInstallBindings,
         explicit: bool,
-    ) -> anyhow::Result<crate::graph_package::GraphPackageInstallReceipt> {
+    ) -> Result<
+        crate::graph_package::GraphPackageInstallReceipt,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         let package = load_test_graph_package(name, options);
         crate::graph_package::install_loaded_graph_package(
             access,
@@ -363,6 +369,7 @@ pub(crate) mod test_support {
             },
         )
         .await
+        .map_err(Into::into)
     }
 
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
