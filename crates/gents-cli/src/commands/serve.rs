@@ -6,32 +6,32 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use axum::{Router, http::Uri, routing::get};
+use axum::{http::Uri, routing::get, Router};
 use gents::defra_node::EmbeddedNode;
 use gents::{
     DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity, ProcessLifecycleObserver,
     ProcessLifecycleState,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::cli::*;
-use crate::commands::codex_shim::{CodexShimBindArgs, bind_codex_shim};
+use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 #[cfg(unix)]
-use crate::commands::grok_shim::{GrokShimBindArgs, bind_grok_shim};
+use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
-    DEFAULT_NODE_NAME, default_data_dir, default_key_path, display_host, format_tool_ceiling,
-    host_tool_ceiling, parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir,
-    server_start_failure_hint, write_runtime_state,
+    default_data_dir, default_key_path, display_host, format_tool_ceiling, host_tool_ceiling,
+    parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir, server_start_failure_hint,
+    write_runtime_state, DEFAULT_NODE_NAME,
 };
 use gents::codex_shim_binding::{ShimBinding, ShimUnboundReason};
 use gents_protocol::row::{
-    AgentReadinessState, NodeReadinessSummary, ProjectedNodeReadinessSummary,
-    project_node_readiness_summary,
+    project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
+    ProjectedNodeReadinessSummary,
 };
 
 pub(crate) struct CliReadyObserver {
@@ -245,7 +245,7 @@ async fn apply_pack_after_ready(
 ) -> Result<AppliedPack> {
     use crate::cli::ManifestNodeDidBindingArg;
     use crate::commands::config::apply::apply_bound_desired_manifest;
-    use crate::commands::config::binding::{ManifestBindingOptions, load_bound_manifest};
+    use crate::commands::config::binding::{load_bound_manifest, ManifestBindingOptions};
     use crate::commands::schema::apply_pack_schemas_if_present;
     use crate::config_writes::ConfigAccess;
 
@@ -481,7 +481,7 @@ async fn serve_with_startup(
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::{signal, SignalKind};
         match signal(SignalKind::terminate()) {
             Ok(mut terminate) => {
                 tokio::select! {

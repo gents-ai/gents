@@ -116,7 +116,10 @@ async fn signed_scope_reads_authenticate_continuation_ancestry_before_skipping_h
     value["admission_signer_did"] = json!(child.admission.signer_did);
     value["runtime_issuer_did"] = json!(child.admission.runtime_issuer_did);
     value["runtime_source_request_id"] = json!(child.admission.runtime_source_request_id);
-    value["runtime_source_kind"] = json!(child.admission.runtime_source_kind.map(|kind| kind.as_str()));
+    value["runtime_source_kind"] = json!(child
+        .admission
+        .runtime_source_kind
+        .map(|kind| kind.as_str()));
     value["admission_signature"] = json!(bs58::encode(child.admission.signature).into_string());
     let row: AgentRequestRow = serde_json::from_value(value).unwrap();
     verify_request_receipt_signature(&row).unwrap();

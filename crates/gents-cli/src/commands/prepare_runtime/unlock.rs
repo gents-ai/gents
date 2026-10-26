@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use clap::Parser;
 
 /// A Keychain grant can be scoped to the process receiving it. The explicit
