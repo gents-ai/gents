@@ -27,14 +27,19 @@ pub fn find_source<'a, T>(error: &'a (dyn Error + 'static)) -> Option<&'a T>
 where
     T: Error + 'static,
 {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        if let Some(found) = error.downcast_ref::<T>() {
-            return Some(found);
-        }
-        current = error.source();
-    }
-    None
+    find_map_source(error, |cause| cause.downcast_ref::<T>())
+}
+
+/// Returns the first answer `classify` gives for `error` or any error in its
+/// `source()` chain. Boundaries that receive an application (`anyhow`) or
+/// boxed error use it to reach each owner enum and ask that enum, whose
+/// classifier matches its own variants, including transparent wrappers that
+/// `source()` skips.
+pub fn find_map_source<'a, T>(
+    error: &'a (dyn Error + 'static),
+    classify: impl FnMut(&'a (dyn Error + 'static)) -> Option<T>,
+) -> Option<T> {
+    std::iter::successors(Some(error), |&cause| cause.source()).find_map(classify)
 }
 
 #[cfg(test)]

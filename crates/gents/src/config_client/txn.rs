@@ -524,10 +524,6 @@ fn native_operation_abandoned(
     retry::transaction_storage_failure(phase(NativeOperationAbandoned))
 }
 
-fn is_native_operation_abandoned(error: &ConfigClientError) -> bool {
-    gents_protocol::error_chain::find_source::<NativeOperationAbandoned>(error).is_some()
-}
-
 impl CallerOperationGuard {
     fn new(tracker: Arc<NativeOperationTracker>) -> Self {
         Self {
@@ -2047,7 +2043,7 @@ fn finish_auto_commit<T>(
     let pending_native = result
         .as_ref()
         .err()
-        .is_some_and(is_native_operation_abandoned);
+        .is_some_and(ConfigClientError::native_operation_abandoned);
     let affected_documents = if pending_native {
         None
     } else {

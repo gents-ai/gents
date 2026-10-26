@@ -41,16 +41,40 @@ pub struct AggregateTokenLedger {
 
 pub const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str = "aggregate_token_budget_exhausted: ";
 
+impl crate::error::LoopStreamError {
+    /// The provider message that ended the loop because the aggregate token
+    /// budget was spent.
+    pub fn aggregate_token_budget_exhaustion(&self) -> Option<&str> {
+        self.provider_message()
+            .filter(|reason| reason.starts_with(AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX))
+    }
+}
+
+/// The aggregate budget exhaustion anywhere in an erased compactor error,
+/// asked of each loop owner it reaches.
 pub fn aggregate_token_budget_exhaustion_message(
     error: &(dyn std::error::Error + 'static),
 ) -> Option<String> {
-    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
-        let reason = cause
-            .downcast_ref::<crate::error::LoopStreamError>()?
-            .provider_message()?;
-        reason
-            .starts_with(AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX)
-            .then(|| reason.to_string())
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<crate::error::LoopStreamError>()
+            .and_then(crate::error::LoopStreamError::aggregate_token_budget_exhaustion)
+            .or_else(|| {
+                cause
+                    .downcast_ref::<super::OneShotError>()?
+                    .aggregate_token_budget_exhaustion()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::compaction::CompactionError>()?
+                    .aggregate_token_budget_exhaustion()
+            })
+            .map(ToString::to_string)
+            .or_else(|| {
+                cause
+                    .downcast_ref::<super::TurnCompactionError>()?
+                    .aggregate_token_budget_exhaustion()
+            })
     })
 }
 
@@ -184,6 +208,59 @@ pub(super) fn clamp_request_aggregate_token_budget(
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[test]
+    fn budget_exhaustion_classifies_through_every_loop_owner() {
+        use crate::compaction::CompactionError;
+        use crate::error::{CompletionFailure, LoopFailureCause, LoopStreamError};
+        use crate::loop_stream::{OneShotError, TurnCompactionError};
+        let reason = format!("{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit=1 used=2");
+        let loop_error = |message: &str| {
+            LoopStreamError::new(
+                LoopFailureCause::Completion {
+                    failure: CompletionFailure::Provider(message.to_string()),
+                    reason: String::new(),
+                },
+                std::io::Error::other("provider"),
+            )
+        };
+        let one_shot = || OneShotError::LoopStream(loop_error(&reason));
+        #[derive(Debug, thiserror::Error)]
+        #[error("compactor step")]
+        struct Step(#[source] CompactionError);
+        let turns = [
+            TurnCompactionError::Compaction(CompactionError::BuildSummaryRequest(loop_error(
+                &reason,
+            ))),
+            TurnCompactionError::Compaction(CompactionError::GuidedBudgetExhausted(one_shot())),
+            TurnCompactionError::Compaction(CompactionError::FallbackBudgetExhausted(
+                OneShotError::ErrorCleanup {
+                    original: String::new(),
+                    source: Box::new(one_shot()),
+                },
+            )),
+            TurnCompactionError::Compactor(Box::new(Step(CompactionError::GuidedBudgetExhausted(
+                one_shot(),
+            )))),
+            TurnCompactionError::Compactor(Box::new(loop_error(&reason))),
+        ];
+        for turn in turns {
+            assert_eq!(
+                turn.aggregate_token_budget_exhaustion().as_deref(),
+                Some(reason.as_str()),
+                "{turn:?}"
+            );
+            assert_eq!(
+                aggregate_token_budget_exhaustion_message(&turn).as_deref(),
+                Some(reason.as_str())
+            );
+        }
+        let other = TurnCompactionError::Compaction(CompactionError::BuildSummaryRequest(
+            loop_error("provider returned 500"),
+        ));
+        assert_eq!(other.aggregate_token_budget_exhaustion(), None);
+        assert_eq!(aggregate_token_budget_exhaustion_message(&other), None);
+    }
 
     #[derive(Deserialize)]
     struct Snapshot {

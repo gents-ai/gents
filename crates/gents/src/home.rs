@@ -186,21 +186,20 @@ impl HomeError {
     }
 }
 
-/// The store lock contention anywhere in `error`'s chain, including through
-/// the owners that wrap [`HomeError`] transparently.
+/// The store lock contention anywhere in an application error's chain,
+/// including through the owners that wrap [`HomeError`] transparently.
 pub fn store_lock_held<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a StoreLockHeld> {
-    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
         cause
             .downcast_ref::<StoreLockHeld>()
             .or_else(|| cause.downcast_ref::<HomeError>()?.lock_held())
-            .or_else(
-                || match cause.downcast_ref::<crate::store_key::StoreKeyError>()? {
-                    crate::store_key::StoreKeyError::Home(home) => home.lock_held(),
-                    _ => None,
-                },
-            )
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .lock_held()
+            })
     })
 }
 
@@ -888,6 +887,24 @@ fn retire_entries_with(
 #[cfg(test)]
 mod tests {
     use gents_protocol::error_chain::ErrorChain;
+
+    #[test]
+    fn store_lock_contention_classifies_through_every_owner_wrapper() {
+        let held = || super::StoreLockHeld {
+            home: "/h".into(),
+            holder_pid: Some(7),
+        };
+        let held_by = |error: anyhow::Error| {
+            super::store_lock_held(error.context("opening the store").as_ref())
+                .and_then(|held| held.holder_pid)
+        };
+        assert_eq!(held_by(anyhow::anyhow!(held())), Some(7));
+        assert_eq!(held_by(super::HomeError::LockHeld(held()).into()), Some(7));
+        let key = crate::store_key::StoreKeyError::Home(super::HomeError::LockHeld(held()));
+        assert_eq!(key.lock_held().and_then(|held| held.holder_pid), Some(7));
+        assert_eq!(held_by(key.into()), Some(7));
+        assert_eq!(held_by(super::HomeError::HomeDirUnresolved.into()), None);
+    }
 
     #[test]
     fn secure_enclave_homes_are_refused_before_serving() {

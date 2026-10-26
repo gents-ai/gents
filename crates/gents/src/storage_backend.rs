@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use gents_protocol::error_chain::find_source;
+use gents_protocol::error_chain::{find_map_source, find_source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageBackendError {
@@ -182,33 +182,50 @@ pub fn incompatible_store(
         })
 }
 
-/// Each wrapper is matched by its own type too, since transparent wrappers
+/// Each owner is asked by its own type too, since transparent wrappers
 /// forward `source()` past the sentinel they carry.
 fn find_incompatible<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a IncompatibleStore> {
-    find_source::<IncompatibleStore>(error)
-        .or_else(|| {
-            find_source::<StorageBackendError>(error).and_then(StorageBackendError::incompatible)
-        })
-        .or_else(|| {
-            find_source::<crate::store_key::StoreKeyError>(error)
-                .and_then(crate::store_key::StoreKeyError::incompatible)
-        })
+    find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<IncompatibleStore>()
+            .or_else(|| cause.downcast_ref::<StorageBackendError>()?.incompatible())
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .incompatible()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::upgrade::UpgradeError>()?
+                    .incompatible()
+            })
+    })
 }
 
 fn find_insecure_key<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a crate::identity::InsecureKeyPermissions> {
-    find_source::<crate::identity::InsecureKeyPermissions>(error)
-        .or_else(|| {
-            find_source::<crate::identity::IdentityError>(error)
-                .and_then(crate::identity::IdentityError::insecure_key)
-        })
-        .or_else(|| {
-            find_source::<crate::store_key::StoreKeyError>(error)
-                .and_then(crate::store_key::StoreKeyError::insecure_key)
-        })
+    find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<crate::identity::InsecureKeyPermissions>()
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::identity::IdentityError>()?
+                    .insecure_key()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .insecure_key()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::config_client::ConfigClientError>()?
+                    .insecure_key()
+            })
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -268,6 +285,70 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_refusals_classify_through_every_owner_wrapper() {
+        use crate::identity::{IdentityError, InsecureKeyPermissions};
+        use crate::store_key::upgrade::UpgradeError;
+        use crate::store_key::StoreKeyError;
+        let store = || IncompatibleStore {
+            kind: IncompatibleStoreKind::LegacyLark,
+            data_path: "/data".into(),
+        };
+        let kind = |error: anyhow::Error| {
+            incompatible_store(error.context("opening").as_ref(), Path::new("/other"))
+                .map(|store| (store.kind, store.data_path))
+        };
+        let refused = Some((IncompatibleStoreKind::LegacyLark, PathBuf::from("/data")));
+        for error in [
+            anyhow::Error::new(store()),
+            StorageBackendError::from(store()).into(),
+            StoreKeyError::from(store()).into(),
+            StoreKeyError::Storage(store().into()).into(),
+            StoreKeyError::Upgrade(UpgradeError::StorageBackend(store().into())).into(),
+            UpgradeError::StorageBackend(store().into()).into(),
+        ] {
+            assert_eq!(kind(error), refused);
+        }
+        let key = || InsecureKeyPermissions {
+            path: "/key".into(),
+            mode: 0o644,
+        };
+        let insecure = Some((IncompatibleStoreKind::InsecureKey, PathBuf::from("/key")));
+        for error in [
+            anyhow::Error::new(key()),
+            IdentityError::from(key()).into(),
+            StoreKeyError::Identity(key().into()).into(),
+            crate::config_client::ConfigClientError::from(IdentityError::from(key())).into(),
+        ] {
+            assert_eq!(kind(error), insecure);
+        }
+        assert_eq!(
+            kind(StorageBackendError::NoExistingDatabase { path: "/d".into() }.into()),
+            None
+        );
+    }
+
+    #[test]
+    fn unavailable_store_keys_classify_through_their_owner() {
+        use crate::store_key::{store_key_unavailable, StoreKeyError, StoreKeyUnavailable};
+        let unavailable = || StoreKeyUnavailable {
+            data_path: "/data".into(),
+            code: -25293,
+        };
+        for error in [
+            anyhow::Error::new(unavailable()),
+            StoreKeyError::from(unavailable()).into(),
+        ] {
+            let error = error.context("opening");
+            assert_eq!(
+                store_key_unavailable(error.as_ref()).map(|key| key.code),
+                Some(-25293)
+            );
+        }
+        let other: anyhow::Error = StoreKeyError::KeychainUnsupported.into();
+        assert!(store_key_unavailable(other.as_ref()).is_none());
+    }
 
     #[test]
     fn in_process_budget_preserves_server_acceptance_and_commit_settings() {

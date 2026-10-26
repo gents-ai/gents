@@ -54,17 +54,24 @@ pub enum SchemaInstallError {
     NotDiscoverable,
 }
 
-/// The install mismatch anywhere in `error`'s chain, including through
-/// [`SchemaInstallError`], which wraps it transparently.
+impl SchemaInstallError {
+    pub fn mismatch(&self) -> Option<&SchemaInstallMismatch> {
+        match self {
+            Self::Mismatch(mismatch) => Some(mismatch),
+            _ => None,
+        }
+    }
+}
+
+/// The install mismatch anywhere in an application error's chain, including
+/// through [`SchemaInstallError`], which wraps it transparently.
 pub fn schema_install_mismatch<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a SchemaInstallMismatch> {
-    use gents_protocol::error_chain::find_source;
-    find_source::<SchemaInstallMismatch>(error).or_else(|| {
-        match find_source::<SchemaInstallError>(error)? {
-            SchemaInstallError::Mismatch(mismatch) => Some(mismatch),
-            _ => None,
-        }
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<SchemaInstallMismatch>()
+            .or_else(|| cause.downcast_ref::<SchemaInstallError>()?.mismatch())
     })
 }
 
@@ -205,6 +212,26 @@ async fn apply_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_mismatch_classifies_through_its_owner() {
+        let mismatch = || SchemaInstallMismatch {
+            collection: "EvalPatch".into(),
+            source: None,
+        };
+        for error in [
+            anyhow::Error::new(mismatch()),
+            SchemaInstallError::from(mismatch()).into(),
+        ] {
+            let error = error.context("schema install");
+            assert_eq!(
+                schema_install_mismatch(error.as_ref()).map(|found| found.collection.as_str()),
+                Some("EvalPatch")
+            );
+        }
+        let other: anyhow::Error = SchemaInstallError::NoCollections.into();
+        assert!(schema_install_mismatch(other.as_ref()).is_none());
+    }
 
     #[tokio::test]
     async fn additive_series_preserves_exact_install_and_requires_declared_fields() {

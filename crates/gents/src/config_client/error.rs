@@ -307,6 +307,60 @@ impl From<crate::identity::IdentityError> for ConfigClientError {
 }
 
 impl ConfigClientError {
+    /// The access error this one carries: a GraphQL response owner forwarding
+    /// an access failure adds no meaning of its own, so classification looks
+    /// through it.
+    fn access(&self) -> &ConfigClientError {
+        match self {
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error)) => error.access(),
+            _ => self,
+        }
+    }
+
+    /// The conflict origin when the transaction owner may replay this failure.
+    pub(crate) fn transaction_conflict(&self) -> Option<ConflictSource> {
+        match self.access() {
+            Self::TransactionConflict(conflict) => Some(conflict.origin),
+            _ => None,
+        }
+    }
+
+    /// A storage failure the transaction owner classified while running an
+    /// attempt, as opposed to an error the callback returned.
+    pub(crate) fn is_storage_failure(&self) -> bool {
+        matches!(self.access(), Self::StorageFailure(_))
+    }
+
+    /// A caller stopped waiting while the native operation stays owned by its
+    /// worker, so the outcome of that operation is not yet known.
+    pub(crate) fn native_operation_abandoned(&self) -> bool {
+        match self {
+            Self::PoisonedByAbandonedOperation(_)
+            | Self::ExecuteCallerTimeout(_)
+            | Self::ExecutionTaskEnded(_)
+            | Self::CommitAfterAbandonedOperation(_)
+            | Self::RollbackDeferred(_)
+            | Self::AutoCommitCallerTimeout(_)
+            | Self::AutoCommitTaskEnded(_) => true,
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error))
+            | Self::StorageFailure(error)
+            | Self::HttpQuery { source: error, .. } => error.native_operation_abandoned(),
+            _ => false,
+        }
+    }
+
+    /// An identity key refused for its permissions, through the transparent
+    /// identity variant and the access wrappers.
+    pub fn insecure_key(&self) -> Option<&crate::identity::InsecureKeyPermissions> {
+        match self {
+            Self::Identity(error) => error.insecure_key(),
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error))
+            | Self::StorageFailure(error)
+            | Self::HttpQuery { source: error, .. } => error.insecure_key(),
+            _ => None,
+        }
+    }
+
     /// The database processed the operation and answered with GraphQL errors,
     /// as opposed to a transport, storage or local failure.
     pub fn is_graphql_rejection(&self) -> bool {

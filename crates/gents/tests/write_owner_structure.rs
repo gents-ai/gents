@@ -1741,3 +1741,202 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
         assert_eq!(anyhow_sites(&syntax), sites, "{source}");
     }
 }
+
+/// Production files that classify an error by its concrete type through a
+/// downcast (`downcast*`, `is::<T>`) or `find_source`. Owner interfaces return
+/// thiserror enums whose classifiers match their variants; a downcast belongs
+/// only where an application (`anyhow`) or erased error reaches an owner
+/// boundary, which then asks the owner enum it finds.
+#[rustfmt::skip]
+const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
+    ("crates/gents-cli/src/commands/config/backend.rs", 2),
+    ("crates/gents-cli/src/commands/eval/manage.rs", 1),
+    ("crates/gents-cli/src/commands/grok_shim/acp.rs", 2),
+    ("crates/gents-cli/src/commands/grok_shim/graph_runs.rs", 1),
+    ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
+    ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
+    ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
+    ("crates/gents-cli/src/http/file_inventory.rs", 1),
+    ("crates/gents-client-host/src/editor_store.rs", 1),
+    ("crates/gents-desktop-bridge/src/commands/chat_resolve.rs", 3),
+    ("crates/gents-desktop-bridge/src/commands/session.rs", 2),
+    ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
+    ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server.rs", 7),
+    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
+    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
+    ("crates/gents-desktop-core/src/client/core/writes/pending_submissions.rs", 2),
+    ("crates/gents-desktop-core/src/client/mutations/chat/request.rs", 1),
+    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt/delivery.rs", 1),
+    ("crates/gents-desktop-core/src/error.rs", 1),
+    ("crates/gents-loop/src/live_output.rs", 1),
+    ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
+    ("crates/gents-protocol/src/database_error.rs", 1),
+    ("crates/gents-protocol/src/error_chain.rs", 1),
+    ("crates/gents-protocol/src/graphql.rs", 1),
+    ("crates/gents/src/agent/daemon.rs", 2),
+    ("crates/gents/src/agent/document_view/snapshot.rs", 1),
+    ("crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory.rs", 1),
+    ("crates/gents/src/agent/reconcile.rs", 1),
+    ("crates/gents/src/application_write/mod.rs", 1),
+    ("crates/gents/src/background_tools/final_output.rs", 1),
+    ("crates/gents/src/config_client/desired_state.rs", 1),
+    ("crates/gents/src/config_client/retry.rs", 2),
+    ("crates/gents/src/config_client/schema_install.rs", 2),
+    ("crates/gents/src/defra_query/mod.rs", 1),
+    ("crates/gents/src/eval/documents.rs", 3),
+    ("crates/gents/src/eval/report/mod.rs", 1),
+    ("crates/gents/src/eval/report/store.rs", 1),
+    ("crates/gents/src/eval/runner/freeze.rs", 1),
+    ("crates/gents/src/eval/runner/mod.rs", 1),
+    ("crates/gents/src/file_inventory/operator.rs", 1),
+    ("crates/gents/src/goal.rs", 2),
+    ("crates/gents/src/graphql.rs", 1),
+    ("crates/gents/src/home.rs", 3),
+    ("crates/gents/src/hook/persistence/background_tools.rs", 3),
+    ("crates/gents/src/hook/persistence/session_message.rs", 1),
+    ("crates/gents/src/identity.rs", 1),
+    ("crates/gents/src/lifecycle.rs", 1),
+    ("crates/gents/src/lifecycle/canonical_recovery.rs", 2),
+    ("crates/gents/src/lifecycle/execution_lease.rs", 2),
+    ("crates/gents/src/lifecycle/execution_renewal.rs", 1),
+    ("crates/gents/src/lifecycle/queue/position.rs", 1),
+    ("crates/gents/src/node_readiness_publisher.rs", 1),
+    ("crates/gents/src/optimization/driver.rs", 2),
+    ("crates/gents/src/optimization/job.rs", 1),
+    ("crates/gents/src/optimization/promote.rs", 2),
+    ("crates/gents/src/pack_resolve.rs", 1),
+    ("crates/gents/src/plugin/allowed.rs", 2),
+    ("crates/gents/src/plugin/approval.rs", 2),
+    ("crates/gents/src/plugin/executor.rs", 2),
+    ("crates/gents/src/plugin/http_calls.rs", 1),
+    ("crates/gents/src/plugin/install.rs", 1),
+    ("crates/gents/src/plugin/store.rs", 1),
+    ("crates/gents/src/plugin_job/driver.rs", 2),
+    ("crates/gents/src/provider_input/replay.rs", 1),
+    ("crates/gents/src/rendered_request/mod.rs", 2),
+    ("crates/gents/src/request_admission.rs", 2),
+    ("crates/gents/src/schema_tool/mod.rs", 2),
+    ("crates/gents/src/self_config/command.rs", 5),
+    ("crates/gents/src/self_config/command/validate.rs", 1),
+    ("crates/gents/src/session/fork.rs", 1),
+    ("crates/gents/src/session/output.rs", 3),
+    ("crates/gents/src/session/request_output.rs", 1),
+    ("crates/gents/src/storage_backend.rs", 9),
+    ("crates/gents/src/store_key.rs", 2),
+    ("crates/gents/src/streaming.rs", 1),
+    ("crates/gents/src/tool_call_lifecycle.rs", 3),
+    ("crates/gents/src/tool_call_lifecycle/delivery.rs", 1),
+    ("crates/gents/src/trigger_engine/mod.rs", 2),
+];
+
+#[derive(Default)]
+struct DowncastVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for DowncastVisitor {
+    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        let test = cfg_test(&item.attrs)
+            || item.attrs.iter().any(|attribute| {
+                attribute
+                    .path()
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "test")
+            });
+        if !test {
+            visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if path_name(call).is_some_and(|name| name.rsplit("::").next() == Some("find_source")) {
+            self.sites += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+        let method = call.method.to_string();
+        if matches!(
+            method.as_str(),
+            "downcast" | "downcast_ref" | "downcast_mut"
+        ) || (method == "is" && call.turbofish.is_some())
+        {
+            self.sites += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn downcast_sites(syntax: &syn::File) -> usize {
+    let mut visitor = DowncastVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn downcast_classifiers_only_shrink() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter_map(|(relative, syntax)| {
+            let sites = downcast_sites(&syntax);
+            (sites > 0).then_some((relative, sites))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let allowed = DOWNCAST_CLASSIFIER_ALLOWLIST
+        .iter()
+        .map(|(path, count)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new downcast classifier site(s); return an owner enum and match its variants"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} downcast classifier sites exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} downcast classifier sites; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "downcast classifier ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn downcast_fence_counts_type_classification_outside_tests() {
+    for (source, sites) in [
+        ("fn f(e: &anyhow::Error) -> bool { e.downcast_ref::<E>().is_some() }", 1),
+        ("fn f(e: anyhow::Error) { let _ = e.downcast::<E>(); }", 1),
+        ("fn f(e: &anyhow::Error) -> bool { e.is::<E>() }", 1),
+        ("fn f(e: &dyn Error) { find_source::<E>(e); gents_protocol::error_chain::find_source::<F>(e); }", 2),
+        ("fn f(e: &Error) -> bool { e.is_conflict() || e.is(x) }", 0),
+        ("#[cfg(test)] mod tests { fn f(e: &anyhow::Error) { e.downcast_ref::<E>(); } }", 0),
+        ("#[test] fn f() { error().downcast_ref::<E>(); }", 0),
+        ("#[tokio::test] async fn f() { error().downcast_ref::<E>(); }", 0),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(downcast_sites(&syntax), sites, "{source}");
+    }
+}

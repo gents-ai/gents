@@ -70,6 +70,15 @@ pub enum UpgradeError {
     Storage(#[from] storage::Error),
 }
 
+impl UpgradeError {
+    pub fn incompatible(&self) -> Option<&crate::storage_backend::IncompatibleStore> {
+        match self {
+            Self::StorageBackend(error) => error.incompatible(),
+            _ => None,
+        }
+    }
+}
+
 type Result<T, E = UpgradeError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -112,6 +112,25 @@ pub enum OneShotError {
 }
 
 impl OneShotError {
+    /// The loop failure this one-shot failed with, through the variants that
+    /// keep it, or a nested one-shot failure, as their source.
+    pub fn loop_stream_error(&self) -> Option<&LoopStreamError> {
+        match self {
+            Self::LoopStream(error) => Some(error),
+            Self::ProviderFailure(failure) => failure.source.as_ref(),
+            Self::NoVisibleOutput(output) => Some(&output.source),
+            Self::ErrorCleanup { source, .. }
+            | Self::ReceivingAfterFlushFailed { source, .. }
+            | Self::RetainingAfterFlushFailed { source, .. } => source.loop_stream_error(),
+            _ => None,
+        }
+    }
+
+    pub fn aggregate_token_budget_exhaustion(&self) -> Option<&str> {
+        self.loop_stream_error()?
+            .aggregate_token_budget_exhaustion()
+    }
+
     fn is_persistence_failure(&self) -> bool {
         matches!(
             self,

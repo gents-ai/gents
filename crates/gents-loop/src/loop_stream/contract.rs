@@ -180,6 +180,17 @@ pub enum TurnCompactionError {
     Compactor(Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl TurnCompactionError {
+    pub fn aggregate_token_budget_exhaustion(&self) -> Option<String> {
+        match self {
+            Self::Compaction(error) => error
+                .aggregate_token_budget_exhaustion()
+                .map(ToString::to_string),
+            Self::Compactor(error) => aggregate_token_budget_exhaustion_message(error.as_ref()),
+        }
+    }
+}
+
 pub type TurnCompactor = Arc<
     dyn Fn(
             TurnCompactionRequest,

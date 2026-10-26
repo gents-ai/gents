@@ -1494,7 +1494,7 @@ where
         ) {
             return StreamingError::Completion(CompletionError::RequestError(Box::new(error)));
         }
-        aggregate_token_budget_exhaustion_message(&error).map_or_else(
+        error.aggregate_token_budget_exhaustion().map_or_else(
             || {
                 StreamingError::Completion(CompletionError::ProviderError(format!(
                     "per-turn provider-input compaction failed: {}",

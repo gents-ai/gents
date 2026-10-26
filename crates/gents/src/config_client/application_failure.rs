@@ -5,7 +5,8 @@ use super::{ConfigClientError, TransactionFailure};
 
 impl TransactionFailure for anyhow::Error {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
-        self.chain().find_map(super::retry::access_error_in)
+        let error: &(dyn std::error::Error + 'static) = self.as_ref();
+        super::retry::access_error_in(error)
     }
 }
 

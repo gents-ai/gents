@@ -105,6 +105,18 @@ pub enum CompactionError {
     FallbackBudgetExhausted(#[source] crate::loop_stream::OneShotError),
 }
 
+impl CompactionError {
+    pub fn aggregate_token_budget_exhaustion(&self) -> Option<&str> {
+        match self {
+            Self::BuildSummaryRequest(error) => error.aggregate_token_budget_exhaustion(),
+            Self::GuidedBudgetExhausted(error) | Self::FallbackBudgetExhausted(error) => {
+                error.aggregate_token_budget_exhaustion()
+            }
+            _ => None,
+        }
+    }
+}
+
 pub fn rolling_plan_is_valid(
     target_messages: usize,
     chunk_messages: &[usize],
@@ -924,9 +936,7 @@ where
             )
             .await
             .map_err(|fallback_error| {
-                if crate::loop_stream::aggregate_token_budget_exhaustion_message(&fallback_error)
-                    .is_some()
-                {
+                if fallback_error.aggregate_token_budget_exhaustion().is_some() {
                     CompactionError::FallbackBudgetExhausted(fallback_error)
                 } else {
                     CompactionError::FallbackProviderFailure {
@@ -945,7 +955,7 @@ where
             })
         }
         Err(error) => {
-            if crate::loop_stream::aggregate_token_budget_exhaustion_message(&error).is_some() {
+            if error.aggregate_token_budget_exhaustion().is_some() {
                 return Err(CompactionError::GuidedBudgetExhausted(error));
             }
             let deadline_context = if deadline_elapsed(summary_config.deadline, now.as_ref()) {

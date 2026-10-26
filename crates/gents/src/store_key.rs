@@ -87,9 +87,8 @@ impl StoreKeyError {
     pub fn incompatible(&self) -> Option<&IncompatibleStore> {
         match self {
             Self::Incompatible(store) => Some(store),
-            Self::Storage(error) | Self::Upgrade(upgrade::UpgradeError::StorageBackend(error)) => {
-                error.incompatible()
-            }
+            Self::Storage(error) => error.incompatible(),
+            Self::Upgrade(error) => error.incompatible(),
             _ => None,
         }
     }
@@ -107,16 +106,24 @@ impl StoreKeyError {
             _ => None,
         }
     }
+
+    pub fn lock_held(&self) -> Option<&crate::home::StoreLockHeld> {
+        match self {
+            Self::Home(error) => error.lock_held(),
+            _ => None,
+        }
+    }
 }
 
-/// The unavailable store key anywhere in `error`'s chain, including through
-/// [`StoreKeyError`], which wraps it transparently.
+/// The unavailable store key anywhere in an application error's chain,
+/// including through [`StoreKeyError`], which wraps it transparently.
 pub fn store_key_unavailable<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a StoreKeyUnavailable> {
-    gents_protocol::error_chain::find_source::<StoreKeyUnavailable>(error).or_else(|| {
-        gents_protocol::error_chain::find_source::<StoreKeyError>(error)
-            .and_then(StoreKeyError::unavailable)
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<StoreKeyUnavailable>()
+            .or_else(|| cause.downcast_ref::<StoreKeyError>()?.unavailable())
     })
 }
 

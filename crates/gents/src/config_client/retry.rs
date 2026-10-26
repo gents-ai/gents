@@ -15,8 +15,8 @@ pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
 /// Exposes the DefraDB access error a transaction callback failed with, so the
 /// transaction owner classifies conflicts and storage failures by type. A
 /// caller error that wraps [`ConfigClientError`] or [`GraphqlResponseError`]
-/// returns it here; an `#[error(transparent)]` wrapper hides it from the
-/// source-chain search below unless `access_error_in` names that wrapper.
+/// returns it here by matching its own variants; erased (`anyhow` or boxed)
+/// callback errors are searched by [`access_error_in`].
 pub trait TransactionFailure {
     fn config_client_error(&self) -> Option<&ConfigClientError>;
 }
@@ -47,25 +47,23 @@ where
 
 impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
-        let root: &(dyn std::error::Error + 'static) = self.as_ref();
-        std::iter::successors(Some(root), |cause| cause.source()).find_map(access_error_in)
+        access_error_in(self.as_ref())
     }
 }
 
+/// The first access owner in an erased error's chain. Both owners wrap each
+/// other transparently, so each is asked for its access error rather than
+/// found by `source()` alone.
 pub(super) fn access_error_in<'a>(
-    cause: &'a (dyn std::error::Error + 'static),
+    error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a ConfigClientError> {
-    fn wrapped<'a, E>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a ConfigClientError>
-    where
-        E: TransactionFailure + std::error::Error + 'static,
-    {
-        cause
-            .downcast_ref::<E>()
-            .and_then(TransactionFailure::config_client_error)
-    }
-    cause
-        .downcast_ref::<ConfigClientError>()
-        .or_else(|| wrapped::<GraphqlResponseError>(cause))
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause.downcast_ref::<ConfigClientError>().or_else(|| {
+            cause
+                .downcast_ref::<GraphqlResponseError>()?
+                .config_client_error()
+        })
+    })
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {
@@ -76,14 +74,11 @@ pub(super) fn classified_transaction_conflict<E>(error: &E) -> Option<ConflictSo
 where
     E: TransactionFailure + ?Sized,
 {
-    match error.config_client_error()? {
-        ConfigClientError::TransactionConflict(conflict) => Some(conflict.origin),
-        _ => None,
-    }
+    error.config_client_error()?.transaction_conflict()
 }
 
 pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigClientError {
-    if classified_transaction_conflict(&error).is_some() {
+    if error.transaction_conflict().is_some() {
         error
     } else {
         ConfigClientError::StorageFailure(Box::new(error))
@@ -94,10 +89,9 @@ pub(super) fn is_transaction_storage_failure<E>(error: &E) -> bool
 where
     E: TransactionFailure + ?Sized,
 {
-    matches!(
-        error.config_client_error(),
-        Some(ConfigClientError::StorageFailure(_))
-    )
+    error
+        .config_client_error()
+        .is_some_and(ConfigClientError::is_storage_failure)
 }
 
 pub(super) fn transaction_backoff(retry_index: u32) -> Duration {
@@ -132,6 +126,101 @@ pub(super) fn graphql_value_is_transaction_conflict(value: &serde_json::Value) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn access(error: ConfigClientError) -> ConfigClientError {
+        ConfigClientError::Response(GraphqlResponseError::Access(Box::new(error)))
+    }
+
+    fn erased(error: ConfigClientError) -> Box<dyn std::error::Error + Send + Sync> {
+        #[derive(Debug, thiserror::Error)]
+        #[error("callback step")]
+        struct Step(#[source] ConfigClientError);
+        Box::new(Step(error))
+    }
+
+    #[test]
+    fn conflict_and_storage_classification_sees_through_access_wrappers() {
+        let conflict = || transaction_conflict(ConflictSource::StructuredCode);
+        let storage = || transaction_storage_failure(ConfigClientError::InjectedReadStorageFailure);
+        for error in [conflict(), access(conflict()), access(access(conflict()))] {
+            assert_eq!(
+                error.transaction_conflict(),
+                Some(ConflictSource::StructuredCode)
+            );
+            assert!(!error.is_storage_failure());
+            assert_eq!(
+                classified_transaction_conflict(&erased(error)),
+                Some(ConflictSource::StructuredCode)
+            );
+        }
+        for error in [storage(), access(storage())] {
+            assert!(error.is_storage_failure());
+            assert_eq!(error.transaction_conflict(), None);
+            assert!(is_transaction_storage_failure(&erased(error)));
+        }
+        let response = GraphqlResponseError::Access(Box::new(conflict()));
+        assert_eq!(
+            classified_transaction_conflict(&response),
+            Some(ConflictSource::StructuredCode)
+        );
+        assert!(!is_transaction_storage_failure(&erased(
+            ConfigClientError::InjectedReadStorageFailure
+        )));
+    }
+
+    #[test]
+    fn abandoned_native_operations_classify_through_every_wrapper() {
+        use super::super::NativeOperationAbandoned as Abandoned;
+        let phases: [fn(Abandoned) -> ConfigClientError; 7] = [
+            ConfigClientError::PoisonedByAbandonedOperation,
+            ConfigClientError::ExecuteCallerTimeout,
+            ConfigClientError::ExecutionTaskEnded,
+            ConfigClientError::CommitAfterAbandonedOperation,
+            ConfigClientError::RollbackDeferred,
+            ConfigClientError::AutoCommitCallerTimeout,
+            ConfigClientError::AutoCommitTaskEnded,
+        ];
+        for phase in phases {
+            let wrapped = [
+                phase(Abandoned),
+                transaction_storage_failure(phase(Abandoned)),
+                access(phase(Abandoned)),
+                ConfigClientError::HttpQuery {
+                    endpoint: "http://node/graphql".into(),
+                    source: Box::new(transaction_storage_failure(phase(Abandoned))),
+                },
+            ];
+            for error in wrapped {
+                assert!(error.native_operation_abandoned(), "{error:?}");
+            }
+        }
+        assert!(
+            !transaction_storage_failure(ConfigClientError::InjectedReadStorageFailure)
+                .native_operation_abandoned()
+        );
+    }
+
+    #[test]
+    fn insecure_identity_keys_classify_through_access_wrappers() {
+        let identity = || {
+            ConfigClientError::from(crate::identity::IdentityError::InsecureKey(
+                crate::identity::InsecureKeyPermissions {
+                    path: "/k".into(),
+                    mode: 0o644,
+                },
+            ))
+        };
+        for error in [
+            identity(),
+            access(identity()),
+            transaction_storage_failure(identity()),
+        ] {
+            assert_eq!(error.insecure_key().map(|key| key.mode), Some(0o644));
+        }
+        assert!(ConfigClientError::InjectedReadStorageFailure
+            .insecure_key()
+            .is_none());
+    }
 
     #[test]
     fn only_typed_conflicts_are_replayable() {
