@@ -3,6 +3,8 @@ import type { ProviderRecoveryRequest } from "../generated/ProviderRecoveryReque
 import type { ProviderRecoveryPlan } from "../generated/ProviderRecoveryPlan.js";
 import type { ProviderRecoveryApply } from "../generated/ProviderRecoveryApply.js";
 import type { ProviderRecoveryResult } from "../generated/ProviderRecoveryResult.js";
+import type { SessionContextDetails } from "../generated/SessionContextDetails.js";
+import type { SessionContextDetailsRequest } from "../generated/SessionContextDetailsRequest.js";
 import type { DesktopBackgroundToolRequest } from "../generated/DesktopBackgroundToolRequest.js";
 import type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
 import type { SessionForkResult } from "../generated/SessionForkResult.js";
@@ -197,6 +199,9 @@ export type DesktopApiAdapter = {
     agentId: string,
   ) => Promise<ToolSurfaceExplanationView>;
   fetchNetworkStatus: () => Promise<NetworkStatusView>;
+  fetchSessionContextDetails?: (
+    request: SessionContextDetailsRequest,
+  ) => Promise<SessionContextDetails | null>;
   fetchSessionSnapshot: (
     sessionId: string,
     nodeDid?: string | null,

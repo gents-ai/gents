@@ -10,6 +10,7 @@ import {
   sessionLiveDeltaRequest,
 } from "@source-inc/gents-desktop-client";
 import { acceptsAsyncResult } from "./observationOrdering";
+import { createContextDetailsCache } from "./sessionContextDetails";
 import { timingConfig } from "./timing";
 import { mergeSessionTipSnapshot } from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
@@ -39,6 +40,9 @@ export function createSessionReads({
   trackedRequestId,
   setError,
 }: SessionReadParams) {
+  const loadSessionContextDetails = createContextDetailsCache(
+    (request) => api.fetchSessionContextDetails?.(request) ?? Promise.resolve(null),
+  );
   let refreshSeq = 0;
   let liveSeq = 0;
   let runEpoch = 0;
@@ -199,6 +203,7 @@ export function createSessionReads({
   }
 
   return {
+    loadSessionContextDetails,
     invalidateSessionReads() {
       runEpoch += 1;
       refreshSeq += 1;

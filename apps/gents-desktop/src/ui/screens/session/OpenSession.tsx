@@ -45,7 +45,7 @@ export function OpenSession() {
   const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
   const {
     stores,
-    actions: { interruptRequest, renameSession },
+    actions: { interruptRequest, renameSession, loadSessionContextDetails },
   } = useApp();
   const inFlight = useInterruptVisible();
   const selectedNodeDid = useSelectedNodeDid();
@@ -53,6 +53,18 @@ export function OpenSession() {
   const selectedSessionId = stores.selection.use.sessionId();
   const sessionLoad = useSessionLoad();
   const session = useSelectedSessionFields(selectScreenFacts);
+  const loadContextDetails = useCallback(
+    (input: NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>) => {
+      if (!session?.nodeDid) return Promise.resolve(null);
+      return loadSessionContextDetails({
+        nodeDid: session.nodeDid,
+        sessionId: session.sessionId,
+        requestId: input.requestId,
+        callId: input.callId,
+      });
+    },
+    [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
+  );
   const homeDid = useHomeDid();
   const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
@@ -197,7 +209,11 @@ export function OpenSession() {
                     )}
                   >
                     <div className="flex min-w-0 items-center overflow-hidden">
-                      <SessionContext context={session.context} compact />
+                      <SessionContext
+                        context={session.context}
+                        loadDetails={loadContextDetails}
+                        compact
+                      />
                     </div>
                   </div>
                 )}
@@ -247,7 +263,12 @@ export function OpenSession() {
                         ? ` on ${sessionNode.node.displayName ?? sessionNode.label}`
                         : null}
                     </span>
-                    {session?.context && <SessionContext context={session.context} />}
+                    {session?.context && (
+                      <SessionContext
+                        context={session.context}
+                        loadDetails={loadContextDetails}
+                      />
+                    )}
                   </div>
                 </div>
               </div>

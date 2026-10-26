@@ -1,4 +1,5 @@
 mod bootstrap;
+mod context_details;
 mod enrollment;
 mod file_inventory;
 mod file_review;
@@ -326,6 +327,7 @@ pub struct ClientCore {
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     observation_scope: observation_scope::ObservationScope,
     request_patch_signatures: tokio::sync::Mutex<RapidHashMap<String, (usize, usize, u64)>>,
+    context_details: context_details::ContextDetailsCache,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     shutdown_completion: Mutex<Option<watch::Receiver<Option<ShutdownOutcome>>>>,
     #[cfg(test)]

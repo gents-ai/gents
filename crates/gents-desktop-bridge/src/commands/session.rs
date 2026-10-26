@@ -548,3 +548,46 @@ pub async fn session_rows(
     }
     Ok(view)
 }
+
+pub async fn session_context_details(
+    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    request: crate::types::SessionContextDetailsRequest,
+) -> Result<Option<gents::toolset::SessionContextDetails>, BridgeError> {
+    if core
+        .session_unreadable_reason(&request.session_id, &request.node_did)
+        .is_some()
+    {
+        return Ok(None);
+    }
+    let operator_access = core
+        .operator_observation_graphql(&request.node_did)
+        .map(gents::config_client::ConfigAccess::Graphql);
+    let node_scope = core.transcript_node_scope(&request.node_did);
+    let requester =
+        {
+            let store = core.store().snapshot();
+            let Some(session) = store.sessions.iter().find(|row| {
+                row.session_id == request.session_id && row.node_did == request.node_did
+            }) else {
+                return Ok(None);
+            };
+            gents_desktop_core::client::session_transcript_requester_scope(
+                Some(session),
+                Some(&request.node_did),
+                node_scope.as_deref(),
+                operator_access.is_some(),
+            )
+        };
+    let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
+    crate::snapshot::load_session_context_details(
+        core,
+        operator_access.as_ref().unwrap_or(&local_access),
+        &request.node_did,
+        requester.as_deref(),
+        &request.session_id,
+        &request.request_id,
+        &request.call_id,
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(error.to_string()))
+}

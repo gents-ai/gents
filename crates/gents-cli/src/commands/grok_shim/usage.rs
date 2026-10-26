@@ -72,7 +72,7 @@ pub(super) async fn session_info(
     let details = match observation.latest_context.as_ref() {
         Some(snapshot) => {
             gents::toolset::load_session_context_details(
-                node,
+                &gents::config_client::ConfigAccess::local(node.clone()),
                 node_did,
                 Some(node_did),
                 session,

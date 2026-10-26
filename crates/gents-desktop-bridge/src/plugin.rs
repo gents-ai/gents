@@ -158,6 +158,7 @@ where
             tauri_commands::lifecycle::desktop_set_selected_node,
             tauri_commands::lifecycle::desktop_observer_metrics,
             tauri_commands::chat::desktop_session_snapshot,
+            tauri_commands::chat::desktop_session_context_details,
             tauri_commands::chat::desktop_session_hydration_retry,
             tauri_commands::chat::desktop_session_live_delta,
             tauri_commands::chat::desktop_session_rows,
