@@ -215,6 +215,10 @@ impl ClientHost {
                     .map_err(backend_error)?;
                 encode(())
             }
+            ClientCommand::ProviderUsageRead { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                encode(crate::accounts::usage::read(&self.core, request).await?)
+            }
             ClientCommand::AccountsList { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
                 let access = self
