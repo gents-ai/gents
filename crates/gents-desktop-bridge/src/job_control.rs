@@ -71,8 +71,10 @@ pub async fn job_control(
                 .await
                 .map_err(|error| error.to_string())?;
             let status = response.status();
-            let value: serde_json::Value =
-                response.json().await.map_err(|error| error.to_string())?;
+            let value: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|error| format!("Runtime job control returned HTTP {status}: {error}"))?;
             if !status.is_success() {
                 return Err(value["error"]
                     .as_str()

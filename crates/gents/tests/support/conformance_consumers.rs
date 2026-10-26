@@ -56,6 +56,27 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot",
+            package: "gents",
+            source_path: "crates/gents/src/plugin_job/control.rs",
+            module_path: "plugin_job::control::tests",
+            function: "kill_reads_children_that_committed_after_the_recovery_snapshot",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin_job::operator_control_conformance::generated_operator_controls_stay_on_the_owning_runtime",
+            package: "gents",
+            source_path: "crates/gents/src/plugin_job/operator_control_conformance.rs",
+            module_path: "plugin_job::operator_control_conformance",
+            function: "generated_operator_controls_stay_on_the_owning_runtime",
+        },
+        ConformanceConsumer::RustTest {
+            id: "hook::tests::generated_background_process_identity_cases_cancel_only_the_physical_invocation",
+            package: "gents",
+            source_path: "crates/gents/src/hook/tests.rs",
+            module_path: "hook::tests",
+            function: "generated_background_process_identity_cases_cancel_only_the_physical_invocation",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::persistence::background_control::observation::tests::generated_observation_cases_preserve_deadlines_and_closed_feed_recovery",
             package: "gents",
             source_path: "crates/gents/src/hook/persistence/background_control/observation_tests.rs",

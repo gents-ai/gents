@@ -221,11 +221,6 @@ async fn job_control_on_a_missing_row_reports_not_found() {
 async fn job_control_on_a_plain_tool_row_reports_unknown_run() {
     let (core, _tmp) = boot_core().await;
     let doc = create_tool_call(&core, "tc_plain", "shell").await;
-    let did = core.node_arc().node_identity_did().unwrap().to_owned();
-    ConfigAccess::local(core.node_arc()).write("test.plain_job_owner", &format!(
-        r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{ node_did: "{}" }}) {{ _docID }} }}"#,
-        escape_graphql_string(&doc), escape_graphql_string(&did),
-    )).await.unwrap();
 
     let error = job_control(&core, &request(&core, &doc, JobControlKind::Stop))
         .await
@@ -265,29 +260,47 @@ async fn job_control_on_an_ended_job_row_is_already_terminal() {
 
 #[tokio::test]
 async fn job_control_routes_to_the_owner_without_a_replica_row() {
+    use gents::identity::{KeyIdentity, NodeIdentity};
     use wiremock::matchers::{body_json, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     let server = MockServer::start().await;
+    let (core, temp) = boot_core().await;
+    let home = temp.path().join("runtime");
+    std::fs::create_dir(&home).unwrap();
+    let key = home.join("node.key");
+    let owner = KeyIdentity::load_or_create(&key, None).unwrap();
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    std::fs::write(
+        home.join("init.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "node_name": "owner", "node_did": owner.did(), "key_path": key,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("runtime.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "node_name": "owner", "node_did": owner.did(), "graphql": graphql,
+            "p2p_transport": "iroh", "p2p_peer_id": "owner-peer",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let expected = JobControlOutcome::Applied {
         state: JobState::Cancelled,
         killed_children: 1,
     };
     Mock::given(method("POST")).and(path(gents_protocol::job::JOB_CONTROL_PATH))
         .and(header_exists("authorization"))
-        .and(body_json(serde_json::json!({"nodeDid": OPERATOR, "toolCallDocId": "runtime-only-doc", "action": "stop"})))
+        .and(body_json(serde_json::json!({"nodeDid": owner.did(), "toolCallDocId": "runtime-only-doc", "action": "stop"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::to_value(&expected).unwrap()))
         .expect(1).mount(&server).await;
-    let (core, temp) = boot_core().await;
-    core.add_managed_enrollment_peer_for_test(
-        OPERATOR,
-        &format!("{}/api/v0/graphql", server.uri()),
-        temp.path().join("runtime").to_str().unwrap(),
-        1,
-    )
-    .await
-    .unwrap();
+    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
+        .await
+        .unwrap();
     let mut command = request(&core, "runtime-only-doc", JobControlKind::Stop);
-    command.node_did = OPERATOR.into();
+    command.node_did = owner.did().into();
     let actual = job_control(&core, &command).await.unwrap();
     assert_eq!(actual, expected);
     core.shutdown().await.unwrap();
