@@ -448,8 +448,6 @@ fn body_digest(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use crate::plugin_job::origin::PluginJobError;
-
-    type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
     use gents_protocol::error_chain::ErrorChain;
     use std::path::Path;
     use std::sync::Arc;

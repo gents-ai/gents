@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 pub mod accounts;
 #[cfg(feature = "tauri-host")]
 mod app_exit;
