@@ -125,7 +125,7 @@ pub(crate) async fn install_with_access(
             args.grant_authority,
             Some(owner_did),
             &bindings.inference_slots,
-            |_| Ok(()),
+            |_| Ok::<_, gents::plugin::install::PluginInstallError>(()),
         )?
     };
     let record = GraphInstallRecord {

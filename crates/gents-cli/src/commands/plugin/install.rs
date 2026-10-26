@@ -28,7 +28,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         &home,
         manifest,
         &pack.digest,
-        |path| Ok(pack.archive.asset(path)?),
+        |path| pack.archive.asset(path),
         args.grant_authority,
     )?;
     let identity = gents::pack::PackIdentity::new(

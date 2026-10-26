@@ -123,7 +123,9 @@ fn release_plugin_records(
     candidates: &mut BTreeSet<String>,
 ) -> Result<Vec<InstalledPackPlugin>> {
     candidates.extend(plugins.iter().map(|plugin| plugin.digest.clone()));
-    gents::pack::plugin_lifecycle::release_plugin_records(home, coordinate, plugins)
+    Ok(gents::pack::plugin_lifecycle::release_plugin_records(
+        home, coordinate, plugins,
+    )?)
 }
 
 fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<Vec<String>> {
@@ -165,7 +167,7 @@ pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result
         home,
         coordinate,
         |record| {
-            Ok((
+            Ok::<_, anyhow::Error>((
                 super::cache::prepare_recorded_cache(home, coordinate, record)?,
                 record.assets.clone(),
             ))
@@ -179,7 +181,7 @@ pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result
                     "reason": reason,
                 })),
             }
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         },
     )?;
     let record = removal.record;

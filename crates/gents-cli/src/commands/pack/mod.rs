@@ -681,7 +681,7 @@ async fn install_documents_pack(
             args.grant_authority,
             Some(owner),
             &inference.bindings,
-            |_| Ok(()),
+            |_| Ok::<_, gents::plugin::install::PluginInstallError>(()),
         )
         .context("publishing document-pack plugins locally")?
     };

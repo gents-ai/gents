@@ -306,7 +306,7 @@ pub async fn ux_data_call(
     access: ConfigAccess,
     request: gents::ux_data::UxDataCall,
 ) -> Result<Value> {
-    gents::ux_data::call(&home, &access, request).await
+    Ok(gents::ux_data::call(&home, &access, request).await?)
 }
 
 /// The surfaces and tools the UX plugin listed as `ux` may call on the
@@ -317,7 +317,7 @@ pub async fn ux_data_surfaces(
     ux: String,
     node_did: String,
 ) -> Result<Value> {
-    gents::ux_data::surfaces(&home, &access, &ux, &node_did).await
+    Ok(gents::ux_data::surfaces(&home, &access, &ux, &node_did).await?)
 }
 
 #[cfg(test)]
