@@ -386,14 +386,20 @@ fn request_assignments(
     })
 }
 
-pub(crate) struct RequestAssignmentScopes<'a, R: crate::config_client::ConfigRead> {
+pub(crate) struct RequestAssignmentScopes<'a, R>
+where
+    R: crate::config_client::ConfigRead,
+{
     access: &'a R,
     requests: RequestAssignments,
     history_loaded: bool,
     scopes: rapidhash::RapidHashMap<String, RequestAssignmentScope>,
 }
 
-impl<R: crate::config_client::ConfigRead> RequestAssignmentScopes<'_, R> {
+impl<R> RequestAssignmentScopes<'_, R>
+where
+    R: crate::config_client::ConfigRead,
+{
     pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         self.requests.request(doc)
     }
@@ -467,11 +473,14 @@ fn signed_scope(
     }
 }
 
-pub(crate) async fn load_request_assignment_scopes<'a, R: crate::config_client::ConfigRead>(
+pub(crate) async fn load_request_assignment_scopes<'a, R>(
     access: &'a R,
     owner: &str,
     session: &str,
-) -> anyhow::Result<RequestAssignmentScopes<'a, R>> {
+) -> anyhow::Result<RequestAssignmentScopes<'a, R>>
+where
+    R: crate::config_client::ConfigRead,
+{
     let rows = super::request_head::load_session_requests(access, owner, session).await?;
     Ok(RequestAssignmentScopes {
         access,
