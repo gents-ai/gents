@@ -13,6 +13,8 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   latestRequestDocId: "physical-parent",
   latestRequestId: "logical-parent",
   closedAt: null,
+  archivedAt: null,
+  archiveRevision: "0",
   tags: [],
   provenance: null,
   title: "Lead",
