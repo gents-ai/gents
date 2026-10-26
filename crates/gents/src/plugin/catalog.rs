@@ -1,6 +1,5 @@
 //! A plugin's catalog: one non-job invocation of its declared `catalog.argv`.
 
-use anyhow::Result;
 use gents_protocol::job::CatalogEntry;
 use serde_json::json;
 
@@ -30,7 +29,13 @@ pub enum CatalogError {
         #[source]
         source: serde_json::Error,
     },
+    #[error(transparent)]
+    Run(#[from] super::executor::PluginRunError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
+
+type Result<T, E = CatalogError> = std::result::Result<T, E>;
 
 /// The most a catalog call's output may encode to; the plugin output cap is larger.
 const MAX_CATALOG_BYTES: usize = 256 * 1024;
@@ -51,8 +56,7 @@ pub async fn catalog(
     let Some(declared) = &record.declaration.catalog else {
         return Err(CatalogError::NoCatalog {
             coordinate: coordinate.clone(),
-        }
-        .into());
+        });
     };
     let call = executor
         .call_with_data(&record, json!({"argv": declared.argv}), caller.clone())
@@ -63,16 +67,14 @@ pub async fn catalog(
             coordinate: coordinate.clone(),
             verdict: outcome.verdict,
             diagnostics: outcome.diagnostics,
-        }
-        .into());
+        });
     }
     let encoded = serde_json::to_string(&outcome.output)?;
     if encoded.len() > MAX_CATALOG_BYTES {
         return Err(CatalogError::TooLarge {
             coordinate: coordinate.clone(),
             bytes: encoded.len(),
-        }
-        .into());
+        });
     }
     serde_json::from_value(outcome.output).map_err(|source| {
         let head = encoded[..encoded.floor_char_boundary(HEAD_BYTES)].to_owned();

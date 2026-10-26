@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use serde::Serialize;
 use serde_json::json;
 
@@ -110,6 +109,18 @@ pub enum BuildError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Compiler(crate::pack::CallbackError),
+    #[error(transparent)]
+    Out(crate::pack::CallbackError),
+    #[error(transparent)]
+    GraphPackage(#[from] crate::graph_package::GraphPackageError),
+    #[error("building {}", dir.display())]
+    Building {
+        dir: PathBuf,
+        #[source]
+        source: Box<BuildError>,
+    },
 }
 
 type Result<T, E = BuildError> = std::result::Result<T, E>;
@@ -119,8 +130,14 @@ pub trait PluginCompiler {
         BUILDER_ID
     }
 
-    fn load_and_validate(&self, owner: &str, dir: &Path) -> anyhow::Result<()>;
-    fn compile(&self, owner: &str, dir: &Path, out_path: &Path) -> anyhow::Result<()>;
+    fn load_and_validate(&self, owner: &str, dir: &Path)
+        -> Result<(), crate::pack::CallbackError>;
+    fn compile(
+        &self,
+        owner: &str,
+        dir: &Path,
+        out_path: &Path,
+    ) -> Result<(), crate::pack::CallbackError>;
 }
 
 #[derive(Debug, Serialize)]
@@ -140,11 +157,14 @@ pub struct PluginReport {
     pub artifact: String,
 }
 
-pub fn build_all(
+pub fn build_all<O>(
     root: &Path,
     compiler: &dyn PluginCompiler,
-    out: impl Fn(&Path) -> anyhow::Result<Option<PathBuf>>,
-) -> anyhow::Result<Vec<BuildReport>> {
+    out: impl Fn(&Path) -> Result<Option<PathBuf>, O>,
+) -> Result<Vec<BuildReport>>
+where
+    O: Into<crate::pack::CallbackError>,
+{
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
         .map_err(|source| BuildError::Read {
             path: root.to_path_buf(),
@@ -158,13 +178,15 @@ pub fn build_all(
     if dirs.is_empty() {
         return Err(BuildError::NoPackDirectories {
             root: root.to_path_buf(),
-        }
-        .into());
+        });
     }
     dirs.iter()
         .map(|dir| {
-            build_pack(dir, compiler, out(dir)?.as_deref())
-                .with_context(|| format!("building {}", dir.display()))
+            let out = out(dir).map_err(|error| BuildError::Out(error.into()))?;
+            build_pack(dir, compiler, out.as_deref()).map_err(|source| BuildError::Building {
+                dir: dir.clone(),
+                source: Box::new(source),
+            })
         })
         .collect()
 }
@@ -173,7 +195,7 @@ pub fn build_pack(
     dir: &Path,
     compiler: &dyn PluginCompiler,
     out: Option<&Path>,
-) -> anyhow::Result<BuildReport> {
+) -> Result<BuildReport> {
     let manifest_path = dir.join("manifest.json");
     let manifest_bytes =
         std::fs::read(&manifest_path).map_err(|source| BuildError::ReadManifest {
@@ -207,8 +229,7 @@ pub fn build_pack(
     if !refused.is_empty() {
         return Err(BuildError::UxRefused {
             findings: refused.join("\n"),
-        }
-        .into());
+        });
     }
 
     let out_dir = match out.and_then(Path::parent) {
@@ -279,16 +300,14 @@ pub fn build_pack(
     })
 }
 
-pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> anyhow::Result<()> {
+pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
     let plans = crate::graph_package::compile_pack_graphs(
         manifest,
-        &|path: &str| -> anyhow::Result<Vec<u8>> {
-            Ok(
-                std::fs::read(dir.join(path)).map_err(|source| BuildError::ReadAsset {
-                    path: path.to_owned(),
-                    source,
-                })?,
-            )
+        &|path: &str| -> Result<Vec<u8>> {
+            std::fs::read(dir.join(path)).map_err(|source| BuildError::ReadAsset {
+                path: path.to_owned(),
+                source,
+            })
         },
         "did:key:zPackBuildPlaceholderOwner",
     )?;
@@ -343,15 +362,14 @@ pub fn build_plugin(
     manifest: &PackManifest,
     plugin: &PackPlugin,
     compiler: &dyn PluginCompiler,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let artifact_path = dir.join(&plugin.artifact);
     let Some(source) = &plugin.source else {
         if !artifact_path.is_file() {
             return Err(BuildError::ArtifactMissing {
                 name: plugin.name.clone(),
                 path: artifact_path,
-            }
-            .into());
+            });
         }
         return Ok(());
     };
@@ -365,16 +383,14 @@ pub fn build_plugin(
         return Err(BuildError::SourceNotDirectory {
             owner,
             declared: source.clone(),
-        }
-        .into());
+        });
     }
     if !source_dir.join(entry).is_file() {
         return Err(BuildError::EntryMissing {
             owner,
             entry,
             dir: source_dir,
-        }
-        .into());
+        });
     }
     let staged = dir.join("target").join("plugins").join(&plugin.name);
     mirror(&source_dir, &staged)?;
@@ -409,8 +425,12 @@ pub fn build_plugin(
             return Ok(());
         }
     }
-    compiler.load_and_validate(&owner, &staged)?;
-    compiler.compile(&owner, &staged, &artifact_path)?;
+    compiler
+        .load_and_validate(&owner, &staged)
+        .map_err(BuildError::Compiler)?;
+    compiler
+        .compile(&owner, &staged, &artifact_path)
+        .map_err(BuildError::Compiler)?;
     let artifact = std::fs::read(&artifact_path).map_err(|source| BuildError::Read {
         path: artifact_path.clone(),
         source,
@@ -574,11 +594,20 @@ mod tests {
     }
 
     impl PluginCompiler for RefusingCompiler {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> anyhow::Result<()> {
+        fn load_and_validate(
+            &self,
+            _owner: &str,
+            _dir: &Path,
+        ) -> std::result::Result<(), crate::pack::CallbackError> {
             self.called.store(true, std::sync::atomic::Ordering::SeqCst);
-            anyhow::bail!("no compiler in this test")
+            Err("no compiler in this test".into())
         }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> anyhow::Result<()> {
+        fn compile(
+            &self,
+            _owner: &str,
+            _dir: &Path,
+            _out_path: &Path,
+        ) -> std::result::Result<(), crate::pack::CallbackError> {
             unreachable!("load_and_validate refuses first")
         }
     }

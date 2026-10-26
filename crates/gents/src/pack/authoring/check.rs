@@ -45,6 +45,12 @@ pub enum CheckError {
     },
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Loader(#[from] crate::pack::LoaderError),
+    #[error(transparent)]
+    DesiredState(#[from] crate::config_client::DesiredStateError),
+    #[error(transparent)]
+    Archive(#[from] crate::pack_archive::PackArchiveError),
 }
 
 type Result<T, E = CheckError> = std::result::Result<T, E>;
@@ -140,7 +146,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
             }
             Err(error) => report
                 .problems
-                .push(format!("{}", ErrorChain(error.as_ref()))),
+                .push(format!("{}", ErrorChain(&error))),
         }
     }
     if dir.join("experiment.json").is_file() {
@@ -237,7 +243,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn load_config(archive: &PackArchive) -> anyhow::Result<crate::document_config::PackConfig> {
+pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::PackConfig> {
     let config = crate::pack::load_pack_config(
         archive.manifest(),
         &crate::pack::PackInstallOptions {
@@ -318,7 +324,7 @@ pub fn topology_block(config: &crate::document_config::PackConfig) -> String {
     )
 }
 
-pub fn write_topology(dir: &Path) -> anyhow::Result<()> {
+pub fn write_topology(dir: &Path) -> Result<()> {
     let (bytes, _) = pack_dir(dir).map_err(|source| CheckError::Pack {
         path: dir.to_path_buf(),
         source,

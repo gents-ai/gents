@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::pack::{load_pack_config, PackInstallOptions, PackManifest};
@@ -22,11 +21,21 @@ pub enum InspectError {
         #[source]
         source: PackFormatError,
     },
+    #[error(transparent)]
+    Loader(#[from] crate::pack::LoaderError),
+    #[error(transparent)]
+    ReadExperiment(crate::pack::CallbackError),
+    #[error("experiment.json is not UTF-8")]
+    ExperimentNotUtf8(#[source] std::str::Utf8Error),
+    #[error("experiment.json references environment variable(s) with no default: {missing}")]
+    ExperimentUnset { missing: String },
+    #[error("parsing experiment.json")]
+    ParseExperiment(#[source] serde_json::Error),
 }
 
-pub fn verify_pack_file(
-    path: &Path,
-) -> std::result::Result<crate::pack_archive::PackHeader, InspectError> {
+type Result<T, E = InspectError> = std::result::Result<T, E>;
+
+pub fn verify_pack_file(path: &Path) -> Result<crate::pack_archive::PackHeader> {
     let file = std::fs::File::open(path).map_err(|source| InspectError::Open {
         path: path.to_path_buf(),
         source,
@@ -43,32 +52,35 @@ pub fn verify_pack_file(
     })
 }
 
-pub fn preview_config(
+pub fn preview_config<E>(
     manifest: &PackManifest,
-    asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-) -> Result<serde_json::Value> {
+    asset: &dyn Fn(&str) -> Result<Vec<u8>, E>,
+) -> Result<serde_json::Value>
+where
+    E: Into<crate::pack::CallbackError>,
+{
     let config = load_pack_config(
         manifest,
         &PackInstallOptions {
             node_did: PREVIEW_OWNER.into(),
         },
-        &|path| asset(path),
+        asset,
         &|_| None,
     )?;
     let scenario = crate::pack::declared_paths(manifest)
         .iter()
         .any(|path| path == "experiment.json")
         .then(|| -> Result<serde_json::Value> {
-            let bytes = asset("experiment.json")?;
-            let raw = std::str::from_utf8(&bytes).context("experiment.json is not UTF-8")?;
+            let bytes = asset("experiment.json")
+                .map_err(|error| InspectError::ReadExperiment(error.into()))?;
+            let raw = std::str::from_utf8(&bytes).map_err(InspectError::ExperimentNotUtf8)?;
             let expanded =
                 crate::pack::interpolate::interpolate_with(raw, &|_| None).map_err(|missing| {
-                    anyhow::anyhow!(
-                        "experiment.json references environment variable(s) with no default: {}",
-                        missing.join(", ")
-                    )
+                    InspectError::ExperimentUnset {
+                        missing: missing.join(", "),
+                    }
                 })?;
-            serde_json::from_str(&expanded).context("parsing experiment.json")
+            serde_json::from_str(&expanded).map_err(InspectError::ParseExperiment)
         })
         .transpose()?;
     Ok(json!({ "config": config, "scenario": scenario }))
@@ -98,11 +110,20 @@ mod tests {
     }
 
     impl PluginCompiler for RefusingCompiler {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> Result<()> {
+        fn load_and_validate(
+            &self,
+            _owner: &str,
+            _dir: &Path,
+        ) -> std::result::Result<(), crate::pack::CallbackError> {
             self.called.store(true, std::sync::atomic::Ordering::SeqCst);
-            anyhow::bail!("no compiler in this test")
+            Err("no compiler in this test".into())
         }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> Result<()> {
+        fn compile(
+            &self,
+            _owner: &str,
+            _dir: &Path,
+            _out_path: &Path,
+        ) -> std::result::Result<(), crate::pack::CallbackError> {
             unreachable!("load_and_validate refuses first")
         }
     }
@@ -167,7 +188,7 @@ mod tests {
         .unwrap();
         let manifest: PackManifest =
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-        let asset = |path: &str| -> Result<Vec<u8>> { Ok(std::fs::read(root.join(path))?) };
+        let asset = |path: &str| std::fs::read(root.join(path));
         let report = preview_config(&manifest, &asset).unwrap();
         assert_eq!(
             report["config"]["agents"][0]["agent_id"],
@@ -191,9 +212,9 @@ mod tests {
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
         let error = preview_config(&manifest, &asset).unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("GENTS_PREVIEW_ENDPOINT"),
+            format!("{}", ErrorChain(&error)).contains("GENTS_PREVIEW_ENDPOINT"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
 
         std::fs::write(

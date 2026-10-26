@@ -17,6 +17,8 @@ use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginToolError {
+    #[error(transparent)]
+    Run(#[from] super::executor::PluginRunError),
     #[error("plugin {plugin} does not declare job dispatch; install a pack whose plugin sets `job: true`")]
     NotJobDispatch { plugin: String },
     #[error("runtime-filled plugin inputs require an object schema")]
@@ -67,13 +69,12 @@ impl PluginTool {
         executor: Arc<PluginExecutor>,
         plugin: &PluginToolRef,
         root: Option<PathBuf>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
         if plugin.job.is_some() && !record.declaration.job.0 {
             return Err(PluginToolError::NotJobDispatch {
                 plugin: plugin.plugin.clone(),
-            }
-            .into());
+            });
         }
         let mut description = record
             .instructions

@@ -8,6 +8,10 @@ use super::template::{Kind, Template};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScaffoldError {
+    #[error(transparent)]
+    Build(#[from] super::build::BuildError),
+    #[error(transparent)]
+    Check(#[from] super::check::CheckError),
     #[error("{} already exists", path.display())]
     SourceExists { path: PathBuf },
     #[error("gents cannot build {language:?} plugins; use one of {}", crate::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", "))]
@@ -82,12 +86,11 @@ impl Template {
     }
 }
 
-pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> anyhow::Result<ScaffoldReport> {
+pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<ScaffoldReport> {
     if dir.join("manifest.json").exists() {
         return Err(ScaffoldError::AlreadyHoldsPack {
             path: dir.to_path_buf(),
-        }
-        .into());
+        });
     }
     let names = Names::new(name, &input.namespace)?;
     let template = input
@@ -686,10 +689,19 @@ mod tests {
     struct NoPlugins;
 
     impl super::super::build::PluginCompiler for NoPlugins {
-        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> anyhow::Result<()> {
+        fn load_and_validate(
+            &self,
+            _owner: &str,
+            _dir: &Path,
+        ) -> std::result::Result<(), crate::pack::CallbackError> {
             unreachable!("an assets pack has no plugin to build")
         }
-        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> anyhow::Result<()> {
+        fn compile(
+            &self,
+            _owner: &str,
+            _dir: &Path,
+            _out_path: &Path,
+        ) -> std::result::Result<(), crate::pack::CallbackError> {
             unreachable!("an assets pack has no plugin to build")
         }
     }

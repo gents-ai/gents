@@ -759,7 +759,7 @@ pub mod allowed;
 pub mod approval;
 pub mod authority;
 mod bound;
-pub use bound::BoundDir;
+pub use bound::{BoundDir, BoundDirError};
 pub use catalog::catalog;
 
 pub fn attempts_allowed(max_attempts: Option<u32>) -> u32 {

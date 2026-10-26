@@ -16,13 +16,25 @@ impl gents::pack::authoring::PluginCompiler for CliPluginCompiler {
         BUILDER_ID
     }
 
-    fn load_and_validate(&self, owner: &str, dir: &Path) -> Result<()> {
-        crate::commands::afterburner_build::load_and_validate(owner, dir).map(|_| ())
+    fn load_and_validate(
+        &self,
+        owner: &str,
+        dir: &Path,
+    ) -> std::result::Result<(), gents::pack::CallbackError> {
+        crate::commands::afterburner_build::load_and_validate(owner, dir)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 
-    fn compile(&self, owner: &str, dir: &Path, out_path: &Path) -> Result<()> {
+    fn compile(
+        &self,
+        owner: &str,
+        dir: &Path,
+        out_path: &Path,
+    ) -> std::result::Result<(), gents::pack::CallbackError> {
         let package = crate::commands::afterburner_build::load_and_validate(owner, dir)?;
         crate::commands::afterburner_build::compile(owner, dir, package, out_path)
+            .map_err(Into::into)
     }
 }
 
@@ -37,11 +49,19 @@ pub(crate) fn dispatch(args: PackBuildArgs) -> Result<()> {
 }
 
 pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {
-    gents::pack::authoring::build_all(root, &CliPluginCompiler, |_| Ok(None))
+    Ok(gents::pack::authoring::build_all(
+        root,
+        &CliPluginCompiler,
+        |_| Ok::<_, anyhow::Error>(None),
+    )?)
 }
 
 pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
-    gents::pack::authoring::build_pack(dir, &CliPluginCompiler, out)
+    Ok(gents::pack::authoring::build_pack(
+        dir,
+        &CliPluginCompiler,
+        out,
+    )?)
 }
 
 pub(crate) fn build_plugin(
@@ -49,7 +69,12 @@ pub(crate) fn build_plugin(
     manifest: &gents::pack::PackManifest,
     plugin: &gents::pack::PackPlugin,
 ) -> Result<()> {
-    gents::pack::authoring::build_plugin(dir, manifest, plugin, &CliPluginCompiler)
+    Ok(gents::pack::authoring::build_plugin(
+        dir,
+        manifest,
+        plugin,
+        &CliPluginCompiler,
+    )?)
 }
 
 pub(crate) fn plugin_entry(language: &str) -> Option<&'static str> {

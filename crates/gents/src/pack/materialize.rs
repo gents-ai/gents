@@ -324,7 +324,7 @@ pub fn cache_lock(parent: &Path) -> Result<std::fs::File> {
 
 /// The caller holds [`lock_exclusive`] on `parent`, so no scenario can acquire
 /// or use a sibling cache root while the probe and removal occur.
-pub fn prune_stale_asset_cache(parent: &Path, current: &Path) -> anyhow::Result<Vec<String>> {
+pub fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>> {
     let mut removed = Vec::new();
     for entry in std::fs::read_dir(parent)? {
         let entry = entry?;
@@ -362,8 +362,8 @@ pub enum CacheRelease {
 /// The caller holds [`lock_exclusive`] on `root.parent()`.
 fn release_cache_root(
     root: &Path,
-    check_owner: impl FnOnce() -> anyhow::Result<()>,
-) -> anyhow::Result<CacheRelease> {
+    check_owner: impl FnOnce() -> Result<()>,
+) -> Result<CacheRelease> {
     match cache_root_disposition(root, check_owner)? {
         CacheRelease::Removed => {
             std::fs::remove_dir_all(root).map_err(|source| MaterializeError::RemoveCacheRoot {
@@ -376,10 +376,10 @@ fn release_cache_root(
     }
 }
 
-pub fn cache_root_disposition(
+pub fn cache_root_disposition<E>(
     root: &Path,
-    check_owner: impl FnOnce() -> anyhow::Result<()>,
-) -> anyhow::Result<CacheRelease> {
+    check_owner: impl FnOnce() -> std::result::Result<(), E>,
+) -> std::result::Result<CacheRelease, E> {
     if !root.is_dir() {
         return Ok(CacheRelease::Retained("already absent"));
     }
