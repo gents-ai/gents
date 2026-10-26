@@ -268,7 +268,9 @@ pub(super) async fn reconcile_prepared_peer(
             desired_state = PairingDesired::default();
             actual = read_actual(admin, &applied_record.state.replicator_addresses)
                 .await
-                .map_err(|error| P2pReconcileError::ReloadLivePairingStateAfterEnrollment(Box::new(error)))?;
+                .map_err(|error| {
+                    P2pReconcileError::ReloadLivePairingStateAfterEnrollment(Box::new(error))
+                })?;
             ops = std::collections::VecDeque::from(compute_owned_pairing_diff(
                 &desired_state,
                 &actual.state,
@@ -287,7 +289,9 @@ pub(super) async fn reconcile_prepared_peer(
     } else {
         read_actual(admin, &applied_record.state.replicator_addresses)
             .await
-            .map_err(|error| P2pReconcileError::VerifyLivePairingStateAfterReconcile(Box::new(error)))?
+            .map_err(|error| {
+                P2pReconcileError::VerifyLivePairingStateAfterReconcile(Box::new(error))
+            })?
     };
     let live_route_matches = owned_pairing_live_matches(
         &desired_state,

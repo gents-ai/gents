@@ -45,7 +45,10 @@ pub async fn request_enrollment(
         decode_offer(offer_token).map_err(P2pReconcileError::DecodingServerEnrollmentOffer)?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
     confirm_network_admin_pin(node, &offer).await?;
-    let candidate_peer = p2p.local_peer_id().await.map_err(|error| TransportFailure(error.to_string()))?;
+    let candidate_peer = p2p
+        .local_peer_id()
+        .await
+        .map_err(|error| TransportFailure(error.to_string()))?;
     let candidate_ticket = local_enrollment_ticket(&p2p, &candidate_peer).await?;
     let (request, document_id) =
         match persisted_request(node, identity, &offer, offer_token, &candidate_peer).await? {

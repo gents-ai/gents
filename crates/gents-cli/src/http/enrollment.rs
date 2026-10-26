@@ -57,23 +57,21 @@ impl EnrollmentDecisionService {
         authenticate_operator_command(self.identity.as_ref(), command, now).await?;
         consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;
         match command.action {
-            EnrollmentOperatorAction::Approve => {
-                Ok(self.store
-                    .decide_request_with_lease(
-                        command.request_id.trim(),
-                        gents_protocol::enrollment::EnrollmentDecisionKind::Approved,
-                        std::time::Duration::from_secs(command.lease_seconds),
-                    )
-                    .await?)
-            }
-            EnrollmentOperatorAction::Deny => {
-                Ok(self.store
-                    .decide_request(
-                        command.request_id.trim(),
-                        gents_protocol::enrollment::EnrollmentDecisionKind::Denied,
-                    )
-                    .await?)
-            }
+            EnrollmentOperatorAction::Approve => Ok(self
+                .store
+                .decide_request_with_lease(
+                    command.request_id.trim(),
+                    gents_protocol::enrollment::EnrollmentDecisionKind::Approved,
+                    std::time::Duration::from_secs(command.lease_seconds),
+                )
+                .await?),
+            EnrollmentOperatorAction::Deny => Ok(self
+                .store
+                .decide_request(
+                    command.request_id.trim(),
+                    gents_protocol::enrollment::EnrollmentDecisionKind::Denied,
+                )
+                .await?),
             EnrollmentOperatorAction::Revoke => {
                 Ok(self.store.revoke_request(command.request_id.trim()).await?)
             }

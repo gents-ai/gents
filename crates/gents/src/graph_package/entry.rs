@@ -548,15 +548,15 @@ pub async fn prepare_entry_run(
     let stdin = prepare_stdin(Value::Object(admitted), &nonce, Value::Object(host));
     let call = request.plugins.call(&record, stdin).await?;
     if call.outcome.verdict != crate::plugin::PluginVerdict::Success {
-        return Err(
-            EntryError::PreparePluginFailed(Box::new(PreparePluginFailure::new(
+        return Err(EntryError::PreparePluginFailed(Box::new(
+            PreparePluginFailure::new(
                 &call.coordinate,
                 &record.declaration,
                 call.outcome.verdict,
                 &call.outcome.diagnostics,
                 diff_bytes,
-            )))
-        );
+            ),
+        )));
     }
     let output: PreparePluginOutput =
         serde_json::from_value(call.outcome.output).map_err(|source| {

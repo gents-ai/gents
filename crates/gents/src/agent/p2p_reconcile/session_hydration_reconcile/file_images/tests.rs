@@ -1,8 +1,8 @@
 mod live;
 mod storage;
 
-use crate::agent::p2p_reconcile::error::TransportFailure;
 use super::*;
+use crate::agent::p2p_reconcile::error::TransportFailure;
 use crate::agent::p2p_reconcile::file_image_hydration::image_delivery_target;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},

@@ -31,9 +31,7 @@ fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSe
     paths
 }
 
-pub fn document_pack_schema_paths(
-    manifest: &super::super::PackManifest,
-) -> Result<Vec<&str>> {
+pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Result<Vec<&str>> {
     for path in manifest
         .metadata
         .assets
@@ -517,12 +515,11 @@ pub async fn install_prepared_document_pack(
                     digest,
                     &inference.bindings,
                     &|path| {
-                        assets
-                            .get(path)
-                            .map(Vec::as_slice)
-                            .ok_or_else(|| InstallationError::DependencyAssetNotPrepared {
+                        assets.get(path).map(Vec::as_slice).ok_or_else(|| {
+                            InstallationError::DependencyAssetNotPrepared {
                                 path: path.to_owned(),
-                            })
+                            }
+                        })
                     },
                     grant_authority,
                 )?;

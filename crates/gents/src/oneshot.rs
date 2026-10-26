@@ -251,10 +251,12 @@ where
         {
             Ok(gate) => gate,
             Err(error) => {
-                return Err(
-                    terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error.into())
-                        .await,
-                );
+                return Err(terminalize_oneshot_setup_failure(
+                    &mut lifecycle,
+                    &lsp_pool,
+                    error.into(),
+                )
+                .await);
             }
         };
     config.output_obligation_gate = output_obligation_gate

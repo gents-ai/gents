@@ -143,13 +143,11 @@ async fn run_case(
     budget: PluginBudget,
     path: &Path,
 ) -> Result<()> {
-    let case: PluginCase = serde_json::from_slice(&std::fs::read(path)?)
-        .map_err(PackTestError::CaseShape)?;
+    let case: PluginCase =
+        serde_json::from_slice(&std::fs::read(path)?).map_err(PackTestError::CaseShape)?;
     let bound = match &case.bind {
         Some(relative) => {
-            let case_dir = path
-                .parent()
-                .ok_or(PackTestError::CaseWithoutParent)?;
+            let case_dir = path.parent().ok_or(PackTestError::CaseWithoutParent)?;
             Some(
                 BoundDir::new(&case_dir.join(relative), Some(case_dir)).map_err(|source| {
                     PackTestError::Bind {

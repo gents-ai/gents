@@ -97,7 +97,9 @@ pub enum AdmissionCause {
     #[error("reload peer requester admission")]
     ReloadPeerRequesterAdmission(#[source] crate::agent::p2p_reconcile::error::P2pReconcileError),
     #[error("fresh enrollment request admission projection")]
-    FreshEnrollmentRequestAdmissionProjection(#[source] crate::agent::p2p_reconcile::error::P2pReconcileError),
+    FreshEnrollmentRequestAdmissionProjection(
+        #[source] crate::agent::p2p_reconcile::error::P2pReconcileError,
+    ),
     #[error("AgentRequest is missing purpose")]
     AgentRequestMissingPurpose,
     #[error(transparent)]
@@ -1023,12 +1025,10 @@ pub(crate) async fn load_request_context(
         Box::pin(async move { load_request_context_in_txn(txn, &owner, &agent_id).await })
     })
     .await
-    .map_err(
-        |error| match error {
-            AdmissionCause::AgentRequestAdmission(error) => *error,
-            error => AgentRequestAdmissionError::unavailable(error),
-        },
-    )
+    .map_err(|error| match error {
+        AdmissionCause::AgentRequestAdmission(error) => *error,
+        error => AgentRequestAdmissionError::unavailable(error),
+    })
 }
 
 /// [`load_request_context`] inside `txn`; a refusal is an

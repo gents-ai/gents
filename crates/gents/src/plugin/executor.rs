@@ -621,11 +621,7 @@ impl PluginExecutor {
         receipt_of(result, refused)
     }
 
-    pub fn resolve(
-        &self,
-        coordinate: &str,
-        pinned: Option<&str>,
-    ) -> Result<InstalledPlugin> {
+    pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
         let (namespace, name) = store::parse_coordinate(coordinate)?;
         let home = self
             .home

@@ -878,10 +878,7 @@ impl Tool for SessionHistoryTool {
             return Err(SessionHistoryError::UnsupportedSessionsActionNextCallSessions.into());
         }
         let value = discovery::run(self, &args, action).await.map_err(|error| {
-            if ErrorChain(&error)
-                .to_string()
-                .contains("next call:")
-            {
+            if ErrorChain(&error).to_string().contains("next call:") {
                 error
             } else {
                 SessionHistoryError::NextCallSessions {
@@ -1484,8 +1481,8 @@ fn latest_context_from_detail_rows(
         call_sequence: row.call_seq,
         queued_at: row.queued_at.clone(),
         accounting: serde_json::from_str(encoded).map_err(|source| {
-                SessionHistoryError::DecodingContextAccountingCall {
-                    source,
+            SessionHistoryError::DecodingContextAccountingCall {
+                source,
                 call_id: row.call_id.to_string(),
             }
         })?,

@@ -226,9 +226,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             case.target
         );
         if let Err(error) = result {
-            assert!(
-                format!("{}", ErrorChain(&error)).contains("requires goal resume-request")
-            );
+            assert!(format!("{}", ErrorChain(&error)).contains("requires goal resume-request"));
         }
         let mut expected = before;
         if case.allowed {

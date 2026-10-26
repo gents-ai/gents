@@ -605,8 +605,7 @@ impl NativeCanonicalExecution {
         match result {
             Ok(crate::lifecycle::RecoveryResult::Lost) => return self.observe(false).await,
             Err(error)
-                if find_source::<crate::lifecycle::RecoverySelectionRejected>(&error)
-                    .is_some()
+                if find_source::<crate::lifecycle::RecoverySelectionRejected>(&error).is_some()
                     || crate::session::find_reconstruction_error(&error).is_some() =>
             {
                 return self.observe(false).await;
@@ -1939,14 +1938,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let result = match result {
                         Ok(value) => value,
                         Err(error)
-                            if find_source::<crate::lifecycle::ToolAccountingRejection>(
-                                &error,
-                            )
-                            .is_some()
+                            if find_source::<crate::lifecycle::ToolAccountingRejection>(&error)
+                                .is_some()
                                 || matches!(
-                                    find_source::<crate::lifecycle::TerminalToolsError>(
-                                        &error
-                                    ),
+                                    find_source::<crate::lifecycle::TerminalToolsError>(&error),
                                     Some(crate::lifecycle::TerminalToolsError::Accounting(_))
                                 )
                                 || owner_error_is(
@@ -2151,9 +2146,9 @@ impl NativeCanonicalExecution {
             Ok(None) => {}
             Ok(Some(_)) => return Err("auxiliary close published a header".into()),
             Err(error)
-                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
-                    &error,
-                )
+                if crate::streaming::canonical::provider_rejection::<
+                    crate::streaming::canonical::ProviderCloseRejection,
+                >(&error)
                 .is_some()
                     || crate::session::find_reconstruction_error(&error).is_some()
                     || owner_error_is(
@@ -2264,9 +2259,9 @@ impl NativeCanonicalExecution {
         let message_doc_id = match result {
             Ok(message_doc_id) => message_doc_id,
             Err(error)
-                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
-                    &error,
-                )
+                if crate::streaming::canonical::provider_rejection::<
+                    crate::streaming::canonical::ProviderCloseRejection,
+                >(&error)
                 .is_some()
                     || crate::session::find_reconstruction_error(&error).is_some() =>
             {
@@ -2441,17 +2436,17 @@ impl NativeCanonicalExecution {
         let published = match published {
             Ok(value) => value,
             Err(error)
-                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
-                    &error,
-                )
+                if crate::streaming::canonical::provider_rejection::<
+                    crate::streaming::canonical::ProviderCloseRejection,
+                >(&error)
                 .is_some() =>
             {
                 return self.observe(false).await;
             }
             Err(error)
-                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderReplayRejection>(
-                    &error,
-                )
+                if crate::streaming::canonical::provider_rejection::<
+                    crate::streaming::canonical::ProviderReplayRejection,
+                >(&error)
                 .is_some()
                     || owner_error_is(
                         &error,

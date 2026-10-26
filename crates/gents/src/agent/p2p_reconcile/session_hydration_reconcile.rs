@@ -218,9 +218,8 @@ async fn commit_rejection(
     );
     match (terminal_write, modeled) {
         (Ok(()), HydrationApplyOutcome::Rejected { .. }) => Ok(()),
-        (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
-            Err(error).map_err(|error| P2pReconcileError::MarkSessionHydrationRejected(Box::new(error)))
-        }
+        (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => Err(error)
+            .map_err(|error| P2pReconcileError::MarkSessionHydrationRejected(Box::new(error))),
         _ => unreachable!("hydration model diverged from rejected receipt commit"),
     }
 }
@@ -257,7 +256,9 @@ async fn serve_admitted_request(
     if !store
         .authorization_is_current(&request, &authorization)
         .await
-        .map_err(|error| P2pReconcileError::RevalidateHydrationAuthorizationGeneration(Box::new(error)))?
+        .map_err(|error| {
+            P2pReconcileError::RevalidateHydrationAuthorizationGeneration(Box::new(error))
+        })?
     {
         let detail = "authenticated enrollment authorization changed before hydration delivery";
         store.mark_rejected(&row, detail).await?;
@@ -282,7 +283,9 @@ async fn serve_admitted_request(
     if !store
         .authorization_is_current(&request, &authorization)
         .await
-        .map_err(|error| P2pReconcileError::RevalidateHydrationAuthorizationTerminalCommit(Box::new(error)))?
+        .map_err(|error| {
+            P2pReconcileError::RevalidateHydrationAuthorizationTerminalCommit(Box::new(error))
+        })?
     {
         let detail = "authenticated enrollment authorization changed before hydration commit";
         store.mark_rejected(&row, detail).await?;
@@ -304,9 +307,8 @@ async fn serve_admitted_request(
             outcome.served.insert(request.request_key);
             Ok(())
         }
-        (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
-            Err(error).map_err(|error| P2pReconcileError::MarkSessionHydrationServed(Box::new(error)))
-        }
+        (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => Err(error)
+            .map_err(|error| P2pReconcileError::MarkSessionHydrationServed(Box::new(error))),
         _ => unreachable!("hydration model diverged from served receipt commit"),
     }
 }
@@ -1087,7 +1089,11 @@ impl GraphqlHydrationStore {
             .enrollment
             .fresh_authorization(&request.requester_did, &request.peer_id)
             .await
-            .map_err(|error| P2pReconcileError::LoadFreshAuthenticatedEnrollmentAuthorityHydration(Box::new(error)))?;
+            .map_err(|error| {
+                P2pReconcileError::LoadFreshAuthenticatedEnrollmentAuthorityHydration(Box::new(
+                    error,
+                ))
+            })?;
         let session_id = escape_graphql_string(&request.session_id);
         let peer_id = escape_graphql_string(&request.peer_id);
         let query = hydration_admission_query(&session_id, &peer_id);

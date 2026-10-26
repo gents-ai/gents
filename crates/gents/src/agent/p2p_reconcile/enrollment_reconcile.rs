@@ -408,11 +408,14 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_authorization_fence(&projection, &member_did, &member_peer)
-                        
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(P2pReconcileError::ReloadEnrollmentAuthorityAuthorizationFence(Box::new(error)))
+                    Err(
+                        P2pReconcileError::ReloadEnrollmentAuthorityAuthorizationFence(Box::new(
+                            error,
+                        )),
+                    )
                 }
             };
             let _ = ack.send(result);
@@ -432,7 +435,9 @@ async fn handle_authority_command(
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(P2pReconcileError::ReloadEnrollmentAuthorityPeerAdmission(Box::new(error)))
+                    Err(P2pReconcileError::ReloadEnrollmentAuthorityPeerAdmission(
+                        Box::new(error),
+                    ))
                 }
             };
             let _ = ack.send(result);
@@ -442,11 +447,12 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_peer_authorization_fence(&projection, &member_peer)
-                        
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(P2pReconcileError::ReloadEnrollmentAuthorityTransportFence(Box::new(error)))
+                    Err(P2pReconcileError::ReloadEnrollmentAuthorityTransportFence(
+                        Box::new(error),
+                    ))
                 }
             };
             let _ = ack.send(result);
@@ -456,11 +462,14 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_member_authorization_fence(&projection, &member_did)
-                        
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(P2pReconcileError::ReloadEnrollmentAuthorityRequestAdmission(Box::new(error)))
+                    Err(
+                        P2pReconcileError::ReloadEnrollmentAuthorityRequestAdmission(Box::new(
+                            error,
+                        )),
+                    )
                 }
             };
             let _ = ack.send(result);
@@ -807,7 +816,9 @@ async fn reconcile_data_plane(
                     delete_enrollment_route(node, stale_peer_id).await?;
                 }
                 return Err(
-                    P2pReconcileError::ReloadEnrollmentAuthorityBeforeRoutePublication(Box::new(error))
+                    P2pReconcileError::ReloadEnrollmentAuthorityBeforeRoutePublication(Box::new(
+                        error,
+                    )),
                 );
             }
         };

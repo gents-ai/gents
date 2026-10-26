@@ -255,11 +255,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     let queued = super::load_request_for_admission_test(node.as_ref(), &doc_id)
         .await
         .unwrap_or_else(|error| {
-            panic!(
-                "{}: load queued request: {}",
-                case.name,
-                ErrorChain(&error)
-            )
+            panic!("{}: load queued request: {}", case.name, ErrorChain(&error))
         });
     if !case.pending_deadline_absent {
         update_request_field(&node, &doc_id, "deadline", &case.request.created_at).await;

@@ -140,7 +140,9 @@ impl From<crate::workspace::WorkspaceRuntimeError> for TriggerEngineError {
     }
 }
 
-impl From<crate::trigger_engine::production_materializer::MaterializerError> for TriggerEngineError {
+impl From<crate::trigger_engine::production_materializer::MaterializerError>
+    for TriggerEngineError
+{
     fn from(error: crate::trigger_engine::production_materializer::MaterializerError) -> Self {
         Self::Materializer(Box::new(error))
     }

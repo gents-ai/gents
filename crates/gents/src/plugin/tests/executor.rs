@@ -2645,11 +2645,7 @@ mod catalog {
         declare_catalog(&home, &mut record);
         let message = format!(
             "{}",
-            ErrorChain(
-                &*list(&home, &record, &test_node().await)
-                    .await
-                    .unwrap_err()
-            )
+            ErrorChain(&*list(&home, &record, &test_node().await).await.unwrap_err())
         );
         assert!(
             message.contains(&format!("{}/{}", record.namespace, record.name)),
@@ -2663,11 +2659,7 @@ mod catalog {
         let (home, record) = installed_plugin(ECHO_BIG_WAT, None);
         let message = format!(
             "{}",
-            ErrorChain(
-                &*list(&home, &record, &test_node().await)
-                    .await
-                    .unwrap_err()
-            )
+            ErrorChain(&*list(&home, &record, &test_node().await).await.unwrap_err())
         );
         assert!(
             message.contains(&format!("{}/{}", record.namespace, record.name)),

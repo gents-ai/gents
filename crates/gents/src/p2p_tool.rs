@@ -312,7 +312,9 @@ impl P2pTool {
 
     async fn enrollment(&self, peer: &str, expected_did: Option<&str>) -> Result<ActiveEnrollment> {
         defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-            .map_err(|error| crate::agent::p2p_reconcile::error::TransportFailure(error.to_string()))
+            .map_err(|error| {
+                crate::agent::p2p_reconcile::error::TransportFailure(error.to_string())
+            })
             .map_err(P2pToolError::InvalidTransportPeerIDNextCall)?;
         let projection = GraphqlEnrollmentStore::new(self.node.clone(), self.actor()?)
             .load_projection()
@@ -565,7 +567,9 @@ impl P2pTool {
             ["network", "get"] => {
                 let peer = text("peer_id")?;
                 defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-                    .map_err(|error| crate::agent::p2p_reconcile::error::TransportFailure(error.to_string()))
+                    .map_err(|error| {
+                        crate::agent::p2p_reconcile::error::TransportFailure(error.to_string())
+                    })
                     .map_err(P2pToolError::InvalidTransportPeerIDNextCall)?;
                 let peers = self
                     .rows(
@@ -589,7 +593,9 @@ impl P2pTool {
                 let peer = (words[1] == "get").then(|| text("peer_id")).transpose()?;
                 if let Some(peer) = peer {
                     defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-                        .map_err(|error| crate::agent::p2p_reconcile::error::TransportFailure(error.to_string()))
+                        .map_err(|error| {
+                            crate::agent::p2p_reconcile::error::TransportFailure(error.to_string())
+                        })
                         .map_err(P2pToolError::InvalidTransportPeerIDNextCall)?;
                 }
                 let filter = peer.map(|peer| format!("{{peer_id: {{_eq: {}}}}}", quoted(peer)));

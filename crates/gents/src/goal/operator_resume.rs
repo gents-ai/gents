@@ -404,7 +404,11 @@ async fn stage_resume_inner(
 
     stage_resume_state(txn, &goal, post, Some((sequence, from_request_id)), now).await?;
     let response = txn
-        .execute(&create.graphql_mutation().map_err(|message| GoalError::RequestFields { message })?)
+        .execute(
+            &create
+                .graphql_mutation()
+                .map_err(|message| GoalError::RequestFields { message })?,
+        )
         .await?;
     let child = response
         .pointer("/data/create_AgentRequest")

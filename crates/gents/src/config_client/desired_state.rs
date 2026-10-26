@@ -1201,10 +1201,11 @@ fn desired_state_error_in<'a>(
         .downcast_ref::<DesiredStateError>()
         .or_else(|| cause.downcast_ref::<ProvenanceError>().and_then(provenance))
         .or_else(|| {
-            match cause
-                .downcast_ref::<InstallationError>()
-                .or_else(|| cause.downcast_ref::<Box<InstallationError>>().map(|boxed| &**boxed))
-            {
+            match cause.downcast_ref::<InstallationError>().or_else(|| {
+                cause
+                    .downcast_ref::<Box<InstallationError>>()
+                    .map(|boxed| &**boxed)
+            }) {
                 Some(InstallationError::DesiredState(error)) => Some(error),
                 Some(InstallationError::Provenance(error)) => provenance(error),
                 _ => None,

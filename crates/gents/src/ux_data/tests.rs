@@ -133,11 +133,7 @@ impl Fixture {
     async fn refusal(&self, surface: &str, tool: &str) -> String {
         format!(
             "{}",
-            ErrorChain(
-                &self.call(surface, tool, json!({}))
-                    .await
-                    .unwrap_err()
-            )
+            ErrorChain(&self.call(surface, tool, json!({})).await.unwrap_err())
         )
     }
 }

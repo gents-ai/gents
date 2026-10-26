@@ -8,8 +8,8 @@ pub(crate) use install::prepare_loaded_graph_package_install;
 pub use catalog::{
     check_graph_pack, compile_pack_graphs, graph_plan_path,
     load_archive_graph_package_with_environment, verify_shipped_plan, GraphPackageCatalogEntry,
-    GraphPackageError,
-    GraphPackageManifest, LoadedGraphPackage, PackageCapabilityTemplate, PackageExternalDependency,
+    GraphPackageError, GraphPackageManifest, LoadedGraphPackage, PackageCapabilityTemplate,
+    PackageExternalDependency,
 };
 pub use entry::{prepare_entry_run, EntryError, EntryRunRequest, PreparedEntryRun};
 pub use install::{

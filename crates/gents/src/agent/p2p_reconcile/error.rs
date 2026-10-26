@@ -320,9 +320,16 @@ pub enum P2pReconcileError {
     #[error("enrollment request mutation returned no document ID")]
     EnrollmentRequestMutationReturnedNoDocument(#[source] gents_protocol::graphql::GraphqlError),
     #[error("enrollment authority owner stopped")]
-    EnrollmentAuthorityOwnerStopped(#[source] tokio::sync::mpsc::error::SendError<super::enrollment_reconcile::EnrollmentAuthorityCommand>),
+    EnrollmentAuthorityOwnerStopped(
+        #[source]
+        tokio::sync::mpsc::error::SendError<
+            super::enrollment_reconcile::EnrollmentAuthorityCommand,
+        >,
+    ),
     #[error("enrollment authority owner dropped fresh authorization response")]
-    EnrollmentAuthorityOwnerDroppedFreshAuthorization(#[source] tokio::sync::oneshot::error::RecvError),
+    EnrollmentAuthorityOwnerDroppedFreshAuthorization(
+        #[source] tokio::sync::oneshot::error::RecvError,
+    ),
     #[error("enrollment authority owner dropped fresh peer authorization response")]
     EnrollmentAuthorityOwnerDroppedFreshPeer(#[source] tokio::sync::oneshot::error::RecvError),
     #[error("enrollment authority owner dropped fresh member response")]
@@ -589,13 +596,17 @@ impl crate::config_client::TransactionFailure for P2pReconcileError {
             Self::ReloadEnrollmentAuthorityPeerAdmission(error) => error.config_client_error(),
             Self::ReloadEnrollmentAuthorityTransportFence(error) => error.config_client_error(),
             Self::ReloadEnrollmentAuthorityRequestAdmission(error) => error.config_client_error(),
-            Self::ReloadEnrollmentAuthorityBeforeRoutePublication(error) => error.config_client_error(),
+            Self::ReloadEnrollmentAuthorityBeforeRoutePublication(error) => {
+                error.config_client_error()
+            }
             Self::LoadPendingSessionHydrationRequests(error) => error.config_client_error(),
             Self::LoadHydrationAdmission(error) => error.config_client_error(),
             Self::MarkSessionHydrationRejected(error) => error.config_client_error(),
             Self::LoadHydrationSelection(error) => error.config_client_error(),
             Self::RevalidateHydrationAuthorizationGeneration(error) => error.config_client_error(),
-            Self::RevalidateHydrationAuthorizationTerminalCommit(error) => error.config_client_error(),
+            Self::RevalidateHydrationAuthorizationTerminalCommit(error) => {
+                error.config_client_error()
+            }
             Self::MarkSessionHydrationServed(error) => error.config_client_error(),
             Self::CommitFileImageHydrationReceipt(error) => error.config_client_error(),
             Self::ReloadLivePairingStateAfterEnrollment(error) => error.config_client_error(),

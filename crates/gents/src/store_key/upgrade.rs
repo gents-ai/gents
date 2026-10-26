@@ -181,8 +181,8 @@ fn load(data: &Path) -> Result<Option<Journal>> {
     if !exists(&path)? {
         return Ok(None);
     }
-    let journal: Journal = serde_json::from_slice(&fs::read(&path)?)
-        .map_err(|source| UpgradeError::ReadIntent {
+    let journal: Journal =
+        serde_json::from_slice(&fs::read(&path)?).map_err(|source| UpgradeError::ReadIntent {
             path: path.clone(),
             source,
         })?;

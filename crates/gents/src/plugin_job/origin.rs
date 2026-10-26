@@ -289,8 +289,12 @@ impl PluginJobError {
                 source: StepRunFailure::Failure(failure),
                 ..
             }
-            | Self::StepJobRowReturned { source: failure, .. }
-            | Self::DecodingStepOutputJobRow { source: failure, .. } => Some(failure),
+            | Self::StepJobRowReturned {
+                source: failure, ..
+            }
+            | Self::DecodingStepOutputJobRow {
+                source: failure, ..
+            } => Some(failure),
             _ => None,
         }
     }

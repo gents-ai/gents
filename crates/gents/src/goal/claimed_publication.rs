@@ -308,7 +308,11 @@ async fn stage_claimed_continuation(
         return Ok(None);
     }
     let response = txn
-        .execute(&create.graphql_mutation().map_err(|message| GoalError::RequestFields { message })?)
+        .execute(
+            &create
+                .graphql_mutation()
+                .map_err(|message| GoalError::RequestFields { message })?,
+        )
         .await?;
     let child = response
         .pointer("/data/create_AgentRequest")

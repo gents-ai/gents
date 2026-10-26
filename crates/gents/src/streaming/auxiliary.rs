@@ -240,7 +240,9 @@ pub(crate) fn sink_with_writer(
                             close,
                         )
                         .await
-                        .map_err(|error| StreamingError::ClosingAuxiliaryAuditOutput(Box::new(error)))?;
+                        .map_err(|error| {
+                            StreamingError::ClosingAuxiliaryAuditOutput(Box::new(error))
+                        })?;
                     writer.reset_tail(&request.doc_id).await?;
                     state.active = None;
                     state.closed = Some((coordinate, close));

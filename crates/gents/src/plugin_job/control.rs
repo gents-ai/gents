@@ -738,8 +738,7 @@ mod tests {
                 })
             })
             .await;
-        assert!(format!("{}", ErrorChain(&result.unwrap_err()))
-            .contains("abort the staged kill"));
+        assert!(format!("{}", ErrorChain(&result.unwrap_err())).contains("abort the staged kill"));
         assert_eq!(row_state(&admission).await, "running");
         assert!(!interrupted(&admission, &live).await);
         finish(admission).await;

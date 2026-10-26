@@ -107,7 +107,8 @@ pub fn load_pack_config<E>(
     options: &PackInstallOptions,
     read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<PackConfig> where
+) -> Result<PackConfig>
+where
     E: Into<CallbackError>,
 {
     validate_pack_manifest(manifest)?;
@@ -144,7 +145,8 @@ pub fn pin_pack_plugins<E>(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     config: &mut PackConfig,
-) -> Result<()> where
+) -> Result<()>
+where
     E: Into<CallbackError>,
 {
     for capability in &mut config.graph_capabilities {
@@ -166,7 +168,8 @@ pub fn decode_pack_config<S>(
     options: Option<&PackInstallOptions>,
     environment: &dyn Fn(&str) -> Option<String>,
     read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> std::result::Result<String, S>,
-) -> Result<PackConfig> where
+) -> Result<PackConfig>
+where
     S: Into<CallbackError>,
 {
     let authored_owner = if options.is_none() {
@@ -260,7 +263,8 @@ fn pin_pack_plugin<E>(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     capability: &mut crate::graph_pipeline::StageCapability,
-) -> Result<()> where
+) -> Result<()>
+where
     E: Into<CallbackError>,
 {
     let crate::graph_pipeline::StageTarget::Plugin { plugin, digest, .. } = &mut capability.target
@@ -281,7 +285,8 @@ fn pin_callback_plugin<E>(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     callback: &mut crate::document_config::Callback,
-) -> Result<()> where
+) -> Result<()>
+where
     E: Into<CallbackError>,
 {
     let crate::document_config::CallbackHandler::Plugin { plugin, digest, .. } =
@@ -302,7 +307,8 @@ fn pin_entry_prepare_plugin<E>(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     entry: &mut crate::graph_pipeline::EntryBinding,
-) -> Result<()> where
+) -> Result<()>
+where
     E: Into<CallbackError>,
 {
     if let Some(schema) = &entry.input_schema {
@@ -336,7 +342,8 @@ fn own_plugin<E>(
     plugin: &str,
     authored: Option<&str>,
     what: &str,
-) -> Result<Option<(String, String)>> where
+) -> Result<Option<(String, String)>>
+where
     E: Into<CallbackError>,
 {
     if plugin.contains('/') {
@@ -367,8 +374,7 @@ fn own_plugin<E>(
                 plugin: plugin.to_owned(),
                 authored: authored.to_owned(),
                 pinned,
-            }
-            );
+            });
         }
     }
     Ok(Some((
@@ -408,7 +414,8 @@ fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
 fn hydrate_eval_cases<S>(
     root: &mut serde_json::Map<String, Value>,
     read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> std::result::Result<String, S>,
-) -> Result<()> where
+) -> Result<()>
+where
     S: Into<CallbackError>,
 {
     let Some(definitions) = root
@@ -434,8 +441,7 @@ fn hydrate_eval_cases<S>(
                 return Err(LoaderError::EvalCaseReference {
                     definition_id: definition_id.clone(),
                     reference,
-                }
-                );
+                });
             }
             let text = read_sidecar(
                 crate::Collection::EvalDefinition,
@@ -487,7 +493,8 @@ fn hydrate_sidecar<E>(
     config_path: &str,
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
-) -> Result<()> where
+) -> Result<()>
+where
     E: Into<CallbackError>,
 {
     let Some(relative) = prompt.strip_prefix("./") else {
@@ -498,8 +505,7 @@ fn hydrate_sidecar<E>(
     {
         return Err(LoaderError::SidecarPath {
             relative: relative.to_owned(),
-        }
-        );
+        });
     }
     let path = match config_path.rsplit_once('/') {
         Some((parent, _)) => format!("{parent}/{relative}"),

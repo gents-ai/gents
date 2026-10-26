@@ -163,8 +163,8 @@ where
             coordinate: coordinate.to_owned(),
         }
     })?;
-    let prepared_cache = prepare_cache(&record)
-        .map_err(|error| PluginLifecycleError::PrepareCache(error.into()))?;
+    let prepared_cache =
+        prepare_cache(&record).map_err(|error| PluginLifecycleError::PrepareCache(error.into()))?;
     let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
     let mut previous = Vec::new();
     for plugin in &record.plugins {
@@ -193,12 +193,10 @@ where
     })();
     match result {
         Ok(plugins) => {
-            let cache_error = cleanup_cache(prepared_cache)
-                .err()
-                .map(|error| {
-                    let error: CallbackError = error.into();
-                    format!("{}", ErrorChain(&*error))
-                });
+            let cache_error = cleanup_cache(prepared_cache).err().map(|error| {
+                let error: CallbackError = error.into();
+                format!("{}", ErrorChain(&*error))
+            });
             Ok(LocalPackRemoval {
                 record,
                 plugins,

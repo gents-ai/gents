@@ -1,5 +1,5 @@
-use crate::hook::HookError;
 use super::*;
+use crate::hook::HookError;
 use futures::FutureExt;
 use gents_protocol::error_chain::ErrorChain;
 use std::panic::AssertUnwindSafe;

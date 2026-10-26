@@ -130,9 +130,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
                         Ok(plans) => {
                             report.graphs = plans.into_iter().map(|plan| plan.graph_id).collect()
                         }
-                        Err(error) => report
-                            .problems
-                            .push(format!("{}", ErrorChain(&error))),
+                        Err(error) => report.problems.push(format!("{}", ErrorChain(&error))),
                     }
                     check_topology(dir, &config, &mut report.problems);
                 }
@@ -144,9 +142,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
                     report.unverified.push("event_source_filters");
                 }
             }
-            Err(error) => report
-                .problems
-                .push(format!("{}", ErrorChain(&error))),
+            Err(error) => report.problems.push(format!("{}", ErrorChain(&error))),
         }
     }
     if dir.join("experiment.json").is_file() {

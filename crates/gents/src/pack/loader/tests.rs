@@ -331,8 +331,7 @@ fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_p
     }
     let malformed = load_eval(&manifest, eval_config(json!(["./cases/bad.json"]))).unwrap_err();
     assert!(
-        format!("{}", ErrorChain(&malformed))
-            .contains("./cases/bad.json is not one EvalCase"),
+        format!("{}", ErrorChain(&malformed)).contains("./cases/bad.json is not one EvalCase"),
         "{}",
         ErrorChain(&malformed)
     );

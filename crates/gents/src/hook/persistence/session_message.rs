@@ -1,5 +1,5 @@
-use crate::hook::HookError;
 use super::*;
+use crate::hook::HookError;
 use gents_protocol::error_chain::ErrorChain;
 
 use crate::session_message::{AgentMessageArgs, AgentNewArgs};
@@ -240,10 +240,7 @@ impl DefraSessionHook {
                 service_unavailable_payload(
                     tool_name,
                     "/session_id",
-                    format!(
-                        "the target chat could not be read: {}",
-                        ErrorChain(&error)
-                    ),
+                    format!("the target chat could not be read: {}", ErrorChain(&error)),
                     true,
                 )
             ),
@@ -288,10 +285,7 @@ impl DefraSessionHook {
                         service_unavailable_payload(
                             tool_name,
                             "/",
-                            format!(
-                                "the message could not be delivered: {}",
-                                ErrorChain(&error)
-                            ),
+                            format!("the message could not be delivered: {}", ErrorChain(&error)),
                             true,
                         )
                     );

@@ -217,7 +217,8 @@ impl SchemaTool {
             ["collection", "update"] => &["patch"],
             ["view", "create"] => &["query", "sdl"],
             ["migration", "set"] => &["config"],
-            ["collection", "list" | "get" | "materialize"] | ["version", "list" | "get" | "activate"] => &[],
+            ["collection", "list" | "get" | "materialize"]
+            | ["version", "list" | "get" | "activate"] => &[],
             _ => return Err(SchemaToolError::UnknownCommand),
         };
         for key in args.options.keys() {

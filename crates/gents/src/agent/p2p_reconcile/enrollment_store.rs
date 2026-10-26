@@ -583,8 +583,8 @@ impl GraphqlEnrollmentStore {
         .await
         .map_err(P2pReconcileError::TimedOutConnectingEnrollmentCandidate)?
         .map_err(|error| TransportFailure(error.to_string()))?;
-        let peer =
-            TransportPeerId::new(request.candidate_peer.clone()).map_err(|error| TransportFailure(error.to_string()))?;
+        let peer = TransportPeerId::new(request.candidate_peer.clone())
+            .map_err(|error| TransportFailure(error.to_string()))?;
         let resolved = timeout(Duration::from_secs(20), p2p.resolve_peer_identity(&peer))
             .await
             .map_err(P2pReconcileError::TimedOutResolvingEnrollmentCandidateIdentity)?
@@ -1042,10 +1042,7 @@ impl GraphqlEnrollmentStore {
                     add_request_conflict(
                         &mut request_conflicts,
                         &request_id,
-                        format!(
-                            "invalid enrollment decision: {}",
-                            ErrorChain(&error)
-                        ),
+                        format!("invalid enrollment decision: {}", ErrorChain(&error)),
                     );
                     tracing::warn!(?scope, request_id, error = %error, "scoped invalid enrollment decision");
                 }

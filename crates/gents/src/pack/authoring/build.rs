@@ -130,8 +130,7 @@ pub trait PluginCompiler {
         BUILDER_ID
     }
 
-    fn load_and_validate(&self, owner: &str, dir: &Path)
-        -> Result<(), crate::pack::CallbackError>;
+    fn load_and_validate(&self, owner: &str, dir: &Path) -> Result<(), crate::pack::CallbackError>;
     fn compile(
         &self,
         owner: &str,

@@ -680,15 +680,17 @@ async fn commit_prepared_graph_package_install(
                         .await?,
                 )?;
                 if live_active_revision_digest != *expected_active_revision_digest {
-                    return Err(GraphPackageInstallError::Stale(crate::config_client::StaleExpectation {
-                        drifted: vec![crate::config_client::DriftedDocument {
-                            collection: Collection::GraphDefinition,
-                            owner: owner.to_owned(),
-                            id: graph_id.clone(),
-                            expected: expected_active_revision_digest.clone(),
-                            found: live_active_revision_digest,
-                        }],
-                    }));
+                    return Err(GraphPackageInstallError::Stale(
+                        crate::config_client::StaleExpectation {
+                            drifted: vec![crate::config_client::DriftedDocument {
+                                collection: Collection::GraphDefinition,
+                                owner: owner.to_owned(),
+                                id: graph_id.clone(),
+                                expected: expected_active_revision_digest.clone(),
+                                found: live_active_revision_digest,
+                            }],
+                        },
+                    ));
                 }
                 let effective =
                     crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;

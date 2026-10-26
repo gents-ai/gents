@@ -173,9 +173,7 @@ impl DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(error) => {
-                    self.on_tool_persistence_error(route.persistence_context(), &error)
-                }
+                Err(error) => self.on_tool_persistence_error(route.persistence_context(), &error),
             };
         }
 
@@ -193,9 +191,7 @@ impl DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(error) => {
-                    self.on_tool_persistence_error("persist job tool call", &error)
-                }
+                Err(error) => self.on_tool_persistence_error("persist job tool call", &error),
             };
         }
 

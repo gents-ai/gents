@@ -705,11 +705,7 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
     ) -> Result<Option<String>> {
         match DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await {
             Ok(id) => Ok(Some(id)),
-            Err(error)
-                if error.is_pending_input_changed() =>
-            {
-                Ok(None)
-            }
+            Err(error) if error.is_pending_input_changed() => Ok(None),
             Err(error) => Err(error),
         }
     }

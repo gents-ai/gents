@@ -319,9 +319,7 @@ impl MaterializerHandle for ProductionMaterializer {
         if matches!(trigger_kind, TriggerKind::Manual)
             && (trigger_id.is_some() || trigger_doc_id.is_some())
         {
-            return Box::pin(async {
-                Err(MaterializerError::ManualTriggerCarriesTrigger.into())
-            });
+            return Box::pin(async { Err(MaterializerError::ManualTriggerCarriesTrigger.into()) });
         }
 
         let prepared_ids =
@@ -744,7 +742,9 @@ impl MaterializerHandle for ProductionMaterializer {
                 crate::goal::TaskGoalFireRecoveryDisposition::Recovered => {
                     Ok(decision.recovered_request_id)
                 }
-                crate::goal::TaskGoalFireRecoveryDisposition::Conflict => Err(MaterializerError::GoalTaskRequestConflict.into()),
+                crate::goal::TaskGoalFireRecoveryDisposition::Conflict => {
+                    Err(MaterializerError::GoalTaskRequestConflict.into())
+                }
             }
         })
     }

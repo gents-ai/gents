@@ -10,7 +10,9 @@ use crate::config::ResolvedAgent;
 pub(crate) enum BackendClientError {
     #[error(transparent)]
     Http(#[from] rig::http_client::Error),
-    #[error("building OpenAI-compatible completion client for agent {agent_id} against {endpoint}")]
+    #[error(
+        "building OpenAI-compatible completion client for agent {agent_id} against {endpoint}"
+    )]
     OpenAiCompatible {
         agent_id: String,
         endpoint: String,
@@ -567,10 +569,7 @@ mod tests {
             let client = build_backend_client(node.clone(), &agent, "key", Duration::from_secs(5))
                 .await
                 .unwrap_or_else(|error| {
-                    panic!(
-                        "{kind:?} {wire:?} with acct-b: {}",
-                        ErrorChain(&error)
-                    )
+                    panic!("{kind:?} {wire:?} with acct-b: {}", ErrorChain(&error))
                 });
             let built = match (&client, wire) {
                 (BackendClient::ChatGptCodex(_), _) => BackendProviderKind::ChatGptCodex,

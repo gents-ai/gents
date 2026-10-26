@@ -168,7 +168,9 @@ pub enum SessionError {
     #[error(transparent)]
     History(#[from] crate::session::HistoryError),
     #[error(transparent)]
-    ProviderContextReduction(#[from] crate::provider_context_reduction::ProviderContextReductionError),
+    ProviderContextReduction(
+        #[from] crate::provider_context_reduction::ProviderContextReductionError,
+    ),
     #[error(transparent)]
     Compaction(#[from] gents_loop::compaction::CompactionError),
     #[error(transparent)]

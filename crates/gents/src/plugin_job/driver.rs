@@ -2943,10 +2943,7 @@ pub(crate) mod tests {
         .await;
         let error = run_step(&step.job.runtime, &step.row).await.unwrap_err();
         assert!(
-            matches!(
-                error.step_failure(),
-                Some(StepFailure::Trap(_))
-            ),
+            matches!(error.step_failure(), Some(StepFailure::Trap(_))),
             "{}",
             ErrorChain(&error)
         );

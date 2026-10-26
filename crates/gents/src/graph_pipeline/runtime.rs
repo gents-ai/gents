@@ -372,7 +372,9 @@ impl From<crate::interrupt::InterruptError> for GraphPipelineError {
     }
 }
 
-impl From<crate::trigger_engine::production_materializer::MaterializerError> for GraphPipelineError {
+impl From<crate::trigger_engine::production_materializer::MaterializerError>
+    for GraphPipelineError
+{
     fn from(error: crate::trigger_engine::production_materializer::MaterializerError) -> Self {
         Self::Materializer(Box::new(error))
     }
