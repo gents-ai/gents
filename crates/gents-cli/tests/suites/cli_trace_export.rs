@@ -2354,7 +2354,26 @@ async fn projection_graphql_mock(
             }]
         })
     };
-    (StatusCode::OK, Json(response))
+    (
+        StatusCode::OK,
+        Json(projection_mock_cursor_page(query, response)),
+    )
+}
+
+/// Transaction reads enumerate through DefraDB's `_cursor` page; the mock
+/// serves its whole row set as one final page.
+fn projection_mock_cursor_page(query: &str, mut response: Value) -> Value {
+    if !query.trim_start().starts_with("{ _cursor {") {
+        return response;
+    }
+    let Some(Value::Object(mut data)) = response.get_mut("data").map(Value::take) else {
+        return response;
+    };
+    data.insert(
+        "_pageInfo".to_owned(),
+        json!({ "hasNext": false, "endCursor": null }),
+    );
+    json!({ "data": { "_cursor": data } })
 }
 
 async fn projection_acp_mock(
