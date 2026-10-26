@@ -237,10 +237,39 @@ fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String>
 }
 
 #[test]
+fn display_owner_binds_generated_session_turn_cases() {
+    for case in super::lean_vocab_test::lean_client_session_turn_cases() {
+        let rows = lean_session_rows("session-1", &case.rows);
+        let selected = rows
+            .iter()
+            .find(|row| {
+                row.doc_id.as_deref() == Some(format!("doc-{}", case.selected_doc).as_str())
+            })
+            .expect("selected case row");
+        let refs = rows.iter().collect::<Vec<_>>();
+        assert_eq!(
+            gents_desktop_core::client::session_display_request(&refs, selected).doc_id,
+            Some(format!("doc-{}", case.expected_display_turn_doc)),
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
 fn session_snapshot_binds_generated_session_turn_cases() {
     let cases = super::lean_vocab_test::lean_client_session_turn_cases();
-    assert_eq!(cases.len(), 41);
-    for case in cases {
+    assert_eq!(cases.len(), 43);
+    let public_cases = cases
+        .iter()
+        .filter(|case| {
+            case.rows
+                .iter()
+                .any(|row| row.doc == case.selected_doc && row.public_input)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(public_cases.len(), 42);
+    for case in public_cases {
         let rows = lean_session_rows("session-1", &case.rows);
         let selected = rows
             .iter()
@@ -268,7 +297,7 @@ fn session_snapshot_binds_generated_session_turn_cases() {
                 selected.requester_did.clone(),
                 Some(selected),
             )],
-            requests: rows.clone(),
+            requests: rows.iter().rev().cloned().collect(),
             ..ClientStoreRows::default()
         });
         let snapshot =
@@ -276,6 +305,24 @@ fn session_snapshot_binds_generated_session_turn_cases() {
         assert_eq!(
             snapshot.latest_request_id,
             request_ids_for_docs(&rows, &[case.expected_display_turn_doc]).pop(),
+            "{}",
+            case.name
+        );
+        let summaries =
+            session_summaries(&store.sessions, &store.requests, CONTRACT_NODE, &[], &[]);
+        assert_eq!(
+            summaries[0].latest_request_id, snapshot.latest_request_id,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            summaries[0].latest_request_doc_id,
+            Some(format!("doc-{}", case.expected_display_turn_doc)),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            summaries[0].turn_state, snapshot.turn_state,
             "{}",
             case.name
         );

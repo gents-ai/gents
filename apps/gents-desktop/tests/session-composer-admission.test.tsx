@@ -387,6 +387,28 @@ const userEntry = (
 });
 
 describe("SessionScreen messages queued behind a running turn", () => {
+  it("stops the background request while retaining queued user messages", async () => {
+    const interruptRequest = vi.fn().mockResolvedValue({});
+    const { app } = screenApp({
+      session: heldSession({
+        turnState: "running",
+        latestRequestId: "background-completion-wake",
+        pendingTurn: null,
+        queuedTurns: [queuedTurn("queued-user", "send this next")],
+      }),
+      api: { interruptRequest },
+    });
+    renderScreen(app);
+    expect(screen.getByTestId("queued-inputs")).toHaveTextContent("send this next");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(interruptRequest).toHaveBeenCalledWith({
+      requestId: "background-completion-wake",
+      nodeDid: NODE,
+      cause: "userCancelled",
+    });
+    expect(screen.getByTestId("queued-inputs")).toHaveTextContent("send this next");
+  });
+
   it("keeps the composer usable and admits a message while the turn runs", async () => {
     const user = userEvent.setup();
     const { app, sendChatMessage } = screenApp({
