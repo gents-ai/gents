@@ -1,20 +1,46 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::pack::{load_pack_config, PackInstallOptions, PackManifest};
-use crate::pack_archive::read_pack;
+use crate::pack_archive::{format::PackFormatError, read_pack};
 
 pub const PREVIEW_OWNER: &str = "did:key:zPackShowPlaceholder";
 
-pub fn verify_pack_file(path: &std::path::Path) -> Result<crate::pack_archive::PackHeader> {
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+#[derive(Debug, thiserror::Error)]
+pub enum InspectError {
+    #[error("opening {}", path.display())]
+    Open {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is not a valid pack", path.display())]
+    InvalidPack {
+        path: PathBuf,
+        #[source]
+        source: PackFormatError,
+    },
+}
+
+pub fn verify_pack_file(
+    path: &Path,
+) -> std::result::Result<crate::pack_archive::PackHeader, InspectError> {
+    let file = std::fs::File::open(path).map_err(|source| InspectError::Open {
+        path: path.to_path_buf(),
+        source,
+    })?;
     read_pack(
         std::io::BufReader::new(file),
         crate::pack_archive::Bounds::default(),
         |_, _| Ok(()),
     )
-    .with_context(|| format!("{} is not a valid pack", path.display()))
     .map(|verified| verified.header)
+    .map_err(|source| InspectError::InvalidPack {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 pub fn preview_config(
@@ -117,9 +143,9 @@ mod tests {
         std::fs::write(&tampered, bytes).unwrap();
         let error = verify_pack_file(&tampered).unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("is not a valid pack"),
+            format!("{}", ErrorChain(&error)).contains("is not a valid pack"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 

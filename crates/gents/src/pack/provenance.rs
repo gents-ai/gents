@@ -100,7 +100,7 @@ pub(super) async fn apply_pack_documents(
     config: &PackConfig,
     policy: super::installation::DriftPolicy,
     expected: Vec<crate::config_client::DesiredStateExpectation>,
-) -> anyhow::Result<super::installation::InstallReport> {
+) -> Result<super::installation::InstallReport, super::installation::InstallationError> {
     let documents = super::installation::installable_documents(config)?;
     let guard = DesiredStateApplyPlan::new(Vec::new())?.with_expected(expected)?;
     access

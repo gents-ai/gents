@@ -1366,7 +1366,7 @@ impl crate::node_readiness_publisher::NodeReadinessWriter for FailGenerationSour
         _node_did: &str,
         snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> Result<()> {
+    ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
         if snapshot.active_generation == 2 {
             self.fatal_attempted.notify_one();
             self.fatal_release.acquire().await.unwrap().forget();
@@ -1388,7 +1388,7 @@ impl crate::node_readiness_publisher::NodeReadinessWriter for GateGenerationSour
         _node_did: &str,
         snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> Result<()> {
+    ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
         if snapshot.active_generation == 2 {
             self.attempted.notify_one();
             self.release.acquire().await.unwrap().forget();

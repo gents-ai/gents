@@ -47,7 +47,7 @@ pub(super) async fn claim_in_txn(
     dependent: &str,
     dependencies: &[String],
     policy: DriftPolicy,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     for coordinate in dependencies {
         let record = read_record(txn, owner, coordinate).await?;
         let doc_id = record
@@ -109,7 +109,7 @@ pub(super) async fn release_in_txn(
     owner: &str,
     dependent: &str,
     policy: DriftPolicy,
-) -> anyhow::Result<Vec<RemoveReport>> {
+) -> Result<Vec<RemoveReport>> {
     let response = txn
         .execute(&format!(
             r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,

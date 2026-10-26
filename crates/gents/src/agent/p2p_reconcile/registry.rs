@@ -1,12 +1,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
-use super::error::P2pReconcileError;
+use super::error::{P2pReconcileError, Result};
 use crate::graphql::escape_graphql_string;
 
 use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_list_literal};
@@ -146,8 +145,8 @@ pub async fn run_registry_heartbeat(
     node_did: String,
     network_id: String,
     cancel: CancellationToken,
-) -> Result<()> {
-    registry_heartbeat(node, node_did, network_id, cancel).await
+) -> anyhow::Result<()> {
+    Ok(registry_heartbeat(node, node_did, network_id, cancel).await?)
 }
 
 async fn registry_heartbeat(
@@ -245,12 +244,12 @@ async fn tick_registry(
     let peer_id = p2p
         .local_peer_id()
         .await
-        .map_err(|e| anyhow::anyhow!("local_peer_id: {e}"))?;
+        .map_err(|error| P2pReconcileError::LocalPeerIdFailed { error })?;
 
     let raw_addresses = p2p
         .listen_addresses()
         .await
-        .map_err(|e| anyhow::anyhow!("listen_addresses: {e}"))?;
+        .map_err(|error| P2pReconcileError::ListenAddressesFailed { error })?;
 
     let mut addresses: Vec<String> = raw_addresses
         .into_iter()

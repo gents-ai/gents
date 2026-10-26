@@ -754,7 +754,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     assert!(result.is_err());
     assert!(cancellation.is_cancelled());
     assert!(super::super::ShutdownDrainFailure::occurs_in(
-        &reviewer.take_failure().unwrap()
+        reviewer.take_failure().unwrap().as_ref()
     ));
     tasks.close();
     let joined = tokio::time::timeout(Duration::from_secs(10), tasks.join_next())
@@ -1006,7 +1006,7 @@ async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daem
         .await
         .unwrap_err();
     assert!(
-        super::super::ShutdownDrainFailure::occurs_in(&error),
+        super::super::ShutdownDrainFailure::occurs_in(error.as_ref()),
         "{}",
         ErrorChain(error.as_ref())
     );
@@ -1017,7 +1017,7 @@ async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daem
         .unwrap();
     let error = super::super::auxiliary_task_join_result(joined).unwrap_err();
     assert!(
-        super::super::ShutdownDrainFailure::occurs_in(&error),
+        super::super::ShutdownDrainFailure::occurs_in(error.as_ref()),
         "{}",
         ErrorChain(error.as_ref())
     );
@@ -2518,7 +2518,7 @@ async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
         .unwrap()
         .expect_err("fenced partial must surface through daemon join");
     assert!(
-        error.is::<super::super::ShutdownDrainFailure>(),
+        super::super::ShutdownDrainFailure::occurs_in(error.as_ref()),
         "{}",
         ErrorChain(error.as_ref())
     );

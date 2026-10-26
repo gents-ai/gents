@@ -313,9 +313,9 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .await
         .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(refused.as_ref())).contains("gents plugin remove"),
+        format!("{}", ErrorChain(&refused)).contains("gents plugin remove"),
         "{}",
-        ErrorChain(refused.as_ref())
+        ErrorChain(&refused)
     );
 
     record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
@@ -651,9 +651,9 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     .await
     .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("acme/demo"),
+        format!("{}", ErrorChain(&error)).contains("acme/demo"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)

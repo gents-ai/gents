@@ -80,8 +80,8 @@ pub(super) struct ShutdownDrainFailure {
 }
 
 impl ShutdownDrainFailure {
-    fn occurs_in(error: &anyhow::Error) -> bool {
-        find_source::<Self>(error.as_ref()).is_some()
+    fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        find_source::<Self>(error).is_some()
     }
 }
 
@@ -271,7 +271,7 @@ impl RequestInterruptionSource {
 fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>) -> Result<()> {
     match joined {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) if ShutdownDrainFailure::occurs_in(&error) => Err(error),
+        Ok(Err(error)) if ShutdownDrainFailure::occurs_in(error.as_ref()) => Err(error),
         Ok(Err(error)) => {
             tracing::warn!(error = %error, "failed to resume owned auxiliary request");
             Ok(())
@@ -711,7 +711,6 @@ where
                 };
                 let ticket = WorkerTicket::new(lifecycle.request().doc_id.clone(), generation);
                 if let Err(error) = RequestGuard::bind_claim(&mut capacity, ticket) {
-                    let error = anyhow::Error::new(error);
                     record_current_request_outcome("worker_ticket_refused");
                     record_current_failure_class(&error);
                     self.finalize_failure_before_work(
@@ -1283,7 +1282,7 @@ where
             // The owned loop returns this only with an interrupt latch present.
             Ok(HandleRequestOutcome::Interrupted(source)) => OwnedWorkOutcome::Interrupted(source),
             Ok(HandleRequestOutcome::FailedAfterResponse(error))
-                if lost_execution_ownership(lifecycle, &error).await =>
+                if lost_execution_ownership(lifecycle, error.as_ref()).await =>
             {
                 tracing::warn!(request_id = %request.request_id, %error, "request work stopped after execution ownership loss");
                 OwnedWorkOutcome::OwnershipLost
@@ -1299,7 +1298,7 @@ where
                 );
                 OwnedWorkOutcome::observed(TaskAgentResult::Failure, Some(error.to_string()), true)
             }
-            Err(error) if ShutdownDrainFailure::occurs_in(&error) => {
+            Err(error) if ShutdownDrainFailure::occurs_in(error.as_ref()) => {
                 record_current_request_outcome("shutdown_drain_failed");
                 record_current_failure_class(&error);
                 tracing::error!(
@@ -1310,7 +1309,7 @@ where
                 );
                 OwnedWorkOutcome::DrainFailed(error)
             }
-            Err(error) if lost_execution_ownership(lifecycle, &error).await => {
+            Err(error) if lost_execution_ownership(lifecycle, error.as_ref()).await => {
                 tracing::warn!(request_id = %request.request_id, %error, "request work stopped after execution ownership loss");
                 OwnedWorkOutcome::OwnershipLost
             }
@@ -1331,8 +1330,11 @@ where
 
 /// A work failure caused by losing the execution lease is not this execution's
 /// failure to report.
-async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
-    if crate::lifecycle::ExecutionOwnershipLost::occurs_in(error.as_ref()) {
+async fn lost_execution_ownership(
+    lifecycle: &RequestLifecycle,
+    error: &(dyn std::error::Error + Send + Sync + 'static),
+) -> bool {
+    if crate::lifecycle::ExecutionOwnershipLost::occurs_in(error) {
         return true;
     }
     matches!(lifecycle.owns_execution().await, Ok(false))

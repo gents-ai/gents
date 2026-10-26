@@ -1,5 +1,6 @@
 use defra_p2p_adapter::P2PError;
 
+use super::enrollment_offer::MAX_OFFER_VALIDITY;
 use super::trait_def::RemoteP2pAdminError;
 
 #[derive(Debug, thiserror::Error)]
@@ -231,6 +232,40 @@ pub enum P2pReconcileError {
     FileImageReceiptScope,
     #[error(transparent)]
     FileImageReceipt(#[from] gents_protocol::file_image_hydration::FileImageHydrationError),
+    #[error("enrollment offer validity must be between 1 and {} seconds", MAX_OFFER_VALIDITY.num_seconds())]
+    OfferValidityOutOfRange,
+    #[error("reading live server peer ID for enrollment offer")]
+    ReadServerPeerId { source: P2PError },
+    #[error("reading live server ticket for enrollment offer")]
+    ReadServerTicket { source: P2PError },
+    #[error("server has no shareable P2P address for enrollment")]
+    ServerHasNoShareableAddress,
+    #[error("server produced an invalid shareable P2P ticket")]
+    InvalidServerTicket { source: p2p::Error },
+    #[error("server shareable ticket does not match its live peer ID")]
+    ServerTicketPeerMismatch,
+    #[error("signing authenticated enrollment offer")]
+    SignEnrollmentOffer {
+        source: crate::identity::IdentityError,
+    },
+    #[error(transparent)]
+    EnrollmentProtocol(#[from] gents_protocol::enrollment::EnrollmentError),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error("client route collection {name} is not registered")]
+    ClientRouteCollectionUnregistered { name: String },
+    #[error("local_peer_id: {error}")]
+    LocalPeerIdFailed { error: P2PError },
+    #[error("listen_addresses: {error}")]
+    ListenAddressesFailed { error: P2PError },
+    #[error("shareable_address: {error}")]
+    ShareableAddressFailed { error: P2PError },
+    #[error("P2P node reported no shareable address for PeerEndpoint")]
+    NoPeerEndpointAddress,
+    #[error("signing PeerEndpoint binding")]
+    SignPeerEndpoint {
+        source: crate::identity::IdentityError,
+    },
 }
 
 pub(crate) type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
+use super::error::{P2pReconcileError, Result};
 use crate::graphql::escape_graphql_string;
 use crate::identity::NodeIdentity;
 
@@ -18,8 +18,8 @@ pub async fn run_endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
-) -> Result<()> {
-    endpoint_heartbeat(node, identity, cancel).await
+) -> anyhow::Result<()> {
+    Ok(endpoint_heartbeat(node, identity, cancel).await?)
 }
 
 async fn endpoint_heartbeat(
@@ -77,12 +77,12 @@ async fn tick_endpoint(
     let peer_id = p2p
         .local_peer_id()
         .await
-        .map_err(|e| anyhow::anyhow!("local_peer_id: {e}"))?;
+        .map_err(|error| P2pReconcileError::LocalPeerIdFailed { error })?;
     let address = p2p
         .shareable_address()
         .await
-        .map_err(|e| anyhow::anyhow!("shareable_address: {e}"))?
-        .context("P2P node reported no shareable address for PeerEndpoint")?;
+        .map_err(|error| P2pReconcileError::ShareableAddressFailed { error })?
+        .ok_or(P2pReconcileError::NoPeerEndpointAddress)?;
     let binding = EndpointBinding { peer_id, address };
     // Readers take freshness from the authorization lease, not from this
     // row's `updated_at`, so an unchanged binding is never rewritten.
@@ -101,7 +101,7 @@ async fn tick_endpoint(
     record.sig = identity
         .sign(&record.signing_payload())
         .await
-        .context("signing PeerEndpoint binding")?;
+        .map_err(|source| P2pReconcileError::SignPeerEndpoint { source })?;
     let mutation = peer_endpoint_upsert_mutation(&record);
     crate::config_client::ConfigAccess::write_local_response(
         node,

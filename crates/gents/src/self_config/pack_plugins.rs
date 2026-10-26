@@ -123,7 +123,8 @@ impl PackInstaller {
                             &identity.coordinate,
                             Some(&identity),
                         )
-                        .await
+                        .await?;
+                        Ok(())
                     }
                 },
             )

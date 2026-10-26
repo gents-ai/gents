@@ -16,7 +16,7 @@ impl crate::node_readiness_publisher::NodeReadinessWriter for AcceptReadinessWri
         _node_did: &str,
         _snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
         Ok(())
     }
 }
@@ -41,7 +41,7 @@ impl crate::node_readiness_publisher::NodeReadinessWriter for RejectRouterGenera
         _node_did: &str,
         snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
         if snapshot.router_generation > 0 {
             return Err(crate::node_readiness_publisher::FatalNodeReadinessWrite.into());
         }
@@ -56,7 +56,7 @@ impl crate::node_readiness_publisher::NodeReadinessWriter for ExhaustStartupSour
         _node_did: &str,
         snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
         if snapshot.process_state == NodeReadinessProcessState::Recovering
             && snapshot.active_generation > 0
         {
@@ -67,7 +67,11 @@ impl crate::node_readiness_publisher::NodeReadinessWriter for ExhaustStartupSour
             if attempt == 5 {
                 self.source_exhausted.notify_one();
             }
-            anyhow::bail!("injected startup source persistence exhaustion");
+            return Err(
+                crate::node_readiness_publisher::NodeReadinessPublisherError::InjectedFailure {
+                    message: "injected startup source persistence exhaustion",
+                },
+            );
         }
         self.persisted
             .lock()
@@ -84,11 +88,15 @@ impl crate::node_readiness_publisher::NodeReadinessWriter for ExhaustReadyWriter
         _node_did: &str,
         snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
         if snapshot.process_state == NodeReadinessProcessState::Ready {
             self.ready_attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            anyhow::bail!("injected Ready persistence exhaustion");
+            return Err(
+                crate::node_readiness_publisher::NodeReadinessPublisherError::InjectedFailure {
+                    message: "injected Ready persistence exhaustion",
+                },
+            );
         }
         self.persisted
             .lock()

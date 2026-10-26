@@ -123,8 +123,8 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
             Ok(applied) => applied,
             Err(error) => {
                 self.admission_gate.close().await;
-                let rendered = ErrorChain(error.as_ref()).to_string();
-                if self.fatal_error.send(error).is_err() {
+                let rendered = ErrorChain(&error).to_string();
+                if self.fatal_error.send(error.into()).is_err() {
                     tracing::error!(
                         error = %rendered,
                         "runtime coordinator stopped before demotion failure was delivered"
@@ -318,7 +318,9 @@ async fn run_agent_with_runtime_status(
             )
             .await
         }
-        Err(error) => Err(error.context("initialize runtime agent_config readiness")),
+        Err(error) => {
+            Err(anyhow::Error::new(error).context("initialize runtime agent_config readiness"))
+        }
     };
 
     finish_run_agent(
@@ -373,10 +375,10 @@ async fn finish_run_agent(
     match (body_result, teardown_error) {
         (Err(error), Some(teardown_error)) => Err(error.context(format!(
             "runtime status teardown also failed: {}",
-            ErrorChain(teardown_error.as_ref())
+            ErrorChain(&teardown_error)
         ))),
         (Err(error), None) => Err(error),
-        (Ok(()), Some(error)) => Err(error),
+        (Ok(()), Some(error)) => Err(error.into()),
         (Ok(()), None) => Ok(()),
     }
 }
@@ -1425,7 +1427,7 @@ mod startup_slot_failure_policy_tests {
             _node_did: &str,
             snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
             _updated_at: &str,
-        ) -> Result<()> {
+        ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
             if snapshot.agents.iter().any(|entry| {
                 entry.reason
                     == Some(gents_protocol::node_readiness::AgentReadinessUnavailableReason::ExecutorStartFailed)
@@ -1604,11 +1606,15 @@ mod lifecycle_coordinator_tests {
             _node_did: &str,
             _snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
             _updated_at: &str,
-        ) -> Result<()> {
+        ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
                 self.ready_attempted.wait().await;
                 self.release.acquire().await.unwrap().forget();
-                anyhow::bail!("injected first Ready persistence failure");
+                return Err(
+                    crate::node_readiness_publisher::NodeReadinessPublisherError::InjectedFailure {
+                        message: "injected first Ready persistence failure",
+                    },
+                );
             }
             Ok(())
         }

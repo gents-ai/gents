@@ -3,6 +3,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use super::InstallationError;
+
 use crate::config_client::{ConfigAccess, SchemaInstallPlan};
 use crate::document_config::PackConfig;
 use crate::graph_package::{GraphInstallRecord, GraphPackageInstallBindings, LoadedGraphPackage};
@@ -29,17 +31,18 @@ fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSe
     paths
 }
 
-pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Result<Vec<&str>> {
+pub fn document_pack_schema_paths(
+    manifest: &super::super::PackManifest,
+) -> std::result::Result<Vec<&str>, InstallationError> {
     for path in manifest
         .metadata
         .assets
         .iter()
         .filter(|path| path.starts_with("schemas/"))
     {
-        anyhow::ensure!(
-            !path.ends_with(".patch.json") && !path.ends_with(".json-patch"),
-            "document packs containing schema patches require the CLI installer"
-        );
+        if path.ends_with(".patch.json") || path.ends_with(".json-patch") {
+            return Err(InstallationError::SchemaPatchUnsupported);
+        }
     }
     Ok(sdl_paths(manifest).into_iter().collect())
 }
@@ -84,7 +87,7 @@ fn sdl_types(sdl: &str) -> Result<BTreeMap<String, SdlType>> {
             }
         }
         types.insert(
-            named(&collection).context("collection is missing Name")?,
+            named(&collection).ok_or(InstallationError::CollectionMissingName)?,
             declared,
         );
     }
@@ -107,14 +110,16 @@ pub fn plugin_data_unique_keys<'a>(
     let name = &plugin.name;
     for mount in &plugin.asset_mounts {
         let prefix = format!("{}/", mount.class);
-        anyhow::ensure!(
-            manifest.metadata.assets.iter().any(|path| {
-                path.starts_with(&prefix) && super::super::is_distributable_asset_path(path)
-            }),
-            "plugin {name:?} asset_mounts class {:?} has no asset under {prefix}; ship one or \
-             drop the mount",
-            mount.class
-        );
+        if !manifest.metadata.assets.iter().any(|path| {
+            path.starts_with(&prefix) && super::super::is_distributable_asset_path(path)
+        }) {
+            return Err(InstallationError::AssetMountUnderspecified {
+                plugin: name.clone(),
+                class: mount.class.clone(),
+                prefix,
+            }
+            .into());
+        }
     }
     let Some(data) = &plugin.data else {
         return Ok((BTreeMap::new(), BTreeMap::new()));
@@ -126,12 +131,13 @@ pub fn plugin_data_unique_keys<'a>(
     let mut keys = BTreeMap::new();
     let mut fields = BTreeMap::new();
     for collection in &data.collections {
-        let declared = types.get(collection).with_context(|| {
-            format!(
-                "plugin {name:?} data.collections names {collection:?}, which no schemas/*.graphql \
-                 in the pack declares; add the type to the pack's SDL or drop it"
-            )
-        })?;
+        let declared =
+            types
+                .get(collection)
+                .ok_or_else(|| InstallationError::DataCollectionUndeclared {
+                    plugin: name.clone(),
+                    collection: collection.clone(),
+                })?;
         keys.insert(collection.clone(), declared.unique.clone());
         fields.insert(
             collection.clone(),
@@ -139,13 +145,17 @@ pub fn plugin_data_unique_keys<'a>(
         );
     }
     for field in data.stamped.keys() {
-        anyhow::ensure!(
-            data.collections
-                .iter()
-                .any(|collection| types[collection].fields.contains(field)),
-            "plugin {name:?} data.stamped field {field:?} is not a field of any collection in \
-             data.collections; stamp a field the pack's SDL declares"
-        );
+        if !data
+            .collections
+            .iter()
+            .any(|collection| types[collection].fields.contains(field))
+        {
+            return Err(InstallationError::StampedFieldUndeclared {
+                plugin: name.clone(),
+                field: field.clone(),
+            }
+            .into());
+        }
     }
     Ok((keys, fields))
 }
@@ -218,37 +228,41 @@ pub async fn prepare_document_pack_install(
 ) -> Result<PreparedDocumentPackInstall> {
     for dependency in dependencies {
         let dependency = dependency.manifest();
-        anyhow::ensure!(
-            matches!(
-                dependency.metadata.kind,
-                super::super::PackKind::Graph | super::super::PackKind::Documents
-            ),
-            "dependency {}/{} is a {:?} pack, which cannot be installed as a dependency; \
-             install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`",
-            dependency.metadata.namespace,
-            dependency.name,
-            dependency.metadata.kind
-        );
-        anyhow::ensure!(
-            dependency.metadata.dependencies.is_empty(),
-            "dependency {}/{} declares dependencies of its own; dependencies are one level: \
-             install it with `gents pack install`, then remove it from `dependencies`",
-            dependency.metadata.namespace,
-            dependency.name
-        );
+        if !matches!(
+            dependency.metadata.kind,
+            super::super::PackKind::Graph | super::super::PackKind::Documents
+        ) {
+            return Err(InstallationError::DependencyKind {
+                namespace: dependency.metadata.namespace.clone(),
+                name: dependency.name.clone(),
+                kind: dependency.metadata.kind.clone(),
+            }
+            .into());
+        }
+        if !dependency.metadata.dependencies.is_empty() {
+            return Err(InstallationError::DependencyNested {
+                namespace: dependency.metadata.namespace.clone(),
+                name: dependency.name.clone(),
+            }
+            .into());
+        }
     }
     for slot in requested.keys() {
-        anyhow::ensure!(
-            std::iter::once(manifest)
-                .chain(dependencies.iter().map(|p| p.manifest()))
-                .any(|m| m
-                    .metadata
+        if !std::iter::once(manifest)
+            .chain(dependencies.iter().map(|p| p.manifest()))
+            .any(|m| {
+                m.metadata
                     .inference_slots
                     .iter()
-                    .any(|declared| &declared.name == slot)),
-            "pack {} and its dependencies have no inference slot {slot:?}",
-            manifest.name
-        );
+                    .any(|declared| &declared.name == slot)
+            })
+        {
+            return Err(InstallationError::InferenceSlotUnknown {
+                pack: manifest.name.clone(),
+                slot: slot.clone(),
+            }
+            .into());
+        }
     }
     let selected = |manifest: &super::super::PackManifest| {
         requested
@@ -396,7 +410,7 @@ pub async fn install_prepared_document_pack(
     );
     for manifest in all {
         for plugin in &manifest.metadata.plugins {
-            let home = plugin_home.context("pack plugins require the node's local plugin home")?;
+            let home = plugin_home.ok_or(InstallationError::PluginHomeMissing)?;
             crate::plugin::store::grant_on_install(
                 home,
                 &manifest.metadata.namespace,

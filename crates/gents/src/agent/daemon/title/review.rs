@@ -158,7 +158,7 @@ where
                     }
                     .await;
                     if let Err(error) = &result {
-                        if super::super::ShutdownDrainFailure::occurs_in(error) {
+                        if super::super::ShutdownDrainFailure::occurs_in(error.as_ref()) {
                             let error = result.unwrap_err();
                             let shared = ReviewFailure(Arc::new(error));
                             failure

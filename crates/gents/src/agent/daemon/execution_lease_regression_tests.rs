@@ -270,7 +270,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         );
         let error = result.expect_err("failed drain must be reported to the daemon caller");
         assert!(
-            error.is::<super::ShutdownDrainFailure>(),
+            super::ShutdownDrainFailure::occurs_in(error.as_ref()),
             "unexpected failure: {}", ErrorChain(error.as_ref())
         );
         let persisted = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state terminal_output }} }}"#)).await;

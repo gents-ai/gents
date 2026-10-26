@@ -289,7 +289,7 @@ where
         if result
             .as_ref()
             .err()
-            .is_some_and(ShutdownDrainFailure::occurs_in)
+            .is_some_and(|error| ShutdownDrainFailure::occurs_in(error.as_ref()))
         {
             return result.map(|_| None);
         }

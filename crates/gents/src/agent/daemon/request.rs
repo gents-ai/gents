@@ -513,7 +513,7 @@ where
                                         summaries.push(compaction::bounded_summary(entry.summary));
                                     }
                                     Err(error)
-                                        if is_stale_compaction_generation(&error)
+                                        if is_stale_compaction_generation(error.as_ref())
                                             && assembly_attempt == 0 =>
                                     {
                                         tracing::info!(
@@ -523,7 +523,7 @@ where
                                         );
                                         continue;
                                     }
-                                    Err(error) if is_stale_compaction_generation(&error) => {
+                                    Err(error) if is_stale_compaction_generation(error.as_ref()) => {
                                         tracing::warn!(
                                             request_id = %request.request_id,
                                             session_id = %request.session_id,
@@ -665,7 +665,7 @@ where
             if result
                 .as_ref()
                 .err()
-                .is_some_and(super::ShutdownDrainFailure::occurs_in)
+                .is_some_and(|error| super::ShutdownDrainFailure::occurs_in(error.as_ref()))
             {
                 return result;
             }
@@ -749,8 +749,8 @@ where
     }
 }
 
-fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
-    ErrorChain(error.as_ref())
+fn is_stale_compaction_generation(error: &(dyn std::error::Error + 'static)) -> bool {
+    ErrorChain(error)
         .to_string()
         .contains("stale compaction generation")
 }

@@ -1154,12 +1154,12 @@ pub fn stale_expectation<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a StaleExpectation> {
     std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
-        cause.downcast_ref::<StaleExpectation>().or_else(|| {
-            match cause.downcast_ref::<DesiredStateError>() {
+        cause
+            .downcast_ref::<StaleExpectation>()
+            .or_else(|| match desired_state_error_in(cause) {
                 Some(DesiredStateError::Stale(stale)) => Some(stale),
                 _ => None,
-            }
-        })
+            })
     })
 }
 
@@ -1169,11 +1169,38 @@ pub fn outcome_source_refusal<'a>(
     std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
         cause
             .downcast_ref::<OutcomeSourceSchemaError>()
-            .or_else(|| match cause.downcast_ref::<DesiredStateError>() {
+            .or_else(|| match desired_state_error_in(cause) {
                 Some(DesiredStateError::OutcomeSource(refusal)) => Some(refusal),
                 _ => None,
             })
     })
+}
+
+/// Owners that wrap `DesiredStateError` transparently forward `source()` past
+/// it, so a chain walk must open those wrappers to see the refusal.
+fn desired_state_error_in<'a>(
+    cause: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a DesiredStateError> {
+    use crate::graph_package::GraphPackageInstallError;
+    use crate::pack::{InstallationError, ProvenanceError};
+    fn provenance(error: &ProvenanceError) -> Option<&DesiredStateError> {
+        match error {
+            ProvenanceError::DesiredState(error) => Some(error),
+            _ => None,
+        }
+    }
+    cause
+        .downcast_ref::<DesiredStateError>()
+        .or_else(|| cause.downcast_ref::<ProvenanceError>().and_then(provenance))
+        .or_else(|| match cause.downcast_ref::<InstallationError>() {
+            Some(InstallationError::DesiredState(error)) => Some(error),
+            Some(InstallationError::Provenance(error)) => provenance(error),
+            _ => None,
+        })
+        .or_else(|| match cause.downcast_ref::<GraphPackageInstallError>() {
+            Some(GraphPackageInstallError::DesiredState(error)) => Some(error),
+            _ => None,
+        })
 }
 
 #[derive(Clone, Debug, PartialEq)]

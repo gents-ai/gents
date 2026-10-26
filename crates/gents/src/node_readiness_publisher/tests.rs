@@ -27,7 +27,7 @@ impl NodeReadinessWriter for ControlledWriter {
         _node_did: &str,
         snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> Result<()> {
+    ) -> Result<(), NodeReadinessPublisherError> {
         let plan = self
             .plans
             .lock()
@@ -39,11 +39,17 @@ impl NodeReadinessWriter for ControlledWriter {
             .expect("attempt observer remains alive");
         match plan {
             WritePlan::Success => {}
-            WritePlan::Fail => anyhow::bail!("injected readiness persistence failure"),
+            WritePlan::Fail => {
+                return Err(NodeReadinessPublisherError::InjectedFailure {
+                    message: "injected readiness persistence failure",
+                })
+            }
             WritePlan::BlockForever => std::future::pending().await,
             WritePlan::BlockThenFail => {
                 self.release.acquire().await.unwrap().forget();
-                anyhow::bail!("injected readiness persistence failure");
+                return Err(NodeReadinessPublisherError::InjectedFailure {
+                    message: "injected readiness persistence failure",
+                });
             }
             WritePlan::BlockThenSucceed => {
                 self.release.acquire().await.unwrap().forget();

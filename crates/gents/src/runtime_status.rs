@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
 use chrono::Utc;
 use tokio::sync::{watch, Mutex};
 use tokio::time::MissedTickBehavior;
@@ -12,11 +11,19 @@ use crate::node_readiness_publisher::{NodeReadinessPublisherHandle, NodeReadines
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 #[derive(Debug, thiserror::Error)]
-enum RuntimeStatusError {
+pub(crate) enum RuntimeStatusError {
     #[error(transparent)]
     Write(#[from] crate::config_client::ConfigClientError),
     #[error("upsert NodeRuntime failed: {errors}")]
     GraphqlRejected { errors: String },
+    #[error(transparent)]
+    Readiness(#[from] crate::node_readiness_publisher::NodeReadinessPublisherError),
+    #[error("publish agent readiness router generation {generation}")]
+    RouterGeneration {
+        generation: u64,
+        #[source]
+        source: crate::node_readiness_publisher::NodeReadinessPublisherError,
+    },
 }
 
 type Result<T, E = RuntimeStatusError> = std::result::Result<T, E>;
@@ -100,8 +107,11 @@ pub(crate) struct RuntimeStatusOwner {
 }
 
 impl RuntimeStatusOwner {
-    pub(crate) async fn close(self) -> anyhow::Result<()> {
-        self.readiness.close().await
+    pub(crate) async fn close(self) -> Result<()> {
+        self.readiness
+            .close()
+            .await
+            .map_err(RuntimeStatusError::Readiness)
     }
 }
 
@@ -195,7 +205,7 @@ impl RuntimeStatusHandle {
         &self.readiness
     }
 
-    pub(crate) async fn initialize_startup(&self, default_agent_id: &str) -> anyhow::Result<()> {
+    pub(crate) async fn initialize_startup(&self, default_agent_id: &str) -> Result<()> {
         self.readiness.initialize(default_agent_id).await?;
         Ok(())
     }
@@ -203,8 +213,11 @@ impl RuntimeStatusHandle {
     pub(crate) async fn set_process_state_durable(
         &self,
         state: ProcessLifecycleState,
-    ) -> anyhow::Result<()> {
-        self.readiness.set_process_state(state).await
+    ) -> Result<()> {
+        self.readiness
+            .set_process_state(state)
+            .await
+            .map_err(RuntimeStatusError::Readiness)
     }
 
     #[cfg(test)]
@@ -229,7 +242,7 @@ impl RuntimeStatusHandle {
     pub(crate) async fn publish_startup_snapshot(
         &self,
         snapshot: &ActiveRuntimeSnapshot,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         self.publish_snapshot(snapshot, ReconcileResult::Startup)
             .await
     }
@@ -275,11 +288,11 @@ impl RuntimeStatusHandle {
         .await;
     }
 
-    pub(crate) async fn publish_router_generation(&self, generation: u64) -> anyhow::Result<()> {
+    pub(crate) async fn publish_router_generation(&self, generation: u64) -> Result<()> {
         self.readiness
             .set_router_generation(generation)
             .await
-            .with_context(|| format!("publish agent readiness router generation {generation}"))
+            .map_err(|source| RuntimeStatusError::RouterGeneration { generation, source })
     }
 
     pub(crate) async fn publish_executor_snapshot(&self, snapshot: &ActiveRuntimeSnapshot) {
@@ -292,7 +305,7 @@ impl RuntimeStatusHandle {
         &self,
         snapshot: &ActiveRuntimeSnapshot,
         result: ReconcileResult,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         self.readiness.publish_snapshot(snapshot).await?;
         let executor_status = executor_status_fields(snapshot);
         self.update(|row| {

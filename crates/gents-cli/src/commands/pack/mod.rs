@@ -440,7 +440,8 @@ pub(crate) async fn record_plugin_store_change(
         node_did: None,
     })
     .await?;
-    gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
+    gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await?;
+    Ok(())
 }
 
 pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {

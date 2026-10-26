@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde_json::Value;
 
 use super::{
@@ -6,19 +6,86 @@ use super::{
 };
 use crate::document_config::{EvalCase, PackConfig};
 
+#[derive(Debug, thiserror::Error)]
+pub enum LoaderError {
+    #[error("pack has no configuration")]
+    ConfigMissing,
+    #[error("parsing pack config JSON")]
+    ConfigJson(#[source] serde_json::Error),
+    #[error("node owner references unset variables: {missing}")]
+    NodeOwnerUnset { missing: String },
+    #[error("configuration requires an explicit node owner")]
+    OwnerMissing,
+    #[error("configuration owner DID must not be blank")]
+    OwnerBlank,
+    #[error("pack config references unset environment variables: {missing}")]
+    ConfigUnset { missing: String },
+    #[error("pack config must be an object")]
+    ConfigNotObject,
+    #[error("pack config requires node")]
+    NodeMissing,
+    #[error("{collection} must be an array or null")]
+    CollectionNotArray { collection: String },
+    #[error("decoding canonical pack configuration")]
+    Decode(#[source] serde_json::Error),
+    #[error("{location} must be a document object")]
+    NotDocumentObject { location: String },
+    #[error("{location} owner does not match installation scope")]
+    OwnerMismatch { location: String },
+    #[error("entry {entry:?} input_schema")]
+    EntryInputSchema {
+        entry: String,
+        #[source]
+        source: Box<crate::graph_pipeline::GraphPipelineError>,
+    },
+    #[error("eval definition {definition_id:?} case {reference:?} must be an inline case or a ./ sidecar path")]
+    EvalCaseReference {
+        definition_id: String,
+        reference: String,
+    },
+    #[error("eval definition {definition_id:?} case sidecar {reference} is not one EvalCase")]
+    EvalCaseSidecar {
+        definition_id: String,
+        reference: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("unsafe/non-canonical pack sidecar path: {relative}")]
+    SidecarPath { relative: String },
+    #[error("undeclared pack sidecar: {path}")]
+    SidecarUndeclared { path: String },
+    #[error("pack sidecar {path} is not UTF-8")]
+    SidecarNotUtf8 {
+        path: String,
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+    #[error("{what} runs plugin {plugin:?}, which this pack does not declare")]
+    PluginUndeclared { what: String, plugin: String },
+    #[error("{what} pins plugin {plugin:?} to {authored}, but the pack ships {pinned}")]
+    PluginDigestMismatch {
+        what: String,
+        plugin: String,
+        authored: String,
+        pinned: String,
+    },
+}
+
+type Result<T, E = LoaderError> = std::result::Result<T, E>;
+
 pub fn load_pack_config(
     manifest: &PackManifest,
     options: &PackInstallOptions,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
     environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<PackConfig> {
+) -> anyhow::Result<PackConfig> {
     validate_pack_manifest(manifest)?;
     let path = manifest
         .config
         .as_deref()
-        .context("pack has no configuration")?;
+        .ok_or(LoaderError::ConfigMissing)?;
     let bytes = read_asset(path).with_context(|| format!("reading pack config {path}"))?;
-    let value: Value = serde_json::from_slice(&bytes).context("parsing pack config JSON")?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(LoaderError::ConfigJson)?;
     let mut config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
         let mut prompt = reference.to_owned();
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
@@ -41,9 +108,9 @@ pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<(), 
 
 pub fn pin_pack_plugins(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
     config: &mut PackConfig,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     for capability in &mut config.graph_capabilities {
         pin_pack_plugin(manifest, read_asset, capability)?;
     }
@@ -62,18 +129,17 @@ pub fn decode_pack_config(
     mut value: Value,
     options: Option<&PackInstallOptions>,
     environment: &dyn Fn(&str) -> Option<String>,
-    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> Result<String>,
-) -> Result<PackConfig> {
+    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> anyhow::Result<String>,
+) -> anyhow::Result<PackConfig> {
     let authored_owner = if options.is_none() {
         value
             .pointer("/node/node_did")
             .and_then(Value::as_str)
             .map(|owner| {
                 interpolate::interpolate_with(owner, environment).map_err(|missing| {
-                    anyhow::anyhow!(
-                        "node owner references unset variables: {}",
-                        missing.join(", ")
-                    )
+                    LoaderError::NodeOwnerUnset {
+                        missing: missing.join(", "),
+                    }
                 })
             })
             .transpose()?
@@ -83,11 +149,10 @@ pub fn decode_pack_config(
     let owner = options
         .map(|options| options.node_did.as_str())
         .or(authored_owner.as_deref())
-        .context("configuration requires an explicit node owner")?;
-    anyhow::ensure!(
-        !owner.trim().is_empty(),
-        "configuration owner DID must not be blank"
-    );
+        .ok_or(LoaderError::OwnerMissing)?;
+    if owner.trim().is_empty() {
+        return Err(LoaderError::OwnerBlank.into());
+    }
     interpolate_values(&mut value, &|name| {
         if name == "GENTS_PACK_NODE_DID" {
             Some(owner.to_owned())
@@ -95,11 +160,9 @@ pub fn decode_pack_config(
             environment(name)
         }
     })?;
-    let root = value
-        .as_object_mut()
-        .context("pack config must be an object")?;
+    let root = value.as_object_mut().ok_or(LoaderError::ConfigNotObject)?;
     bind_owner(
-        root.get_mut("node").context("pack config requires node")?,
+        root.get_mut("node").ok_or(LoaderError::NodeMissing)?,
         owner,
         "node",
     )?;
@@ -114,15 +177,16 @@ pub fn decode_pack_config(
             }
             let rows = values
                 .as_array_mut()
-                .with_context(|| format!("{collection} must be an array or null"))?;
+                .ok_or_else(|| LoaderError::CollectionNotArray {
+                    collection: collection.to_owned(),
+                })?;
             for (index, row) in rows.iter_mut().enumerate() {
                 bind_owner(row, owner, &format!("{collection}[{index}]"))?;
             }
         }
     }
     hydrate_eval_cases(root, read_sidecar)?;
-    let mut config: PackConfig =
-        serde_json::from_value(value).context("decoding canonical pack configuration")?;
+    let mut config: PackConfig = serde_json::from_value(value).map_err(LoaderError::Decode)?;
     for context in &mut config.contexts {
         if let Some(prompt) = &mut context.system_prompt {
             if prompt.starts_with("./") {
@@ -153,9 +217,9 @@ pub fn decode_pack_config(
 
 fn pin_pack_plugin(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
     capability: &mut crate::graph_pipeline::StageCapability,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let crate::graph_pipeline::StageTarget::Plugin { plugin, digest, .. } = &mut capability.target
     else {
         return Ok(());
@@ -172,9 +236,9 @@ fn pin_pack_plugin(
 
 fn pin_callback_plugin(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
     callback: &mut crate::document_config::Callback,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let crate::document_config::CallbackHandler::Plugin { plugin, digest, .. } =
         &mut callback.handler
     else {
@@ -191,12 +255,16 @@ fn pin_callback_plugin(
 
 fn pin_entry_prepare_plugin(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
     entry: &mut crate::graph_pipeline::EntryBinding,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     if let Some(schema) = &entry.input_schema {
-        crate::graph_pipeline::validate_input_schema(schema)
-            .with_context(|| format!("entry {:?} input_schema", entry.name))?;
+        crate::graph_pipeline::validate_input_schema(schema).map_err(|source| {
+            LoaderError::EntryInputSchema {
+                entry: entry.name.clone(),
+                source: Box::new(source),
+            }
+        })?;
     }
     let Some(prepare) = &mut entry.prepare else {
         return Ok(());
@@ -217,11 +285,11 @@ fn pin_entry_prepare_plugin(
 
 fn own_plugin(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
     plugin: &str,
     authored: Option<&str>,
     what: &str,
-) -> Result<Option<(String, String)>> {
+) -> anyhow::Result<Option<(String, String)>> {
     if plugin.contains('/') {
         return Ok(None);
     }
@@ -230,8 +298,9 @@ fn own_plugin(
         .plugins
         .iter()
         .find(|declared| declared.name == plugin)
-        .with_context(|| {
-            format!("{what} runs plugin {plugin:?}, which this pack does not declare")
+        .ok_or_else(|| LoaderError::PluginUndeclared {
+            what: what.to_owned(),
+            plugin: plugin.to_owned(),
         })?;
     let bytes = read_asset(&declared.artifact)
         .with_context(|| format!("reading plugin artifact {}", declared.artifact))?;
@@ -240,10 +309,15 @@ fn own_plugin(
         <sha2::Sha256 as sha2::Digest>::digest(&bytes)
     );
     if let Some(authored) = authored {
-        anyhow::ensure!(
-            authored == pinned,
-            "{what} pins plugin {plugin:?} to {authored}, but the pack ships {pinned}"
-        );
+        if authored != pinned {
+            return Err(LoaderError::PluginDigestMismatch {
+                what: what.to_owned(),
+                plugin: plugin.to_owned(),
+                authored: authored.to_owned(),
+                pinned,
+            }
+            .into());
+        }
     }
     Ok(Some((
         format!("{}/{}", manifest.metadata.namespace, plugin),
@@ -254,23 +328,28 @@ fn own_plugin(
 fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
     let object = value
         .as_object_mut()
-        .with_context(|| format!("{location} must be a document object"))?;
+        .ok_or_else(|| LoaderError::NotDocumentObject {
+            location: location.to_owned(),
+        })?;
     match object.get("node_did") {
         None => {
             object.insert("node_did".into(), owner.into());
         }
-        Some(value) => anyhow::ensure!(
-            value.as_str() == Some(owner),
-            "{location} owner does not match installation scope"
-        ),
+        Some(value) => {
+            if value.as_str() != Some(owner) {
+                return Err(LoaderError::OwnerMismatch {
+                    location: location.to_owned(),
+                });
+            }
+        }
     }
     Ok(())
 }
 
 fn hydrate_eval_cases(
     root: &mut serde_json::Map<String, Value>,
-    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> Result<String>,
-) -> Result<()> {
+    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> anyhow::Result<String>,
+) -> anyhow::Result<()> {
     let Some(definitions) = root
         .get_mut("eval_definitions")
         .and_then(Value::as_array_mut)
@@ -290,18 +369,24 @@ fn hydrate_eval_cases(
             let Some(reference) = case.as_str().map(str::to_owned) else {
                 continue;
             };
-            anyhow::ensure!(
-                reference.starts_with("./"),
-                "eval definition {definition_id:?} case {reference:?} must be an inline case or a ./ sidecar path"
-            );
+            if !reference.starts_with("./") {
+                return Err(LoaderError::EvalCaseReference {
+                    definition_id: definition_id.clone(),
+                    reference,
+                }
+                .into());
+            }
             let text = read_sidecar(
                 crate::Collection::EvalDefinition,
                 &definition_id,
                 &reference,
             )?;
-            let parsed: EvalCase = serde_json::from_str(&text).with_context(|| {
-                format!("eval definition {definition_id:?} case sidecar {reference} is not one EvalCase")
-            })?;
+            let parsed: EvalCase =
+                serde_json::from_str(&text).map_err(|source| LoaderError::EvalCaseSidecar {
+                    definition_id: definition_id.clone(),
+                    reference: reference.clone(),
+                    source,
+                })?;
             *case = serde_json::to_value(parsed)?;
         }
     }
@@ -315,10 +400,9 @@ fn interpolate_values(
     match value {
         Value::String(text) => {
             *text = interpolate::interpolate_with(text, environment).map_err(|missing| {
-                anyhow::anyhow!(
-                    "pack config references unset environment variables: {}",
-                    missing.join(", ")
-                )
+                LoaderError::ConfigUnset {
+                    missing: missing.join(", "),
+                }
             })?;
         }
         Value::Array(values) => {
@@ -340,27 +424,31 @@ fn hydrate_sidecar(
     prompt: &mut String,
     config_path: &str,
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-) -> Result<()> {
+    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
+) -> anyhow::Result<()> {
     let Some(relative) = prompt.strip_prefix("./") else {
         return Ok(());
     };
-    anyhow::ensure!(
-        asset_path::is_distributable_asset(relative)
-            && asset_path::has_canonical_asset_spelling(relative),
-        "unsafe/non-canonical pack sidecar path: {relative}"
-    );
+    if !(asset_path::is_distributable_asset(relative)
+        && asset_path::has_canonical_asset_spelling(relative))
+    {
+        return Err(LoaderError::SidecarPath {
+            relative: relative.to_owned(),
+        }
+        .into());
+    }
     let path = match config_path.rsplit_once('/') {
         Some((parent, _)) => format!("{parent}/{relative}"),
         None => relative.to_owned(),
     };
-    anyhow::ensure!(
-        manifest.metadata.assets.contains(&path),
-        "undeclared pack sidecar: {path}"
-    );
+    if !manifest.metadata.assets.contains(&path) {
+        return Err(LoaderError::SidecarUndeclared { path }.into());
+    }
     let bytes = read_asset(&path).with_context(|| format!("reading pack sidecar {path}"))?;
-    *prompt =
-        String::from_utf8(bytes).with_context(|| format!("pack sidecar {path} is not UTF-8"))?;
+    *prompt = String::from_utf8(bytes).map_err(|source| LoaderError::SidecarNotUtf8 {
+        path: path.clone(),
+        source,
+    })?;
     Ok(())
 }
 

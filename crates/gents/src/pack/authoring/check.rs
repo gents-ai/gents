@@ -1,7 +1,6 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use serde::Serialize;
 use serde_json::json;
 
@@ -32,6 +31,18 @@ pub enum CheckError {
     },
     #[error("walked outside the pack")]
     OutsidePack,
+    #[error("packing {}", path.display())]
+    Pack {
+        path: PathBuf,
+        #[source]
+        source: crate::pack_archive::format::PackFormatError,
+    },
+    #[error("writing {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -308,7 +319,10 @@ pub fn topology_block(config: &crate::document_config::PackConfig) -> String {
 }
 
 pub fn write_topology(dir: &Path) -> anyhow::Result<()> {
-    let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
+    let (bytes, _) = pack_dir(dir).map_err(|source| CheckError::Pack {
+        path: dir.to_path_buf(),
+        source,
+    })?;
     let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
     let readme = dir.join("README.md");
     let text = read_pack_text_asset(dir, "README.md")?;
@@ -325,7 +339,12 @@ pub fn write_topology(dir: &Path) -> anyhow::Result<()> {
             text.trim_end_matches('\n')
         ),
     };
-    std::fs::write(&readme, updated).with_context(|| format!("writing {}", readme.display()))
+    Ok(
+        std::fs::write(&readme, updated).map_err(|source| CheckError::Write {
+            path: readme.clone(),
+            source,
+        })?,
+    )
 }
 
 /// The static lint every file-produced UX plugin must pass: what the

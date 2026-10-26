@@ -16,6 +16,8 @@ pub enum BuildError {
     AssetsNotClosed,
     #[error("walked outside the plugin")]
     OutsidePlugin,
+    #[error("no pack directories with a manifest.json were found under {}", root.display())]
+    NoPackDirectories { root: PathBuf },
     #[error("creating {}", path.display())]
     Create {
         path: PathBuf,
@@ -25,6 +27,12 @@ pub enum BuildError {
     #[error("reading {}", path.display())]
     Read {
         path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading {path}")]
+    ReadAsset {
+        path: String,
         #[source]
         source: std::io::Error,
     },
@@ -40,8 +48,68 @@ pub enum BuildError {
         #[source]
         source: std::io::Error,
     },
+    #[error("reading the pack manifest at {}", path.display())]
+    ReadManifest {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing the pack manifest at {}", path.display())]
+    ParseManifest {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("resolving {}", path.display())]
+    Resolve {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("staging the pack in {}", path.display())]
+    StageDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("packing {}", path.display())]
+    Pack {
+        path: PathBuf,
+        #[source]
+        source: crate::pack_archive::format::PackFormatError,
+    },
+    #[error("writing the pack")]
+    FlushPack(#[source] std::io::Error),
+    #[error("sizing the pack")]
+    SizePack(#[source] std::io::Error),
+    #[error("the static lint refuses the pack's ux plugins:\n{findings}")]
+    UxRefused { findings: String },
+    #[error(transparent)]
+    Ux(#[from] crate::ux_plugin::UxPluginError),
+    #[error("plan path has no parent")]
+    PlanPathParent,
+    #[error("reading manifest.json")]
+    ReadManifestJson(#[source] std::io::Error),
+    #[error("writing manifest.json")]
+    WriteManifestJson(#[source] std::io::Error),
+    #[error("plugin {name:?} has no source and its artifact is missing: {}", path.display())]
+    ArtifactMissing { name: String, path: PathBuf },
+    #[error("{owner} declares language {language:?}, which gents cannot build")]
+    UnbuildableLanguage { owner: String, language: String },
+    #[error("{owner} declares source {declared:?}, which is not a directory")]
+    SourceNotDirectory { owner: String, declared: String },
+    #[error("{owner} has no {entry} in {}", dir.display())]
+    EntryMissing {
+        owner: String,
+        entry: &'static str,
+        dir: PathBuf,
+    },
+    #[error("stamp parent")]
+    StampParent,
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 type Result<T, E = BuildError> = std::result::Result<T, E>;
@@ -78,17 +146,21 @@ pub fn build_all(
     out: impl Fn(&Path) -> anyhow::Result<Option<PathBuf>>,
 ) -> anyhow::Result<Vec<BuildReport>> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
-        .with_context(|| format!("reading {}", root.display()))?
+        .map_err(|source| BuildError::Read {
+            path: root.to_path_buf(),
+            source,
+        })?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| path.is_dir() && path.join("manifest.json").is_file())
         .collect();
     dirs.sort();
-    anyhow::ensure!(
-        !dirs.is_empty(),
-        "no pack directories with a manifest.json were found under {}",
-        root.display()
-    );
+    if dirs.is_empty() {
+        return Err(BuildError::NoPackDirectories {
+            root: root.to_path_buf(),
+        }
+        .into());
+    }
     dirs.iter()
         .map(|dir| {
             build_pack(dir, compiler, out(dir)?.as_deref())
@@ -103,10 +175,16 @@ pub fn build_pack(
     out: Option<&Path>,
 ) -> anyhow::Result<BuildReport> {
     let manifest_path = dir.join("manifest.json");
-    let manifest_bytes = std::fs::read(&manifest_path)
-        .with_context(|| format!("reading the pack manifest at {}", manifest_path.display()))?;
-    let manifest: PackManifest = serde_json::from_slice(&manifest_bytes)
-        .with_context(|| format!("parsing the pack manifest at {}", manifest_path.display()))?;
+    let manifest_bytes =
+        std::fs::read(&manifest_path).map_err(|source| BuildError::ReadManifest {
+            path: manifest_path.clone(),
+            source,
+        })?;
+    let manifest: PackManifest =
+        serde_json::from_slice(&manifest_bytes).map_err(|source| BuildError::ParseManifest {
+            path: manifest_path.clone(),
+            source,
+        })?;
 
     for plugin in &manifest.metadata.plugins {
         build_plugin(dir, &manifest, plugin, compiler)?;
@@ -126,45 +204,61 @@ pub fn build_pack(
             )
         })
         .collect();
-    anyhow::ensure!(
-        refused.is_empty(),
-        "the static lint refuses the pack's ux plugins:\n{}",
-        refused.join("\n")
-    );
+    if !refused.is_empty() {
+        return Err(BuildError::UxRefused {
+            findings: refused.join("\n"),
+        }
+        .into());
+    }
 
     let out_dir = match out.and_then(Path::parent) {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         Some(_) => PathBuf::from("."),
         None => std::path::absolute(dir)
-            .with_context(|| format!("resolving {}", dir.display()))?
+            .map_err(|source| BuildError::Resolve {
+                path: dir.to_path_buf(),
+                source,
+            })?
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf(),
     };
-    std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    std::fs::create_dir_all(&out_dir).map_err(|source| BuildError::Create {
+        path: out_dir.clone(),
+        source,
+    })?;
     let mut staged = tempfile::Builder::new()
         .prefix(".building-")
         .tempfile_in(&out_dir)
-        .with_context(|| format!("staging the pack in {}", out_dir.display()))?;
+        .map_err(|source| BuildError::StageDir {
+            path: out_dir.clone(),
+            source,
+        })?;
     let header = {
         let mut writer = std::io::BufWriter::new(staged.as_file_mut());
-        let header = crate::pack_archive::write_pack(dir, &mut writer)
-            .with_context(|| format!("packing {}", dir.display()))?;
-        std::io::Write::flush(&mut writer).context("writing the pack")?;
+        let header = crate::pack_archive::write_pack(dir, &mut writer).map_err(|source| {
+            BuildError::Pack {
+                path: dir.to_path_buf(),
+                source,
+            }
+        })?;
+        std::io::Write::flush(&mut writer).map_err(BuildError::FlushPack)?;
         header
     };
     let size_bytes = staged
         .as_file()
         .metadata()
-        .context("sizing the pack")?
+        .map_err(BuildError::SizePack)?
         .len();
     let out_path = out
         .map(Path::to_path_buf)
         .unwrap_or_else(|| out_dir.join(header.file_name()));
     staged
         .persist(&out_path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("writing {}", out_path.display()))?;
+        .map_err(|error| BuildError::Write {
+            path: out_path.clone(),
+            source: error.error,
+        })?;
 
     Ok(BuildReport {
         pack: manifest.name.clone(),
@@ -188,14 +282,21 @@ pub fn build_pack(
 pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> anyhow::Result<()> {
     let plans = crate::graph_package::compile_pack_graphs(
         manifest,
-        &|path| std::fs::read(dir.join(path)).with_context(|| format!("reading {path}")),
+        &|path: &str| -> anyhow::Result<Vec<u8>> {
+            Ok(
+                std::fs::read(dir.join(path)).map_err(|source| BuildError::ReadAsset {
+                    path: path.to_owned(),
+                    source,
+                })?,
+            )
+        },
         "did:key:zPackBuildPlaceholderOwner",
     )?;
     let mut missing = Vec::new();
     for plan in &plans {
         let path = crate::graph_package::graph_plan_path(&plan.graph_id);
         let target = dir.join(&path);
-        std::fs::create_dir_all(target.parent().context("plan path has no parent")?)?;
+        std::fs::create_dir_all(target.parent().ok_or(BuildError::PlanPathParent)?)?;
         write_if_changed(
             &target,
             (serde_json::to_string_pretty(plan)? + "\n").as_bytes(),
@@ -208,10 +309,13 @@ pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> anyhow::Result<
         return Ok(());
     }
     let manifest_path = dir.join("manifest.json");
-    let text = std::fs::read_to_string(&manifest_path).context("reading manifest.json")?;
+    let text = std::fs::read_to_string(&manifest_path).map_err(BuildError::ReadManifestJson)?;
     let mut assets = manifest.metadata.assets.clone();
     assets.extend(missing);
-    std::fs::write(&manifest_path, replace_assets(&text, &assets)?).context("writing manifest.json")
+    Ok(
+        std::fs::write(&manifest_path, replace_assets(&text, &assets)?)
+            .map_err(BuildError::WriteManifestJson)?,
+    )
 }
 
 fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
@@ -242,31 +346,36 @@ pub fn build_plugin(
 ) -> anyhow::Result<()> {
     let artifact_path = dir.join(&plugin.artifact);
     let Some(source) = &plugin.source else {
-        anyhow::ensure!(
-            artifact_path.is_file(),
-            "plugin {:?} has no source and its artifact is missing: {}",
-            plugin.name,
-            artifact_path.display()
-        );
+        if !artifact_path.is_file() {
+            return Err(BuildError::ArtifactMissing {
+                name: plugin.name.clone(),
+                path: artifact_path,
+            }
+            .into());
+        }
         return Ok(());
     };
     let source_dir = dir.join(source);
     let owner = format!("plugin {:?}", plugin.name);
-    let entry = plugin_entry(&plugin.language).with_context(|| {
-        format!(
-            "{owner} declares language {:?}, which gents cannot build",
-            plugin.language
-        )
+    let entry = plugin_entry(&plugin.language).ok_or_else(|| BuildError::UnbuildableLanguage {
+        owner: owner.clone(),
+        language: plugin.language.clone(),
     })?;
-    anyhow::ensure!(
-        source_dir.is_dir(),
-        "{owner} declares source {source:?}, which is not a directory"
-    );
-    anyhow::ensure!(
-        source_dir.join(entry).is_file(),
-        "{owner} has no {entry} in {}",
-        source_dir.display()
-    );
+    if !source_dir.is_dir() {
+        return Err(BuildError::SourceNotDirectory {
+            owner,
+            declared: source.clone(),
+        }
+        .into());
+    }
+    if !source_dir.join(entry).is_file() {
+        return Err(BuildError::EntryMissing {
+            owner,
+            entry,
+            dir: source_dir,
+        }
+        .into());
+    }
     let staged = dir.join("target").join("plugins").join(&plugin.name);
     mirror(&source_dir, &staged)?;
     write_if_changed(
@@ -302,11 +411,19 @@ pub fn build_plugin(
     }
     compiler.load_and_validate(&owner, &staged)?;
     compiler.compile(&owner, &staged, &artifact_path)?;
-    let artifact = std::fs::read(&artifact_path)
-        .with_context(|| format!("reading {}", artifact_path.display()))?;
-    std::fs::create_dir_all(stamp.parent().context("stamp parent")?)?;
-    std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact)))
-        .with_context(|| format!("writing {}", stamp.display()))
+    let artifact = std::fs::read(&artifact_path).map_err(|source| BuildError::Read {
+        path: artifact_path.clone(),
+        source,
+    })?;
+    std::fs::create_dir_all(stamp.parent().ok_or(BuildError::StampParent)?)?;
+    Ok(
+        std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact))).map_err(
+            |source| BuildError::Write {
+                path: stamp.clone(),
+                source,
+            },
+        )?,
+    )
 }
 
 pub const BUILDER_ID: &str = concat!("gents/", env!("CARGO_PKG_VERSION"));

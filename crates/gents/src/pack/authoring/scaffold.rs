@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -27,6 +26,24 @@ pub enum ScaffoldError {
         #[source]
         source: std::io::Error,
     },
+    #[error("creating {}", path.display())]
+    Create {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} already holds a pack", path.display())]
+    AlreadyHoldsPack { path: PathBuf },
+    #[error("schemas list")]
+    SchemasList,
+    #[error("writing manifest.json")]
+    WriteManifest(#[source] std::io::Error),
+    #[error(transparent)]
+    Names(#[from] super::names::NamesError),
+    #[error(transparent)]
+    Toolset(#[from] crate::toolset::ContextError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -66,16 +83,20 @@ impl Template {
 }
 
 pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> anyhow::Result<ScaffoldReport> {
-    anyhow::ensure!(
-        !dir.join("manifest.json").exists(),
-        "{} already holds a pack",
-        dir.display()
-    );
+    if dir.join("manifest.json").exists() {
+        return Err(ScaffoldError::AlreadyHoldsPack {
+            path: dir.to_path_buf(),
+        }
+        .into());
+    }
     let names = Names::new(name, &input.namespace)?;
     let template = input
         .template
         .unwrap_or_else(|| Template::for_kind(input.kind));
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|source| ScaffoldError::Create {
+        path: dir.to_path_buf(),
+        source,
+    })?;
 
     // Resolve generated paths through the rooted owner before writing, refusing nested symlink escapes.
     let context = crate::toolset::ToolContext::new(dir.to_path_buf(), false)?;
@@ -106,11 +127,10 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> anyhow::Result
                 .unwrap_or("rust")
                 .trim()
                 .to_ascii_lowercase();
-            let entry = super::build::plugin_entry(&language).with_context(|| {
-                format!(
-                    "gents cannot build {language:?} plugins; use one of {}",
-                    crate::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
-                )
+            let entry = super::build::plugin_entry(&language).ok_or_else(|| {
+                ScaffoldError::UnsupportedLanguage {
+                    language: language.clone(),
+                }
             })?;
             output_paths.extend([
                 format!("plugins/{}/{}", names.name, entry),
@@ -179,7 +199,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> anyhow::Result
                 ));
                 manifest["schemas"]
                     .as_array_mut()
-                    .context("schemas list")?
+                    .ok_or(ScaffoldError::SchemasList)?
                     .push(json!(format!("schemas/{}_result.graphql", names.name)));
                 manifest["compiler_version"] = json!(crate::graph_pipeline::COMPILER_VERSION);
             }
@@ -223,11 +243,15 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> anyhow::Result
     for (path, contents) in &files {
         let target = dir.join(path);
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            std::fs::create_dir_all(parent).map_err(|source| ScaffoldError::Create {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
-        std::fs::write(&target, contents)
-            .with_context(|| format!("writing {}", target.display()))?;
+        std::fs::write(&target, contents).map_err(|source| ScaffoldError::Write {
+            path: target.clone(),
+            source,
+        })?;
     }
     let mut assets: Vec<String> = files.iter().map(|(path, _)| path.clone()).collect();
     if template == Template::PluginTool {
@@ -239,7 +263,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> anyhow::Result
         dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest)? + "\n",
     )
-    .context("writing manifest.json")?;
+    .map_err(ScaffoldError::WriteManifest)?;
     if template == Template::Graph {
         let manifest: crate::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;

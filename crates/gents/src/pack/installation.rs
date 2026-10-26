@@ -36,6 +36,36 @@ pub enum InstallationError {
     #[error(transparent)]
     Provenance(#[from] ProvenanceError),
     #[error(transparent)]
+    HomeInstall(#[from] super::home_install::HomeInstallError),
+    #[error(transparent)]
+    PluginStore(#[from] crate::plugin::store::PluginStoreError),
+    #[error("document packs containing schema patches require the CLI installer")]
+    SchemaPatchUnsupported,
+    #[error("collection is missing Name")]
+    CollectionMissingName,
+    #[error("plugin {plugin:?} asset_mounts class {class:?} has no asset under {prefix}; ship one or drop the mount")]
+    AssetMountUnderspecified {
+        plugin: String,
+        class: String,
+        prefix: String,
+    },
+    #[error("plugin {plugin:?} data.collections names {collection:?}, which no schemas/*.graphql in the pack declares; add the type to the pack's SDL or drop it")]
+    DataCollectionUndeclared { plugin: String, collection: String },
+    #[error("plugin {plugin:?} data.stamped field {field:?} is not a field of any collection in data.collections; stamp a field the pack's SDL declares")]
+    StampedFieldUndeclared { plugin: String, field: String },
+    #[error("dependency {namespace}/{name} is a {kind:?} pack, which cannot be installed as a dependency; install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`")]
+    DependencyKind {
+        namespace: String,
+        name: String,
+        kind: super::PackKind,
+    },
+    #[error("dependency {namespace}/{name} declares dependencies of its own; dependencies are one level: install it with `gents pack install`, then remove it from `dependencies`")]
+    DependencyNested { namespace: String, name: String },
+    #[error("pack {pack} and its dependencies have no inference slot {slot:?}")]
+    InferenceSlotUnknown { pack: String, slot: String },
+    #[error("pack plugins require the node's local plugin home")]
+    PluginHomeMissing,
+    #[error(transparent)]
     GraphPipeline(#[from] crate::graph_pipeline::GraphPipelineError),
     #[error("installation record names unknown collection {name:?}")]
     UnknownCollection { name: String },
@@ -423,7 +453,7 @@ pub(crate) async fn install_in_txn(
     pack: &PackIdentity,
     documents: Vec<DesiredStateApplyDocument>,
     policy: DriftPolicy,
-) -> anyhow::Result<InstallReport> {
+) -> Result<InstallReport> {
     let prior = read_record(txn, owner, &pack.coordinate).await?;
     let mut report = InstallReport::default();
     let mut recorded = BTreeMap::new();
@@ -523,7 +553,7 @@ pub(crate) async fn install_in_txn(
         }
     }
     if !edited.is_empty() {
-        return Err(edited_error(&pack.coordinate, &edited).into());
+        return Err(edited_error(&pack.coordinate, &edited));
     }
 
     let applied: Vec<_> = documents
@@ -585,7 +615,7 @@ pub async fn record_plugin_store_change(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     record_plugin_store_change_as(access, owner, None, home, coordinate, installed).await
 }
 
@@ -597,7 +627,7 @@ pub async fn record_plugin_store_change_as(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     match access {
         ConfigAccess::Local(local) => {
             ConfigAccess::transact_local_write(
@@ -630,7 +660,7 @@ async fn write_plugin_record(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let current_home = super::read_home_install(home, coordinate)?;
     let current_identity = current_home.map(|record| PackIdentity {
         coordinate: record.coordinate,
@@ -650,7 +680,7 @@ async fn write_plugin_record(
     let own = prior.doc_id.is_none() || prior.plugin_store;
     match installed {
         Some(pack) if own => {
-            return Ok(write_record_in_txn(txn, owner, pack, &prior, documents, false, true).await?)
+            return write_record_in_txn(txn, owner, pack, &prior, documents, false, true).await
         }
         None if prior.doc_id.is_none() => return Ok(()),
         None if own && !retained => {
@@ -674,7 +704,7 @@ async fn write_plugin_record(
         explicit: prior.explicit,
     };
     let plugin_store = prior.plugin_store;
-    Ok(write_record_in_txn(
+    write_record_in_txn(
         txn,
         owner,
         &unchanged,
@@ -683,7 +713,7 @@ async fn write_plugin_record(
         false,
         plugin_store,
     )
-    .await?)
+    .await
 }
 
 fn is_plugin_store_row(row: &Value) -> bool {
@@ -696,7 +726,7 @@ async fn remove_record_in_txn(
     coordinate: &str,
     record: &Record,
     policy: DriftPolicy,
-) -> anyhow::Result<RemoveReport> {
+) -> Result<RemoveReport> {
     let doc_id = record
         .doc_id
         .clone()
@@ -786,7 +816,7 @@ async fn remove_record_in_txn(
         removals.push((collection, owner.to_owned(), document.id.clone()));
     }
     if !edited.is_empty() {
-        return Err(edited_error(coordinate, &edited).into());
+        return Err(edited_error(coordinate, &edited));
     }
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
@@ -814,7 +844,7 @@ pub async fn remove_pack(
     owner: &str,
     coordinate: &str,
     policy: DriftPolicy,
-) -> anyhow::Result<RemoveReport> {
+) -> Result<RemoveReport> {
     access
         .transact_write("pack.remove", |txn| {
             Box::pin(async move {
@@ -823,15 +853,13 @@ pub async fn remove_pack(
                     return Err(InstallationError::NotInstalled {
                         coordinate: coordinate.to_owned(),
                         owner: owner.to_owned(),
-                    }
-                    .into());
+                    });
                 }
                 if record.plugin_store {
                     return Err(InstallationError::PluginStoreRecord {
                         coordinate: coordinate.to_owned(),
                         owner: owner.to_owned(),
-                    }
-                    .into());
+                    });
                 }
                 if !record.required_by.is_empty() {
                     let dependents: Vec<&str> =
@@ -840,8 +868,7 @@ pub async fn remove_pack(
                         coordinate: coordinate.to_owned(),
                         dependents: dependents.join(", "),
                         noun: if dependents.len() == 1 { "it" } else { "them" },
-                    }
-                    .into());
+                    });
                 }
                 let mut report =
                     remove_record_in_txn(txn, owner, coordinate, &record, policy).await?;
@@ -953,7 +980,7 @@ pub async fn installed_pack_documents(
 pub async fn installed_packs(
     home: Option<&Path>,
     node: Option<(&ConfigAccess, &str)>,
-) -> anyhow::Result<Vec<InstalledPack>> {
+) -> Result<Vec<InstalledPack>> {
     let mut packs = BTreeMap::new();
     if let Some(home) = home {
         for record in super::list_home_installs(home)? {
@@ -978,7 +1005,7 @@ pub async fn installed_packs(
 pub async fn referenced_pack_digests(
     home: &Path,
     node: Option<&ConfigAccess>,
-) -> anyhow::Result<BTreeSet<String>> {
+) -> Result<BTreeSet<String>> {
     let mut digests = BTreeSet::new();
     for record in super::list_home_installs(home)? {
         digests.insert(record.digest);

@@ -162,7 +162,7 @@ async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
     let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap_err();
-    let message = format!("{}", ErrorChain(error.as_ref()));
+    let message = format!("{}", ErrorChain(&error));
     assert!(message.contains(&run.run_id), "{message}");
     assert!(message.contains("code-review"), "{message}");
     assert!(message.contains("gents graph cancel"), "{message}");

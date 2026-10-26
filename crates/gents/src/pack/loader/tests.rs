@@ -12,7 +12,7 @@ fn manifest(graph: bool) -> PackManifest {
     })).unwrap()
 }
 
-fn load(value: Value, graph: bool) -> Result<PackConfig> {
+fn load(value: Value, graph: bool) -> anyhow::Result<PackConfig> {
     load_pack_config(
         &manifest(graph),
         &PackInstallOptions {
@@ -252,7 +252,7 @@ fn eval_config(cases: Value) -> Value {
 
 const SIDECAR_CASE: &str = r#"{"case_id":"one","split":"train","stages":[{"stage_id":"s","prompt":"literal ${NOT_INTERPOLATED}","deadline_secs":60,"checks":[{"check":"finding_count","params":{"count":1},"tier":"acceptance"}]}]}"#;
 
-fn load_eval(manifest: &PackManifest, config: Value) -> Result<PackConfig> {
+fn load_eval(manifest: &PackManifest, config: Value) -> anyhow::Result<PackConfig> {
     load_pack_config(
         manifest,
         &PackInstallOptions {
@@ -352,7 +352,7 @@ fn skill_instructions_load_from_a_literal_sidecar() {
     );
 }
 
-fn plugin_pack_config(target: Value) -> Result<PackConfig> {
+fn plugin_pack_config(target: Value) -> anyhow::Result<PackConfig> {
     let manifest: PackManifest = serde_json::from_value(json!({
         "manifest_version":1,"name":"example","namespace":"team","version":"1",
         "description":"Example","kind":"graph","authors":["Example"],
@@ -421,7 +421,7 @@ fn a_plugin_node_the_pack_cannot_run_is_refused() {
     );
 }
 
-fn prepare_pack_config(entry_extra: Value) -> Result<PackConfig> {
+fn prepare_pack_config(entry_extra: Value) -> anyhow::Result<PackConfig> {
     let manifest: PackManifest = serde_json::from_value(json!({
         "manifest_version":1,"name":"example","namespace":"team","version":"1",
         "description":"Example","kind":"graph","authors":["Example"],

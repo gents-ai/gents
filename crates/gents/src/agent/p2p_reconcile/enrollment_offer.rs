@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
 use defra_p2p_adapter::P2POperations;
 use gents_protocol::enrollment::{
@@ -11,6 +10,7 @@ use p2p::iroh::parse_public_peer_addr;
 use serde::Serialize;
 use uuid::Uuid;
 
+use super::error::{P2pReconcileError, Result};
 use crate::NodeIdentity;
 
 /// The `/status` offer keeps a short window, because each holder can file a
@@ -56,30 +56,25 @@ impl EnrollmentOfferIssuer {
     }
 
     pub async fn mint_valid_for(&self, validity: Duration) -> Result<EnrollmentOfferStatus> {
-        anyhow::ensure!(
-            validity > Duration::zero() && validity <= MAX_OFFER_VALIDITY,
-            "enrollment offer validity must be between 1 and {} seconds",
-            MAX_OFFER_VALIDITY.num_seconds()
-        );
+        if validity <= Duration::zero() || validity > MAX_OFFER_VALIDITY {
+            return Err(P2pReconcileError::OfferValidityOutOfRange);
+        }
         let server_peer = self
             .p2p
             .local_peer_id()
             .await
-            .map_err(anyhow::Error::msg)
-            .context("reading live server peer ID for enrollment offer")?;
+            .map_err(|source| P2pReconcileError::ReadServerPeerId { source })?;
         let server_ticket = self
             .p2p
             .shareable_address()
             .await
-            .map_err(anyhow::Error::msg)
-            .context("reading live server ticket for enrollment offer")?
-            .context("server has no shareable P2P address for enrollment")?;
+            .map_err(|source| P2pReconcileError::ReadServerTicket { source })?
+            .ok_or(P2pReconcileError::ServerHasNoShareableAddress)?;
         let (ticket_peer, _) = parse_public_peer_addr(&server_ticket)
-            .context("server produced an invalid shareable P2P ticket")?;
-        anyhow::ensure!(
-            ticket_peer.to_string() == server_peer,
-            "server shareable ticket does not match its live peer ID"
-        );
+            .map_err(|source| P2pReconcileError::InvalidServerTicket { source })?;
+        if ticket_peer.to_string() != server_peer {
+            return Err(P2pReconcileError::ServerTicketPeerMismatch);
+        }
         let issued = Utc::now();
         let issued_at = issued.to_rfc3339_opts(SecondsFormat::Secs, true);
         let expires_at = (issued + validity).to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -116,7 +111,7 @@ impl EnrollmentOfferIssuer {
             .identity
             .sign(&offer.signing_payload())
             .await
-            .context("signing authenticated enrollment offer")?;
+            .map_err(|source| P2pReconcileError::SignEnrollmentOffer { source })?;
         let token = encode_offer(&offer)?;
         Ok(EnrollmentOfferStatus { token, offer })
     }

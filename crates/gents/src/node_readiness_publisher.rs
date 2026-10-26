@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use gents_protocol::row::{
     project_node_readiness_source, AgentReadinessSourceEntry, AgentReadinessUnavailableReason,
@@ -14,6 +13,52 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::ProcessLifecycleState;
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NodeReadinessPublisherError {
+    #[error("agent readiness publisher stopped")]
+    Stopped,
+    #[error("agent readiness publisher command enqueue timed out")]
+    EnqueueTimedOut,
+    #[error("agent readiness publisher command acknowledgement timed out")]
+    AcknowledgementTimedOut,
+    #[error("agent readiness publisher dropped acknowledgement")]
+    AcknowledgementDropped,
+    #[error("agent readiness publisher stopped before close")]
+    StoppedBeforeClose,
+    #[error("agent readiness publisher dropped close acknowledgement")]
+    CloseAcknowledgementDropped,
+    #[error("agent readiness publisher close timed out")]
+    CloseTimedOut,
+    #[error("agent readiness publisher task shutdown timed out")]
+    ShutdownTimedOut,
+    #[error("join agent readiness publisher")]
+    Join(#[source] tokio::task::JoinError),
+    #[error("agent readiness publisher command channel closed")]
+    CommandChannelClosed,
+    #[error("agent readiness source is not initialized")]
+    SourceUninitialized,
+    #[error("{reason}")]
+    SourceRejected { reason: String },
+    #[error("agent readiness persistence attempt timed out")]
+    PersistAttemptTimedOut,
+    #[error("agent readiness persistence cancelled")]
+    PersistCancelled,
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    Write(#[from] crate::config_client::ConfigClientError),
+    #[error("upsert NodeReadiness failed: {errors}")]
+    GraphqlRejected { errors: String },
+    #[cfg(test)]
+    #[error("{message}")]
+    InjectedFailure { message: &'static str },
+    #[cfg(test)]
+    #[error(transparent)]
+    InjectedFatal(#[from] FatalNodeReadinessWrite),
+}
+
+type Result<T, E = NodeReadinessPublisherError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentAdmissionObservation {
@@ -388,7 +433,7 @@ impl NodeReadinessPublisherHandle {
     ) -> Result<T> {
         let (ack, result) = oneshot::channel();
         if self.cancel.is_cancelled() {
-            return Err(anyhow!("agent readiness publisher stopped"));
+            return Err(NodeReadinessPublisherError::Stopped);
         }
         let enqueue = async { self.commands.send(command(ack)).await };
         let enqueue_result = match self.command_timeout {
@@ -396,16 +441,14 @@ impl NodeReadinessPublisherHandle {
                 Ok(result) => result,
                 Err(_) => {
                     self.cancel.cancel();
-                    return Err(anyhow!(
-                        "agent readiness publisher command enqueue timed out"
-                    ));
+                    return Err(NodeReadinessPublisherError::EnqueueTimedOut);
                 }
             },
             None => enqueue.await,
         };
         match enqueue_result {
             Ok(()) => {}
-            Err(_) => return Err(anyhow!("agent readiness publisher stopped")),
+            Err(_) => return Err(NodeReadinessPublisherError::Stopped),
         }
         let acknowledgement = result;
         let acknowledgement_result = match self.command_timeout {
@@ -413,16 +456,14 @@ impl NodeReadinessPublisherHandle {
                 Ok(result) => result,
                 Err(_) => {
                     self.cancel.cancel();
-                    return Err(anyhow!(
-                        "agent readiness publisher command acknowledgement timed out"
-                    ));
+                    return Err(NodeReadinessPublisherError::AcknowledgementTimedOut);
                 }
             },
             None => acknowledgement.await,
         };
         match acknowledgement_result {
             Ok(result) => result,
-            Err(_) => Err(anyhow!("agent readiness publisher dropped acknowledgement")),
+            Err(_) => Err(NodeReadinessPublisherError::AcknowledgementDropped),
         }
     }
 }
@@ -434,15 +475,15 @@ impl NodeReadinessPublisherOwner {
             self.commands
                 .send(Command::Close { ack })
                 .await
-                .map_err(|_| anyhow!("agent readiness publisher stopped before close"))?;
+                .map_err(|_| NodeReadinessPublisherError::StoppedBeforeClose)?;
             result
                 .await
-                .map_err(|_| anyhow!("agent readiness publisher dropped close acknowledgement"))?
+                .map_err(|_| NodeReadinessPublisherError::CloseAcknowledgementDropped)?
         };
         let close_result = match self.close_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, close).await {
                 Ok(result) => result,
-                Err(_) => Err(anyhow!("agent readiness publisher close timed out")),
+                Err(_) => Err(NodeReadinessPublisherError::CloseTimedOut),
             },
             None => close.await,
         };
@@ -452,16 +493,16 @@ impl NodeReadinessPublisherOwner {
         let mut task = self.task;
         let joined = match self.close_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, &mut task).await {
-                Ok(joined) => joined.context("join agent readiness publisher")?,
+                Ok(joined) => joined.map_err(NodeReadinessPublisherError::Join)?,
                 Err(_) => {
                     task.abort();
                     let _ = task.await;
-                    return Err(close_result.err().unwrap_or_else(|| {
-                        anyhow!("agent readiness publisher task shutdown timed out")
-                    }));
+                    return Err(close_result
+                        .err()
+                        .unwrap_or(NodeReadinessPublisherError::ShutdownTimedOut));
                 }
             },
-            None => task.await.context("join agent readiness publisher")?,
+            None => task.await.map_err(NodeReadinessPublisherError::Join)?,
         };
         close_result?;
         joined
@@ -482,9 +523,7 @@ async fn run_publisher(
             _ = cancel.cancelled() => return Ok(()),
             command = commands.recv() => match command {
                 Some(command) => command,
-                None => return Err(anyhow!(
-                    "agent readiness publisher command channel closed"
-                )),
+                None => return Err(NodeReadinessPublisherError::CommandChannelClosed),
             },
         };
         let close = matches!(&command, Command::Close { .. });
@@ -751,7 +790,7 @@ async fn persist_candidate(
     let source = state
         .source
         .as_ref()
-        .ok_or_else(|| anyhow!("agent readiness source is not initialized"))?;
+        .ok_or(NodeReadinessPublisherError::SourceUninitialized)?;
     let sources = source.entries.values().cloned().map(|mut entry| {
         entry.startup_demoted =
             source
@@ -771,13 +810,13 @@ async fn persist_candidate(
         source.default_agent_id.clone(),
         sources,
     )
-    .map_err(anyhow::Error::msg)?;
+    .map_err(|reason| NodeReadinessPublisherError::SourceRejected { reason })?;
     if state.persisted.as_ref() != Some(&snapshot) {
         state.updated_at = Utc::now().to_rfc3339();
         for attempt in 1..=MAX_PERSIST_ATTEMPTS {
             let write = tokio::select! {
                 _ = cancel.cancelled() => {
-                    return Err(anyhow!("agent readiness persistence cancelled"));
+                    return Err(NodeReadinessPublisherError::PersistCancelled);
                 }
                 result = async {
                     match state.persist_attempt_timeout {
@@ -786,7 +825,7 @@ async fn persist_candidate(
                             writer.upsert(&state.node_did, &snapshot, &state.updated_at),
                         )
                         .await
-                        .map_err(|_| anyhow!("agent readiness persistence attempt timed out"))?,
+                        .map_err(|_| NodeReadinessPublisherError::PersistAttemptTimedOut)?,
                         None => writer.upsert(&state.node_did, &snapshot, &state.updated_at).await,
                     }
                 } => result,
@@ -804,7 +843,7 @@ async fn persist_candidate(
                     );
                     tokio::select! {
                         _ = cancel.cancelled() => {
-                            return Err(anyhow!("agent readiness persistence cancelled"));
+                            return Err(NodeReadinessPublisherError::PersistCancelled);
                         }
                         _ = tokio::time::sleep(retry_delay) => {}
                     }
@@ -829,10 +868,10 @@ async fn persist_candidate(
     })
 }
 
-fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
+fn is_fatal_node_readiness_write(error: &NodeReadinessPublisherError) -> bool {
     #[cfg(test)]
     {
-        error.downcast_ref::<FatalNodeReadinessWrite>().is_some()
+        matches!(error, NodeReadinessPublisherError::InjectedFatal(_))
     }
     #[cfg(not(test))]
     {
@@ -874,7 +913,9 @@ pub(crate) async fn upsert_node_readiness(
     )
     .await?;
     if response.has_errors() {
-        anyhow::bail!("upsert NodeReadiness failed: {:?}", response.errors);
+        return Err(NodeReadinessPublisherError::GraphqlRejected {
+            errors: format!("{:?}", response.errors),
+        });
     }
     Ok(())
 }

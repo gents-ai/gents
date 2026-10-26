@@ -27,7 +27,7 @@ impl NodeReadinessWriter for RejectRouterGenerationWriter {
         _node_did: &str,
         snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), crate::node_readiness_publisher::NodeReadinessPublisherError> {
         if snapshot.router_generation > 0 {
             return Err(FatalNodeReadinessWrite.into());
         }

@@ -336,7 +336,7 @@ impl ClientSyncStateOwner {
     async fn local_replicated_schema(
         &self,
         local: &Arc<defra_node::EmbeddedNode>,
-    ) -> anyhow::Result<&ReplicatedSchema> {
+    ) -> Result<&ReplicatedSchema, gents::agent::p2p_reconcile::error::P2pReconcileError> {
         self.local_replicated_schema
             .get_or_try_init(|| read_client_replicated_schema(Arc::clone(local)))
             .await
