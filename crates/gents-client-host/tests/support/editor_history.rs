@@ -162,7 +162,7 @@ pub fn reply(request: &Value, options: Options) -> Option<fake_llm::ChatAction> 
             .find_map(|part| part["text"].as_str().and_then(sequence)),
         _ => None,
     }?;
-    if !(1..=options.turns).contains(&turn) {
+    if !(1..=options.turns + 1).contains(&turn) {
         return None;
     }
     let action_completed = request["messages"]
@@ -431,7 +431,7 @@ async fn canonical_action_doc_id(
         .context("profile action has no canonical document identity")
 }
 
-async fn verified_requests(
+pub(super) async fn verified_requests(
     access: &ConfigAccess,
     node: &str,
     session: &str,
@@ -553,6 +553,17 @@ fn history_options_validate_explicit_qualification_scope() {
         response,
         fake_llm::completion_text_sse("History reply 1000.")
     );
+}
+
+#[test]
+fn history_profile_can_answer_one_followup_after_the_seeded_turns() {
+    let options = Options::parse(None, None).unwrap();
+    let request = |turn| json!({"messages":[{"role":"user","content":format!("History fixture turn {turn}")}]});
+    let Some(fake_llm::ChatAction::Sse(response)) = reply(&request(46), options) else {
+        panic!("the post-update request must have a finite provider response");
+    };
+    assert_eq!(response, fake_llm::completion_text_sse("History reply 46."));
+    assert!(reply(&request(47), options).is_none());
 }
 
 #[test]
