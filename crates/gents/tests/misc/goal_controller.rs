@@ -2168,6 +2168,56 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
 }
 
 #[tokio::test]
+async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
+    for (name, state, reason) in [
+        ("folded", "superseded", gents::lifecycle::FOLDED_REASON),
+        ("replaced", "superseded", gents::lifecycle::REPLACED_REASON),
+        ("removed", "interrupted", gents::lifecycle::REMOVED_REASON),
+    ] {
+        let db = test_db(&format!("goal-retired-input-{name}")).await;
+        let parent = seed_completed_request(&db, "execution-parent").await;
+        let input = seed_signed_terminal_request(&db, "zz-retired-input", state).await;
+        ConfigAccess::local(db.node.clone())
+            .write(
+                "test.goal_retired_input",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+                failure_reason: "{}", superseded_by_request: "execution-parent",
+                superseded_by_request_doc_id: "{}"
+            }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&input),
+                    escape_graphql_string(reason),
+                    escape_graphql_string(&parent),
+                ),
+            )
+            .await
+            .unwrap();
+        set_goal(
+            &db.node,
+            db.node_identity.did(),
+            SESSION,
+            Some("Continue the existing objective"),
+            Some(GoalStatus::Active),
+            None,
+        )
+        .await
+        .unwrap();
+        let (mut source, _tx) = source(&db).await;
+        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+            .await
+            .unwrap_or_else(|_| panic!("{name}: the retired input prevented continuation"))
+            .expect("continued Goal request");
+        let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(goal.parsed_status(), Some(GoalStatus::Active), "{name}");
+        let children = goal_children(&db).await;
+        assert_eq!(children.len(), 1, "{name}");
+    }
+}
+
+#[tokio::test]
 async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     let db = test_db("goal-interrupted").await;
     create_request_for_agent_with_signed_fields(

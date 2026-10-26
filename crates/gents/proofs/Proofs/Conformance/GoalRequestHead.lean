@@ -12,10 +12,10 @@ structure Case where
   deriving DecidableEq, Repr
 
 def scope : Scope := ⟨1, 1, 1⟩
-def root : Row := ⟨.normal, 10, 100, 1, 1, none, none, none, 0, true, true⟩
-def child : Row := ⟨.normal, 20, 200, 1, 1, some 1, some 10, some 100, 1, true, true⟩
-def grandchild : Row := ⟨.normal, 30, 300, 1, 1, some 1, some 20, some 200, 2, true, true⟩
-def unrelated : Row := ⟨.normal, 40, 400, 1, 1, none, none, none, 0, true, true⟩
+def root : Row := ⟨.normal, 10, 100, 1, 1, none, none, none, 0, true, true, .execution⟩
+def child : Row := ⟨.normal, 20, 200, 1, 1, some 1, some 10, some 100, 1, true, true, .execution⟩
+def grandchild : Row := ⟨.normal, 30, 300, 1, 1, some 1, some 20, some 200, 2, true, true, .execution⟩
+def unrelated : Row := ⟨.normal, 40, 400, 1, 1, none, none, none, 0, true, true, .execution⟩
 
 def cases : List Case :=
   [ ⟨"same_second_graph_parent", [root, child], some child⟩
@@ -32,6 +32,10 @@ def cases : List Case :=
   , ⟨"wrong_deterministic_identity_does_not_suppress", [root, {child with deterministicIdentity := false}], some root⟩
   , ⟨"branch_leaves_keep_canonical_order", [root, child, {grandchild with parentDoc := some 10, parentRequest := some 100}], some child⟩
   , ⟨"new_goal_epoch_may_reset_sequence", [root, {child with sequence := 5}, {grandchild with sequence := 1}], some {grandchild with sequence := 1}⟩
+  , ⟨"folded_input_is_not_the_goal_execution_head", [{unrelated with inputDisposition := .folded}, root, child], some child⟩
+  , ⟨"replaced_input_is_not_the_goal_execution_head", [{unrelated with inputDisposition := .replaced}, root, child], some child⟩
+  , ⟨"removed_input_is_not_an_execution_interrupt", [{unrelated with inputDisposition := .removed}, root, child], some child⟩
+  , ⟨"retired_inputs_do_not_invent_execution", [{unrelated with inputDisposition := .folded}, {root with inputDisposition := .replaced}], none⟩
   , ⟨"empty_session", [], none⟩
   , ⟨"title_cannot_be_public_head", [{unrelated with purpose := .titleAudit}, root], some root⟩
   , ⟨"title_cannot_supersede_parent", [root, {child with purpose := .titleAudit}], some root⟩
@@ -43,6 +47,11 @@ theorem cases_replay_explicit_expectations : ∀ c ∈ cases, select scope c.row
 
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
+private def dispositionJson : InputDisposition → String
+  | .execution => jsonString "execution"
+  | .folded => jsonString "folded"
+  | .replaced => jsonString "replaced"
+  | .removed => jsonString "removed"
 private def optionalNatJson : Option Nat → String
   | none => "null"
   | some value => toString value
@@ -53,7 +62,8 @@ def rowJson (row : Row) : String :=
   ",\"goal\":" ++ optionalNatJson row.goal ++ ",\"parent_doc\":" ++ optionalNatJson row.parentDoc ++
   ",\"parent_request\":" ++ optionalNatJson row.parentRequest ++ ",\"sequence\":" ++ toString row.sequence ++
   ",\"receipt_valid\":" ++ boolJson row.receiptValid ++
-  ",\"deterministic_identity\":" ++ boolJson row.deterministicIdentity ++ "}"
+  ",\"deterministic_identity\":" ++ boolJson row.deterministicIdentity ++
+  ",\"input_disposition\":" ++ dispositionJson row.inputDisposition ++ "}"
 
 def caseJson (testCase : Case) : String :=
   "{\"name\":" ++ jsonString testCase.name ++
@@ -64,6 +74,6 @@ def caseJson (testCase : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-theorem cases_count : cases.length = 17 := by decide
+theorem cases_count : cases.length = 21 := by decide
 
 end Conformance.GoalRequestHeadContracts

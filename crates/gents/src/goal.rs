@@ -58,7 +58,8 @@ pub(crate) use request_assignment::{
 pub(crate) use request_head::assignment_allows;
 pub(crate) use request_head::{
     assignment_request_id_in_txn, authenticated_goal_request_members, goal_session_is_idle,
-    latest_authenticated_session_request, latest_goal_request, verify_goal_continuation_edge,
+    latest_authenticated_session_request, latest_goal_request, request_selection_fields,
+    verify_goal_continuation_edge,
 };
 pub use reset_resume::resume_at_reset;
 pub(crate) use tool_context::load_goal_tool_context;
@@ -977,7 +978,7 @@ async fn fence_opened_graph_goal_in_txn(
     }
     let did = escape_graphql_string(&goal.node_did);
     let session = escape_graphql_string(&goal.session_id);
-    let fields = crate::request_admission::SIGNED_REQUEST_FIELDS;
+    let fields = request_selection_fields();
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{

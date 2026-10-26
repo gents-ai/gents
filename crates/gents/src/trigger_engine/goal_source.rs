@@ -690,8 +690,8 @@ impl GoalSource {
                 }}
             }}"#,
             signed_fields = format_args!(
-                "{} failure_reason terminalized_at",
-                crate::request_admission::SIGNED_REQUEST_FIELDS
+                "{} terminalized_at",
+                crate::goal::request_selection_fields()
             ),
         );
         let response =
