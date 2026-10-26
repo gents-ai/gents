@@ -1531,6 +1531,18 @@
           "markdownDescription": "Denies the desktop_session_archive command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_session_context_details command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-context-details",
+          "markdownDescription": "Enables the desktop_session_context_details command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_context_details command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-context-details",
+          "markdownDescription": "Denies the desktop_session_context_details command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_session_fork_before_message command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-session-fork-before-message",
@@ -1885,10 +1897,10 @@
           "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
         },
         {
-          "description": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-history`\n- `allow-desktop-session-goal`",
+          "description": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-context-details`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-history`\n- `allow-desktop-session-goal`",
           "type": "string",
           "const": "session-read",
-          "markdownDescription": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-history`\n- `allow-desktop-session-goal`"
+          "markdownDescription": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-context-details`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-history`\n- `allow-desktop-session-goal`"
         },
         {
           "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",

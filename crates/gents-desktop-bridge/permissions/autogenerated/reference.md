@@ -2702,6 +2702,32 @@ Denies the desktop_session_archive command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-session-context-details`
+
+</td>
+<td>
+
+Enables the desktop_session_context_details command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-context-details`
+
+</td>
+<td>
+
+Denies the desktop_session_context_details command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-session-fork-before-message`
 
 </td>

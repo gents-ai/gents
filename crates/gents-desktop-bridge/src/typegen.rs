@@ -324,6 +324,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         MessageView,
         ToolCallView,
         RequestResendResultView,
+        SessionContextDetailsRequest,
+        gents::toolset::SessionContextDetails,
         WorkspaceListingView,
         DesktopObserverMetrics,
         InferenceProbeResult,

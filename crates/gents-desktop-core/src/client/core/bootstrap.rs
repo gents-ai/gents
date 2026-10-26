@@ -217,6 +217,7 @@ impl ClientCore {
                 request_patch_signatures: tokio::sync::Mutex::new(
                     rapidhash::RapidHashMap::default(),
                 ),
+                context_details: super::context_details::ContextDetailsCache::default(),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
                 shutdown_completion: tokio::sync::Mutex::new(None),
                 #[cfg(test)]

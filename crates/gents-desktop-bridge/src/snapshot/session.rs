@@ -53,6 +53,7 @@ pub(crate) use projection::render_transcript_rows;
 #[cfg(test)]
 use request_context::decode_latest_request_context;
 use request_context::load_latest_session_request_context;
+pub use request_context::load_session_context_details;
 use timeline_page::insert_timeline_item_by_sequence;
 pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page_with_query};
 
