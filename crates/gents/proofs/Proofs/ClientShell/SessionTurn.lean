@@ -83,6 +83,10 @@ def replacementSeen (rows : List Row) : Nat → List Nat → Row → Row
 def replacementOf (rows : List Row) (row : Row) : Row :=
   replacementSeen rows (rows.length + 1) [] row
 
+def displayCandidates (rows : List Row) (selected : Row) : List Row :=
+  rows.dropWhile (fun row => !(row.doc == selected.doc &&
+    row.requester == selected.requester && row.publicInput))
+
 /-- A durable observation can still name a terminal request while another
 request owns the session loop. Once the observed turn has ended, presentation
 uses a subsequent active row in the same requester scope, or the latest subsequent
@@ -93,13 +97,27 @@ def displayTurn (rows : List Row) (selected : Row) : Row :=
   let turn := turnOf rows (replacementOf rows selected)
   if turn.state = .terminal then
     let eligible := fun row : Row => row.requester == selected.requester && row.publicInput
-    let subsequent := rows.dropWhile (fun row => row.doc != selected.doc)
+    let subsequent := displayCandidates rows selected
     match subsequent.reverse.find? (fun row => eligible row && row.state == .active) with
     | some active => active
     | none =>
       ((subsequent.reverse.find? eligible).map (fun row =>
         turnOf rows (replacementOf rows row))).getD turn
   else turn
+
+theorem display_uses_subsequent_active_owner (rows : List Row) (selected owner : Row)
+    (hterminal : (turnOf rows (replacementOf rows selected)).state = .terminal)
+    (howner : ((displayCandidates rows selected).reverse.find?
+      (fun row => (row.requester == selected.requester && row.publicInput) &&
+        row.state == .active)) = some owner) :
+    displayTurn rows selected = owner := by
+  simp [displayTurn, hterminal, howner]
+
+theorem display_keeps_terminal_without_anchor (rows : List Row) (selected : Row)
+    (hterminal : (turnOf rows (replacementOf rows selected)).state = .terminal)
+    (hmissing : displayCandidates rows selected = []) :
+    displayTurn rows selected = turnOf rows (replacementOf rows selected) := by
+  simp [displayTurn, hterminal, hmissing]
 
 theorem display_keeps_nonterminal_turn (rows : List Row) (selected : Row)
     (h : (turnOf rows (replacementOf rows selected)).state ≠ .terminal) :
@@ -270,6 +288,18 @@ theorem requestReadRows_keeps_unclaimed (all : List Row) (requester selected lat
   exact closeReadRows_keeps_current all (all.length + 1)
     (requestReadSeeds all requester selected latest pageDocs) hseed hall
 
+theorem requestReadRows_keeps_noncompleted_public (all : List Row) (requester selected latest : Nat)
+    (pageDocs : List Nat) {row : Row}
+    (hall : row ∈ all) (hrequester : row.requester = requester)
+    (hpublic : row.publicInput = true) (hcompleted : row.completed = false) :
+    row ∈ requestReadRows all requester selected latest pageDocs := by
+  have hseed : row ∈ requestReadSeeds all requester selected latest pageDocs := by
+    apply List.mem_filter.mpr
+    refine ⟨hall, ?_⟩
+    simp [requestReadSeeds, mayOmitCompletedPublicInput, hrequester, hpublic, hcompleted]
+  exact closeReadRows_keeps_current all (all.length + 1)
+    (requestReadSeeds all requester selected latest pageDocs) hseed hall
+
 def turnState (row : Row) : ClientTurnState :=
   match row.state with
   | .unclaimed => .waitingForClaim
@@ -286,6 +316,20 @@ def observe (sid : SessionId) (node : NodeDid) (agent : Option AgentId)
   , latestTurn := some (turnState turn)
   , queuedRequests := (queuedBehind rows turn).map (·.request)
   , foldedRequests := (foldedIn rows newest.requester).map (·.request) }
+
+theorem active_owner_remains_observable (sid : SessionId) (node : NodeDid)
+    (agent : Option AgentId) (rows : List Row) (selected owner : Row)
+    (hterminal : (turnOf rows (replacementOf rows selected)).state = .terminal)
+    (howner : ((displayCandidates rows selected).reverse.find?
+      (fun row => (row.requester == selected.requester && row.publicInput) &&
+        row.state == .active)) = some owner) :
+    (observe sid node agent rows selected).latestObservedRequest = some owner.request ∧
+    (observe sid node agent rows selected).latestTurn = some .running ∧
+    owner.requester = selected.requester := by
+  have eligible := List.find?_some howner
+  simp only [Bool.and_eq_true, beq_iff_eq] at eligible
+  simp [observe, display_uses_subsequent_active_owner rows selected owner hterminal howner,
+    turnState, eligible.2, eligible.1.1]
 
 theorem resolve_follows_fold_owner (rows : List Row) (fuel : Nat) (row owner : Row)
     (head : Nat) (hfold : row.foldedInto = some head)

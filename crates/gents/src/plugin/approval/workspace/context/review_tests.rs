@@ -165,6 +165,11 @@ async fn a_routine_decision_cannot_be_carried_to_another_workspace() {
 #[tokio::test]
 async fn unavailable_review_uses_the_same_question_for_human_consent() {
     let fixture = Fixture::new();
+    let listener_home = fixture.home.clone();
+    tokio::task::spawn_blocking(move || approval::mark_listening(&listener_home))
+        .await
+        .unwrap()
+        .unwrap();
     let observed = Arc::new(Mutex::new(None));
     let reviewer: Reviewer = Arc::new({
         let observed = observed.clone();
@@ -180,7 +185,8 @@ async fn unavailable_review_uses_the_same_question_for_human_consent() {
             true,
             None,
         ));
-        assert!(futures::poll!(consent.as_mut()).is_pending());
+        let observed_consent = futures::poll!(consent.as_mut());
+        assert!(observed_consent.is_pending(), "{observed_consent:?}");
         let questions = approval::pending(&fixture.home).unwrap();
         assert_eq!(questions.len(), 1);
         assert_eq!(Some(&questions[0].id), observed.lock().unwrap().as_ref());
@@ -328,5 +334,51 @@ async fn stop_cancels_review_before_a_human_question_can_be_published() {
             },
         ),
     )
+    .await;
+}
+
+#[tokio::test]
+async fn strict_ask_prompts_for_each_routine_binding_without_invoking_review() {
+    let fixture = Fixture::new();
+    let current = workspace::get(&fixture.home, &fixture.key)
+        .unwrap()
+        .unwrap();
+    workspace::save_mode(
+        &fixture.home,
+        &fixture.key,
+        current.selection.revision,
+        Mode::Ask,
+        None,
+    )
+    .unwrap();
+    let reviewer: Reviewer = Arc::new(|_| panic!("strict Ask must not invoke automatic review"));
+    scope(Some(fixture.context(reviewer)), async {
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let decision = fixture.decision(true);
+            assert_eq!(decision.route, Route::Ask);
+            let mut consent = Box::pin(workspace::consent_binding(
+                &fixture.home,
+                decision,
+                true,
+                None,
+            ));
+            assert!(futures::poll!(consent.as_mut()).is_pending());
+            let questions = approval::pending(&fixture.home).unwrap();
+            assert_eq!(questions.len(), 1);
+            ids.push(questions[0].id.clone());
+            approval::decide(&fixture.home, &questions[0].id, approval::Answer::Once).unwrap();
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), consent)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            );
+            assert!(approval::pending_requests(&fixture.home)
+                .unwrap()
+                .is_empty());
+        }
+        assert_ne!(ids[0], ids[1]);
+    })
     .await;
 }

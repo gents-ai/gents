@@ -20,7 +20,7 @@ const TOOL: &str = "workflow";
 const PIN: &str =
     r#""pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"}"#;
 const SPAWN: &str =
-    r#"{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}"#;
+    r#"{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}"#;
 
 struct Options {
     settings: Option<PluginJobSettings>,
@@ -39,14 +39,14 @@ struct Options {
 /// The job block of `team/plugin` in the caller's Tools: it may start `worker`.
 fn worker_settings(policy: JobPolicy) -> PluginJobSettings {
     let mut settings = live_settings(policy);
-    settings.agent_targets = vec!["worker".into()];
+    settings.agent_targets = vec!["t-worker".into()];
     settings
 }
 
 fn running_policy() -> JobPolicy {
     JobPolicy {
         dynamic: DynamicMode::Run,
-        dynamic_targets: vec!["worker".into()],
+        dynamic_targets: vec!["t-worker".into()],
         ..Default::default()
     }
 }
@@ -471,6 +471,88 @@ fn failed(row: &Value, class: &str) {
 }
 
 #[tokio::test]
+async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_arguments() {
+    let step = step0(
+        json!({"result": {"answer": 42}}),
+        Options {
+            settings: Some(worker_settings(JobPolicy {
+                dynamic: DynamicMode::Off,
+                ..running_policy()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    for (index, name) in [
+        "absent_sources_under_off",
+        "empty_script_under_off",
+        "empty_path_under_off",
+        "both_empty_under_off",
+        "nonempty_script_under_off",
+        "nonempty_path_under_off",
+        "whitespace_script_is_source",
+        "whitespace_path_is_source",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
+            .iter()
+            .find(|case| case.name == name)
+            .unwrap();
+        let arguments = json!({
+            "argv": case.job.call.argv,
+            "script": case.job.call.script,
+            "path": case.job.call.path,
+        });
+        let call = format!("source-boundary-{index}");
+        let answer = step.call_as(&call, &arguments.to_string()).await;
+        let row = step.row_of(&call).await;
+        if case.expected.admitted {
+            assert_eq!(answer, json!({"answer": 42}), "{name}");
+            assert_eq!(row["lifecycle_state"], "completed", "{name}: {row}");
+        } else {
+            assert!(case.expected.dynamic_code_disabled, "{name}");
+            assert_eq!(
+                answer["code"].as_str(),
+                case.expected.code.as_deref(),
+                "{name}"
+            );
+            assert!(
+                answer["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("job.policy.dynamic"),
+                "{name}: {answer}"
+            );
+            assert!(
+                answer["next"]
+                    .as_str()
+                    .unwrap()
+                    .contains("operator-installed script"),
+                "{name}: {answer}"
+            );
+            failed(&row, "policyDenied");
+        }
+        let accepted = crate::tool_call_lifecycle::load_tool_call_arguments(
+            &step.access(),
+            row["_docID"].as_str().unwrap(),
+            &step.hook.node_did,
+            &step.session_id,
+            Some(&step.hook.node_did),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&accepted).unwrap(),
+            arguments,
+            "{name}"
+        );
+    }
+    step.finish().await;
+}
+
+#[tokio::test]
 async fn non_job_result_with_writes_commits_atomically_with_the_foreground_terminal() {
     let step = step0(
         json!({
@@ -769,7 +851,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     step.reinstall(&json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "ignored"},
         "resume": resume,
-        "spawn": [{"slot": "s2", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s2", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
     }}));
     let answer = step
         .call_as("call-2", r#"{"argv": ["resume", "root"]}"#)
@@ -790,7 +872,90 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     let again = step
         .call_as("call-3", r#"{"argv": ["resume", "root"]}"#)
         .await;
-    assert_eq!(again["code"], "plugin_job_policy_denied", "{again}");
+    assert_eq!(again["code"], "plugin_job_resume_not_head", "{again}");
+    let address = format!("{}:call-2", step.session_id);
+    assert_eq!(
+        again["next"],
+        format!("Next: `{TOOL} resume {address}`"),
+        "{again}"
+    );
+    failed(&step.row_of("call-3").await, "policyDenied");
+    step.finish().await;
+}
+
+/// A step 0 that adopts a job and asks to resume `row`.
+fn resuming(row: &str) -> Value {
+    json!({"effects": {
+        "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"},
+        "resume": {"row_doc_id": row, "engine": "current"},
+        "spawn": [{"slot": "s2", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+    }})
+}
+
+#[tokio::test]
+async fn resume_of_a_missing_row_names_the_cause_and_the_next_call() {
+    let step = step0(resuming("no-such-row"), idle()).await;
+    let refused = step
+        .call_as("call-1", r#"{"argv": ["resume", "gone"]}"#)
+        .await;
+    assert_eq!(refused["code"], "plugin_job_resume_unknown", "{refused}");
+    assert_eq!(
+        refused["message"], "no job row no-such-row exists to resume",
+        "{refused}"
+    );
+    assert_eq!(
+        refused["next"],
+        format!("Next: `{TOOL} resume <address>` with the address the run's receipt printed"),
+        "{refused}"
+    );
+    failed(&step.row_of("call-1").await, "policyDenied");
+    step.finish().await;
+}
+
+#[tokio::test]
+async fn resume_of_a_continued_row_names_the_newest_rows_address() {
+    let step = step0(adopting(), idle()).await;
+    step.call_as("call-1", ARGS).await;
+    let root = step.row_of("call-1").await["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The continuation row is pinned directly; a live resume is not what is under test.
+    step.reinstall(&json!({"result": "x"}));
+    step.call_as("call-2", ARGS).await;
+    let continuation = step.row_of("call-2").await["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let pin = JobPin {
+        plugin_ref: "team/plugin".to_owned(),
+        chain_root_doc_id: root.clone(),
+        resume_of: Some(root.clone()),
+        ..fixture_job_pin()
+    };
+    crate::config_client::ConfigAccess::transact_local_write(&step.node, None, "test.pin", |txn| {
+        let (doc, pin) = (&continuation, &pin);
+        Box::pin(async move { write_pin_in_txn(txn, doc, pin).await })
+    })
+    .await
+    .unwrap();
+
+    step.reinstall(&resuming(&root));
+    let refused = step
+        .call_as("call-3", r#"{"argv": ["resume", "root"]}"#)
+        .await;
+    assert_eq!(refused["code"], "plugin_job_resume_not_head", "{refused}");
+    let address = format!("{}:call-2", step.session_id);
+    assert_eq!(
+        refused["message"],
+        format!("{root} was already resumed by {address}; only a run's newest row resumes"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["next"],
+        format!("Next: `{TOOL} resume {address}`"),
+        "{refused}"
+    );
     failed(&step.row_of("call-3").await, "policyDenied");
     step.finish().await;
 }
@@ -799,7 +964,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
 async fn duplicate_handle_is_suffixed_and_the_scratch_path_is_unchanged() {
     let output = json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
         "scratch": [{"name": "a.txt", "content": "x"}],
     }});
     let step = step0(
@@ -856,7 +1021,7 @@ async fn adoption_writes_no_execution_receipt() {
 async fn background_receipt_shows_address_handle_script_id_and_tier_line() {
     let output = json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
         "progress": {
             "title": "flow", "state": "running", "phases": [], "active": [], "spawned": 0,
             "budget": {"total": 2, "spent": 0, "remaining": 2},
@@ -888,7 +1053,7 @@ async fn adopted_origin_follows_classify() {
     );
     let installed = json!({"effects": {
         "pin": {"script_id": "s", "source_digest": digest, "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
     }});
     let step = step0(
         installed,
@@ -987,7 +1152,7 @@ async fn step0_budget_pause_with_a_pin_settles_paused_inline_and_is_resumable() 
     step.reinstall(&json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 3, "handle": "h"},
         "resume": {"row_doc_id": doc, "engine": "current", "budget": 3},
-        "spawn": [{"slot": "s2", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s2", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
     }}));
     let resumed = step.call_as("call-2", r#"{"argv": ["resume", "h"]}"#).await;
     assert_eq!(resumed["status"], "running", "{resumed}");

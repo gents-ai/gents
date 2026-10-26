@@ -37,6 +37,7 @@ import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
+import Proofs.Conformance.Contracts.Json.PackInstallation
 import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
@@ -361,6 +362,10 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"client_live_delta_cases\":"
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
+    ++ "\"plugin_reference_cases\":"
+      ++ PackInstallation.casesJson ++ ","
+    ++ "\"snapshot_demotion_cases\":"
+      ++ snapshotDemotionCasesJson ++ ","
     ++ "\"startup_readiness_cases\":"
       ++ startupReadinessCasesJson ++ ","
     ++ "\"readiness_publication_cases\":"

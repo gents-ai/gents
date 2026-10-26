@@ -133,14 +133,17 @@ where
     if !input.ceiling_allows {
         return Route::Deny;
     }
-    if !input.crosses_boundary || valid_grant(input) {
-        return Route::Allow;
-    }
     let mode = if input.configured_workspace == input.current.workspace {
         input.mode
     } else {
         Mode::Ask
     };
+    if mode == Mode::Ask {
+        return Route::Ask;
+    }
+    if !input.crosses_boundary || valid_grant(input) {
+        return Route::Allow;
+    }
     match mode {
         Mode::Ask => Route::Ask,
         Mode::AutoReview => Route::Review,

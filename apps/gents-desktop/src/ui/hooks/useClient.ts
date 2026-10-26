@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
+import { interruptVisible } from "../screens/activity-status";
+
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 
 import {
@@ -181,7 +183,6 @@ export function useSessionLoad() {
 
 export function useInterruptVisible() {
   return useView((view) => {
-    const kind = view.shellProjection.workflow.kind;
-    return kind === "awaitingObservation" || kind === "turnInProgress";
+    return interruptVisible(view.shellProjection.workflow.kind);
   });
 }

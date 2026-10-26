@@ -588,6 +588,29 @@ jobs:
       - name: Build desktop packages
         run: npm run build:packages
 
+      - name: Use the Ubuntu archive for browser system dependencies
+        if: matrix.suite == 'browser'
+        run: |
+          sudo python3 - <<'PYTHON'
+          from pathlib import Path
+
+          for path in Path('/etc/apt').rglob('*'):
+              if not path.is_file():
+                  continue
+              if path.suffix not in {'.sources', '.list'} and path.name != 'apt-mirrors.txt':
+                  continue
+              original = path.read_text(encoding='utf-8')
+              updated = original
+              for scheme in ('http', 'https'):
+                  updated = updated.replace(
+                      f'{scheme}://azure.archive.ubuntu.com/ubuntu',
+                      'https://archive.ubuntu.com/ubuntu',
+                  )
+              if updated != original:
+                  path.write_text(updated, encoding='utf-8')
+                  print(f'Using the Ubuntu archive in {path}')
+          PYTHON
+
       - name: Install Playwright browsers
         if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop

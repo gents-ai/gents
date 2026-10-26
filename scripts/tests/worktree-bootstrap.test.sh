@@ -13,6 +13,12 @@ cat > "$source_root/Cargo.toml" <<'EOF'
 [workspace]
 members = ["crates/gents-lean-contract", "crates/consumer"]
 resolver = "2"
+
+[profile.fast-dev]
+inherits = "dev"
+
+[profile.release]
+incremental = true
 EOF
 for package in gents-lean-contract consumer warm-dependency; do
     package_root="$source_root/crates/$package"
@@ -44,16 +50,28 @@ fn main() {
 }
 EOF
 export RUSTC_WRAPPER= CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=2
-for profile in debug release; do
-    cargo_profile=dev
-    [[ "$profile" != release ]] || cargo_profile=release
+for profile in debug release fast-dev; do
+    cargo_profile="$profile"
+    [[ "$profile" != debug ]] || cargo_profile=dev
     nice -n 10 cargo build --manifest-path "$source_root/Cargo.toml" \
         --target-dir "$source_root/target" -p consumer --profile "$cargo_profile"
 done
 host="$(rustc -vV | sed -n 's/^host: //p')"
 nice -n 10 cargo build --manifest-path "$source_root/Cargo.toml" \
     --target-dir "$source_root/target" --target "$host" -p consumer
+nice -n 10 cargo build --manifest-path "$source_root/Cargo.toml" \
+    --target-dir "$source_root/target/qualification/native" -p consumer --profile fast-dev
 [[ -n "$(find "$source_root/target/$host" -name 'libgents_lean_contract*.rlib' -print)" ]]
+for profile in debug release fast-dev; do
+    [[ -n "$(find "$source_root/target/$profile/incremental" -type f -print -quit)" ]]
+done
+[[ -n "$(find "$source_root/target/$host/debug/incremental" -type f -print -quit)" ]]
+if [[ ! -d "$source_root/target/qualification/native/fast-dev/incremental" ]]; then
+    echo "nested Cargo target did not create incremental state" >&2
+    exit 1
+fi
+mkdir -p "$source_root/target/artifacts/retained/incremental"
+printf 'retained nested artifact\n' > "$source_root/target/artifacts/retained/incremental/evidence.txt"
 git -C "$source_root" init -q
 git -C "$source_root" config user.email bootstrap-test@example.invalid
 git -C "$source_root" config user.name bootstrap-test
@@ -63,15 +81,26 @@ git -C "$source_root" commit -qm fixture
 (cd "$source_root" && "$script" relocated "$destination")
 
 [[ -n "$(find "$destination/target/$host" -name 'libgents_lean_contract*.rlib' -print)" ]]
-for profile in debug release; do
+for profile in debug release fast-dev "$host/debug" qualification/native/fast-dev; do
+    if [[ -e "$destination/target/$profile/incremental" ]]; then
+        echo "cloned incremental state remains for $profile" >&2
+        exit 1
+    fi
+    [[ -n "$(find "$source_root/target/$profile/incremental" -type f -print -quit)" ]]
+done
+if [[ ! -f "$destination/target/artifacts/retained/incremental/evidence.txt" ]]; then
+    echo "removed a retained artifact outside a Cargo profile" >&2
+    exit 1
+fi
+for profile in debug release fast-dev; do
     helper="$(find "$source_root/target/$profile/deps" -name 'libgents_lean_contract-*.rlib' -print)"
     [[ -n "$helper" ]]
     cmp "$helper" "$destination/target/$profile/deps/$(basename "$helper")"
     dependency="$(find "$source_root/target/$profile/deps" -name 'libwarm_dependency-*.rlib' -print)"
     [[ -n "$dependency" ]]
     cmp "$dependency" "$destination/target/$profile/deps/$(basename "$dependency")"
-    cargo_profile=dev
-    [[ "$profile" != release ]] || cargo_profile=release
+    cargo_profile="$profile"
+    [[ "$profile" != debug ]] || cargo_profile=dev
     output="$(nice -n 10 cargo run --quiet --manifest-path "$destination/Cargo.toml" \
         --target-dir "$destination/target" -p consumer --profile "$cargo_profile")"
     expected="$(printf '%s\n%s' "$destination/crates/consumer" "$destination/crates/consumer")"

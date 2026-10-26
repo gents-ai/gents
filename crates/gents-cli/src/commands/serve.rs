@@ -1300,7 +1300,9 @@ async fn serve_foreground(
     }
     .await;
 
+    tracing::info!(target: "gents::shutdown", stage = "agent_drain", "server shutdown stage started");
     let runtime_result = runtime.finish(serve_result).await;
+    tracing::info!(target: "gents::shutdown", stage = "agent_drain", "server shutdown stage completed");
 
     #[cfg(unix)]
     let runtime_result = {
@@ -1319,7 +1321,9 @@ async fn serve_foreground(
         }
         grok_shutdown_error.map_or(runtime_result, Err)
     };
+    tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage started");
     runtime.shutdown_node().await;
+    tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage completed");
     runtime_result
 }
 
