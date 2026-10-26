@@ -1159,7 +1159,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
-        run_editor_journey(
+        let editor = run_editor_journey(
             root,
             &paths,
             &host_binary,
@@ -1167,7 +1167,25 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             provider.endpoint(),
             journey.editor_scenario().context("steering scenario")?,
         )
-        .await?;
+        .await;
+        if editor.is_err() {
+            let snapshot = read_session(&mut client, &mut id, node_did, session).await?;
+            let requests = access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+                gents::graphql::escape_graphql_string(session),
+                gents::SIGNED_REQUEST_FIELDS,
+            )).await?;
+            let name = "editor-steering-failure.json";
+            std::fs::write(
+                root.join(name),
+                serde_json::to_vec_pretty(&json!({
+                    "snapshot": snapshot, "requests": requests,
+                }))?,
+            )?;
+            copy_editor_evidence(root, name)?;
+        }
+        editor?;
         id += 1;
     }
     if matches!(journey, Journey::EditorGoalRecovery) {
