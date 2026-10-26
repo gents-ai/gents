@@ -12,6 +12,12 @@ use super::r4c_private_support::{
 };
 use crate::support::test_db;
 
+#[path = "background_wait_wakes.rs"]
+mod background_wait_wakes;
+
+#[path = "background_wait_profile.rs"]
+mod background_wait_profile;
+
 struct StaticTool {
     name: &'static str,
     result: &'static str,
@@ -38,6 +44,108 @@ impl ToolDyn for StaticTool {
 }
 
 struct PendingTool;
+
+struct GatedTool(std::sync::Arc<tokio::sync::Semaphore>);
+
+impl ToolDyn for GatedTool {
+    fn name(&self) -> String {
+        "gated_tool".to_owned()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "gated_tool".to_owned(),
+                description: "gated tool".to_owned(),
+                parameters: json!({"type":"object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async {
+            let _permit = self.0.acquire().await.unwrap();
+            Ok("wake-completed".to_owned())
+        })
+    }
+}
+
+struct SilentChanges {
+    waiting: std::sync::Arc<tokio::sync::Notify>,
+    closed: bool,
+}
+
+impl futures::Stream for SilentChanges {
+    type Item = events::DocumentChangeBatch;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.waiting.notify_one();
+        if self.closed {
+            std::task::Poll::Ready(None)
+        } else {
+            std::task::Poll::Pending
+        }
+    }
+}
+
+async fn background_wait_recovers_without_notification(closed: bool) {
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let (db, hook, session_id, request_id) = setup_hook(
+        if closed {
+            "wait-closed-feed"
+        } else {
+            "wait-silent-feed"
+        },
+        registry(vec![Box::new(GatedTool(gate.clone()))], &["gated_tool"]),
+    )
+    .await;
+    let handle = background_tool(&hook, "gated-background", "gated_tool").await;
+    let caller = crate::background_tools::ProcessControlScope {
+        request_id,
+        session_id,
+        node_did: db.node_identity.did().to_owned(),
+        requester_did: Some(db.node_identity.did().to_owned()),
+    };
+    let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
+    let changes = SilentChanges {
+        waiting: waiting.clone(),
+        closed,
+    };
+    let now = chrono::Utc::now();
+    let wait = hook.await_background_tool_observing(
+        &caller,
+        handle["tool_call_id"].as_str().unwrap(),
+        now + chrono::Duration::minutes(1),
+        now + chrono::Duration::seconds(30),
+        changes,
+    );
+    let complete = async {
+        waiting.notified().await;
+        gate.add_permits(1);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        tokio::join!(wait, complete)
+    })
+    .await
+    .expect("durable completion must be observed before the caller's wait expires");
+    let result: Value = serde_json::from_str(&result.unwrap()).unwrap();
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["result"], "wake-completed");
+    assert_eq!(result["error"], Value::Null);
+}
+
+#[tokio::test]
+async fn background_wait_recovers_after_a_lost_notification() {
+    background_wait_recovers_without_notification(false).await;
+}
+
+#[tokio::test]
+async fn background_wait_recovers_after_the_change_feed_closes() {
+    background_wait_recovers_without_notification(true).await;
+}
 
 impl ToolDyn for PendingTool {
     fn name(&self) -> String {

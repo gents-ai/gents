@@ -9,6 +9,10 @@ use tokio::sync::watch;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::lifecycle::queue::drain_automated_wakeups_in_txn;
 
+mod scoped;
+pub use scoped::fetch_interrupt_requested_at_scoped;
+pub(crate) use scoped::observe_interrupt_requested_at_scoped;
+
 /// Requests a soft interrupt by latching `interrupt_requested_at` on the
 /// AgentRequest document. Idempotent: the first latch drains automated wakes
 /// visible as pending in the same transaction and exact session scope; a
@@ -305,44 +309,6 @@ pub async fn fetch_interrupt_requested_at(
 ) -> Result<Option<String>> {
     let request_doc_id = crate::request_binding::require_request_doc_id(node, request_id).await?;
     fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await
-}
-
-pub async fn fetch_interrupt_requested_at_scoped(
-    node: &EmbeddedNode,
-    request_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-) -> Result<Option<String>> {
-    let filter = scoped_request_filter(request_id, node_did, requester_did)?;
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{{filter}}},
-                limit: 2
-            ) {{
-                interrupt_requested_at
-            }}
-        }}"#
-    );
-    let resp = graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_scoped")
-        .await
-        .with_context(|| format!("fetch_interrupt_requested_at_scoped({request_id})"))?;
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "interrupt request fetch is ambiguous within node scope"
-    );
-    Ok(rows
-        .first()
-        .and_then(|row| row.get("interrupt_requested_at"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from))
 }
 
 #[derive(Debug, Clone)]

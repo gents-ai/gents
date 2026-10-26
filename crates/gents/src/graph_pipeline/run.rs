@@ -978,6 +978,18 @@ pub async fn reconcile_owned_graph_runs(
     node: &std::sync::Arc<EmbeddedNode>,
     owner_did: &str,
 ) -> Result<usize> {
+    Ok(sweep_owned_graph_runs(node, owner_did).await?.terminalized)
+}
+
+struct OwnedGraphRunSweep {
+    terminalized: usize,
+    saw_running_rows: bool,
+}
+
+async fn sweep_owned_graph_runs(
+    node: &Arc<EmbeddedNode>,
+    owner_did: &str,
+) -> Result<OwnedGraphRunSweep> {
     let query = format!(
         r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, status: {{ _eq: "running" }} }}, limit: 1001) {{ run_id }} }}"#,
         escape_graphql_string(owner_did),
@@ -991,6 +1003,7 @@ pub async fn reconcile_owned_graph_runs(
         anyhow::bail!("running graph run sweep exceeds the bounded 1000-run limit");
     }
 
+    let saw_running_rows = !running.is_empty();
     let mut terminalized = 0;
     for row in running {
         let Some(run_id) = row.get("run_id").and_then(Value::as_str) else {
@@ -1007,7 +1020,25 @@ pub async fn reconcile_owned_graph_runs(
             ),
         }
     }
-    Ok(terminalized)
+    Ok(OwnedGraphRunSweep {
+        terminalized,
+        saw_running_rows,
+    })
+}
+
+/// Graph creations invalidate GraphRun itself. Missing invalidations still
+/// require the fixed deadline sweep even after a durable empty result.
+fn graph_run_change_relevant(
+    batch: &events::DocumentChangeBatch,
+    request_collection: &str,
+    running_rows_may_exist: bool,
+) -> bool {
+    batch.resync_required
+        || batch.changes.iter().any(|change| {
+            running_rows_may_exist
+                || change.doc_id.is_empty()
+                || change.collection_id != request_collection
+        })
 }
 
 /// Run deadlines are wall-clock facts no document change announces, so the
@@ -1020,33 +1051,47 @@ pub async fn run_graph_run_reconciler(
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut changes = crate::subscribe_collections(&node, ["GraphRun", "AgentRequest"])?;
+    let collections = crate::collection_ids(&node, ["AgentRequest"])?;
+    let request_collection = &collections[0];
+    let mut running_rows_may_exist = true;
     let mut changes_open = true;
     let mut interval = tokio::time::interval(GRAPH_RUN_DEADLINE_SWEEP);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {}
             batch = changes.recv(), if changes_open => {
-                if batch.is_none() {
-                    tracing::warn!(owner_did, "graph run change subscription closed; sweeping on the interval only");
-                    changes_open = false;
-                    continue;
+                match batch {
+                    None => {
+                        tracing::warn!(owner_did, "graph run change subscription closed; sweeping on the interval only");
+                        changes_open = false;
+                        continue;
+                    }
+                    Some(batch) if !graph_run_change_relevant(&batch, request_collection, running_rows_may_exist) => {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                    Some(_) => {}
                 }
             }
         }
-        match reconcile_owned_graph_runs(&node, &owner_did).await {
-            Ok(terminalized) if terminalized > 0 => tracing::info!(
-                owner_did,
-                terminalized,
-                "materialized durable graph run completion"
-            ),
-            Ok(_) => {}
-            Err(error) => tracing::warn!(
-                owner_did,
-                %error,
-                "graph run reconciliation sweep failed; retrying"
-            ),
+        match sweep_owned_graph_runs(&node, &owner_did).await {
+            Ok(sweep) => {
+                running_rows_may_exist = sweep.saw_running_rows;
+                if sweep.terminalized > 0 {
+                    tracing::info!(
+                        owner_did,
+                        terminalized = sweep.terminalized,
+                        "materialized durable graph run completion"
+                    );
+                }
+            }
+            Err(error) => {
+                running_rows_may_exist = true;
+                tracing::warn!(owner_did, %error, "graph run reconciliation sweep failed; retrying");
+            }
         }
     }
 }
@@ -1507,5 +1552,41 @@ mod tests {
         }
         view.status = "paused".to_owned();
         assert!(view.status().is_err());
+    }
+}
+
+#[cfg(test)]
+mod wake_tests {
+    use super::graph_run_change_relevant;
+
+    #[test]
+    fn graph_run_wakes_preserve_graph_changes_and_unknown_state() {
+        for (collection_id, doc_id, running, resync, relevant) in [
+            ("requests", "request", false, false, false),
+            ("requests", "request", true, false, true),
+            ("graphs", "graph", false, false, true),
+            ("unknown", "document", false, false, true),
+            ("requests", "", false, false, true),
+            ("requests", "request", false, true, true),
+        ] {
+            let batch = events::DocumentChangeBatch {
+                changes: vec![events::DocumentChange {
+                    collection_id: collection_id.into(),
+                    doc_id: doc_id.into(),
+                    has_local_write: true,
+                }],
+                resync_required: resync,
+                updates: 1,
+            };
+            assert_eq!(
+                graph_run_change_relevant(&batch, "requests", running),
+                relevant
+            );
+        }
+        let batch = events::DocumentChangeBatch {
+            resync_required: true,
+            ..Default::default()
+        };
+        assert!(graph_run_change_relevant(&batch, "requests", false));
     }
 }
