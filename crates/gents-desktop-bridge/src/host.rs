@@ -615,6 +615,9 @@ impl ClientHost {
                 )
                 .await?,
             ),
+            ClientCommand::SessionContextDetails { request } => {
+                encode(crate::commands::session_context_details(&self.core, request).await?)
+            }
             ClientCommand::SessionLiveDelta(args) => encode(
                 crate::snapshot::build_session_live_delta(
                     &self.core,

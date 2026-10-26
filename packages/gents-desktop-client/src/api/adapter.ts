@@ -68,6 +68,8 @@ export function createDesktopApiAdapter(
     explainToolSurface: (nodeDid, agentId) =>
       invokeDesktop("desktop_tool_surface_explain", { nodeDid, agentId }),
     fetchNetworkStatus: () => invokeDesktop("desktop_network_status"),
+    fetchSessionContextDetails: (request) =>
+      invokeDesktop("desktop_session_context_details", { request }),
     fetchSessionSnapshot: (sessionId, nodeDid, requestId, timelinePage) =>
       invokeDesktop("desktop_session_snapshot", {
         sessionId,

@@ -854,3 +854,64 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
     assert_indexed_query(node.as_ref(), query, index.name, 4).await;
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
+    use gents_protocol::schemas::{RENDERED_REQUEST, RENDERED_REQUEST_NAME};
+    let node = fresh_node().await;
+    node.add_schema(RENDERED_REQUEST).await.unwrap();
+    let before = node.get_collection(RENDERED_REQUEST_NAME).unwrap().unwrap();
+    let rows = (0..100)
+        .map(|turn| {
+            serde_json::json!({
+                "capture_key": format!("capture-{turn}"), "request_doc_id":"physical-request",
+                "node_did":"node", "session_id":"session", "turn_index":turn,
+                "attempt":0, "capture_scope":"inference.1", "capture_version":1,
+                "source":"openai_chat_completions", "request_json":"{}", "provenance_json":"{}",
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(rows)).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_RenderedRequest(input:{input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let baseline = DEFAULT_BASELINE
+        .iter()
+        .find(|c| c.name == RENDERED_REQUEST_NAME)
+        .unwrap();
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|i| i.name == "RenderedRequest_request_node_session_turn_attempt")
+        .unwrap();
+    let registry = Registry {
+        baseline: std::slice::from_ref(baseline),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
+    };
+    let query = r#"query { RenderedRequest(filter:{request_doc_id:{_eq:"physical-request"},node_did:{_eq:"node"},session_id:{_eq:"session"},turn_index:{_eq:73},attempt:{_eq:0},capture_scope:{_like:"inference.%"}},limit:2){capture_version source request_json provenance_json} }"#;
+    for _ in 0..2 {
+        ensure_migrations_with_registry(node.as_ref(), &registry)
+            .await
+            .unwrap();
+        assert_indexed_query(node.as_ref(), query, index.name, 2).await;
+        assert_eq!(
+            before.version_id,
+            node.get_collection(RENDERED_REQUEST_NAME)
+                .unwrap()
+                .unwrap()
+                .version_id
+        );
+        let response = node.execute(query).await;
+        assert_eq!(
+            response.data.unwrap()["RenderedRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    node.shutdown().await;
+}
