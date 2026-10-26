@@ -386,22 +386,45 @@ fn request_assignments(
     })
 }
 
-pub(crate) struct RequestAssignmentScopes {
+pub(crate) struct RequestAssignmentScopes<'a, R: crate::config_client::ConfigRead> {
+    access: &'a R,
     requests: RequestAssignments,
+    history_loaded: bool,
     scopes: rapidhash::RapidHashMap<String, RequestAssignmentScope>,
 }
 
-impl RequestAssignmentScopes {
-    pub(crate) fn scope(&self, doc: &str) -> anyhow::Result<RequestAssignmentScope> {
-        use anyhow::Context;
-        self.scopes
-            .get(doc)
-            .cloned()
-            .context("request scope was not included in its observation")
+impl<R: crate::config_client::ConfigRead> RequestAssignmentScopes<'_, R> {
+    pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
+        self.requests.request(doc)
     }
 
-    pub(crate) fn scope_for_request(
-        &self,
+    pub(crate) async fn scope(&mut self, doc: &str) -> anyhow::Result<RequestAssignmentScope> {
+        if let Some(scope) = self.scopes.get(doc) {
+            return Ok(scope.clone());
+        }
+        self.requests.request(doc)?;
+        let scope = match signed_scope(&self.requests, doc) {
+            Ok(Some(scope)) => scope,
+            _ => {
+                if !self.history_loaded {
+                    let versions = super::load_goal_versions_for_session(
+                        self.access,
+                        &self.requests.owner,
+                        &self.requests.session,
+                    )
+                    .await?;
+                    self.requests.goals = latest_assignment_goals(&versions)?;
+                    self.history_loaded = true;
+                }
+                self.requests.scope(doc)?
+            }
+        };
+        self.scopes.insert(doc.to_owned(), scope.clone());
+        Ok(scope)
+    }
+
+    pub(crate) async fn scope_for_request(
+        &mut self,
         doc: &str,
         request_id: &str,
     ) -> anyhow::Result<RequestAssignmentScope> {
@@ -409,7 +432,7 @@ impl RequestAssignmentScopes {
             self.requests.request(doc)?.request_id == request_id,
             "assignment request logical identity differs from its physical observation"
         );
-        self.scope(doc)
+        self.scope(doc).await
     }
 }
 
@@ -444,33 +467,18 @@ fn signed_scope(
     }
 }
 
-pub(crate) async fn load_request_assignment_scopes(
-    access: &impl crate::config_client::ConfigRead,
+pub(crate) async fn load_request_assignment_scopes<'a, R: crate::config_client::ConfigRead>(
+    access: &'a R,
     owner: &str,
     session: &str,
-    documents: &[&str],
-) -> anyhow::Result<RequestAssignmentScopes> {
+) -> anyhow::Result<RequestAssignmentScopes<'a, R>> {
     let rows = super::request_head::load_session_requests(access, owner, session).await?;
-    let mut requests = request_assignments(owner, session, rows, Vec::new())?;
-    let mut scopes = rapidhash::RapidHashMap::default();
-    for doc in documents {
-        match signed_scope(&requests, doc) {
-            Ok(Some(scope)) => {
-                scopes.insert((*doc).to_owned(), scope);
-            }
-            _ => {
-                let versions =
-                    super::load_goal_versions_for_session(access, owner, session).await?;
-                requests.goals = latest_assignment_goals(&versions)?;
-                scopes.clear();
-                for doc in documents {
-                    scopes.insert((*doc).to_owned(), requests.scope(doc)?);
-                }
-                break;
-            }
-        }
-    }
-    Ok(RequestAssignmentScopes { requests, scopes })
+    Ok(RequestAssignmentScopes {
+        access,
+        requests: request_assignments(owner, session, rows, Vec::new())?,
+        history_loaded: false,
+        scopes: Default::default(),
+    })
 }
 
 #[cfg(test)]

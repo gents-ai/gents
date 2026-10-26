@@ -153,7 +153,12 @@ impl ClientHost {
                 encode(
                     gents_desktop_core::inference::load_inference_setup_state(&access, &node_did)
                         .await
-                        .map_err(backend_error)?,
+                        .map_err(|error| {
+                            BridgeError::new(
+                                BridgeErrorCode::EndpointUnreachable,
+                                format!("Runtime configuration is not available: {error}"),
+                            )
+                        })?,
                 )
             }
             ClientCommand::InferenceModelsDiscover { request } => {
