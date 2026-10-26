@@ -591,7 +591,22 @@ jobs:
       - name: Use the Ubuntu archive for browser system dependencies
         if: matrix.suite == 'browser'
         run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo python3 - <<'PYTHON'
+          from pathlib import Path
+
+          for path in Path('/etc/apt').rglob('*'):
+              if not path.is_file() or path.suffix not in {'.sources', '.list'}:
+                  continue
+              original = path.read_text(encoding='utf-8')
+              updated = original
+              for scheme in ('http', 'https'):
+                  updated = updated.replace(
+                      f'{scheme}://azure.archive.ubuntu.com/ubuntu',
+                      'https://archive.ubuntu.com/ubuntu',
+                  )
+              if updated != original:
+                  path.write_text(updated, encoding='utf-8')
+          PYTHON
 
       - name: Install Playwright browsers
         if: matrix.suite == 'browser'
