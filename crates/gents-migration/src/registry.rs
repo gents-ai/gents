@@ -828,6 +828,30 @@ static INFERENCE_CALL_TERMINAL_WINDOW_FIELDS: &[OrdinaryIndexField<'static>] = &
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     OrdinaryIndex {
         collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        name: "InferenceCall_session_id_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "session_id",
+            descending: false,
+        }],
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        name: "InferenceCall_model_name_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "model_name",
+            descending: false,
+        }],
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        name: "InferenceCall_profile_id_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "profile_id",
+            descending: false,
+        }],
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
         name: "InferenceCall_kind_ended_at",
         fields: INFERENCE_CALL_TERMINAL_WINDOW_FIELDS,
     },
