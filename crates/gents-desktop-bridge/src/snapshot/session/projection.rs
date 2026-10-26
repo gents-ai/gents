@@ -615,9 +615,16 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         .filter_map(|(index, request)| {
             if !owner_absent(request)
                 || !same_requester(request)
-                || queued_requests
+                || (queued_requests
                     .iter()
                     .any(|queued| queued.request_id == request.request_id)
+                    && !request
+                        .input
+                        .as_ref()
+                        .and_then(|input| input.queue.as_ref())
+                        .is_some_and(|queue| {
+                            queue.delivery == gents_protocol::request_input::QueueDelivery::Steer
+                        }))
             {
                 return None;
             }

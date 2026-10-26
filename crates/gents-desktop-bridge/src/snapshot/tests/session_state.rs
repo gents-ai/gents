@@ -1179,6 +1179,50 @@ fn tool_cancel_cause_uses_only_its_physical_request_owner() {
 }
 
 #[test]
+fn accepted_steer_remains_in_the_transcript_before_intake() {
+    use gents_protocol::request_input::{
+        QueueDelivery, QueuePolicy, QueueSource, RequestInput, RequestQueue,
+    };
+
+    for delivery in [QueueDelivery::Queue, QueueDelivery::Steer] {
+        let mut input = request("req-3", RequestLifecycleState::Pending);
+        input.created_at = Some("2026-04-21T12:01:00Z".into());
+        input.input = Some(RequestInput {
+            queue: Some(RequestQueue {
+                delivery,
+                position: None,
+                source: QueueSource::User,
+                policy: QueuePolicy::Append,
+                key: None,
+                queued_after_request_id: Some("req-2".into()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            }),
+            ..Default::default()
+        });
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(None)],
+            requests: vec![request("req-2", RequestLifecycleState::Processing), input],
+            ..Default::default()
+        });
+        let snapshot = build_session_snapshot_from_store(&store, "session-1", None)
+            .expect("snapshot after reconnect");
+        assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"));
+        assert_eq!(snapshot.turn_state.as_deref(), Some("running"));
+        assert_eq!(snapshot.queued_turns.len(), 1);
+        assert_eq!(snapshot.queued_turns[0].request_id, "req-3");
+        assert_eq!(
+            snapshot.timeline_items.iter().any(|item| matches!(
+                item, RenderedTimelineItem::PendingUserTurn { request_id, .. }
+                    if request_id == "req-3"
+            )),
+            delivery == QueueDelivery::Steer,
+            "accepted {delivery:?} input before provider intake"
+        );
+    }
+}
+
+#[test]
 fn session_snapshot_projects_failed_request_reason_without_response_storage() {
     let mut failed = request("req-2", RequestLifecycleState::Failed);
     failed.failure_reason = Some("provider exploded".into());
