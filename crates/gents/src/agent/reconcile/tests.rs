@@ -258,23 +258,31 @@ async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> 
         PairingStateStore,
     };
 
+    use crate::agent::p2p_reconcile::error::{P2pReconcileError, TransportFailure};
+
     struct FailingDesiredStore;
     #[async_trait::async_trait]
     impl PairingStateStore for FailingDesiredStore {
-        async fn load_desired(&self, _peer_id: &str) -> anyhow::Result<Option<PairingDesired>> {
-            anyhow::bail!("simulated desired-state read failure")
+        async fn load_desired(
+            &self,
+            _peer_id: &str,
+        ) -> Result<Option<PairingDesired>, P2pReconcileError> {
+            Err(TransportFailure("simulated desired-state read failure".to_owned()).into())
         }
-        async fn load_applied(&self, _peer_id: &str) -> anyhow::Result<LoadedPairingApplied> {
+        async fn load_applied(
+            &self,
+            _peer_id: &str,
+        ) -> Result<LoadedPairingApplied, P2pReconcileError> {
             Ok(LoadedPairingApplied::default())
         }
         async fn persist_applied(
             &self,
             _peer_id: &str,
             _applied: &LoadedPairingApplied,
-        ) -> anyhow::Result<()> {
+        ) -> Result<(), P2pReconcileError> {
             Ok(())
         }
-        async fn list_peer_ids(&self) -> anyhow::Result<BTreeSet<String>> {
+        async fn list_peer_ids(&self) -> Result<BTreeSet<String>, P2pReconcileError> {
             Ok(BTreeSet::new())
         }
     }

@@ -1,3 +1,4 @@
+use crate::agent::p2p_reconcile::error::TransportFailure;
 fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
 }
@@ -84,7 +85,7 @@ impl PairingStateStore for MockStore {
             .lock()
             .unwrap()
             .clone()
-            .map_err(|message| anyhow!(message))
+            .map_err(|message| TransportFailure(message.to_string()).into())
     }
 
     async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {
@@ -119,7 +120,7 @@ impl PairingStateStore for MockStore {
             }
         };
         if should_fail {
-            anyhow::bail!("transient list_peer_ids failure");
+            return Err(TransportFailure("transient list_peer_ids failure".to_string()).into());
         }
         if let Some(started) = &self.list_peer_ids_retry_started {
             started.notify_one();
@@ -165,7 +166,7 @@ impl PairingStateStore for EnrollmentFenceStore {
             .unwrap()
             .pop_front()
             .unwrap_or(Ok(false))
-            .map_err(|error| TransportFailure(error.to_string()))
+            .map_err(|error| TransportFailure(error.to_string()).into())
     }
 
     async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {

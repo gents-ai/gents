@@ -258,7 +258,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
             panic!(
                 "{}: load queued request: {}",
                 case.name,
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             )
         });
     if !case.pending_deadline_absent {

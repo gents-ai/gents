@@ -1,6 +1,7 @@
 mod live;
 mod storage;
 
+use crate::agent::p2p_reconcile::error::TransportFailure;
 use super::*;
 use crate::agent::p2p_reconcile::file_image_hydration::image_delivery_target;
 use std::sync::{
@@ -50,10 +51,9 @@ impl ImageRequestStore for Store {
         _: &str,
     ) -> Result<()> {
         assert_eq!(row, &self.demand);
-        anyhow::ensure!(
-            !self.fail_write.load(Ordering::SeqCst),
-            "receipt write failed"
-        );
+        if self.fail_write.load(Ordering::SeqCst) {
+            return Err(TransportFailure("receipt write failed".to_string()).into());
+        }
         self.committed.lock().unwrap().push(selection.clone());
         Ok(())
     }
@@ -72,7 +72,9 @@ impl HydrationDelivery for Delivery {
             panic!("unexpected transcript delivery")
         };
         self.attempts.fetch_add(1, Ordering::SeqCst);
-        anyhow::ensure!(!self.fail, "transport failed");
+        if self.fail {
+            return Err(TransportFailure("transport failed".to_string()).into());
+        }
         self.pushed
             .lock()
             .unwrap()

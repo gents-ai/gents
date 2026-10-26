@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use anyhow::anyhow;
 use defra_node::EmbeddedNode;
 use events::Bus;
 use tokio_util::sync::CancellationToken;

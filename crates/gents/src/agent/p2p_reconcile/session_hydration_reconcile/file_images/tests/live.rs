@@ -3,6 +3,7 @@ use crate::agent::p2p_reconcile::embedded_impl::push_documents_to_peer;
 use crate::agent::p2p_reconcile::embedded_impl::tests::{
     authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer, wait_for_peer_info,
 };
+use crate::agent::p2p_reconcile::error::TransportFailure;
 use crate::agent::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
     EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, PairingFilters, RemoteP2pAdmin,
@@ -114,7 +115,10 @@ impl HydrationDelivery for ObservedDelivery {
         self.gate.pause(PauseAt::Acknowledged).await;
         if self.gate.at == PauseAt::Delivered {
             let DeliveryTarget::FileImage(image) = target else {
-                anyhow::bail!("file review delivered an unexpected collection")
+                return Err(TransportFailure(
+                    "file review delivered an unexpected collection".to_string(),
+                )
+                .into());
             };
             self.wait_materialized(image).await?;
             self.gate.pause(PauseAt::Delivered).await;
@@ -141,15 +145,24 @@ impl ObservedDelivery {
                         gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
                         image,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| TransportFailure(error.to_string()))?;
                 if let Some(owner) = owner {
-                    anyhow::ensure!(
-                        owner.to_string() == self.source_did,
-                        "imported image has an unexpected creator: {owner}"
-                    );
+                    if owner.to_string() != self.source_did {
+                        return Err(TransportFailure(format!(
+                            "imported image has an unexpected creator: {owner}"
+                        ))
+                        .into());
+                    }
                     let result = ConfigAccess::transact_local_readonly(
                         &self.recipient,
-                        Some(self.source_did.parse()?),
+                        Some(
+                            self.source_did
+                                .parse()
+                                .map_err(|error: ::identity::Error| {
+                                    TransportFailure(error.to_string())
+                                })?,
+                        ),
                         "test.file_review.observe_import",
                         |txn| {
                             let query = query.clone();
@@ -159,13 +172,21 @@ impl ObservedDelivery {
                     .await?;
                     let rows = result["data"]["ToolFileChange"]
                         .as_array()
-                        .context("imported file image rows")?;
-                    anyhow::ensure!(rows.len() <= 1, "imported image became ambiguous");
+                        .ok_or_else(|| TransportFailure("imported file image rows".to_string()))?;
+                    if rows.len() > 1 {
+                        return Err(TransportFailure(
+                            "imported image became ambiguous".to_string(),
+                        )
+                        .into());
+                    }
                     if let Some(row) = rows.first() {
-                        anyhow::ensure!(
-                            row["_docID"] == image && row["file_changes"] == self.expected_changes,
-                            "import changed the retained image"
-                        );
+                        if !(row["_docID"] == image && row["file_changes"] == self.expected_changes)
+                        {
+                            return Err(TransportFailure(
+                                "import changed the retained image".to_string(),
+                            )
+                            .into());
+                        }
                         return Ok(());
                     }
                 }
@@ -173,7 +194,11 @@ impl ObservedDelivery {
             }
         })
         .await
-        .context("acknowledged file image did not materialize")?
+        .map_err(|error| {
+            TransportFailure(format!(
+                "acknowledged file image did not materialize: {error}"
+            ))
+        })?
     }
 }
 

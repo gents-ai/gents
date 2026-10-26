@@ -970,6 +970,7 @@ impl EnrollmentRouteRow {
 
 #[cfg(test)]
 mod tests {
+    use crate::agent::p2p_reconcile::error::TransportFailure;
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
