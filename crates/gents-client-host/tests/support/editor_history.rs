@@ -459,6 +459,7 @@ async fn verified_requests(
     Ok(rows)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn verify_profile(
     client: &mut Attachment,
     id: &mut u32,
@@ -467,8 +468,30 @@ pub async fn verify_profile(
     session: &str,
     author: &str,
     options: Options,
+    command_output: bool,
 ) -> Result<Value> {
-    let rows = verified_requests(access, node, session, author, options.turns + 2).await?;
+    let rows = verified_requests(
+        access,
+        node,
+        session,
+        author,
+        options.turns + 2 + usize::from(command_output),
+    )
+    .await?;
+    let activity = if command_output {
+        let commands = rows
+            .iter()
+            .filter(|row| {
+                row.content.as_deref() == Some(super::editor_command_output::ACTIVITY_PROMPT)
+            })
+            .collect::<Vec<_>>();
+        let [request] = commands.as_slice() else {
+            anyhow::bail!("history profile must admit exactly one command-output request");
+        };
+        super::editor_command_output::verify(access, node, session, request).await?
+    } else {
+        Value::Null
+    };
     let streamed = rows
         .iter()
         .filter(|row| row.content.as_deref() == Some("History profile streaming request."))
@@ -498,6 +521,7 @@ pub async fn verify_profile(
         "nodeDid":node, "sessionId":session, "authorDid":author,
         "completedRequests":rows.len(), "verifiedSignatures":rows.len(),
         "streamingRequestId":request, "streamingOutput":output["output"],
+        "commandOutput":activity,
     }))
 }
 

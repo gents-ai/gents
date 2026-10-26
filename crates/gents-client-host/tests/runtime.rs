@@ -24,6 +24,8 @@ use console::ConsoleChild as Child;
 
 #[path = "support/configured_actions.rs"]
 mod configured_actions;
+#[path = "support/editor_command_output.rs"]
+mod editor_command_output;
 #[path = "support/editor_delivery.rs"]
 mod editor_delivery;
 #[path = "support/editor_goal_recovery.rs"]
@@ -649,6 +651,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             }
             if matches!(journey, Journey::EditorRetry) {
                 if let Some(action) = editor_retry::reply(request, &provider_retry_attempts) {
+                    return action;
+                }
+            }
+            if activity_profile && matches!(journey, Journey::EditorHistory) {
+                if let Some(action) = editor_command_output::reply(request) {
                     return action;
                 }
             }
@@ -1519,7 +1526,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorHistory) {
         let options = history.context("history options")?;
-        let evidence = editor_history::populate(
+        let mut evidence = editor_history::populate(
             &mut client,
             &mut id,
             &access,
@@ -1531,6 +1538,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root,
         )
         .await?;
+        evidence["commandOutputProfile"] = json!(activity_profile && options.profile);
         std::fs::write(
             root.join("editor-history-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
@@ -1584,6 +1592,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 session,
                 &client_did,
                 options,
+                activity_profile,
             )
             .await?;
             std::fs::write(
