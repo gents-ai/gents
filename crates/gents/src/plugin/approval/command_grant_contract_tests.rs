@@ -67,11 +67,6 @@ struct RevokeResult {
     changed: bool,
     next: Option<policy::Preference<u64>>,
 }
-#[derive(Deserialize)]
-struct Snapshot {
-    workspace_command_grant_answers: Vec<AnswerCase>,
-    workspace_command_grant_revocations: Vec<RevokeCase>,
-}
 
 fn store(home: &Path, entries: &[workspace::Settings]) {
     std::fs::write(
@@ -83,13 +78,11 @@ fn store(home: &Path, entries: &[workspace::Settings]) {
 
 #[test]
 fn generated_command_answers_preserve_scope_and_one_time_delivery() {
-    let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
     assert_eq!(snapshot.workspace_command_grant_answers.len(), 962);
-    for (index, case) in snapshot
-        .workspace_command_grant_answers
-        .into_iter()
-        .enumerate()
-    {
+    assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
+    for (index, value) in snapshot.workspace_command_grant_answers.iter().enumerate() {
+        let case: AnswerCase = serde_json::from_value(value.clone()).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let home = root.join("home");
@@ -187,9 +180,10 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
 
 #[test]
 fn generated_command_revocation_preserves_the_selected_mode() {
-    let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
     assert_eq!(snapshot.workspace_command_grant_revocations.len(), 54);
-    for case in snapshot.workspace_command_grant_revocations {
+    for value in &snapshot.workspace_command_grant_revocations {
+        let case: RevokeCase = serde_json::from_value(value.clone()).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let workspace = key(&root, 1);
