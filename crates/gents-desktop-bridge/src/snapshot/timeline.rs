@@ -34,6 +34,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         project_tool_presentation(&unavailable)
     };
     RenderedToolCallView {
+        node_did: tool.node_did.clone(),
         request_turn: tool.request_turn.clone(),
         background_available: tool.background_available,
         item_key: tool.tool_call_key.clone(),
@@ -363,6 +364,7 @@ mod tests {
     #[test]
     fn session_message_identity_and_await_mode_reach_rendered_tool() {
         let tool = ToolCallView {
+            node_did: Some("did:test:row-owner".into()),
             request_turn: Some(crate::types::RequestTurnView {
                 request_doc_id: "physical-parent".into(),
                 request_id: "parent-1".into(),
@@ -426,6 +428,7 @@ mod tests {
         }
 
         let unresolved = render_tool_call(ToolCallView {
+            node_did: None,
             request_turn: None,
             tool_name: Some("custom".to_string()),
             args: Some("private arguments".to_string()),

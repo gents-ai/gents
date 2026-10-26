@@ -1896,6 +1896,7 @@ pub(super) fn project_transcript_rows(
                 None => (None, None, None),
             };
             ToolCallView {
+                node_did: row.node_did.clone(),
                 request_turn: row
                     .request_doc_id
                     .as_deref()

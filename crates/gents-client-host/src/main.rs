@@ -24,6 +24,8 @@ struct Args {
     editor_checkpoints: Option<PathBuf>,
     #[arg(long, hide = true, conflicts_with_all = ["home", "serve", "stdio", "editor_store", "allow_keychain_prompts", "describe", "editor_checkpoints"])]
     unlock_runtime_keys: Option<PathBuf>,
+    #[arg(long, hide = true, conflicts_with_all = ["home", "serve", "stdio", "editor_store", "allow_keychain_prompts", "describe", "editor_checkpoints", "unlock_runtime_keys"])]
+    unlock_and_prepare_runtime: Option<PathBuf>,
 }
 
 mod editor_checkpoints;
@@ -43,6 +45,16 @@ fn main() -> Result<()> {
         return gents_server::run_cli_without_keychain_prompts();
     }
     let args = Args::parse();
+    if let Some(home) = &args.unlock_and_prepare_runtime {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(16 * 1024 * 1024)
+            .build()?;
+        return runtime.block_on(gents_server::prepare_runtime_after_unlock(
+            home,
+            runtime.handle().clone(),
+        ));
+    }
     if let Some(home) = &args.unlock_runtime_keys {
         return tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -88,6 +100,7 @@ async fn client_main(args: Args) -> Result<()> {
                 "transportSupported": cfg!(any(unix, windows)),
                 "localRuntimeCli": true,
                 "runtimeKeyUnlock": true,
+                "runtimeKeyUnlockAndPrepare": true,
                 "runtimePreparationVersion": gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION,
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
                 "editorCheckpointVersion": editor_checkpoints::VERSION,
@@ -121,5 +134,45 @@ async fn client_main(args: Args) -> Result<()> {
     {
         let _ = paths;
         anyhow::bail!("the native client transport is not available on this platform")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_runtime_unlock_is_separate_from_history_and_automatic_modes() {
+        let args = Args::try_parse_from([
+            "gents-client-host",
+            "--unlock-and-prepare-runtime",
+            "/runtime",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.unlock_and_prepare_runtime,
+            Some(PathBuf::from("/runtime"))
+        );
+        for extra in ["--stdio", "--serve", "--describe", "--editor-store"] {
+            assert!(
+                Args::try_parse_from([
+                    "gents-client-host",
+                    "--unlock-and-prepare-runtime",
+                    "/runtime",
+                    extra
+                ])
+                .is_err(),
+                "{extra}"
+            );
+        }
+        let automatic = Args::try_parse_from([
+            "gents-client-host",
+            "--stdio",
+            "--home",
+            "/history",
+            "--editor-store",
+        ])
+        .unwrap();
+        assert!(automatic.unlock_and_prepare_runtime.is_none());
     }
 }

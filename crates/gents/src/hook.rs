@@ -107,6 +107,7 @@ impl BackgroundToolRegistry {
 
 #[derive(Clone)]
 struct BackgroundExecution {
+    tool_call_id: String,
     cancellation_token: CancellationToken,
     completion_tx: watch::Sender<bool>,
     tool_call_doc_id: String,
@@ -203,9 +204,14 @@ impl BackgroundExecutionRegistry {
         tool_call_id: &str,
         tool_call_doc_id: &str,
     ) -> Option<crate::managed_exec::ownership::ProcessRecord> {
-        self.process_records
-            .read(tool_call_id)
-            .filter(|record| record.tool_call_doc_id == tool_call_doc_id)
+        [tool_call_doc_id, tool_call_id]
+            .into_iter()
+            .find_map(|key| {
+                self.process_records.read(key).filter(|record| {
+                    record.tool_call_id == tool_call_id
+                        && record.tool_call_doc_id == tool_call_doc_id
+                })
+            })
     }
 
     pub(crate) fn process_record_list(&self) -> Vec<crate::managed_exec::ownership::ProcessRecord> {
@@ -233,12 +239,12 @@ impl BackgroundExecutionRegistry {
                 );
                 return;
             }
-            self.process_records.remove(tool_call_id);
+            self.remove_process_record(tool_call_id, tool_call_doc_id);
         }
     }
 
-    pub(crate) fn forget_process_record(&self, tool_call_id: &str) {
-        if let Some(record) = self.process_records.read(tool_call_id) {
+    pub(crate) fn forget_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
+        if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
             let observed = record.identity.observe();
             if observed.retain_process_record() {
                 tracing::warn!(
@@ -249,7 +255,17 @@ impl BackgroundExecutionRegistry {
                 );
                 return;
             }
-            self.process_records.remove(tool_call_id);
+            self.remove_process_record(tool_call_id, tool_call_doc_id);
+        }
+    }
+
+    fn remove_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
+        for key in [tool_call_doc_id, tool_call_id] {
+            if self.process_records.read(key).is_some_and(|record| {
+                record.tool_call_id == tool_call_id && record.tool_call_doc_id == tool_call_doc_id
+            }) {
+                self.process_records.remove(key);
+            }
         }
     }
 
@@ -261,10 +277,17 @@ impl BackgroundExecutionRegistry {
         use crate::managed_exec::ownership::ProcessObservation;
         use crate::managed_exec::ProcessStopOutcome;
         let record = self.process_record(tool_call_id, tool_call_doc_id);
-        if self.cancel(tool_call_id).await {
+        let execution = self
+            .lock_executions()
+            .get(tool_call_doc_id)
+            .filter(|execution| execution.tool_call_id == tool_call_id)
+            .cloned();
+        if let Some(execution) = execution {
+            let completion_rx = execution.completion_tx.subscribe();
+            execution.cancellation_token.cancel();
             let released = tokio::time::timeout(
                 LIVE_STOP_RELEASE_WAIT,
-                self.wait_for_completion(tool_call_id),
+                Self::await_completion(completion_rx),
             )
             .await
             .is_ok();
@@ -318,14 +341,6 @@ impl BackgroundExecutionRegistry {
         })
     }
 
-    pub async fn cancel(&self, tool_call_id: &str) -> bool {
-        let Some(execution) = self.lock_executions().get(tool_call_id).cloned() else {
-            return false;
-        };
-        execution.cancellation_token.cancel();
-        true
-    }
-
     pub(crate) fn reserve(
         &self,
         tool_call_id: String,
@@ -334,18 +349,24 @@ impl BackgroundExecutionRegistry {
     ) -> anyhow::Result<BackgroundExecutionReservation> {
         let service_work = Arc::new(self.service_admission.admit()?);
         let (completion_tx, _) = watch::channel(false);
-        self.lock_executions().insert(
-            tool_call_id.clone(),
+        let mut executions = self.lock_executions();
+        anyhow::ensure!(
+            !executions.contains_key(&tool_call_doc_id),
+            "background invocation already has an execution owner"
+        );
+        executions.insert(
+            tool_call_doc_id.clone(),
             BackgroundExecution {
+                tool_call_id,
                 cancellation_token,
                 completion_tx,
-                tool_call_doc_id,
+                tool_call_doc_id: tool_call_doc_id.clone(),
                 _service_work: service_work.clone(),
             },
         );
         Ok(BackgroundExecutionReservation {
             registry: self.clone(),
-            tool_call_id,
+            tool_call_doc_id,
             armed: true,
             _service_work: service_work,
         })
@@ -353,11 +374,21 @@ impl BackgroundExecutionRegistry {
 
     #[cfg(test)]
     pub(crate) async fn remove(&self, tool_call_id: &str) {
-        self.remove_now(tool_call_id);
+        let docs = self
+            .lock_executions()
+            .iter()
+            .filter(|(_, execution)| execution.tool_call_id == tool_call_id)
+            .map(|(doc, _)| doc.clone())
+            .collect::<Vec<_>>();
+        for doc in docs {
+            self.remove_now(&doc);
+        }
     }
 
-    pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
-        self.lock_executions().contains_key(tool_call_id)
+    pub(crate) async fn contains(&self, tool_call_id: &str, tool_call_doc_id: &str) -> bool {
+        self.lock_executions()
+            .get(tool_call_doc_id)
+            .is_some_and(|execution| execution.tool_call_id == tool_call_id)
     }
 
     pub(crate) fn active_tool_call_doc_ids(&self) -> Vec<String> {
@@ -368,22 +399,27 @@ impl BackgroundExecutionRegistry {
     }
 
     pub async fn wait_for_completion(&self, tool_call_id: &str) {
-        let mut completion_rx = {
-            let executions = self.lock_executions();
-            let Some(execution) = executions.get(tool_call_id) else {
-                return;
-            };
-            execution.completion_tx.subscribe()
-        };
-        while !*completion_rx.borrow_and_update() {
-            if completion_rx.changed().await.is_err() {
+        let receivers = self
+            .lock_executions()
+            .values()
+            .filter(|execution| execution.tool_call_id == tool_call_id)
+            .map(|execution| execution.completion_tx.subscribe())
+            .collect::<Vec<_>>();
+        for receiver in receivers {
+            Self::await_completion(receiver).await;
+        }
+    }
+
+    async fn await_completion(mut receiver: watch::Receiver<bool>) {
+        while !*receiver.borrow_and_update() {
+            if receiver.changed().await.is_err() {
                 break;
             }
         }
     }
 
-    fn remove_now(&self, tool_call_id: &str) {
-        if let Some(execution) = self.lock_executions().remove(tool_call_id) {
+    fn remove_now(&self, tool_call_doc_id: &str) {
+        if let Some(execution) = self.lock_executions().remove(tool_call_doc_id) {
             execution.completion_tx.send_replace(true);
         }
     }
@@ -402,7 +438,7 @@ impl BackgroundExecutionRegistry {
 /// the volatile entry synchronously, so periodic recovery can see the orphan.
 pub(crate) struct BackgroundExecutionReservation {
     registry: BackgroundExecutionRegistry,
-    tool_call_id: String,
+    tool_call_doc_id: String,
     armed: bool,
     _service_work: Arc<crate::runtime_service::RuntimeServiceWork>,
 }
@@ -417,7 +453,7 @@ impl BackgroundExecutionReservation {
 impl Drop for BackgroundExecutionReservation {
     fn drop(&mut self) {
         if self.armed {
-            self.registry.remove_now(&self.tool_call_id);
+            self.registry.remove_now(&self.tool_call_doc_id);
         }
     }
 }

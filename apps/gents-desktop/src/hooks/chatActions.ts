@@ -3,13 +3,17 @@ import type { RequestAttachment } from "@source-inc/gents-desktop-client";
 import {
   selectedNodeReadinessDecision,
   type ChatSendResult,
+  type PendingMessageSteerRequest,
   type PendingQueueEditRequest,
   type DesktopApiAdapter,
   type DesktopInterruptRequestRequest,
   type DesktopSessionSnapshot,
+  type GoalControlAction,
+  type GoalControlResult,
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
+import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 
 import {
   adoptNewChatFolder,
@@ -69,9 +73,9 @@ function queueEditFailure(
   after: DesktopSessionSnapshot | null,
   requestIds: string[],
   error: unknown,
+  doing = "change pending messages",
 ): string {
-  if (!after || requestIds.length === 0)
-    return actionFailure("change pending messages", error);
+  if (!after || requestIds.length === 0) return actionFailure(doing, error);
   const waiting = new Set((after.pendingQueue ?? []).map((entry) => entry.requestId));
   const taken = new Set([
     ...after.foldedInputs.map((input) => input.requestId),
@@ -83,8 +87,15 @@ function queueEditFailure(
       : "This message already reached the agent";
   if (requestIds.every((id) => waiting.has(id)))
     return "The queue changed before it was saved";
-  return actionFailure("change pending messages", error);
+  return actionFailure(doing, error);
 }
+
+const GOAL_CONTROL_DOING = {
+  edit: "edit the goal",
+  pause: "pause the goal",
+  resume: "resume the goal",
+  stop: "remove the goal",
+} as const;
 
 export function createChatActions({
   api,
@@ -103,6 +114,7 @@ export function createChatActions({
     content: string,
     agentId?: string | null,
     attachments: RequestAttachment[] = [],
+    followUp?: QueueDelivery,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = selectedNode() ?? firstNode(stores.fleet.getState());
@@ -170,6 +182,9 @@ export function createChatActions({
         sessionId: earlier?.sessionId ?? selectedSessionId,
         content,
         attachments,
+        /* how a message behind a running turn waits; the bridge steers when
+           it is not said */
+        delivery: status.kind === "queue" ? (followUp ?? null) : null,
         causedBySourceDocId: mailboxRoute?.itemId ?? null,
         cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
         resolveRequestId: earlier?.requestId ?? null,
@@ -234,6 +249,118 @@ export function createChatActions({
     }
   }
 
+  /** A goal starts with its objective as the session's next message. One
+      already on the session is replaced, fenced on the revision observed. */
+  async function setGoal(
+    objective: string,
+    agentId?: string | null,
+  ): Promise<GoalControlResult | null> {
+    if (submissionInFlight) return null;
+    const node = selectedNode() ?? firstNode(stores.fleet.getState());
+    if (!node || !objective.trim()) return null;
+    const projection = project();
+    const status = projection.shellProjection.nonEmptyContentSendStatus;
+    if (status.kind === "disabled") {
+      reportFailure(status.hint);
+      return null;
+    }
+    const admission =
+      agentId === undefined
+        ? projection.agentReadiness
+        : selectedNodeReadinessDecision(node, agentId);
+    if (admission.kind !== "ready") {
+      reportFailure("The selected agent is unavailable");
+      return null;
+    }
+
+    submissionInFlight = true;
+    const intentGeneration = selection.captureIntent(store);
+    const { sessionId: selectedSessionId } = store.getState();
+    const ownedWorkflow: ChatWorkflowState = {
+      kind: "submittingRequest",
+      nodeDid: node.nodeDid,
+      sessionId: selectedSessionId,
+    };
+    chat.beginSubmission(stores.chat, ownedWorkflow);
+    try {
+      const current = selectedSessionId
+        ? await api.fetchSessionGoal(node.nodeDid, selectedSessionId)
+        : null;
+      const result = await api.controlGoal({
+        nodeDid: node.nodeDid,
+        sessionId: selectedSessionId,
+        sessionDocId: current?.sessionDocId ?? null,
+        expected: current?.goal?.revision ?? null,
+        agentId: admission.agentId,
+        action: { kind: "create", objective, tokenBudget: null },
+        cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
+      });
+      if (selectedSessionId === null)
+        writeChatFolders(stores.chat, (folders) =>
+          adoptNewChatFolder(folders, result.sessionId),
+        );
+      if (!selection.acceptsIntent(store, intentGeneration)) return result;
+      selection.adoptSession(store, result.sessionId);
+      if (result.requestId) {
+        chat.showPendingTurn(
+          stores.chat,
+          {
+            sessionId: result.sessionId,
+            requestId: result.requestId,
+            content: objective,
+            selectedSkillIds: [],
+            lifecycleState: "pending",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: new Date().toISOString(),
+          },
+          status.kind === "queue",
+        );
+        chat.awaitObservation(stores.chat, {
+          nodeDid: node.nodeDid,
+          sessionId: result.sessionId,
+          requestId: result.requestId,
+        });
+      }
+      return result;
+    } catch (err) {
+      if (!selection.acceptsIntent(store, intentGeneration)) return null;
+      chat.resetWorkflow(stores.chat);
+      reportFailure(actionFailure("set the goal", err));
+      return null;
+    } finally {
+      chat.endSubmission(stores.chat, ownedWorkflow);
+      submissionInFlight = false;
+    }
+  }
+
+  async function controlGoal(
+    sessionId: string,
+    action: Exclude<GoalControlAction, { kind: "create" }>,
+  ) {
+    const nodeDid =
+      heldFor(readSession(stores.session), sessionId, null)?.nodeDid ??
+      store.getState().nodeDid;
+    try {
+      if (!nodeDid) throw new Error("no node holds this session");
+      const current = await api.fetchSessionGoal(nodeDid, sessionId);
+      if (!current?.goal) throw new Error("this session has no goal");
+      await api.controlGoal({
+        nodeDid,
+        sessionId,
+        sessionDocId: current.sessionDocId,
+        expected: current.goal.revision,
+        agentId: null,
+        action,
+        cwd: null,
+      });
+      await refreshSession(sessionId);
+    } catch (err) {
+      reportFailure(actionFailure(GOAL_CONTROL_DOING[action.kind], err));
+      throw shownFailure(err);
+    }
+  }
+
   async function retryMessage(requestId: string) {
     if (submissionInFlight) return;
     const node = selectedNode();
@@ -267,6 +394,30 @@ export function createChatActions({
     } finally {
       chat.endSubmission(stores.chat, ownedWorkflow);
       submissionInFlight = false;
+    }
+  }
+
+  async function steerPendingMessage(request: PendingMessageSteerRequest) {
+    const before = heldFor(
+      readSession(stores.session),
+      request.sessionId,
+      request.nodeDid,
+    );
+    const queue = before?.pendingQueue ?? [];
+    const at = queue.findIndex((entry) => entry.requestDocId === request.requestDocId);
+    const requestIds = queue.slice(0, at + 1).map((entry) => entry.requestId);
+    const showing = () =>
+      store.getState().nodeDid === request.nodeDid &&
+      store.getState().sessionId === request.sessionId;
+    try {
+      await api.steerPendingMessage(request);
+      if (showing()) await refreshSession(request.sessionId);
+    } catch (error) {
+      const after = showing() ? await refreshSession(request.sessionId) : null;
+      reportFailure(
+        queueEditFailure(after, at < 0 ? [] : requestIds, error, "steer the message"),
+      );
+      throw shownFailure(error);
     }
   }
 
@@ -328,8 +479,11 @@ export function createChatActions({
   return {
     sendMessage,
     editPendingQueue,
+    steerPendingMessage,
     retryMessage,
     renameSession,
+    setGoal,
+    controlGoal,
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),

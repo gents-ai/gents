@@ -460,6 +460,20 @@ impl Gents {
         .await
     }
 
+    /// The HTTP boundary authenticates `actor` with DefraDB.
+    pub async fn operator_job_control(
+        &self,
+        actor: Option<&str>,
+        request: &gents_protocol::job::OperatorJobControlRequest,
+    ) -> Result<gents_protocol::job::JobControlOutcome, gents_protocol::job::JobReadError> {
+        crate::plugin_job::control::operator_control(
+            &crate::config_client::ConfigAccess::local(self.node.clone()),
+            actor,
+            request,
+        )
+        .await
+    }
+
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         runtime::run_agent(self, shutdown).await
     }

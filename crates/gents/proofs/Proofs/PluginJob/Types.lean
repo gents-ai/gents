@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.Meet
+import Proofs.PluginJob.TargetResolution
 
 /-!
 # Plugin jobs: the executable source of steps, pins and admission
@@ -24,9 +24,6 @@ namespace PluginJob
 open ToolPolicy
 
 abbrev DocId := String
-
-/-- AgentTarget id resolved by the host to `(target_node_did, agent_id)`. -/
-abbrev Target := String × String
 
 instance : DecidableEq (EndpointScope Target Unit)
   | .none, .none => isTrue rfl
@@ -54,7 +51,7 @@ def scopeLe : EndpointScope Target Unit → EndpointScope Target Unit → Bool
   | _, _ => false
 
 structure Ceiling where
-  targets : EndpointScope Target Unit
+  targets : List String
   maxLive : Nat
   maxSpawns : Nat
   maxMessagesPerSlot : Nat
@@ -64,11 +61,11 @@ structure Ceiling where
 
 /-- Absent block: no targets, every bound zero. -/
 def Ceiling.empty : Ceiling :=
-  { targets := .none, maxLive := 0, maxSpawns := 0, maxMessagesPerSlot := 0
+  { targets := [], maxLive := 0, maxSpawns := 0, maxMessagesPerSlot := 0
   , resultBytes := 0, maxWallSecs := 0 }
 
 def Ceiling.meet (a b : Ceiling) : Ceiling :=
-  { targets := a.targets.meet unitVM b.targets
+  { targets := TargetResolution.meetIds a.targets b.targets
   , maxLive := Nat.min a.maxLive b.maxLive
   , maxSpawns := Nat.min a.maxSpawns b.maxSpawns
   , maxMessagesPerSlot := Nat.min a.maxMessagesPerSlot b.maxMessagesPerSlot
@@ -77,7 +74,7 @@ def Ceiling.meet (a b : Ceiling) : Ceiling :=
 
 /-- Fieldwise order; `JobGrant.narrows` compares stored ceilings with it. -/
 def Ceiling.leB (a b : Ceiling) : Bool :=
-  scopeLe a.targets b.targets && decide (a.maxLive ≤ b.maxLive)
+  decide (a.targets ⊆ b.targets) && decide (a.maxLive ≤ b.maxLive)
     && decide (a.maxSpawns ≤ b.maxSpawns)
     && decide (a.maxMessagesPerSlot ≤ b.maxMessagesPerSlot)
     && decide (a.resultBytes ≤ b.resultBytes)
@@ -96,7 +93,7 @@ inductive DynamicMode | off | check | run
 
 structure Policy where
   mode : DynamicMode
-  dynamicTargets : EndpointScope Target Unit
+  dynamicTargets : List String
   (trustedPacks projectRoots : List String)
   deriving DecidableEq
 

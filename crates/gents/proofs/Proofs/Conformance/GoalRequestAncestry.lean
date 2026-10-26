@@ -1,5 +1,6 @@
 import Proofs.GoalAutomation.RequestAncestry
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.GoalRequestAssignment
 import Lean
 
 namespace Conformance.GoalRequestAncestryContracts
@@ -48,5 +49,56 @@ def casesJson : String := Conformance.Contracts.jsonArray (cases.map caseJson)
 example : cases.length = 12 := by decide
 example : (cases.map fun c => signedEntry 1 1 c.rows c.expectedGoal c.current).take 6 =
     [some 10, some 10, some 10, none, none, none] := by native_decide
+
+open GoalAutomation.RequestAssignment
+
+structure ScopeCase where
+  name : String
+  rootTagged : Bool := true
+  rootOpenings : List Nat := []
+  childOpenings : List Nat := []
+  childValid : Bool := true
+  missingParent : Bool := false
+
+def scopeCases : List ScopeCase :=
+  [ {name := "signed_continuation"}
+  , {name := "signed_continuation_ignores_conflicting_opening", rootOpenings := [2]}
+  , {name := "signed_continuation_ignores_intermediate_opening", childOpenings := [1]}
+  , {name := "untagged_continuation_uses_retained_opening", rootTagged := false, rootOpenings := [1]}
+  , {name := "untagged_continuation_refuses_conflicting_opening", rootTagged := false, rootOpenings := [2]}
+  , {name := "untagged_continuation_uses_intermediate_opening", rootTagged := false, childOpenings := [1]}
+  , {name := "signed_continuation_refuses_invalid_receipt", childValid := false}
+  , {name := "signed_continuation_refuses_missing_parent", missingParent := true}
+  ]
+
+def scopeRows (c : ScopeCase) : List AssignmentRow :=
+  (if c.missingParent then [] else
+    [{request := root, tagged := c.rootTagged, openingGoals := c.rootOpenings}]) ++
+    [{request := {child with receiptValid := c.childValid}, tagged := c.rootTagged,
+      openingGoals := c.childOpenings}]
+
+def scopeEntries (c : ScopeCase) : List Entry :=
+  [⟨10, 1, 1, if c.rootTagged then some ⟨1, none⟩ else none, true⟩,
+   ⟨20, 1, 1, if c.rootTagged then some ⟨1, some 10⟩ else none, c.childValid⟩]
+
+def scopeAssignments (c : ScopeCase) : List Assignment :=
+  c.rootOpenings.map (fun goal => ⟨1,1,goal,some 10⟩) ++
+    c.childOpenings.map (fun goal => ⟨1,1,goal,some 20⟩)
+
+def scopeResult (c : ScopeCase) : Option QueueScope :=
+  queueScopeWithAncestry 1 1 (scopeRows c) (scopeEntries c) (scopeAssignments c) 20
+
+def scopeCaseJson (c : ScopeCase) : Json := Json.mkObj
+  [("name", toJson c.name), ("root_tagged", toJson c.rootTagged),
+   ("root_openings", toJson c.rootOpenings), ("child_openings", toJson c.childOpenings),
+   ("child_valid", toJson c.childValid), ("missing_parent", toJson c.missingParent),
+   ("expected", (scopeResult c).map GoalRequestAssignmentContracts.queueScopeJson |>.getD Json.null)]
+
+def scopeCasesJson : String := (toJson (scopeCases.map scopeCaseJson)).compress
+
+example : scopeResult {name := "conflicting", rootOpenings := [2]} =
+    some (.referenced 1 10) := by native_decide
+example : GoalAutomation.RequestAncestry.assignmentEntry 1 1
+    (scopeRows {name := "conflicting", rootOpenings := [2]}) none 20 = none := by native_decide
 
 end Conformance.GoalRequestAncestryContracts

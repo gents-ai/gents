@@ -194,11 +194,19 @@ pub(crate) trait HostRecord:
     Serialize + serde::de::DeserializeOwned + Clone + Send + 'static
 {
     fn key(&self) -> &str;
+
+    fn matches_key(&self, key: &str) -> bool {
+        self.key() == key
+    }
 }
 
 impl HostRecord for ProcessRecord {
     fn key(&self) -> &str {
-        &self.tool_call_id
+        &self.tool_call_doc_id
+    }
+
+    fn matches_key(&self, key: &str) -> bool {
+        self.tool_call_doc_id == key || self.tool_call_id == key
     }
 }
 
@@ -267,7 +275,7 @@ where
         };
         let bytes = std::fs::read(record_path(dir, key)).ok()?;
         match serde_json::from_slice::<R>(&bytes) {
-            Ok(record) if record.key() == key => Some(record),
+            Ok(record) if record.matches_key(key) => Some(record),
             Ok(_) | Err(_) => {
                 tracing::warn!(key, "ignoring unreadable host record");
                 None
@@ -656,6 +664,31 @@ pub(crate) mod test_support {
             "notOwned" => None,
             other => panic!("a test-owned group cannot produce process outcome {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn call_keyed_process_record_remains_cancellable_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::hook::BackgroundExecutionRegistry::default()
+            .with_process_records(directory.path().into());
+        let process =
+            OwnedTestProcess::spawn(Some(registry.process_recorder("old-call", "physical-tool")))
+                .await;
+        std::fs::rename(
+            super::record_path(directory.path(), "physical-tool"),
+            super::record_path(directory.path(), "old-call"),
+        )
+        .unwrap();
+        let restarted = crate::hook::BackgroundExecutionRegistry::default()
+            .with_process_records(directory.path().into());
+        assert!(restarted.process_record("old-call", "wrong-tool").is_none());
+        assert_eq!(
+            restarted.stop_execution("old-call", "physical-tool").await,
+            super::ProcessStopOutcome::Stopped
+        );
+        restarted.forget_process_record("old-call", "physical-tool");
+        assert!(restarted.process_record_list().is_empty());
+        process.finish().await;
     }
 
     impl Drop for OwnedTestProcess {
