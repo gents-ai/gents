@@ -10,7 +10,7 @@
 //! Wherever `gents_protocol::job` has the type, the translation builds that
 //! type. Lean models only the presence or count of a rider, so a protocol field
 //! the model does not carry (a prompt, a title, a write's body) is left empty.
-//! A target's wire spelling is its agent id, as in Lean's `targetId`.
+//! Composed wire traces carry the actual resolution table and raw ceilings.
 use crate::lean_vocab_test::{
     lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases,
     lean_plugin_job_authority_cases, lean_plugin_job_control_cases, lean_plugin_job_key_cases,
@@ -494,15 +494,54 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        29,
-        "Lean supplies sixteen admission regressions and thirteen source-boundary cases"
+        125,
+        "Lean supplies 29 admission regressions and 96 wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {
         assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
         let expected = &case.expected;
-        let context = context(&case.context, &case.job, &case.output);
-        let job = row(&case.job);
+        let expected_job = expected.job.as_ref().map(row).map(|mut expected_job| {
+            if let Some(trace) = &case.wire_trace {
+                expected_job
+                    .pin
+                    .as_mut()
+                    .expect("pinned wire trace")
+                    .ceiling_at_pin
+                    .targets
+                    .clone_from(&trace.pinned_ids);
+            }
+            expected_job
+        });
+        let mut context = context(&case.context, &case.job, &case.output);
+        let mut job = row(&case.job);
+        let mut output = output(&case.output);
+        if let Some(trace) = &case.wire_trace {
+            context.target_ids = trace
+                .bindings
+                .iter()
+                .map(|binding| (binding.wire.clone(), target(&binding.target)))
+                .collect();
+            context.live.targets.clone_from(&trace.live_ids);
+            job.pin
+                .as_mut()
+                .expect("pinned wire trace")
+                .ceiling_at_pin
+                .targets
+                .clone_from(&trace.pinned_ids);
+            let JobStepOutput::Effects { effects } = &mut output else {
+                panic!("{}: wire trace requires spawn effects", case.name);
+            };
+            assert_eq!(
+                effects.spawn.len(),
+                trace.spawn_wires.len(),
+                "{}",
+                case.name
+            );
+            for (spawn, wire) in effects.spawn.iter_mut().zip(&trace.spawn_wires) {
+                spawn.target.clone_from(wire);
+            }
+        }
         let expected_state: JobState = spelled(&expected.row_state);
         let mut expected_kills: Vec<&str> = expected
             .kill
@@ -510,19 +549,20 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
             .map(|kill| kill.retry_key.as_str())
             .collect();
         expected_kills.sort_unstable();
-        match gents::plugin_job::admit::admit_step(&context, &job, &output(&case.output)) {
+        let settled = match gents::plugin_job::admit::admit_step(&context, &job, &output) {
             Ok(admitted) => {
                 assert!(expected.admitted, "{}: admitted a refused step", case.name);
                 assert!(!expected.dynamic_code_disabled, "{}", case.name);
                 assert_eq!(expected.code, None, "{}", case.name);
                 assert_eq!(
                     Some(&admitted),
-                    expected.job.as_ref().map(row).as_ref(),
+                    expected_job.as_ref(),
                     "{}: admitted row",
                     case.name
                 );
                 assert_eq!(admitted.state, expected_state, "{}", case.name);
                 assert!(expected_kills.is_empty(), "{}: kill", case.name);
+                admitted
             }
             Err(refusal) => {
                 assert!(
@@ -552,7 +592,28 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                 let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
                 kills.sort_unstable();
                 assert_eq!(kills, expected_kills, "{}: killed children", case.name);
+                refusal.closed_row().clone()
             }
+        };
+        if let Some(trace) = &case.wire_trace {
+            let before = crate::lean_vocab_test::LeanPluginJobRecoveryRow {
+                running: settled.state == JobState::Running,
+                terminal_children: admit::terminal_count(&settled) as u32,
+                observed: settled.observed_terminal,
+                live: admit::live_count(&settled) as u32,
+                ..trace.before
+            };
+            assert_eq!(
+                before, trace.before,
+                "{}: settlement-to-recovery projection",
+                case.name
+            );
+            let (_, after) = super::recovery_sweeps::tick_row(before);
+            assert_eq!(
+                after, trace.after,
+                "{}: recovery of the actual settled row",
+                case.name
+            );
         }
     }
 }

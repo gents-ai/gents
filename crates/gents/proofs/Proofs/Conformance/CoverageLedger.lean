@@ -1830,6 +1830,11 @@ def caseCoverage : List CoverageEntry :=
       "goal::observation::contract_tests::generated_goal_observations_drive_signature_and_scope_validation")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_observation_cases"
+      "GoalObservationCases"
+      "goal::observation::contract_tests::generated_goal_rescans_recover_lost_notifications")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "plugin_approval_cases"
       "PluginApprovalCases"
       "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants")
