@@ -145,7 +145,7 @@ pub async fn run_registry_heartbeat(
     node_did: String,
     network_id: String,
     cancel: CancellationToken,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     Ok(registry_heartbeat(node, node_did, network_id, cancel).await?)
 }
 

@@ -4,8 +4,6 @@ use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-
 use super::error::P2pReconcileError;
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
@@ -23,6 +21,8 @@ use super::{
     desired_route_is_applied, observe_owned_pairing_live_matches, EmbeddedRemoteP2pAdmin,
     GraphqlPairingStateStore, PairingStateStore,
 };
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 const SOURCE_ENROLLMENT: &str = "enrollment";
 
@@ -54,7 +54,7 @@ pub struct EnrollmentAuthorizationFence {
     pub authorization_expires_at: String,
 }
 
-enum EnrollmentAuthorityCommand {
+pub enum EnrollmentAuthorityCommand {
     Authorization {
         member_did: String,
         member_peer: String,
@@ -125,10 +125,10 @@ impl EnrollmentAuthorityHandle {
                 ack,
             })
             .await
-            .context("enrollment authority owner stopped")?;
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerStopped)?;
         result
             .await
-            .context("enrollment authority owner dropped fresh authorization response")?
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerDroppedFreshAuthorization)?
     }
 
     /// Resolve one transport peer to its exact current generation; transport
@@ -145,10 +145,10 @@ impl EnrollmentAuthorityHandle {
                 ack,
             })
             .await
-            .context("enrollment authority owner stopped")?;
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerStopped)?;
         result
             .await
-            .context("enrollment authority owner dropped fresh peer authorization response")?
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerDroppedFreshPeer)?
     }
 
     /// Resolve an exact current generation for a signed request principal;
@@ -164,10 +164,10 @@ impl EnrollmentAuthorityHandle {
                 ack,
             })
             .await
-            .context("enrollment authority owner stopped")?;
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerStopped)?;
         result
             .await
-            .context("enrollment authority owner dropped fresh member response")?
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerDroppedFreshMember)?
     }
 
     pub async fn client_observation_authorized(
@@ -216,10 +216,10 @@ impl PeerAdmissionAuthority for EnrollmentAuthorityHandle {
                 ack,
             })
             .await
-            .context("enrollment authority owner stopped")?;
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerStopped)?;
         result
             .await
-            .context("enrollment authority owner dropped peer admission response")?
+            .map_err(P2pReconcileError::EnrollmentAuthorityOwnerDroppedPeerAdmission)?
     }
 
     async fn fresh_member_authorized_for_agent(
@@ -320,9 +320,8 @@ impl EnrollmentAuthorityOwner {
         });
     }
 
-    fn publish_failed(&self, error: &anyhow::Error) {
-        let next =
-            EnrollmentAuthorityState::Failed(Arc::from(ErrorChain(error.as_ref()).to_string()));
+    fn publish_failed(&self, error: &P2pReconcileError) {
+        let next = EnrollmentAuthorityState::Failed(Arc::from(ErrorChain(error).to_string()));
         self.sender.send_if_modified(|current| {
             if *current == next {
                 return false;
@@ -409,11 +408,11 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_authorization_fence(&projection, &member_did, &member_peer)
-                        .map_err(anyhow::Error::from)
+                        
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(error.context("reload enrollment authority for authorization fence"))
+                    Err(P2pReconcileError::ReloadEnrollmentAuthorityAuthorizationFence(Box::new(error)))
                 }
             };
             let _ = ack.send(result);
@@ -423,7 +422,7 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     if projection.conflict.is_some() {
-                        Err(anyhow::anyhow!("enrollment root authority is conflicted"))
+                        Err(P2pReconcileError::EnrollmentRootAuthorityConflicted)
                     } else {
                         Ok(projection
                             .active
@@ -433,7 +432,7 @@ async fn handle_authority_command(
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(error.context("reload enrollment authority for peer admission"))
+                    Err(P2pReconcileError::ReloadEnrollmentAuthorityPeerAdmission(Box::new(error)))
                 }
             };
             let _ = ack.send(result);
@@ -443,11 +442,11 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_peer_authorization_fence(&projection, &member_peer)
-                        .map_err(anyhow::Error::from)
+                        
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(error.context("reload enrollment authority for transport fence"))
+                    Err(P2pReconcileError::ReloadEnrollmentAuthorityTransportFence(Box::new(error)))
                 }
             };
             let _ = ack.send(result);
@@ -457,11 +456,11 @@ async fn handle_authority_command(
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_member_authorization_fence(&projection, &member_did)
-                        .map_err(anyhow::Error::from)
+                        
                 }
                 Err(error) => {
                     owner.publish_failed(&error);
-                    Err(error.context("reload enrollment authority for request admission"))
+                    Err(P2pReconcileError::ReloadEnrollmentAuthorityRequestAdmission(Box::new(error)))
                 }
             };
             let _ = ack.send(result);
@@ -769,7 +768,8 @@ async fn reconcile_data_plane(
     .await?;
     let existing = rows::<EnrollmentRouteRow>(&response, "PeerPairingDesired")?;
     let desired = desired_routes(projection);
-    let client = resolve_template(CLIENT_TEMPLATE).context("client template is missing")?;
+    let client =
+        resolve_template(CLIENT_TEMPLATE).ok_or(P2pReconcileError::ClientTemplateMissing)?;
     let client_collections = client
         .collections
         .iter()
@@ -806,7 +806,9 @@ async fn reconcile_data_plane(
                 for stale_peer_id in enrollment_rows.keys() {
                     delete_enrollment_route(node, stale_peer_id).await?;
                 }
-                return Err(error.context("reload enrollment authority before route publication"));
+                return Err(
+                    P2pReconcileError::ReloadEnrollmentAuthorityBeforeRoutePublication(Box::new(error))
+                );
             }
         };
         let fresh =
@@ -1044,7 +1046,9 @@ mod tests {
                 .expect("scripted projection step")
             {
                 ScriptedProjection::Projection(projection) => Ok(projection),
-                ScriptedProjection::Error(message) => anyhow::bail!(message),
+                ScriptedProjection::Error(message) => {
+                    return Err(TransportFailure(message.to_string()).into())
+                }
             }
         }
     }

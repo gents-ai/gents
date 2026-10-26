@@ -480,9 +480,9 @@ impl Gents {
             .map_err(|_| AgentError::EnrollmentAuthorityUnavailable)?
             .clone()
             .ok_or(AgentError::EnrollmentAuthorityNotRunning)?;
-        authority
+        Ok(authority
             .client_observation_authorized(member_did, self.node_did())
-            .await
+            .await?)
     }
 
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {

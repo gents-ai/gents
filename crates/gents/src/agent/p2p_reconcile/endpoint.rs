@@ -18,7 +18,7 @@ pub async fn run_endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     Ok(endpoint_heartbeat(node, identity, cancel).await?)
 }
 

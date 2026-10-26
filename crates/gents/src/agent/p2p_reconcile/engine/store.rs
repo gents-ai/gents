@@ -1,7 +1,7 @@
+use crate::agent::p2p_reconcile::error::P2pReconcileError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use defra_node::EmbeddedNode;
@@ -25,6 +25,8 @@ use super::{
     EnrollmentEndpointEntry, EnrollmentRouteGeneration, LoadedPairingApplied, LoadedPairingDesired,
     PairingStateStore,
 };
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct GraphqlPairingStateStore {
@@ -184,7 +186,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let materialized_entry = self
             .data_plane_materialized_entry(&raw_peer_id)
             .await
-            .with_context(|| format!("checking enrollment authority for {raw_peer_id}"))?;
+            .map_err(|source| P2pReconcileError::CheckingEnrollmentAuthority {
+                raw_peer_id: raw_peer_id.to_string(),
+                source: Box::new(source),
+            })?;
         let Some((entry, generation)) = materialized_entry else {
             return Ok(LoadedPairingDesired::default());
         };

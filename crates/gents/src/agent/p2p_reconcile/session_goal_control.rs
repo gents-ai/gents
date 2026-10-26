@@ -1,6 +1,6 @@
+use crate::agent::p2p_reconcile::error::P2pReconcileError;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::goal_control::{
@@ -13,6 +13,8 @@ use super::session_commands::{CommandRow, FIELDS};
 use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::graphql::escape_graphql_string;
 use crate::identity::NodeIdentity;
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 pub(super) async fn has_verified_receipt(
     identity: &dyn NodeIdentity,
@@ -107,16 +109,18 @@ async fn process_command_with_clock(
         Box::pin(async move {
             let response = txn.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {FIELDS} }} }}"#, escape_graphql_string(doc_id))).await?;
             let rows: Vec<CommandRow> = serde_json::from_value(response["data"]["AgentSessionGoalControl"].clone())?;
-            let [row] = rows.as_slice() else { anyhow::bail!("goal control command is missing or ambiguous"); };
+            let [row] = rows.as_slice() else { return Err(P2pReconcileError::GoalControlCommandMissingAmbiguous); };
             if row.node_did != identity.did() { return Ok(None); }
             let command: SessionGoalControl = serde_json::from_str(&row.intent_json)?;
-            anyhow::ensure!(row.command_id == command.command_id && row.requester_did == command.requester_did
+            if !(row.command_id == command.command_id && row.requester_did == command.requester_did
                 && row.requester_peer_id == command.requester_peer_id && row.node_did == command.node_did
-                && row.session_id == command.session_id, "goal control immutable scope disagrees with signed intent");
+                && row.session_id == command.session_id) {
+ return Err(P2pReconcileError::GoalControlImmutableScopeDisagreesSigned);
+ }
             crate::graphql::fence_arrivals(txn, "AgentSessionGoalControl").await?;
             let twins = txn.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
                 escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
-            let twins = twins["data"]["AgentSessionGoalControl"].as_array().context("missing goal command identity query")?;
+            let twins = twins["data"]["AgentSessionGoalControl"].as_array().ok_or(P2pReconcileError::MissingGoalCommandIdentityQuery)?;
             if twins.iter().any(|twin| twin["command_id"].as_str() == Some(command.command_id.as_str()) && twin["_docID"].as_str() != Some(row.doc_id.as_str())) {
                 tracing::debug!(command_doc_id = doc_id, command_id = %command.command_id, "goal control identity collides; leaving it unanswered");
                 return Ok(None);
@@ -168,8 +172,9 @@ async fn process_command_with_clock(
             receipt.validate_for(&command)?;
             let written = txn.execute(&format!(r#"mutation {{ update_AgentSessionGoalControl(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&row.doc_id), escape_graphql_string(&serde_json::to_string(&receipt)?))).await?;
-            anyhow::ensure!(written["data"]["update_AgentSessionGoalControl"].as_array().is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(row.doc_id.as_str())),
-                "goal control receipt lost its command");
+            if !(written["data"]["update_AgentSessionGoalControl"].as_array().is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(row.doc_id.as_str()))) {
+ return Err(P2pReconcileError::GoalControlReceiptLostCommand);
+ }
             Ok(None)
         })
     }).await

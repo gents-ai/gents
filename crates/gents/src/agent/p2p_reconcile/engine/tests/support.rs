@@ -165,7 +165,7 @@ impl PairingStateStore for EnrollmentFenceStore {
             .unwrap()
             .pop_front()
             .unwrap_or(Ok(false))
-            .map_err(anyhow::Error::msg)
+            .map_err(|error| TransportFailure(error.to_string()))
     }
 
     async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {

@@ -1,6 +1,6 @@
+use crate::agent::p2p_reconcile::error::P2pReconcileError;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::session_input_edit::{
@@ -14,6 +14,8 @@ use super::session_commands::{CommandRow, FIELDS};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::graphql::escape_graphql_string;
 use crate::identity::NodeIdentity;
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 pub(super) async fn verified_receipt(
     identity: &dyn NodeIdentity,
@@ -101,7 +103,7 @@ async fn authority_rejection(
         escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id))).await?;
     let sessions = response["data"]["AgentSession"]
         .as_array()
-        .context("missing session scope")?;
+        .ok_or(P2pReconcileError::MissingSessionScope)?;
     if sessions.len() != 1
         || sessions[0]["requester_did"].as_str() != Some(command.requester_did.as_str())
     {
@@ -159,19 +161,21 @@ pub(crate) async fn process_command(
         Box::pin(async move {
             let response = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {FIELDS} }} }}"#, escape_graphql_string(doc_id))).await?;
             let rows: Vec<CommandRow> = serde_json::from_value(response["data"]["AgentSessionInputEdit"].clone())?;
-            let [row] = rows.as_slice() else { anyhow::bail!("edit command is missing or ambiguous"); };
+            let [row] = rows.as_slice() else { return Err(P2pReconcileError::EditCommandMissingAmbiguous); };
             if row.node_did != identity.did() {
                 return Ok(None);
             }
             let command: SessionInputEdit = serde_json::from_str(&row.intent_json)?;
-            anyhow::ensure!(row.command_id == command.command_id && row.node_did == command.node_did
+            if !(row.command_id == command.command_id && row.node_did == command.node_did
                 && row.requester_did == command.requester_did && row.requester_peer_id == command.requester_peer_id
-                && row.session_id == command.session_id, "edit immutable scope disagrees with signed intent");
+                && row.session_id == command.session_id) {
+ return Err(P2pReconcileError::EditImmutableScopeDisagreesSignedIntent);
+ }
             if verified_receipt(identity.as_ref(), &command, row.receipt_json.as_deref()).await?.is_some() { return Ok(None); }
             crate::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
             let twins = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
                 escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
-            let twins = twins["data"]["AgentSessionInputEdit"].as_array().context("missing command identity query")?;
+            let twins = twins["data"]["AgentSessionInputEdit"].as_array().ok_or(P2pReconcileError::MissingCommandIdentityQuery)?;
             if twins.iter().any(|twin| twin["command_id"].as_str() == Some(command.command_id.as_str()) && twin["_docID"].as_str() != Some(row.doc_id.as_str())) {
                 tracing::debug!(command_doc_id = doc_id, command_id = %command.command_id, "edit command identity collides; leaving it unanswered");
                 return Ok(None);
@@ -208,7 +212,9 @@ pub(crate) async fn process_command(
             let receipt = signed_receipt(identity.as_ref(), &command, outcome, reason, request_doc_ids).await?;
             let written = txn.execute(&format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&row.doc_id), escape_graphql_string(&serde_json::to_string(&receipt)?))).await?;
-            anyhow::ensure!(written["data"]["update_AgentSessionInputEdit"].as_array().is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(row.doc_id.as_str())), "edit receipt write lost its command");
+            if !(written["data"]["update_AgentSessionInputEdit"].as_array().is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(row.doc_id.as_str()))) {
+ return Err(P2pReconcileError::EditReceiptWriteLostCommand);
+ }
             Ok(None)
         })
     }).await

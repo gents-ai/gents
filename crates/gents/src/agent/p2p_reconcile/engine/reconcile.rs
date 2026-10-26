@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use p2p::iroh::parse_public_peer_addr;
 
 use super::super::error::P2pReconcileError;
@@ -13,6 +12,8 @@ use super::remote_topology::{
 use super::{
     EnrollmentRouteGeneration, LoadedPairingApplied, PairingStateStore, PairingTickOutcome,
 };
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 pub async fn reconcile_peer_tick(
     admin: &dyn RemoteP2pAdmin,
@@ -149,7 +150,7 @@ pub(super) async fn prepare_pairing_peer(
             if let Err(error) = admin
                 .connect(&addresses)
                 .await
-                .context("connect pairing peer")
+                .map_err(P2pReconcileError::ConnectPairingPeer)
             {
                 return PairingPeerPreparation {
                     peer_id,
@@ -267,7 +268,7 @@ pub(super) async fn reconcile_prepared_peer(
             desired_state = PairingDesired::default();
             actual = read_actual(admin, &applied_record.state.replicator_addresses)
                 .await
-                .context("reload live pairing state after enrollment authority closed")?;
+                .map_err(|error| P2pReconcileError::ReloadLivePairingStateAfterEnrollment(Box::new(error)))?;
             ops = std::collections::VecDeque::from(compute_owned_pairing_diff(
                 &desired_state,
                 &actual.state,
@@ -286,7 +287,7 @@ pub(super) async fn reconcile_prepared_peer(
     } else {
         read_actual(admin, &applied_record.state.replicator_addresses)
             .await
-            .context("verify live pairing state after reconcile")?
+            .map_err(|error| P2pReconcileError::VerifyLivePairingStateAfterReconcile(Box::new(error)))?
     };
     let live_route_matches = owned_pairing_live_matches(
         &desired_state,

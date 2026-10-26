@@ -1,7 +1,7 @@
+use crate::agent::p2p_reconcile::error::P2pReconcileError;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::session_input_edit::SessionInputEdit;
@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 use crate::identity::NodeIdentity;
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 #[derive(Deserialize)]
 pub(super) struct CommandRow {
@@ -133,14 +135,14 @@ pub async fn run_session_command_reconciler(
     for kind in CommandKind::ALL {
         let collection = node
             .get_collection(kind.collection())?
-            .context("session command schema missing")?;
+            .ok_or(P2pReconcileError::SessionCommandSchemaMissing)?;
         collections.insert(collection.collection_id, kind);
     }
     let mut goal_sources = RapidHashMap::new();
     for source in crate::goal::GOAL_OBSERVATION_SOURCES {
         let collection = node
             .get_collection(source)?
-            .context("goal observation schema missing")?;
+            .ok_or(P2pReconcileError::GoalObservationSchemaMissing)?;
         goal_sources.insert(collection.collection_id, source);
     }
     let watched = collections
@@ -315,7 +317,7 @@ mod tests {
                         "requester_did": identity.did(), "session_id":"session", "intent_json":intent}})).await?;
                 ids.push(crate::graphql::created_doc_id(&response, "AgentSessionGoalControl")?);
             }
-            Ok::<_, anyhow::Error>(ids)
+            Ok::<_, P2pReconcileError>(ids)
         })).await.unwrap();
         let mut actual = unanswered_commands(
             CommandKind::GoalControl,

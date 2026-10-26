@@ -92,7 +92,7 @@ async fn serve_image(
     }
     let fence = admission
         .authorization
-        .context("image demand has no authenticated enrollment fence")?;
+        .ok_or(P2pReconcileError::ImageDemandHasNoAuthenticatedEnrollment)?;
     let selection = store.selection(demand, &admission.catalog).await?;
     let before = store.authorized(demand, &fence).await?;
     let delivered = match image_attempt_delivery_target(
@@ -145,7 +145,7 @@ async fn commit_image_result(
     store
         .commit(row, &terminal, detail)
         .await
-        .context("commit file-image hydration receipt")
+        .map_err(|error| P2pReconcileError::CommitFileImageHydrationReceipt(Box::new(error)))
 }
 
 #[derive(Deserialize)]
@@ -186,10 +186,9 @@ impl ImageRequestStore for GraphqlHydrationStore {
         rows::<PendingImageRow>(&response, FILE_IMAGE_HYDRATION_REQUEST_NAME)?
             .into_iter()
             .map(|row| {
-                anyhow::ensure!(
-                    !row.document_id.is_empty(),
-                    "file-image demand omitted physical identity"
-                );
+                if row.document_id.is_empty() {
+                    return Err(P2pReconcileError::FileImageDemandOmittedPhysicalIdentity);
+                }
                 Ok(ImageDemandRow {
                     document_id: row.document_id,
                     demand: FileImageDemand {
@@ -236,7 +235,7 @@ impl ImageRequestStore for GraphqlHydrationStore {
         let (terminal, images) = match observed {
             ToolFileChangeRead::Pending => (false, Vec::new()),
             ToolFileChangeRead::Unsupported => {
-                anyhow::bail!("runtime file-image collection is unavailable")
+                return Err(P2pReconcileError::RuntimeFileImageCollectionUnavailable)
             }
             ToolFileChangeRead::Missing => (true, Vec::new()),
             ToolFileChangeRead::Retained { document_id, .. } => (
@@ -287,10 +286,9 @@ impl ImageRequestStore for GraphqlHydrationStore {
             signer_did: self.identity.did().to_owned(),
             signature: Vec::new(),
         };
-        anyhow::ensure!(
-            receipt.signer_did == receipt.demand.admission.node_did,
-            "file-image reconciler cannot sign for another node"
-        );
+        if receipt.signer_did != receipt.demand.admission.node_did {
+            return Err(P2pReconcileError::FileImageReconcilerCannotSignAnother);
+        }
         receipt.signature = self.identity.sign(&receipt.signing_payload()?).await?;
         receipt.validate_shape()?;
         let row = row.clone();
@@ -310,10 +308,12 @@ impl ImageRequestStore for GraphqlHydrationStore {
                         prior.as_ref().map(|receipt| &receipt.selection),
                         &candidate.selection,
                         HydrationTerminalWriteResult::Committed,
-                    ).context("file-image transaction did not select an outcome")?;
+                    ).ok_or(P2pReconcileError::FileImageTransactionDidNotSelect)?;
                     let new_outcome = prior.is_none();
                     let receipt = prior.unwrap_or(candidate);
-                    anyhow::ensure!(receipt.selection == outcome, "file-image receipt changed its recorded outcome");
+                    if receipt.selection != outcome {
+ return Err(P2pReconcileError::FileImageReceiptChangedRecordedOutcome);
+ }
                     if new_outcome {
                         txn.execute_with_variables(
                             "mutation($input: FileImageHydrationReceiptMutationInputArg!) { create_FileImageHydrationReceipt(input: $input) { _docID } }",
@@ -325,10 +325,9 @@ impl ImageRequestStore for GraphqlHydrationStore {
                         ).await?;
                     }
                     let response = txn.execute(&terminal_image_mutation(&row, &receipt)?).await?;
-                    anyhow::ensure!(
-                        response["data"]["update_FileImageHydrationRequest"].as_array().is_some_and(|rows| rows.len() == 1),
-                        "file-image receipt lost its pending-row compare-and-set"
-                    );
+                    if !(response["data"]["update_FileImageHydrationRequest"].as_array().is_some_and(|rows| rows.len() == 1)) {
+ return Err(P2pReconcileError::FileImageReceiptLostPendingRow);
+ }
                     Ok(())
                 })
             },
@@ -352,27 +351,28 @@ async fn decode_recorded_image_receipt(
 ) -> Result<Option<FileImageHydrationReceipt>> {
     let rows = response["data"]["FileImageHydrationReceipt"]
         .as_array()
-        .context("file-image receipt query omitted its rows")?;
-    anyhow::ensure!(rows.len() <= 1, "recorded file-image outcome is ambiguous");
+        .ok_or(P2pReconcileError::FileImageReceiptQueryOmittedRows)?;
+    if rows.len() > 1 {
+        return Err(P2pReconcileError::RecordedFileImageOutcomeAmbiguous);
+    }
     let Some(stored) = rows.first() else {
         return Ok(None);
     };
     let receipt: FileImageHydrationReceipt = serde_json::from_value(stored["receipt"].clone())?;
     receipt.validate_shape()?;
-    anyhow::ensure!(
-        receipt.demand == row.demand && receipt.signer_did == identity.did(),
-        "recorded file-image receipt crossed source or demand scope"
-    );
-    anyhow::ensure!(
-        identity
-            .verify(
-                &receipt.signer_did,
-                &receipt.signing_payload()?,
-                &receipt.signature
-            )
-            .await?,
-        "recorded file-image receipt has an invalid source signature"
-    );
+    if !(receipt.demand == row.demand && receipt.signer_did == identity.did()) {
+        return Err(P2pReconcileError::RecordedFileImageReceiptCrossedSource);
+    }
+    if !(identity
+        .verify(
+            &receipt.signer_did,
+            &receipt.signing_payload()?,
+            &receipt.signature,
+        )
+        .await?)
+    {
+        return Err(P2pReconcileError::RecordedFileImageReceiptHasInvalid);
+    }
     Ok(Some(receipt))
 }
 

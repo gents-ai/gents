@@ -1,11 +1,12 @@
 //! Final, fresh `AgentRequest` authority check. Watcher delivery, replication,
 //! queue residence, and caller-authored lineage are not authority.
 
+use crate::identity::IdentityError;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::request_admission::{
     project_agent_request_admission_disposition, validate_signing_fields,
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
@@ -41,16 +42,162 @@ pub enum RequestReceiptError {
 
 #[derive(Debug)]
 pub enum AgentRequestAdmissionError {
-    Denied(anyhow::Error),
-    Unavailable(anyhow::Error),
+    Denied(AdmissionCause),
+    Unavailable(AdmissionCause),
 }
 
+/// Why an admission was denied or could not be observed. Display text is the
+/// claim-time refusal reason; keep it stable.
+#[derive(Debug, thiserror::Error)]
+pub enum AdmissionCause {
+    #[error("{reason}")]
+    Denial { reason: &'static str },
+    #[error("parse enrollment request authorization expiry")]
+    ParseEnrollmentExpiry(#[source] chrono::ParseError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("AgentRequest admission observation is unavailable")]
+    AgentRequestAdmissionObservationUnavailable,
+    #[error("peer requester is not authorized for the target node")]
+    PeerRequesterNotAuthorizedTargetNode,
+    #[error("enrollment signer is not requester")]
+    EnrollmentSignerNotRequester,
+    #[error("enrollment target agent mismatch")]
+    EnrollmentTargetAgentMismatch,
+    #[error("request carries a stale or mixed enrollment generation")]
+    RequestCarriesStaleMixedEnrollmentGeneration,
+    #[error("enrollment authorization lease expired")]
+    EnrollmentAuthorizationLeaseExpired,
+    #[error("requester has no current enrollment authorization")]
+    RequesterHasNoCurrentEnrollmentAuthorization,
+    #[error("enrollment request has no requester DID")]
+    EnrollmentRequestHasNoRequesterDID,
+    #[error("local-control parent document binding is absent")]
+    LocalControlParentDocumentBindingAbsent,
+    #[error("request agent is missing")]
+    RequestAgentMissing,
+    #[error("request context is missing")]
+    RequestContextMissing,
+    #[error("request tools are missing")]
+    RequestToolsMissing,
+    #[error("request agent target is missing")]
+    RequestAgentTargetMissing,
+    #[error("auxiliary receipt crosses its authenticated parent scope")]
+    AuxiliaryReceiptCrossesAuthenticatedParentScope,
+    #[error("fresh AgentRequest document binding changed before admission")]
+    FreshAgentRequestDocumentBindingChangedBefore,
+    #[error("AgentRequest is missing {field}")]
+    AgentRequestMissing { field: String },
+    #[error("AgentRequest disappeared before admission")]
+    AgentRequestDisappearedBeforeAdmission,
+    #[error("verify local-self AgentRequest signature")]
+    VerifyLocalSelfAgentRequestSignature(#[source] IdentityError),
+    #[error("verify AgentRequest admission signature")]
+    VerifyAgentRequestAdmissionSignature(#[source] IdentityError),
+    #[error("reload peer requester admission")]
+    ReloadPeerRequesterAdmission(#[source] crate::agent::p2p_reconcile::error::P2pReconcileError),
+    #[error("fresh enrollment request admission projection")]
+    FreshEnrollmentRequestAdmissionProjection(#[source] crate::agent::p2p_reconcile::error::P2pReconcileError),
+    #[error("AgentRequest is missing purpose")]
+    AgentRequestMissingPurpose,
+    #[error(transparent)]
+    AgentRequestAdmission(Box<crate::request_admission::AgentRequestAdmissionError>),
+    #[error(transparent)]
+    Attachment(#[from] gents_protocol::request_input::AttachmentError),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    DesiredState(#[from] crate::config_client::DesiredStateError),
+    #[error(transparent)]
+    DurableTrigger(Box<crate::trigger_engine::durable::DurableTriggerError>),
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Overlay(#[from] crate::workspace::overlay::OverlayError),
+    #[error(transparent)]
+    RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
+    #[error(transparent)]
+    DocumentConfig(#[from] crate::document_config::DocumentConfigError),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+    #[error(transparent)]
+    Queue(Box<crate::lifecycle::QueueError>),
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
+    #[error(transparent)]
+    Watcher(Box<crate::watcher::WatcherError>),
+}
+
+impl crate::config_client::TransactionFailure for AdmissionCause {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::DurableTrigger(error) => error.config_client_error(),
+            Self::GraphqlResponse(error) => error.config_client_error(),
+            Self::DocumentConfig(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::Queue(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::Watcher(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::session::SessionError> for AdmissionCause {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::watcher::WatcherError> for AdmissionCause {
+    fn from(error: crate::watcher::WatcherError) -> Self {
+        Self::Watcher(Box::new(error))
+    }
+}
+
+impl From<crate::trigger_engine::durable::DurableTriggerError> for AdmissionCause {
+    fn from(error: crate::trigger_engine::durable::DurableTriggerError) -> Self {
+        Self::DurableTrigger(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for AdmissionCause {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::QueueError> for AdmissionCause {
+    fn from(error: crate::lifecycle::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::LifecycleError> for AdmissionCause {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<crate::request_admission::AgentRequestAdmissionError> for AdmissionCause {
+    fn from(error: crate::request_admission::AgentRequestAdmissionError) -> Self {
+        Self::AgentRequestAdmission(Box::new(error))
+    }
+}
+
+type Result<T, E = AdmissionCause> = std::result::Result<T, E>;
+
 impl AgentRequestAdmissionError {
-    fn denied(error: impl Into<anyhow::Error>) -> Self {
+    fn denied(error: impl Into<AdmissionCause>) -> Self {
         Self::Denied(error.into())
     }
 
-    fn unavailable(error: impl Into<anyhow::Error>) -> Self {
+    fn unavailable(error: impl Into<AdmissionCause>) -> Self {
         Self::Unavailable(error.into())
     }
 
@@ -62,7 +209,13 @@ impl AgentRequestAdmissionError {
 impl std::fmt::Display for AgentRequestAdmissionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Denied(error) | Self::Unavailable(error) => error.fmt(formatter),
+            Self::Denied(error) | Self::Unavailable(error) => {
+                if formatter.alternate() {
+                    write!(formatter, "{}", ErrorChain(error))
+                } else {
+                    write!(formatter, "{error}")
+                }
+            }
         }
     }
 }
@@ -116,15 +269,17 @@ fn base_admission_observation(
 
 fn require_admitted_observation(
     observation: AgentRequestAdmissionObservation,
-    denied: Option<anyhow::Error>,
+    denied: Option<AdmissionCause>,
 ) -> AdmissionResult<()> {
     match final_claim_admission_disposition(true, observation) {
         AgentRequestAdmissionDisposition::Admit => Ok(()),
         AgentRequestAdmissionDisposition::Deny => Err(AgentRequestAdmissionError::denied(
-            denied.unwrap_or_else(|| anyhow::anyhow!(admission_denial_reason(&observation))),
+            denied.unwrap_or_else(|| AdmissionCause::Denial {
+                reason: admission_denial_reason(&observation),
+            }),
         )),
         AgentRequestAdmissionDisposition::Retry => Err(AgentRequestAdmissionError::unavailable(
-            anyhow::anyhow!("AgentRequest admission observation is unavailable"),
+            AdmissionCause::AgentRequestAdmissionObservationUnavailable,
         )),
     }
 }
@@ -149,7 +304,9 @@ fn deny_if(condition: bool, message: &'static str) -> AdmissionResult<()> {
     if condition {
         Ok(())
     } else {
-        Err(AgentRequestAdmissionError::denied(anyhow::anyhow!(message)))
+        Err(AgentRequestAdmissionError::denied(AdmissionCause::Denial {
+            reason: message,
+        }))
     }
 }
 
@@ -173,7 +330,7 @@ pub(crate) async fn verify_fresh_local_self_request(
             &admission.signature,
         )
         .await
-        .context("verify local-self AgentRequest signature")
+        .map_err(AdmissionCause::VerifyLocalSelfAgentRequestSignature)
         .map_err(AgentRequestAdmissionError::denied)?;
     let mut observation =
         base_admission_observation(admission.kind, RuntimeInternalSourceKind::LocalControl);
@@ -293,10 +450,10 @@ pub(crate) async fn terminalize_pending_request_rejection(
                             .await?;
                         }
                         match serde_json::from_value::<AgentRequestRow>(row.clone())
-                            .map_err(anyhow::Error::from)
+                            .map_err(AdmissionCause::from)
                             .and_then(|row| {
                                 crate::watcher::AgentRequest::try_from(row)
-                                    .map_err(anyhow::Error::from)
+                                    .map_err(AdmissionCause::from)
                             })
                         {
                             Ok(request) => {
@@ -390,7 +547,7 @@ impl AgentRequestAdmissionVerifier {
             .identity
             .verify(&admission.signer_did, &payload, &admission.signature)
             .await
-            .context("verify AgentRequest admission signature")
+            .map_err(AdmissionCause::VerifyAgentRequestAdmissionSignature)
             .map_err(AgentRequestAdmissionError::denied)?;
         let runtime_source_kind = admission
             .runtime_source_kind
@@ -439,12 +596,10 @@ impl AgentRequestAdmissionVerifier {
                             required_row_string(row.node_did.as_deref(), "node_did")?,
                         )
                         .await
-                        .context("reload peer requester admission")
+                        .map_err(AdmissionCause::ReloadPeerRequesterAdmission)
                         .map_err(AgentRequestAdmissionError::unavailable)?;
                     if !observation.peer_authority_allows {
-                        denied = Some(anyhow::anyhow!(
-                            "peer requester is not authorized for the target node"
-                        ));
+                        denied = Some(AdmissionCause::PeerRequesterNotAuthorizedTargetNode);
                     }
                 }
             }
@@ -455,14 +610,14 @@ impl AgentRequestAdmissionVerifier {
                     .filter(|did| !did.trim().is_empty());
                 observation.signer_matches_requester = requester == Some(&admission.signer_did);
                 if !observation.signer_matches_requester {
-                    denied = Some(anyhow::anyhow!("enrollment signer is not requester"));
+                    denied = Some(AdmissionCause::EnrollmentSignerNotRequester);
                 }
                 if let Some(requester) = requester {
                     let current = self
                         .enrollment
                         .fresh_member_authorization(requester)
                         .await
-                        .context("fresh enrollment request admission projection")
+                        .map_err(AdmissionCause::FreshEnrollmentRequestAdmissionProjection)
                         .map_err(AgentRequestAdmissionError::unavailable)?;
                     if let Some(current) = current {
                         let observed_at = test_observed_at.unwrap_or_else(Utc::now);
@@ -483,29 +638,22 @@ impl AgentRequestAdmissionVerifier {
                         ) {
                             Ok(expires) => observation.authorization_fresh = observed_at < expires,
                             Err(error) => {
-                                denied = Some(
-                                    anyhow::Error::new(error)
-                                        .context("parse enrollment request authorization expiry"),
-                                );
+                                denied = Some(AdmissionCause::ParseEnrollmentExpiry(error));
                             }
                         }
                         if !observation.current_approval {
-                            denied = Some(anyhow::anyhow!("enrollment target agent mismatch"));
+                            denied = Some(AdmissionCause::EnrollmentTargetAgentMismatch);
                         } else if !observation.exact_generation {
-                            denied = Some(anyhow::anyhow!(
-                                "request carries a stale or mixed enrollment generation"
-                            ));
-                        } else if !observation.authorization_fresh && denied.is_none() {
                             denied =
-                                Some(anyhow::anyhow!("enrollment authorization lease expired"));
+                                Some(AdmissionCause::RequestCarriesStaleMixedEnrollmentGeneration);
+                        } else if !observation.authorization_fresh && denied.is_none() {
+                            denied = Some(AdmissionCause::EnrollmentAuthorizationLeaseExpired);
                         }
                     } else if denied.is_none() {
-                        denied = Some(anyhow::anyhow!(
-                            "requester has no current enrollment authorization"
-                        ));
+                        denied = Some(AdmissionCause::RequesterHasNoCurrentEnrollmentAuthorization);
                     }
                 } else if denied.is_none() {
-                    denied = Some(anyhow::anyhow!("enrollment request has no requester DID"));
+                    denied = Some(AdmissionCause::EnrollmentRequestHasNoRequesterDID);
                 }
             }
             AgentRequestAdmissionKind::RuntimeInternal => {
@@ -547,7 +695,7 @@ impl AgentRequestAdmissionVerifier {
                         self.node.clone(),
                         &row,
                         row.purpose
-                            .context("AgentRequest is missing purpose")
+                            .ok_or(AdmissionCause::AgentRequestMissingPurpose)
                             .map_err(AgentRequestAdmissionError::denied)?,
                         source,
                         source_kind,
@@ -753,10 +901,7 @@ async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> Adm
     ))
 }
 
-pub(crate) async fn max_request_hop(
-    node: &EmbeddedNode,
-    node_did: &str,
-) -> anyhow::Result<Option<u32>> {
+pub(crate) async fn max_request_hop(node: &EmbeddedNode, node_did: &str) -> Result<Option<u32>> {
     Ok(crate::document_config::load_node(node, node_did)
         .await?
         .and_then(|node_doc| node_doc.max_request_hop))
@@ -791,9 +936,9 @@ async fn verify_runtime_source_binding(
                 row.caused_by_parent_request_doc_id
                     .as_deref()
                     .ok_or_else(|| {
-                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                            "local-control parent document binding is absent"
-                        ))
+                        AgentRequestAdmissionError::denied(
+                            AdmissionCause::LocalControlParentDocumentBindingAbsent,
+                        )
                     })?;
             let parent = load_exact_parent_request(node.as_ref(), parent_doc_id).await?;
             deny_if(
@@ -873,9 +1018,9 @@ pub(crate) async fn load_request_context(
     })
     .await
     .map_err(
-        |error| match error.downcast::<AgentRequestAdmissionError>() {
-            Ok(error) => error,
-            Err(error) => AgentRequestAdmissionError::unavailable(error),
+        |error| match error {
+            AdmissionCause::AgentRequestAdmission(error) => *error,
+            error => AgentRequestAdmissionError::unavailable(error),
         },
     )
 }
@@ -886,7 +1031,7 @@ pub(crate) async fn load_request_context_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
-) -> anyhow::Result<(
+) -> Result<(
     Option<crate::document_config::AgentContext>,
     Option<crate::document_config::Tools>,
     Vec<crate::document_config::AgentTargetDocument>,
@@ -898,7 +1043,7 @@ pub(crate) async fn load_request_context_in_txn(
         read(txn, Collection::Agent, owner, agent_id)
             .await?
             .ok_or_else(|| {
-                AgentRequestAdmissionError::denied(anyhow::anyhow!("request agent is missing"))
+                AgentRequestAdmissionError::denied(AdmissionCause::RequestAgentMissing)
             })?,
     )?;
     deny_if(agent.enabled, "request agent is disabled")?;
@@ -909,7 +1054,7 @@ pub(crate) async fn load_request_context_in_txn(
         read(txn, Collection::AgentContext, owner, &context_id)
             .await?
             .ok_or_else(|| {
-                AgentRequestAdmissionError::denied(anyhow::anyhow!("request context is missing"))
+                AgentRequestAdmissionError::denied(AdmissionCause::RequestContextMissing)
             })?,
     )?;
     let tools: Option<Tools> = match context.tools_id.as_deref() {
@@ -918,7 +1063,7 @@ pub(crate) async fn load_request_context_in_txn(
             read(txn, Collection::Tools, owner, id)
                 .await?
                 .ok_or_else(|| {
-                    AgentRequestAdmissionError::denied(anyhow::anyhow!("request tools are missing"))
+                    AgentRequestAdmissionError::denied(AdmissionCause::RequestToolsMissing)
                 })?,
         )?),
     };
@@ -929,9 +1074,9 @@ pub(crate) async fn load_request_context_in_txn(
                 read(txn, Collection::AgentTarget, owner, id)
                     .await?
                     .ok_or_else(|| {
-                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                            "request agent target is missing"
-                        ))
+                        AgentRequestAdmissionError::denied(
+                            AdmissionCause::RequestAgentTargetMissing,
+                        )
                     })?,
             )?);
         }
@@ -1023,19 +1168,19 @@ pub(crate) fn verify_historical_auxiliary_receipt(
     verify_request_receipt_signature(request)?;
     verify_request_receipt_signature(parent)?;
     verify_auxiliary_request_shape(request, &row_admission(request)?)?;
-    anyhow::ensure!(
-        request.purpose.is_some_and(RequestPurpose::is_auxiliary)
-            && parent.purpose == Some(RequestPurpose::Normal)
-            && request.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            && parent.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            && request.doc_id != parent.doc_id
-            && request.caused_by_parent_request_doc_id == parent.doc_id
-            && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && request.node_did == parent.node_did
-            && request.session_id == parent.session_id
-            && request.agent_id == parent.agent_id,
-        "auxiliary receipt crosses its authenticated parent scope"
-    );
+    if !(request.purpose.is_some_and(RequestPurpose::is_auxiliary)
+        && parent.purpose == Some(RequestPurpose::Normal)
+        && request.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+        && parent.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+        && request.doc_id != parent.doc_id
+        && request.caused_by_parent_request_doc_id == parent.doc_id
+        && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
+        && request.node_did == parent.node_did
+        && request.session_id == parent.session_id
+        && request.agent_id == parent.agent_id)
+    {
+        return Err(AdmissionCause::AuxiliaryReceiptCrossesAuthenticatedParentScope);
+    }
     Ok(())
 }
 
@@ -1143,16 +1288,17 @@ fn row_signing_fields(
 }
 
 fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
-    anyhow::ensure!(
-        row.doc_id.as_deref() == Some(expected_doc_id),
-        "fresh AgentRequest document binding changed before admission"
-    );
+    if row.doc_id.as_deref() != Some(expected_doc_id) {
+        return Err(AdmissionCause::FreshAgentRequestDocumentBindingChangedBefore);
+    }
     Ok(AgentRequest::try_from(row)?)
 }
 
 fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResult<&'a str> {
     value.ok_or_else(|| {
-        AgentRequestAdmissionError::denied(anyhow::anyhow!("AgentRequest is missing {field}"))
+        AgentRequestAdmissionError::denied(AdmissionCause::AgentRequestMissing {
+            field: field.to_string(),
+        })
     })
 }
 
@@ -1204,9 +1350,9 @@ async fn load_signed_request(
     crate::graphql::first_row(&response, "AgentRequest")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
-            AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-                "AgentRequest disappeared before admission"
-            ))
+            AgentRequestAdmissionError::unavailable(
+                AdmissionCause::AgentRequestDisappearedBeforeAdmission,
+            )
         })
 }
 
@@ -1215,9 +1361,7 @@ pub(crate) async fn load_request_for_admission_test(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<AgentRequest> {
-    let row = load_signed_request(node, doc_id)
-        .await
-        .map_err(anyhow::Error::from)?;
+    let row = load_signed_request(node, doc_id).await?;
     row_into_agent_request(row, doc_id)
 }
 

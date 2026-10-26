@@ -1,7 +1,7 @@
+use crate::agent::p2p_reconcile::error::P2pReconcileError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use futures::{stream, StreamExt};
 use tokio_util::sync::CancellationToken;
@@ -12,6 +12,8 @@ use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
 use super::super::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use super::reconcile::{prepare_pairing_peer, reconcile_prepared_peer};
 use super::{GraphqlPairingStateStore, PairingStateStore, MAX_CONCURRENT_PEER_PREPARATIONS};
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 const PAIRING_STATE_COLLECTIONS: [&str; 3] = [
     "PeerPairingDesired",

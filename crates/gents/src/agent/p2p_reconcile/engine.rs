@@ -6,10 +6,10 @@ mod rows;
 mod store;
 mod sweep;
 
+use crate::agent::p2p_reconcile::error::P2pReconcileError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use anyhow::Result;
 use async_trait::async_trait;
 
 use super::{DiffOp, PairingApplied, PairingDesired};
@@ -26,6 +26,8 @@ pub use sweep::run_pairing_reconciler;
 use desired::{data_plane_desired_from_pairing_row, desired_from_pairing_row};
 #[cfg(test)]
 use rows::PairingStateRow;
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;

@@ -1,11 +1,11 @@
 //! Candidate side of signed enrollment: verify a server's signed offer,
 //! countersign a request with this identity and deliver it to that server.
 
+use crate::agent::p2p_reconcile::error::TransportFailure;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::{P2POperations, P2pDocumentRequest, ReplicationFilter, TransportPeerId};
@@ -27,6 +27,8 @@ use gents_protocol::error_chain::ErrorChain;
 use super::enrollment_store::RequestRow;
 use super::error::P2pReconcileError;
 
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
+
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
 const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_agent profile client_nonce issued_at expires_at candidate_sig";
@@ -38,11 +40,12 @@ pub async fn request_enrollment(
     identity: &dyn NodeIdentity,
     offer_token: &str,
 ) -> Result<EnrollmentRequestRecord> {
-    let p2p = crate::identity::node_p2p(node).context("this node has no P2P transport")?;
-    let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
+    let p2p = crate::identity::node_p2p(node).ok_or(P2pReconcileError::NodeHasNoP2PTransport)?;
+    let offer =
+        decode_offer(offer_token).map_err(P2pReconcileError::DecodingServerEnrollmentOffer)?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
     confirm_network_admin_pin(node, &offer).await?;
-    let candidate_peer = p2p.local_peer_id().await.map_err(anyhow::Error::msg)?;
+    let candidate_peer = p2p.local_peer_id().await.map_err(|error| TransportFailure(error.to_string()))?;
     let candidate_ticket = local_enrollment_ticket(&p2p, &candidate_peer).await?;
     let (request, document_id) =
         match persisted_request(node, identity, &offer, offer_token, &candidate_peer).await? {
@@ -68,11 +71,10 @@ pub async fn request_enrollment(
                         )
                         .await?
                         .filter(|(persisted, _)| persisted == &request)
-                        .with_context(|| {
-                            format!(
-                                "enrollment request commit was not observably recovered after: {}",
-                                ErrorChain(write_error.as_ref())
-                            )
+                        .ok_or_else(|| {
+                            P2pReconcileError::EnrollmentRequestCommitWasNotObservably {
+                                detail: ErrorChain(&write_error).to_string(),
+                            }
                         })?
                         .1
                     }
@@ -91,46 +93,47 @@ pub async fn verify_enrollment_offer(
     identity: &dyn NodeIdentity,
     offer: &EnrollmentOfferRecord,
 ) -> Result<()> {
-    anyhow::ensure!(
-        offer.schema_fingerprint == enrollment_schema_fingerprint(),
-        "server enrollment schema {} is incompatible with {}",
-        offer.schema_fingerprint,
-        enrollment_schema_fingerprint()
-    );
-    anyhow::ensure!(offer.profile == "client", "unsupported enrollment profile");
+    if offer.schema_fingerprint != enrollment_schema_fingerprint() {
+        return Err(P2pReconcileError::ServerEnrollmentSchemaIncompatible {
+            schema_fingerprint: offer.schema_fingerprint.to_string(),
+            enrollment_schema_fingerprint: enrollment_schema_fingerprint().to_string(),
+        });
+    }
+    if offer.profile != "client" {
+        return Err(P2pReconcileError::UnsupportedEnrollmentProfile);
+    }
     validate_fresh_window(&offer.issued_at, &offer.expires_at)?;
     let (ticket_peer, _) = parse_public_peer_addr(&offer.server_ticket)
-        .context("server enrollment offer contains an invalid Iroh ticket")?;
-    anyhow::ensure!(
-        ticket_peer.to_string() == offer.server_peer,
-        "server enrollment ticket does not match its signed peer ID"
-    );
+        .map_err(P2pReconcileError::ServerEnrollmentOfferContainsInvalidIroh)?;
+    if ticket_peer.to_string() != offer.server_peer {
+        return Err(P2pReconcileError::ServerEnrollmentTicketDoesNotMatch);
+    }
     timeout(
         ENROLLMENT_P2P_TIMEOUT,
         p2p.connect_peer(&offer.server_ticket),
     )
     .await
-    .context("timed out connecting to enrollment server")?
-    .map_err(anyhow::Error::msg)
-    .context("connecting to enrollment server")?;
+    .map_err(P2pReconcileError::TimedOutConnectingEnrollmentServer)?
+    .map_err(|error| TransportFailure(error.to_string()))
+    .map_err(P2pReconcileError::ConnectingEnrollmentServer)?;
     let transport_peer = TransportPeerId::new(offer.server_peer.clone())
-        .map_err(anyhow::Error::msg)
-        .context("validating enrollment server peer ID")?;
+        .map_err(|error| TransportFailure(error.to_string()))
+        .map_err(P2pReconcileError::ValidatingEnrollmentServerPeerID)?;
     let resolved_server_did = timeout(
         ENROLLMENT_P2P_TIMEOUT,
         p2p.resolve_peer_identity(&transport_peer),
     )
     .await
-    .context("timed out authenticating enrollment server identity")?
-    .map_err(anyhow::Error::msg)?
-    .context("enrollment server has no configured authenticated identity")?;
+    .map_err(P2pReconcileError::TimedOutAuthenticatingEnrollmentServerIdentity)?
+    .map_err(|error| TransportFailure(error.to_string()))?
+    .ok_or(P2pReconcileError::EnrollmentServerHasNoConfiguredAuthenticated)?;
     validate_authenticated_server_did(&offer.admin_did, resolved_server_did.as_ref())?;
-    anyhow::ensure!(
-        identity
-            .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
-            .await?,
-        "enrollment offer signature is invalid"
-    );
+    if !(identity
+        .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
+        .await?)
+    {
+        return Err(P2pReconcileError::EnrollmentOfferSignatureInvalid);
+    }
     Ok(())
 }
 
@@ -226,7 +229,7 @@ pub async fn sign_enrollment_request(
     request.candidate_sig = identity.sign(&request.signing_payload()).await?;
     request
         .validate_against_offer(offer)
-        .context("validating authored enrollment request")?;
+        .map_err(P2pReconcileError::ValidatingAuthoredEnrollmentRequest)?;
     Ok(request)
 }
 
@@ -250,15 +253,22 @@ pub async fn confirm_network_admin_pin(
         graphql_with_transaction_retry(node, &query, "loading local enrollment admin pin").await?;
     match rows::<AdminPinRow>(&response, "NetworkAdminPin")?.as_slice() {
         [pin] if &pin.admin_did == admin_did => return Ok(()),
-        [pin] => anyhow::bail!(
-            "network {network_id} is pinned to admin {}; refusing conflicting admin {admin_did}",
-            pin.admin_did
-        ),
+        [pin] => {
+            return Err(
+                P2pReconcileError::NetworkPinnedAdminRefusingConflictingAdmin {
+                    network_id: network_id.to_string(),
+                    admin_did: pin.admin_did.to_string(),
+                    admin_did2: admin_did.to_string(),
+                },
+            )
+        }
         [] => {}
-        pins => anyhow::bail!(
-            "network {network_id} has {} local admin pins; refusing enrollment",
-            pins.len()
-        ),
+        pins => {
+            return Err(P2pReconcileError::NetworkHasLocalAdminPinsRefusing {
+                network_id: network_id.to_string(),
+                pins_len: pins.len().to_string(),
+            })
+        }
     }
     let pin_key = format!(
         "pin-{}",
@@ -285,11 +295,12 @@ pub async fn confirm_network_admin_pin(
         let response =
             graphql_with_transaction_retry(node, &query, "recovering local enrollment admin pin")
                 .await?;
-        anyhow::ensure!(
-            matches!(rows::<AdminPinRow>(&response, "NetworkAdminPin")?.as_slice(), [pin] if &pin.admin_did == admin_did),
-            "admin pin commit was not observably recovered after: {}",
-            ErrorChain(&commit_error)
-        );
+        if !(matches!(rows::<AdminPinRow>(&response, "NetworkAdminPin")?.as_slice(), [pin] if &pin.admin_did == admin_did))
+        {
+            return Err(P2pReconcileError::AdminPinCommitWasNotObservably {
+                detail: ErrorChain(&commit_error).to_string(),
+            });
+        }
     }
     Ok(())
 }
@@ -316,27 +327,27 @@ async fn persisted_request(
     let row = match found.as_slice() {
         [] => return Ok(None),
         [row] => row,
-        _ => anyhow::bail!(
-            "offer {} has multiple local enrollment requests",
-            offer.offer_id
-        ),
+        _ => {
+            return Err(P2pReconcileError::OfferHasMultipleLocalEnrollmentRequests {
+                offer_id: offer.offer_id.to_string(),
+            })
+        }
     };
     let request = row.to_record()?;
-    anyhow::ensure!(
-        request.offer_token == offer_token,
-        "persisted enrollment request embeds a different signed offer"
-    );
+    if request.offer_token != offer_token {
+        return Err(P2pReconcileError::PersistedEnrollmentRequestEmbedsDifferentSigned);
+    }
     request.validate_against_offer(offer)?;
-    anyhow::ensure!(
-        identity
-            .verify(
-                &request.candidate_did,
-                &request.signing_payload(),
-                &request.candidate_sig
-            )
-            .await?,
-        "persisted enrollment request signature is invalid"
-    );
+    if !(identity
+        .verify(
+            &request.candidate_did,
+            &request.signing_payload(),
+            &request.candidate_sig,
+        )
+        .await?)
+    {
+        return Err(P2pReconcileError::PersistedEnrollmentRequestSignatureInvalid);
+    }
     Ok(Some((request, row.doc_id.clone())))
 }
 
@@ -349,7 +360,7 @@ pub async fn write_enrollment_request(
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
     let response = ConfigAccess::write_local(node, "enrollment.create_request", &mutation).await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, "NetworkEnrollmentRequest")
-        .context("enrollment request mutation returned no document ID")
+        .map_err(P2pReconcileError::EnrollmentRequestMutationReturnedNoDocument)
 }
 
 pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
@@ -478,5 +489,5 @@ pub async fn push_enrollment_request(
                 })
             }
         };
-    outcome.map_err(anyhow::Error::from)
+    outcome
 }

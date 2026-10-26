@@ -866,7 +866,8 @@ async fn run_agent_owned(
                 enrollment_owner,
                 enrollment_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 
@@ -882,7 +883,8 @@ async fn run_agent_owned(
                 pairing_enrollment,
                 pairing_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 
@@ -897,7 +899,8 @@ async fn run_agent_owned(
                 crate::agent::p2p_reconcile::resolve_network_id(),
                 registry_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 
@@ -911,7 +914,8 @@ async fn run_agent_owned(
                 endpoint_identity,
                 endpoint_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 
@@ -927,7 +931,8 @@ async fn run_agent_owned(
                 hydration_identity,
                 hydration_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 
@@ -941,7 +946,8 @@ async fn run_agent_owned(
                 session_command_identity,
                 session_command_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 

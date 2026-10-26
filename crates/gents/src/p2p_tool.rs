@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
@@ -53,7 +52,98 @@ pub(crate) enum P2pToolError {
     RequestDid,
     #[error("pairing overlay is managed by another owner; do not change its policy")]
     OverlayOwnedElsewhere,
+    #[error("enrollment authority is conflicted")]
+    EnrollmentAuthorityConflicted,
+    #[error("peer DID does not match signed enrollment; next call: p2p {{\"action\":\"pairings_list\"}}")]
+    PeerDIDDoesNotMatchSigned,
+    #[error("P2P document observation failed: {detail}")]
+    P2PDocumentObservationFailed { detail: String },
+    #[error("ambiguous pairing document")]
+    AmbiguousPairingDocument,
+    #[error("existing pairing contains collections outside the P2P grant; next call: p2p {{\"action\":\"pairings_list\"}}")]
+    ExistingPairingContainsCollectionsOutsideP2P,
+    #[error("collections must contain application collection names; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}")]
+    CollectionsMustContainApplicationCollectionNames,
+    #[error("at most 16 application collections per pairing")]
+    MostApplicationCollectionsPerPairing,
+    #[error("application collection {name} is outside this tool's P2P collection grant. A configuration owner grants it in this agent's Tools built_ins.p2p_collections, and gents pack wire grants a wired plugin's pack collections. The grant this tool holds was fixed when this request started, so a new grant applies from the agent's next request, not in this turn: finish the turn and retry then. ACP document access remains separate; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}")]
+    ApplicationCollectionOutsideToolSP2P { name: String },
+    #[error("unknown P2P command; next call: p2p {next}")]
+    UnknownP2PCommandNextCallP2p { next: String },
+    #[error("unexpected field for action {detail}; accepted fields: {allowed}; next call: p2p {{\"action\":\"help\",\"topic\":\"{detail2}\"}}")]
+    UnexpectedFieldActionAcceptedFieldsNext {
+        detail: String,
+        allowed: String,
+        detail2: String,
+    },
+    #[error("P2P mutations are disabled by the tool grant")]
+    P2PMutationsDisabledToolGrant,
+    #[error("sync requires 1 through 16 nonempty document IDs")]
+    SyncRequiresThroughNonemptyDocumentIDs,
+    #[error("invalid transport peer ID; next call: p2p {{\"action\":\"network_list\"}}")]
+    InvalidTransportPeerIDNextCall(#[source] crate::agent::p2p_reconcile::error::TransportFailure),
+    #[error("peer has no current authorized enrollment in this node's network. A pairing applied here needs the peer to have joined this node: it ran enrollment_request with this node's offer and this node approved it. Joining the peer's network does not count; pairing both ways needs each node enrolled in the other's network, so mint an offer here for the peer or have the peer apply its pairing toward this node; next call: p2p {{\"action\":\"enrollment_pending\"}}")]
+    PeerHasNoCurrentAuthorizedEnrollment,
+    #[error("P2P response omitted documents")]
+    P2PResponseOmittedDocuments,
+    #[error("missing pairing documents")]
+    MissingPairingDocuments,
+    #[error("malformed existing collection scope")]
+    MalformedExistingCollectionScope(#[source] serde_json::Error),
+    #[error("existing pairing contains protocol collections")]
+    ExistingPairingContainsProtocolCollections,
+    #[error("invalid desired pairing")]
+    InvalidDesiredPairing,
+    #[error("overlay identity missing")]
+    OverlayIdentityMissing,
+    #[error("collections is required")]
+    CollectionsRequired,
+    #[error("protocol collections, including credentials, are never supported by application pairing or sync; changing grants or ACP cannot enable this operation. Keep credentials with their existing operator owner; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}")]
+    ProtocolCollectionsIncludingCredentialsNeverSupported,
+    #[error("collection {name} is unavailable on this node")]
+    CollectionUnavailableNode { name: String },
+    #[error("{key} must be a nonempty string; next call: p2p {{\"action\":\"help\",\"topic\":\"{detail}\"}}")]
+    MustNonemptyStringNextCallP2p { key: String, detail: String },
+    #[error("details must be true or false")]
+    DetailsMustTrueFalse,
+    #[error("this node has no enrollment Network; the running server creates it at startup")]
+    NodeHasNoEnrollmentNetworkRunning,
+    #[error("P2P is not running on this node")]
+    P2PNotRunningNode,
+    #[error("valid_for_secs must be a whole number of seconds")]
+    ValidSecsMustWholeNumberSeconds,
+    #[error("an offer token is single use: two nodes requested with one offer, so both requests are refused. Each joining node needs its own fresh offer; mint one per node and have each re-request; next call: p2p {{\"action\":\"enrollment_offer\"}}")]
+    OfferTokenSingleUseTwoNodes(#[source] crate::agent::p2p_reconcile::error::P2pReconcileError),
+    #[error("doc_ids is required")]
+    DocIdsRequired,
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    P2pReconcile(#[from] crate::agent::p2p_reconcile::error::P2pReconcileError),
+    #[error(transparent)]
+    P2pSyncObservation(#[from] crate::p2p_observability::P2pSyncObservationError),
+    #[error(transparent)]
+    RemoteP2pAdmin(#[from] crate::agent::p2p_reconcile::trait_def::RemoteP2pAdminError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Error(#[from] serde_json::Error),
+    #[error(transparent)]
+    Transport(#[from] crate::agent::p2p_reconcile::error::TransportFailure),
+    #[error(transparent)]
+    Did(#[from] ::identity::Error),
 }
+
+impl crate::config_client::TransactionFailure for P2pToolError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = P2pToolError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct P2pTool {
@@ -222,18 +312,22 @@ impl P2pTool {
 
     async fn enrollment(&self, peer: &str, expected_did: Option<&str>) -> Result<ActiveEnrollment> {
         defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-            .map_err(anyhow::Error::msg)
-            .context("invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}")?;
+            .map_err(|error| crate::agent::p2p_reconcile::error::TransportFailure(error.to_string()))
+            .map_err(P2pToolError::InvalidTransportPeerIDNextCall)?;
         let projection = GraphqlEnrollmentStore::new(self.node.clone(), self.actor()?)
             .load_projection()
             .await?;
-        ensure!(
-            projection.conflict.is_none(),
-            "enrollment authority is conflicted"
-        );
-        let active = projection.active.into_iter().find(|entry| entry.request.candidate_peer == peer)
-            .context("peer has no current authorized enrollment in this node's network. A pairing applied here needs the peer to have joined this node: it ran enrollment_request with this node's offer and this node approved it. Joining the peer's network does not count; pairing both ways needs each node enrolled in the other's network, so mint an offer here for the peer or have the peer apply its pairing toward this node; next call: p2p {\"action\":\"enrollment_pending\"}")?;
-        ensure!(expected_did.is_none_or(|did| did == active.request.candidate_did), "peer DID does not match signed enrollment; next call: p2p {{\"action\":\"pairings_list\"}}");
+        if !projection.conflict.is_none() {
+            return Err(P2pToolError::EnrollmentAuthorityConflicted);
+        }
+        let active = projection
+            .active
+            .into_iter()
+            .find(|entry| entry.request.candidate_peer == peer)
+            .ok_or(P2pToolError::PeerHasNoCurrentAuthorizedEnrollment)?;
+        if !expected_did.is_none_or(|did| did == active.request.candidate_did) {
+            return Err(P2pToolError::PeerDIDDoesNotMatchSigned);
+        }
         Ok(active)
     }
 
@@ -250,17 +344,18 @@ impl P2pTool {
         let result = ConfigAccess::local(self.node.clone())
             .execute(&format!("{{{collection}({arguments}) {{{fields}}}}}"))
             .await?;
-        ensure!(
-            result
-                .get("errors")
-                .is_none_or(|e| e.is_null() || e.as_array().is_some_and(Vec::is_empty)),
-            "P2P document observation failed: {}",
-            result["errors"]
-        );
+        if !(result
+            .get("errors")
+            .is_none_or(|e| e.is_null() || e.as_array().is_some_and(Vec::is_empty)))
+        {
+            return Err(P2pToolError::P2PDocumentObservationFailed {
+                detail: result["errors"].to_string(),
+            });
+        }
         result["data"][collection]
             .as_array()
             .cloned()
-            .context("P2P response omitted documents")
+            .ok_or(P2pToolError::P2PResponseOmittedDocuments)
     }
 
     async fn overlay(&self, peer: &str) -> Result<Option<Value>> {
@@ -271,7 +366,9 @@ impl P2pTool {
                 "_docID peer_id node_did collections replicator_addresses template source",
             )
             .await?;
-        ensure!(rows.len() <= 1, "ambiguous pairing document");
+        if rows.len() > 1 {
+            return Err(P2pToolError::AmbiguousPairingDocument);
+        }
         Ok(rows.into_iter().next())
     }
 
@@ -301,27 +398,33 @@ impl P2pTool {
             let collections_scope = collections_scope.clone();
             Box::pin(async move {
                 let response = txn.execute(&format!("{{DataPlanePairingDesired(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id node_did collections replicator_addresses template source}}}}", quoted(&peer))).await?;
-                let rows = response["data"]["DataPlanePairingDesired"].as_array().context("missing pairing documents")?;
-                ensure!(rows.len() <= 1, "ambiguous pairing document");
+                let rows = response["data"]["DataPlanePairingDesired"].as_array().ok_or(P2pToolError::MissingPairingDocuments)?;
+                if rows.len() > 1 {
+ return Err(P2pToolError::AmbiguousPairingDocument);
+ }
                 let before = rows.first();
                 if let Some(row) = before {
-                    ensure!(row["node_did"].as_str() == Some(actor.as_str()) && row["source"].as_str() == Some(OVERLAY_SOURCE), "pairing overlay is managed by another owner; do not change its policy");
-                    let before_collections: Vec<String> = if row["collections"].is_null() {Vec::new()} else {serde_json::from_value(row["collections"].clone()).context("malformed existing collection scope")?};
-                    ensure!(collections_scope.permits_all(before_collections.iter()), "existing pairing contains collections outside the P2P grant; next call: p2p {{\"action\":\"pairings_list\"}}");
+                    if !(row["node_did"].as_str() == Some(actor.as_str()) && row["source"].as_str() == Some(OVERLAY_SOURCE)) {
+ return Err(P2pToolError::OverlayOwnedElsewhere);
+ }
+                    let before_collections: Vec<String> = if row["collections"].is_null() {Vec::new()} else {serde_json::from_value(row["collections"].clone()).map_err(P2pToolError::MalformedExistingCollectionScope)?};
+                    if !(collections_scope.permits_all(before_collections.iter())) {
+ return Err(P2pToolError::ExistingPairingContainsCollectionsOutsideP2P);
+ }
                     if !before_collections.is_empty() {
-                        admit_app_collections(before_collections.into_iter().collect()).context("existing pairing contains protocol collections")?;
+                        admit_app_collections(before_collections.into_iter().collect()).ok_or(P2pToolError::ExistingPairingContainsProtocolCollections)?;
                     }
                 }
                 let unchanged = match (&desired, before) {
                     (None, None) => true,
-                    (Some(desired), Some(before)) => desired.as_object().context("invalid desired pairing")?.iter().all(|(key, value)| before.get(key) == Some(value)),
+                    (Some(desired), Some(before)) => desired.as_object().ok_or(P2pToolError::InvalidDesiredPairing)?.iter().all(|(key, value)| before.get(key) == Some(value)),
                     _ => false,
                 };
                 if unchanged { return Ok(true); }
                 let mutation = match (fields, before) {
-                    (Some(fields), Some(row)) => format!("mutation {{update_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}, input: {fields}) {{_docID}}}}", quoted(row["_docID"].as_str().context("overlay identity missing")?)),
+                    (Some(fields), Some(row)) => format!("mutation {{update_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}, input: {fields}) {{_docID}}}}", quoted(row["_docID"].as_str().ok_or(P2pToolError::OverlayIdentityMissing)?)),
                     (Some(fields), None) => format!("mutation {{create_DataPlanePairingDesired(input: {fields}) {{_docID}}}}"),
-                    (None, Some(row)) => format!("mutation {{delete_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}) {{_docID}}}}", quoted(row["_docID"].as_str().context("overlay identity missing")?)),
+                    (None, Some(row)) => format!("mutation {{delete_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}) {{_docID}}}}", quoted(row["_docID"].as_str().ok_or(P2pToolError::OverlayIdentityMissing)?)),
                     (None, None) => unreachable!(),
                 };
                 txn.execute(&mutation).await?;
@@ -335,20 +438,27 @@ impl P2pTool {
             options
                 .get("collections")
                 .cloned()
-                .context("collections is required")?,
+                .ok_or(P2pToolError::CollectionsRequired)?,
         )?;
-        ensure!(!collections.is_empty(), "collections must contain application collection names; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}");
+        if collections.is_empty() {
+            return Err(P2pToolError::CollectionsMustContainApplicationCollectionNames);
+        }
         let collections = admit_app_collections(collections.into_iter().collect())
-            .context("protocol collections, including credentials, are never supported by application pairing or sync; changing grants or ACP cannot enable this operation. Keep credentials with their existing operator owner; next call: p2p {\"action\":\"help\",\"topic\":\"scope\"}")?;
-        ensure!(
-            collections.len() <= 16,
-            "at most 16 application collections per pairing"
-        );
+            .ok_or(P2pToolError::ProtocolCollectionsIncludingCredentialsNeverSupported)?;
+        if collections.len() > 16 {
+            return Err(P2pToolError::MostApplicationCollectionsPerPairing);
+        }
         for name in &collections {
             validate_collection_identifier(name)?;
-            ensure!(self.collections.permits(name), "application collection {name} is outside this tool's P2P collection grant. A configuration owner grants it in this agent's Tools built_ins.p2p_collections, and gents pack wire grants a wired plugin's pack collections. The grant this tool holds was fixed when this request started, so a new grant applies from the agent's next request, not in this turn: finish the turn and retry then. ACP document access remains separate; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}");
+            if !self.collections.permits(name) {
+                return Err(P2pToolError::ApplicationCollectionOutsideToolSP2P {
+                    name: name.to_string(),
+                });
+            }
             crate::agent::p2p_reconcile::resolve_embedded_collection_id(&self.node, name)?
-                .with_context(|| format!("collection {name} is unavailable on this node"))?;
+                .ok_or_else(|| P2pToolError::CollectionUnavailableNode {
+                    name: name.to_string(),
+                })?;
         }
         Ok(collections)
     }
@@ -394,22 +504,30 @@ impl P2pTool {
                     json!({"action":"help"}),
                     |resource| json!({"action":"help","topic":resource}),
                 );
-                bail!("unknown P2P command; next call: p2p {next}")
+                return Err(P2pToolError::UnknownP2PCommandNextCallP2p {
+                    next: next.to_string(),
+                });
             }
         };
-        ensure!(
-            options.keys().all(|key| allowed.contains(&key.as_str())),
-            "unexpected field for action {}; accepted fields: {allowed:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"{}\"}}", words.join("_"), words[0]
-        );
+        if !(options.keys().all(|key| allowed.contains(&key.as_str()))) {
+            return Err(P2pToolError::UnexpectedFieldActionAcceptedFieldsNext {
+                detail: words.join("_").to_string(),
+                allowed: format!("{:?}", allowed),
+                detail2: words[0].to_string(),
+            });
+        }
         let text = |key: &str| {
             options
                 .get(key)
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
-                .with_context(|| format!("{key} must be a nonempty string; next call: p2p {{\"action\":\"help\",\"topic\":\"{}\"}}", words[0]))
+                .ok_or_else(|| P2pToolError::MustNonemptyStringNextCallP2p {
+                    key: key.to_string(),
+                    detail: words[0].to_string(),
+                })
         };
         let details = options.get("details").map_or(Ok(false), |value| {
-            value.as_bool().context("details must be true or false")
+            value.as_bool().ok_or(P2pToolError::DetailsMustTrueFalse)
         })?;
         match words.as_slice() {
             ["status"] => {
@@ -447,10 +565,8 @@ impl P2pTool {
             ["network", "get"] => {
                 let peer = text("peer_id")?;
                 defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-                    .map_err(anyhow::Error::msg)
-                    .context(
-                        "invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}",
-                    )?;
+                    .map_err(|error| crate::agent::p2p_reconcile::error::TransportFailure(error.to_string()))
+                    .map_err(P2pToolError::InvalidTransportPeerIDNextCall)?;
                 let peers = self
                     .rows(
                         "PeerRegistry",
@@ -472,8 +588,9 @@ impl P2pTool {
             ["pairings", "list" | "get"] => {
                 let peer = (words[1] == "get").then(|| text("peer_id")).transpose()?;
                 if let Some(peer) = peer {
-                    defra_p2p_adapter::TransportPeerId::new(peer.to_owned()).map_err(anyhow::Error::msg)
-                        .context("invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}")?;
+                    defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
+                        .map_err(|error| crate::agent::p2p_reconcile::error::TransportFailure(error.to_string()))
+                        .map_err(P2pToolError::InvalidTransportPeerIDNextCall)?;
                 }
                 let filter = peer.map(|peer| format!("{{peer_id: {{_eq: {}}}}}", quoted(peer)));
                 let desired = self
@@ -548,26 +665,27 @@ impl P2pTool {
                 ))
             }
             ["enrollment", "offer"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                if !self.mutate {
+                    return Err(P2pToolError::P2PMutationsDisabledToolGrant);
+                }
                 let projection = GraphqlEnrollmentStore::new(self.node.clone(), actor.clone())
                     .load_projection()
                     .await?;
-                ensure!(
-                    projection.conflict.is_none(),
-                    "enrollment authority is conflicted"
-                );
-                let network_id = projection.network_id.context(
-                    "this node has no enrollment Network; the running server creates it at startup",
-                )?;
-                let p2p = crate::identity::node_p2p(&self.node)
-                    .context("P2P is not running on this node")?;
+                if !projection.conflict.is_none() {
+                    return Err(P2pToolError::EnrollmentAuthorityConflicted);
+                }
+                let network_id = projection
+                    .network_id
+                    .ok_or(P2pToolError::NodeHasNoEnrollmentNetworkRunning)?;
+                let p2p =
+                    crate::identity::node_p2p(&self.node).ok_or(P2pToolError::P2PNotRunningNode)?;
                 let validity = options.get("valid_for_secs").map_or(
                     Ok(crate::agent::p2p_reconcile::enrollment_offer::DEFAULT_OFFER_VALIDITY),
                     |value| {
                         value
                             .as_i64()
                             .map(chrono::Duration::seconds)
-                            .context("valid_for_secs must be a whole number of seconds")
+                            .ok_or(P2pToolError::ValidSecsMustWholeNumberSeconds)
                     },
                 )?;
                 let did = actor.did().to_owned();
@@ -606,7 +724,9 @@ impl P2pTool {
                 ))
             }
             ["enrollment", "request"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                if !self.mutate {
+                    return Err(P2pToolError::P2PMutationsDisabledToolGrant);
+                }
                 let request =
                     crate::agent::p2p_reconcile::enrollment_candidate::request_enrollment(
                         &self.node,
@@ -621,19 +741,29 @@ impl P2pTool {
                 ))
             }
             ["enrollment", operation @ ("approve" | "deny" | "revoke")] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                if !self.mutate {
+                    return Err(P2pToolError::P2PMutationsDisabledToolGrant);
+                }
                 let store = GraphqlEnrollmentStore::new(self.node.clone(), actor);
                 let id = text("request_id")?;
                 let result = match *operation {
-                    "approve" => store.decide_request(id, EnrollmentDecisionKind::Approved).await,
-                    "deny" => store.decide_request(id, EnrollmentDecisionKind::Denied).await,
+                    "approve" => {
+                        store
+                            .decide_request(id, EnrollmentDecisionKind::Approved)
+                            .await
+                    }
+                    "deny" => {
+                        store
+                            .decide_request(id, EnrollmentDecisionKind::Denied)
+                            .await
+                    }
                     _ => store.revoke_request(id).await,
                 }
                 .map_err(|error| {
-                    if format!("{}", ErrorChain(error.as_ref())).contains("challenge is reused") {
-                        error.context("an offer token is single use: two nodes requested with one offer, so both requests are refused. Each joining node needs its own fresh offer; mint one per node and have each re-request; next call: p2p {\"action\":\"enrollment_offer\"}")
+                    if format!("{}", ErrorChain(&error)).contains("challenge is reused") {
+                        P2pToolError::OfferTokenSingleUseTwoNodes(error)
                     } else {
-                        error
+                        error.into()
                     }
                 })?;
                 Ok(reply(
@@ -658,7 +788,9 @@ impl P2pTool {
                         json!({"enrollment_request_id":active.request.request_id}),
                     ));
                 }
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                if !self.mutate {
+                    return Err(P2pToolError::P2PMutationsDisabledToolGrant);
+                }
                 let fields = format!("{{peer_id: {}, node_did: {}, collections: {}, replicator_addresses: {}, template: \"app-collections\", source: {}}}",
                     quoted(peer), quoted(actor.did()), crate::graphql::graphql_string_list_literal(collections.iter().map(String::as_str)), crate::graphql::graphql_string_list_literal([active.request.candidate_ticket.as_str()]), quoted(OVERLAY_SOURCE));
                 let unchanged = self
@@ -671,7 +803,9 @@ impl P2pTool {
                 ))
             }
             ["pairings", "revoke"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                if !self.mutate {
+                    return Err(P2pToolError::P2PMutationsDisabledToolGrant);
+                }
                 let peer = text("peer_id")?;
                 let unchanged = self.mutate_overlay(peer, None, None).await?;
                 Ok(reply(
@@ -681,7 +815,9 @@ impl P2pTool {
                 ))
             }
             ["sync", "documents"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                if !self.mutate {
+                    return Err(P2pToolError::P2PMutationsDisabledToolGrant);
+                }
                 let peer = text("peer_id")?;
                 self.enrollment(peer, None).await?;
                 let collection = text("collection")?;
@@ -691,14 +827,14 @@ impl P2pTool {
                     options
                         .get("doc_ids")
                         .cloned()
-                        .context("doc_ids is required")?,
+                        .ok_or(P2pToolError::DocIdsRequired)?,
                 )?;
-                ensure!(
-                    !ids.is_empty()
-                        && ids.len() <= 16
-                        && ids.iter().all(|id| !id.trim().is_empty()),
-                    "sync requires 1 through 16 nonempty document IDs"
-                );
+                if !(!ids.is_empty()
+                    && ids.len() <= 16
+                    && ids.iter().all(|id| !id.trim().is_empty()))
+                {
+                    return Err(P2pToolError::SyncRequiresThroughNonemptyDocumentIDs);
+                }
                 let result = admin
                     .sync_documents(collection, &ids, Some(Duration::from_secs(10)))
                     .await;
@@ -708,17 +844,16 @@ impl P2pTool {
                 let observed = ConfigAccess::local(self.node.clone())
                     .execute(&format!("{{{collection}(docIDs: {doc_ids}) {{_docID}}}}"))
                     .await?;
-                ensure!(
-                    observed
-                        .get("errors")
-                        .is_none_or(|errors| errors.is_null()
-                            || errors.as_array().is_some_and(Vec::is_empty)),
-                    "P2P document observation failed: {}",
-                    observed["errors"]
-                );
+                if !(observed.get("errors").is_none_or(|errors| {
+                    errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
+                })) {
+                    return Err(P2pToolError::P2PDocumentObservationFailed {
+                        detail: observed["errors"].to_string(),
+                    });
+                }
                 let present = observed["data"][collection]
                     .as_array()
-                    .context("P2P response omitted documents")?;
+                    .ok_or(P2pToolError::P2PResponseOmittedDocuments)?;
                 let arrived: BTreeSet<_> = present
                     .iter()
                     .filter_map(|r| r["_docID"].as_str())
@@ -817,7 +952,7 @@ impl Tool for P2pTool {
             ));
         }
         let result = self.call_one(argv, options).await.map_err(|error| {
-            let message = format!("{}", ErrorChain(error.as_ref()));
+            let message = format!("{}", ErrorChain(&error));
             P2pError(if message.contains("next call:") {
                 message
             } else {

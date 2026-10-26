@@ -501,7 +501,8 @@ pub(super) async fn fail_routed_request(
                     &reason,
                     "terminalize_invalid_execution_origin_before_route_rejection",
                 )
-                .await;
+                .await
+                .map_err(anyhow::Error::from);
             }
         };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(

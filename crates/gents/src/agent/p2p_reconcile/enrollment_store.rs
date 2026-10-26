@@ -1,9 +1,9 @@
+use crate::agent::p2p_reconcile::error::TransportFailure;
 use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::{P2pDocumentRequest, TransportPeerId};
@@ -31,6 +31,8 @@ use super::enrollment::{
 };
 use super::error::P2pReconcileError;
 use super::graphql_helpers::rows;
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 const ENROLLMENT_DOCUMENT_QUERY: &str = r#"{
   Network { network_id admin_did display_name default_template created_at admin_sig }
@@ -225,20 +227,25 @@ impl GraphqlEnrollmentStore {
     ) -> Result<EnrollmentDecisionOutcome> {
         let _guard = self.decision_lock.lock().await;
         let projection = self.load_projection().await?;
-        anyhow::ensure!(
-            projection.conflict.is_none(),
-            "enrollment authority is conflicted: {}",
-            projection.conflict.as_deref().unwrap_or("unknown conflict")
-        );
+        if !projection.conflict.is_none() {
+            return Err(P2pReconcileError::EnrollmentAuthorityConflicted {
+                detail: projection
+                    .conflict
+                    .as_deref()
+                    .unwrap_or("unknown conflict")
+                    .to_string(),
+            });
+        }
         if let Some(active) = projection
             .active
             .iter()
             .find(|active| active.request.request_id == request_id)
         {
-            anyhow::ensure!(
-                kind == WireDecisionKind::Approved,
-                "request {request_id} is already approved"
-            );
+            if kind != WireDecisionKind::Approved {
+                return Err(P2pReconcileError::RequestAlreadyApproved {
+                    request_id: request_id.to_string(),
+                });
+            }
             let request = active.request.clone();
             let decision_doc_id = active.decision_doc_id.clone();
             let revision_doc_id = active.revision_doc_id.clone();
@@ -265,10 +272,11 @@ impl GraphqlEnrollmentStore {
             .iter()
             .find(|denied| denied.request.request_id == request_id)
         {
-            anyhow::ensure!(
-                kind == WireDecisionKind::Denied,
-                "request {request_id} is already denied"
-            );
+            if kind != WireDecisionKind::Denied {
+                return Err(P2pReconcileError::RequestAlreadyDenied {
+                    request_id: request_id.to_string(),
+                });
+            }
             let request = denied.request.clone();
             let decision_doc_id = denied.decision_doc_id.clone();
             drop(_guard);
@@ -297,10 +305,9 @@ impl GraphqlEnrollmentStore {
                 .unwrap_or(1),
             WireDecisionKind::Denied => 0,
         };
-        anyhow::ensure!(
-            sequence <= i64::MAX as u64,
-            "authorization sequence exhausted the DefraDB Int range for this member"
-        );
+        if !(sequence <= i64::MAX as u64) {
+            return Err(P2pReconcileError::AuthorizationSequenceExhaustedDefraDBIntRange);
+        }
         let decided_at = decided_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let authorization_expires_at = match kind {
             WireDecisionKind::Approved => (DateTime::parse_from_rfc3339(&decided_at)?
@@ -384,7 +391,7 @@ impl GraphqlEnrollmentStore {
                     )
                 })
                 .transpose()?;
-            Ok::<_, anyhow::Error>((decision_doc_id, revision_doc_id))
+            Ok::<_, P2pReconcileError>((decision_doc_id, revision_doc_id))
         }
         .await;
         let (decision_doc_id, revision_doc_id) = match committed {
@@ -392,12 +399,12 @@ impl GraphqlEnrollmentStore {
             Err(commit_error) => self
                 .recover_exact_terminal(&decision, revision.as_ref())
                 .await
-                .with_context(|| {
-                    format!(
-                        "enrollment terminal commit was not observably recovered after: {}",
-                        ErrorChain(commit_error.as_ref())
-                    )
-                })?,
+                .map_err(
+                    |source| P2pReconcileError::EnrollmentTerminalCommitWasNotObservably {
+                        detail: ErrorChain(&commit_error).to_string(),
+                        source: Box::new(source),
+                    },
+                )?,
         };
         drop(_guard);
         let delivery_pending = match &revision_doc_id {
@@ -430,11 +437,15 @@ impl GraphqlEnrollmentStore {
     pub async fn revoke_request(&self, request_id: &str) -> Result<EnrollmentDecisionOutcome> {
         let guard = self.decision_lock.lock().await;
         let projection = self.load_projection().await?;
-        anyhow::ensure!(
-            projection.conflict.is_none(),
-            "enrollment authority is conflicted: {}",
-            projection.conflict.as_deref().unwrap_or("unknown conflict")
-        );
+        if !projection.conflict.is_none() {
+            return Err(P2pReconcileError::EnrollmentAuthorityConflicted {
+                detail: projection
+                    .conflict
+                    .as_deref()
+                    .unwrap_or("unknown conflict")
+                    .to_string(),
+            });
+        }
         if let Some(revoked) = projection
             .revoked
             .iter()
@@ -463,7 +474,9 @@ impl GraphqlEnrollmentStore {
             .iter()
             .find(|active| active.request.request_id == request_id)
             .cloned()
-            .with_context(|| format!("request {request_id} has no current approval to revoke"))?;
+            .ok_or_else(|| P2pReconcileError::RequestHasNoCurrentApprovalRevoke {
+                request_id: request_id.to_string(),
+            })?;
         let scope = (
             active.request.network_id.clone(),
             active.request.candidate_did.clone(),
@@ -473,10 +486,9 @@ impl GraphqlEnrollmentStore {
             .get(&scope)
             .copied()
             .unwrap_or_else(|| active.revision.sequence.saturating_add(1));
-        anyhow::ensure!(
-            sequence > active.revision.sequence && sequence <= i64::MAX as u64,
-            "authorization revocation sequence is invalid or exhausted"
-        );
+        if !(sequence > active.revision.sequence && sequence <= i64::MAX as u64) {
+            return Err(P2pReconcileError::AuthorizationRevocationSequenceInvalidExhausted);
+        }
         let kind = WireRevisionKind::Revoked;
         let issued_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut revision = AuthorizationRevisionRecord {
@@ -526,12 +538,11 @@ impl GraphqlEnrollmentStore {
                     .iter()
                     .find(|candidate| candidate.revision == revision)
                     .map(|candidate| candidate.revision_doc_id.clone())
-                    .with_context(|| {
-                        format!(
-                            "revocation commit was not observably recovered after: {}",
-                            ErrorChain(&commit_error)
-                        )
-                    })?
+                    .ok_or_else(
+                        || P2pReconcileError::RevocationCommitWasNotObservablyRecovered {
+                            detail: ErrorChain(&commit_error).to_string(),
+                        },
+                    )?
             }
         };
         drop(guard);
@@ -556,45 +567,45 @@ impl GraphqlEnrollmentStore {
         &self,
         request: &EnrollmentRequestRecord,
     ) -> Result<DateTime<Utc>> {
-        let p2p = crate::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+        let p2p = crate::identity::node_p2p(&self.node)
+            .ok_or(P2pReconcileError::RuntimeP2PUnavailable)?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await
-            .context("timed out reading the enrollment server peer identity")?
-            .map_err(anyhow::Error::msg)?;
-        anyhow::ensure!(
-            local_peer == request.server_peer,
-            "enrollment request targets a different server transport peer"
-        );
+            .map_err(P2pReconcileError::TimedOutReadingEnrollmentServerPeer)?
+            .map_err(|error| TransportFailure(error.to_string()))?;
+        if local_peer != request.server_peer {
+            return Err(P2pReconcileError::EnrollmentRequestTargetsDifferentServerTransport);
+        }
         timeout(
             Duration::from_secs(20),
             p2p.connect_peer(&request.candidate_ticket),
         )
         .await
-        .context("timed out connecting to enrollment candidate")?
-        .map_err(anyhow::Error::msg)?;
+        .map_err(P2pReconcileError::TimedOutConnectingEnrollmentCandidate)?
+        .map_err(|error| TransportFailure(error.to_string()))?;
         let peer =
-            TransportPeerId::new(request.candidate_peer.clone()).map_err(anyhow::Error::msg)?;
+            TransportPeerId::new(request.candidate_peer.clone()).map_err(|error| TransportFailure(error.to_string()))?;
         let resolved = timeout(Duration::from_secs(20), p2p.resolve_peer_identity(&peer))
             .await
-            .context("timed out resolving enrollment candidate identity")?
-            .map_err(anyhow::Error::msg)?
-            .context("enrollment candidate has no authenticated identity")?;
-        anyhow::ensure!(
-            resolved.to_string() == request.candidate_did,
-            "candidate transport identity does not match its signed request DID"
-        );
+            .map_err(P2pReconcileError::TimedOutResolvingEnrollmentCandidateIdentity)?
+            .map_err(|error| TransportFailure(error.to_string()))?
+            .ok_or(P2pReconcileError::EnrollmentCandidateHasNoAuthenticatedIdentity)?;
+        if resolved.to_string() != request.candidate_did {
+            return Err(P2pReconcileError::CandidateTransportIdentityDoesNotMatch);
+        }
         let now = Utc::now();
         let issued_at = DateTime::parse_from_rfc3339(&request.issued_at)
-            .context("parsing enrollment request issued_at")?
+            .map_err(P2pReconcileError::ParsingEnrollmentRequestIssued)?
             .with_timezone(&Utc);
         let expires_at = DateTime::parse_from_rfc3339(&request.expires_at)
-            .context("parsing enrollment request expires_at")?
+            .map_err(P2pReconcileError::ParsingEnrollmentRequestExpires)?
             .with_timezone(&Utc);
-        anyhow::ensure!(issued_at <= now, "enrollment request is not yet valid");
-        anyhow::ensure!(
-            now <= expires_at,
-            "enrollment request expired during approval"
-        );
+        if issued_at > now {
+            return Err(P2pReconcileError::EnrollmentRequestNotYetValid);
+        }
+        if now > expires_at {
+            return Err(P2pReconcileError::EnrollmentRequestExpiredDuringApproval);
+        }
         Ok(now)
     }
 
@@ -610,7 +621,7 @@ impl GraphqlEnrollmentStore {
                     .active
                     .iter()
                     .find(|active| active.decision == *decision && active.revision == *revision)
-                    .context("exact committed approval pair is absent")?;
+                    .ok_or(P2pReconcileError::ExactCommittedApprovalPairAbsent)?;
                 Ok((
                     active.decision_doc_id.clone(),
                     Some(active.revision_doc_id.clone()),
@@ -621,7 +632,7 @@ impl GraphqlEnrollmentStore {
                     .denied
                     .iter()
                     .find(|denied| denied.decision == *decision)
-                    .context("exact committed denial is absent")?;
+                    .ok_or(P2pReconcileError::ExactCommittedDenialAbsent)?;
                 Ok((denied.decision_doc_id.clone(), None))
             }
         }
@@ -636,14 +647,13 @@ impl GraphqlEnrollmentStore {
             return Ok(doc_id.clone());
         }
         let current = self.load_projection().await?;
-        anyhow::ensure!(
-            current.active.iter().any(|candidate| {
-                candidate.request == active.request
-                    && candidate.decision == active.decision
-                    && candidate.revision == active.revision
-            }),
-            "authorization generation expired or changed before route receipt publication"
-        );
+        if !(current.active.iter().any(|candidate| {
+            candidate.request == active.request
+                && candidate.decision == active.decision
+                && candidate.revision == active.revision
+        })) {
+            return Err(P2pReconcileError::AuthorizationGenerationExpiredChangedBeforeRoute);
+        }
         let direction = WireReceiptDirection::ClientToServer;
         let mut receipt = EnrollmentRouteReceiptRecord {
             protocol_version: ENROLLMENT_PROTOCOL_VERSION,
@@ -692,11 +702,8 @@ impl GraphqlEnrollmentStore {
                     .iter()
                     .find(|candidate| candidate.route_receipt.as_ref() == Some(&receipt))
                     .and_then(|candidate| candidate.route_receipt_doc_id.clone())
-                    .with_context(|| {
-                        format!(
-                            "route receipt commit was not observably recovered after: {}",
-                            ErrorChain(&commit_error)
-                        )
+                    .ok_or_else(|| P2pReconcileError::RouteReceiptCommitWasNotObservably {
+                        detail: ErrorChain(&commit_error).to_string(),
                     })
             }
         }
@@ -736,10 +743,10 @@ impl GraphqlEnrollmentStore {
         let delivery = async {
             p2p.connect_peer(&request.candidate_ticket)
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(|error| TransportFailure(error.to_string()))?;
             p2p.push_documents_to_peer(&request.candidate_peer, documents)
                 .await
-                .map_err(anyhow::Error::msg)
+                .map_err(|error| TransportFailure(error.to_string()))
         };
         match timeout(Duration::from_secs(20), delivery).await {
             Ok(Ok(())) => false,
@@ -815,7 +822,7 @@ impl GraphqlEnrollmentStore {
                 self.fail_closed.record(Some(if network_rows.is_empty() {
                     FailClosed::NoNetwork
                 } else {
-                    FailClosed::Authority(ErrorChain(error.as_ref()).to_string())
+                    FailClosed::Authority(ErrorChain(&error).to_string())
                 }));
                 Ok(EnrollmentProjection::conflicted(network_id, error))
             }
@@ -829,19 +836,21 @@ impl GraphqlEnrollmentStore {
         now: DateTime<Utc>,
     ) -> Result<EnrollmentProjection> {
         let [network_row] = network_rows else {
-            anyhow::bail!("expected exactly one Network, found {}", network_rows.len());
+            return Err(P2pReconcileError::ExpectedExactlyOneNetworkFound {
+                network_rows_len: network_rows.len().to_string(),
+            });
         };
         let network = network_row.to_record()?;
-        anyhow::ensure!(
-            network.admin_did == self.identity.did(),
-            "Network admin does not match the local runtime identity"
-        );
-        anyhow::ensure!(
-            self.identity
-                .verify(&network.admin_did, &network.signing_payload(), &network.sig)
-                .await?,
-            "Network signature is invalid"
-        );
+        if network.admin_did != self.identity.did() {
+            return Err(P2pReconcileError::NetworkAdminDoesNotMatchLocal);
+        }
+        if !(self
+            .identity
+            .verify(&network.admin_did, &network.signing_payload(), &network.sig)
+            .await?)
+        {
+            return Err(P2pReconcileError::NetworkSignatureInvalid);
+        }
 
         let mut scoped_conflicts = BTreeMap::<(String, String), Vec<String>>::new();
         let mut request_conflicts = BTreeMap::<String, Vec<String>>::new();
@@ -905,7 +914,7 @@ impl GraphqlEnrollmentStore {
                 Err(error) => add_request_conflict(
                     &mut request_conflicts,
                     &request_id,
-                    format!("invalid enrollment request: {}", ErrorChain(error.as_ref())),
+                    format!("invalid enrollment request: {}", ErrorChain(&error)),
                 ),
             }
         }
@@ -1011,8 +1020,10 @@ impl GraphqlEnrollmentStore {
                         &record.admin_sig,
                     )
                     .await?;
-                anyhow::ensure!(signed, "enrollment decision signature is invalid");
-                Ok::<_, anyhow::Error>(VerifiedDecision {
+                if !signed {
+                    return Err(P2pReconcileError::EnrollmentDecisionSignatureInvalid);
+                }
+                Ok::<_, P2pReconcileError>(VerifiedDecision {
                     doc_id: row.doc_id,
                     record,
                     signed,
@@ -1033,7 +1044,7 @@ impl GraphqlEnrollmentStore {
                         &request_id,
                         format!(
                             "invalid enrollment decision: {}",
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         ),
                     );
                     tracing::warn!(?scope, request_id, error = %error, "scoped invalid enrollment decision");
@@ -1128,8 +1139,10 @@ impl GraphqlEnrollmentStore {
                         &record.admin_sig,
                     )
                     .await?;
-                anyhow::ensure!(signed, "authorization revision signature is invalid");
-                Ok::<_, anyhow::Error>(VerifiedRevision {
+                if !signed {
+                    return Err(P2pReconcileError::AuthorizationRevisionSignatureInvalid);
+                }
+                Ok::<_, P2pReconcileError>(VerifiedRevision {
                     doc_id: row.doc_id,
                     record,
                     signed,
@@ -1238,8 +1251,10 @@ impl GraphqlEnrollmentStore {
                         &record.admin_sig,
                     )
                     .await?;
-                anyhow::ensure!(signed, "enrollment route receipt signature is invalid");
-                Ok::<_, anyhow::Error>(VerifiedRouteReceipt {
+                if !signed {
+                    return Err(P2pReconcileError::EnrollmentRouteReceiptSignatureInvalid);
+                }
+                Ok::<_, P2pReconcileError>(VerifiedRouteReceipt {
                     doc_id: row.doc_id,
                     record,
                 })
@@ -1505,28 +1520,26 @@ impl GraphqlEnrollmentStore {
     ) -> Result<VerifiedRequest> {
         let record = row.to_record()?;
         let offer = decode_offer(&record.offer_token)?;
-        anyhow::ensure!(
-            offer.schema_fingerprint == enrollment_schema_fingerprint(),
-            "enrollment offer schema fingerprint mismatch"
-        );
-        anyhow::ensure!(
-            offer.network_id == network.network_id,
-            "offer network mismatch"
-        );
-        anyhow::ensure!(offer.admin_did == network.admin_did, "offer admin mismatch");
+        if offer.schema_fingerprint != enrollment_schema_fingerprint() {
+            return Err(P2pReconcileError::EnrollmentOfferSchemaFingerprintMismatch);
+        }
+        if offer.network_id != network.network_id {
+            return Err(P2pReconcileError::OfferNetworkMismatch);
+        }
+        if offer.admin_did != network.admin_did {
+            return Err(P2pReconcileError::OfferAdminMismatch);
+        }
         record.validate_against_offer(&offer)?;
         let (server_ticket_peer, _) = parse_public_peer_addr(&offer.server_ticket)
-            .context("parsing enrollment server ticket")?;
+            .map_err(P2pReconcileError::ParsingEnrollmentServerTicket)?;
         let (candidate_ticket_peer, _) = parse_public_peer_addr(&record.candidate_ticket)
-            .context("parsing enrollment candidate ticket")?;
-        anyhow::ensure!(
-            server_ticket_peer.to_string() == offer.server_peer,
-            "offer server ticket peer mismatch"
-        );
-        anyhow::ensure!(
-            candidate_ticket_peer.to_string() == record.candidate_peer,
-            "request candidate ticket peer mismatch"
-        );
+            .map_err(P2pReconcileError::ParsingEnrollmentCandidateTicket)?;
+        if server_ticket_peer.to_string() != offer.server_peer {
+            return Err(P2pReconcileError::OfferServerTicketPeerMismatch);
+        }
+        if candidate_ticket_peer.to_string() != record.candidate_peer {
+            return Err(P2pReconcileError::RequestCandidateTicketPeerMismatch);
+        }
         let offer_signed = self
             .identity
             .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)

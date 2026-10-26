@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-
 use super::error::P2pReconcileError;
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
@@ -32,6 +30,8 @@ use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 mod file_images;
 
@@ -120,18 +120,21 @@ async fn reconcile_hydration_tick(
     let pending = store
         .load_pending_requests()
         .await
-        .context("load pending session hydration requests")?;
+        .map_err(|error| P2pReconcileError::LoadPendingSessionHydrationRequests(Box::new(error)))?;
 
     let mut outcome = HydrationTickOutcome::default();
-    let mut first_error: Option<anyhow::Error> = None;
-    let mut record_error = |request_key: &str, error: anyhow::Error| {
+    let mut first_error: Option<P2pReconcileError> = None;
+    let mut record_error = |request_key: &str, error: P2pReconcileError| {
         tracing::warn!(
             request_key = %request_key,
             error = %error,
             "session hydration reconcile failed; continuing sweep"
         );
         if first_error.is_none() {
-            first_error = Some(error.context(format!("reconcile session hydration {request_key}")));
+            first_error = Some(P2pReconcileError::ReconcileSessionHydration {
+                request_key: request_key.to_string(),
+                source: Box::new(error),
+            });
         }
     };
     let mut admitted = Vec::new();
@@ -175,7 +178,7 @@ async fn admit_or_reject(
     let admission = store
         .load_admission(&request)
         .await
-        .context("load hydration admission")?;
+        .map_err(|error| P2pReconcileError::LoadHydrationAdmission(Box::new(error)))?;
     match decide_hydration(&request, &admission.catalog) {
         HydrationVerdict::Admit(_) => Ok(Some(AdmittedHydration {
             row,
@@ -216,7 +219,7 @@ async fn commit_rejection(
     match (terminal_write, modeled) {
         (Ok(()), HydrationApplyOutcome::Rejected { .. }) => Ok(()),
         (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
-            Err(error).context("mark session hydration rejected")
+            Err(error).map_err(|error| P2pReconcileError::MarkSessionHydrationRejected(Box::new(error)))
         }
         _ => unreachable!("hydration model diverged from rejected receipt commit"),
     }
@@ -235,11 +238,11 @@ async fn serve_admitted_request(
     } = admitted;
     let authorization = admission
         .authorization
-        .context("admitted hydration request has no authenticated enrollment fence")?;
+        .ok_or(P2pReconcileError::AdmittedHydrationRequestHasNoAuthenticated)?;
     let selection = store
         .load_selection(&request)
         .await
-        .context("load hydration selection")?;
+        .map_err(|error| P2pReconcileError::LoadHydrationSelection(Box::new(error)))?;
     let catalog = HydrationCatalog {
         documents: selection.documents,
         authorized_reference_closure: selection.authorized_reference_closure,
@@ -254,7 +257,7 @@ async fn serve_admitted_request(
     if !store
         .authorization_is_current(&request, &authorization)
         .await
-        .context("revalidate hydration authorization generation")?
+        .map_err(|error| P2pReconcileError::RevalidateHydrationAuthorizationGeneration(Box::new(error)))?
     {
         let detail = "authenticated enrollment authorization changed before hydration delivery";
         store.mark_rejected(&row, detail).await?;
@@ -279,7 +282,7 @@ async fn serve_admitted_request(
     if !store
         .authorization_is_current(&request, &authorization)
         .await
-        .context("revalidate hydration authorization at terminal commit")?
+        .map_err(|error| P2pReconcileError::RevalidateHydrationAuthorizationTerminalCommit(Box::new(error)))?
     {
         let detail = "authenticated enrollment authorization changed before hydration commit";
         store.mark_rejected(&row, detail).await?;
@@ -302,7 +305,7 @@ async fn serve_admitted_request(
             Ok(())
         }
         (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
-            Err(error).context("mark session hydration served")
+            Err(error).map_err(|error| P2pReconcileError::MarkSessionHydrationServed(Box::new(error)))
         }
         _ => unreachable!("hydration model diverged from served receipt commit"),
     }
@@ -472,10 +475,9 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
                     &[document.to_owned()],
                 )
                 .await?;
-            anyhow::ensure!(
-                acknowledged == [true],
-                "selected file image has not been acknowledged by the peer"
-            );
+            if acknowledged != [true] {
+                return Err(P2pReconcileError::SelectedFileImageHasNotBeen);
+            }
         }
         Ok(())
     }
@@ -592,10 +594,9 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             &mutation,
         )
         .await?;
-        anyhow::ensure!(
-            rows::<serde_json::Value>(&response, "update_SessionHydrationRequest")?.len() == 1,
-            "session hydration served commit lost its pending-row compare-and-set"
-        );
+        if !(rows::<serde_json::Value>(&response, "update_SessionHydrationRequest")?.len() == 1) {
+            return Err(P2pReconcileError::SessionHydrationServedCommitLostPending);
+        }
         Ok(())
     }
 
@@ -610,10 +611,9 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             &mutation,
         )
         .await?;
-        anyhow::ensure!(
-            rows::<serde_json::Value>(&response, "update_SessionHydrationRequest")?.len() == 1,
-            "session hydration rejected commit lost its pending-row compare-and-set"
-        );
+        if !(rows::<serde_json::Value>(&response, "update_SessionHydrationRequest")?.len() == 1) {
+            return Err(P2pReconcileError::SessionHydrationRejectedCommitLostPending);
+        }
         Ok(())
     }
 }
@@ -644,31 +644,33 @@ async fn load_hydration_selection(
                 request_row
                     .doc_id
                     .clone()
-                    .context("terminal hydration request omitted physical id")?,
+                    .ok_or(P2pReconcileError::TerminalHydrationRequestOmittedPhysicalId)?,
             );
             match request_row
                 .terminal_output
-                .context("terminal hydration request omitted terminal_output")?
+                .ok_or(P2pReconcileError::TerminalHydrationRequestOmittedTerminalOutput)?
             {
                 gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
                     let selected = root_headers
                         .iter()
                         .find(|row| row.doc_id == message_doc_id)
-                        .context("terminal hydration selection is missing its exact header")?;
-                    anyhow::ensure!(
-                        selected.message.session_id == request.session_id
-                            && selected.message.request_doc_id == request_row.doc_id,
-                        "terminal hydration selection does not belong to the exact request"
-                    );
-                    anyhow::ensure!(
-                        selected.message.role == gents_protocol::output::MessageRole::Assistant
-                            && matches!(
-                                selected.message.publication,
-                                gents_protocol::output::MessagePublication::RequestExecution { .. }
-                                    | gents_protocol::output::MessagePublication::RequestRecovery { .. }
-                            ),
-                        "terminal hydration selection is not an eligible assistant header"
-                    );
+                        .ok_or(P2pReconcileError::TerminalHydrationSelectionMissingExactHeader)?;
+                    if !(selected.message.session_id == request.session_id
+                        && selected.message.request_doc_id == request_row.doc_id)
+                    {
+                        return Err(P2pReconcileError::TerminalHydrationSelectionDoesNotBelong);
+                    }
+                    if !(selected.message.role == gents_protocol::output::MessageRole::Assistant
+                        && matches!(
+                            selected.message.publication,
+                            gents_protocol::output::MessagePublication::RequestExecution { .. }
+                                | gents_protocol::output::MessagePublication::RequestRecovery { .. }
+                        ))
+                    {
+                        return Err(
+                            P2pReconcileError::TerminalHydrationSelectionNotEligibleAssistant,
+                        );
+                    }
                     root_header_ids.push(message_doc_id);
                 }
                 gents_protocol::output::TerminalOutput::NoMessage => {}
@@ -786,7 +788,7 @@ async fn load_hydration_selection(
         requester_did: Some(&request.requester_did),
         session_id: &request.session_id,
     })
-    .context("build authorized canonical hydration closure")?;
+    .map_err(P2pReconcileError::BuildAuthorizedCanonicalHydrationClosure)?;
     for request_id in terminal_request_ids {
         let row = bases
             .iter()
@@ -795,7 +797,7 @@ async fn load_hydration_selection(
                     == gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest
                     && row.doc_id == request_id
             })
-            .context("terminal hydration request missing from authorized base rows")?;
+            .ok_or(P2pReconcileError::TerminalHydrationRequestMissingAuthorizedBase)?;
         documents.insert(HydrationDocument {
             collection: row.collection,
             doc_id: row.doc_id.clone(),
@@ -851,10 +853,9 @@ async fn load_origin_headers(
             .iter()
             .map(decode_transcript_message_row)
             .collect::<Result<Vec<_>, _>>()?;
-        anyhow::ensure!(
-            decoded.len() == 1,
-            "hydration origin is missing, denied, or conflicting"
-        );
+        if decoded.len() != 1 {
+            return Err(P2pReconcileError::HydrationOriginMissingDeniedConflicting);
+        }
         loaded.insert(doc_id);
         headers.extend(decoded);
     }
@@ -982,26 +983,24 @@ async fn load_referenced_bases(
         ), "query exact authorized hydration provenance").await?;
         if collection == SessionHydrationCollection::AgentToolCall {
             let found = rows::<gents_protocol::row::AgentToolCallRow>(&response, name)?;
-            anyhow::ensure!(
-                found.len() == 1,
-                "hydration provenance is missing, denied, or conflicting"
-            );
+            if found.len() != 1 {
+                return Err(P2pReconcileError::HydrationProvenanceMissingDeniedConflicting);
+            }
             for row in found {
                 observe_tool_call(row, bases, effects);
             }
             continue;
         }
         let found = rows::<TranscriptRow>(&response, name)?;
-        anyhow::ensure!(
-            found.len() == 1,
-            "hydration provenance is missing, denied, or conflicting"
-        );
+        if found.len() != 1 {
+            return Err(P2pReconcileError::HydrationProvenanceMissingDeniedConflicting);
+        }
         let row = found.into_iter().next().expect("length checked");
         bases.push(ScopedDocument {
             collection,
             doc_id: row
                 .doc_id
-                .context("hydration provenance omitted physical id")?,
+                .ok_or(P2pReconcileError::HydrationProvenanceOmittedPhysicalId)?,
             requester_did: row.requester_did.unwrap_or_default(),
             node_did: row.node_did.unwrap_or_default(),
             session_id: row.session_id.unwrap_or_default(),
@@ -1088,7 +1087,7 @@ impl GraphqlHydrationStore {
             .enrollment
             .fresh_authorization(&request.requester_did, &request.peer_id)
             .await
-            .context("load fresh authenticated enrollment authority for hydration")?;
+            .map_err(|error| P2pReconcileError::LoadFreshAuthenticatedEnrollmentAuthorityHydration(Box::new(error)))?;
         let session_id = escape_graphql_string(&request.session_id);
         let peer_id = escape_graphql_string(&request.peer_id);
         let query = hydration_admission_query(&session_id, &peer_id);
@@ -1161,10 +1160,9 @@ impl GraphqlHydrationStore {
             signer_did: self.identity.did().to_string(),
             signature: Vec::new(),
         };
-        anyhow::ensure!(
-            receipt.node_did == receipt.signer_did,
-            "hydration reconciler cannot sign for another agent"
-        );
+        if receipt.node_did != receipt.signer_did {
+            return Err(P2pReconcileError::HydrationReconcilerCannotSignAnotherAgent);
+        }
         receipt.signature = self.identity.sign(&receipt.signing_payload()?).await?;
         receipt.validate_shape()?;
         Ok(receipt)
@@ -1370,7 +1368,7 @@ mod tests {
                 )
                 .is_ok()
             {
-                anyhow::bail!("injected terminal write failure");
+                return Err(P2pReconcileError::InjectedTerminalWriteFailure);
             }
             self.served
                 .lock()
@@ -1388,7 +1386,7 @@ mod tests {
                 )
                 .is_ok()
             {
-                anyhow::bail!("injected terminal write failure");
+                return Err(P2pReconcileError::InjectedTerminalWriteFailure);
             }
             self.rejected
                 .lock()
@@ -1425,7 +1423,7 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                 == 0
             {
-                anyhow::bail!("temporary transport failure");
+                return Err(P2pReconcileError::TemporaryTransportFailure);
             }
             self.pushed
                 .lock()
@@ -1448,7 +1446,7 @@ mod tests {
                 .lock()
                 .expect("pushed lock")
                 .push((peer_id.to_string(), documents.transcript()));
-            anyhow::bail!("transport outcome unknown after dispatch")
+            return Err(P2pReconcileError::TransportOutcomeUnknownAfterDispatch);
         }
     }
 

@@ -1,10 +1,12 @@
-use anyhow::{Context, Result};
+use crate::agent::p2p_reconcile::error::P2pReconcileError;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 
 use super::enrollment_store::GraphqlEnrollmentStore;
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
+
+type Result<T, E = P2pReconcileError> = std::result::Result<T, E>;
 
 pub(super) struct AuthorScope<'a> {
     pub requester_did: &'a str,
@@ -58,10 +60,10 @@ pub(super) async fn current_admission(
         }}"#)).await?;
         let desired = response["data"]["PeerPairingDesired"]
             .as_array()
-            .context("missing desired routes")?;
+            .ok_or(P2pReconcileError::MissingDesiredRoutes)?;
         let applied = response["data"]["PeerPairingApplied"]
             .as_array()
-            .context("missing applied routes")?;
+            .ok_or(P2pReconcileError::MissingAppliedRoutes)?;
         let route = desired
             .iter()
             .any(|row| row["node_did"].as_str() == Some(scope.node_did))
