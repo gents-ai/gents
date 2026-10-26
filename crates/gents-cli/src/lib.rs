@@ -393,6 +393,8 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 ];
 pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
+pub use commands::prepare_runtime::unlock_runtime_keys;
+
 /// Embedded editor launches must never trigger a system authentication dialog.
 /// Explicit credential access remains with the existing browser or store-unlock owner.
 pub fn run_cli_without_keychain_prompts() -> Result<()> {

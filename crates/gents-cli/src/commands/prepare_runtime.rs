@@ -25,6 +25,9 @@ const STARTUP_WAIT: Duration = Duration::from_secs(60);
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONTROL_RECEIPT: usize = 64 * 1024;
 
+mod unlock;
+pub use unlock::unlock_runtime_keys;
+
 #[cfg(test)]
 mod tests;
 

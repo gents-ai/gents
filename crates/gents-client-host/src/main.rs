@@ -22,6 +22,8 @@ struct Args {
     describe: bool,
     #[arg(long, hide = true, conflicts_with_all = ["home", "serve", "stdio", "editor_store", "allow_keychain_prompts", "describe"])]
     editor_checkpoints: Option<PathBuf>,
+    #[arg(long, hide = true, conflicts_with_all = ["home", "serve", "stdio", "editor_store", "allow_keychain_prompts", "describe", "editor_checkpoints"])]
+    unlock_runtime_keys: Option<PathBuf>,
 }
 
 mod editor_checkpoints;
@@ -41,6 +43,9 @@ fn main() -> Result<()> {
         return gents_server::run_cli_without_keychain_prompts();
     }
     let args = Args::parse();
+    if let Some(home) = &args.unlock_runtime_keys {
+        return gents_server::unlock_runtime_keys(home);
+    }
     if let Some(directory) = args.editor_checkpoints {
         return editor_checkpoints::serve(
             &directory,
@@ -79,6 +84,7 @@ async fn client_main(args: Args) -> Result<()> {
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
                 "localRuntimeCli": true,
+                "runtimeKeyUnlock": true,
                 "runtimePreparationVersion": gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION,
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
                 "editorCheckpointVersion": editor_checkpoints::VERSION,
