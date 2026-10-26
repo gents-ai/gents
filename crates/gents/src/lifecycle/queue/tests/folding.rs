@@ -961,12 +961,9 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             .await
             .unwrap_err();
         assert!(
-            matches!(
-                error.downcast_ref::<super::super::QueueError>(),
-                Some(super::super::QueueError::PendingInputChanged(_))
-            ),
+            error.is_pending_input_changed(),
             "{name}: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let rows = fold_rows(&db.node, session_id).await;
         for entry in &expected.pending {

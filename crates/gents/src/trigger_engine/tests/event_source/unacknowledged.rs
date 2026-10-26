@@ -119,7 +119,7 @@ impl Delivery {
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
-                    Ok::<_, anyhow::Error>(
+                    Ok::<_, crate::trigger_engine::TriggerEngineError>(
                         crate::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
                             owner,
@@ -389,7 +389,7 @@ impl MaterializerHandle for PanicMaterializer {
         _durable_fire_key: &str,
         _delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
         _prepared_ids: Option<(&str, &str)>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         Box::pin(async { panic!("injected materializer panic") })
     }
 
@@ -398,7 +398,7 @@ impl MaterializerHandle for PanicMaterializer {
         _node_did: &str,
         _trigger_id: &str,
         _excluded_request_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         Box::pin(async { Ok(false) })
     }
 
@@ -407,7 +407,7 @@ impl MaterializerHandle for PanicMaterializer {
         _node_did: &str,
         _trigger_id: &str,
         _excluded_request_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
         Box::pin(async { Ok(0) })
     }
 
@@ -415,7 +415,7 @@ impl MaterializerHandle for PanicMaterializer {
         &self,
         _task: &crate::runtime_snapshot::ResolvedTask,
         _durable_fire_key: &str,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send + '_>> {
         Box::pin(async { Ok(None) })
     }
 
@@ -424,7 +424,7 @@ impl MaterializerHandle for PanicMaterializer {
         _node_did: &str,
         _trigger_id: &str,
         _durable_fire_key: &str,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         Box::pin(async { Ok(false) })
     }
 }

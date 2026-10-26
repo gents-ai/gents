@@ -1612,9 +1612,9 @@ pub(crate) mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                format!("{}", ErrorChain(error.as_ref())).contains("no stored progress"),
+                format!("{}", ErrorChain(&error)).contains("no stored progress"),
                 "{settlement:?}: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             );
             assert_eq!(
                 stored_row(&admission).await["lifecycle_state"],

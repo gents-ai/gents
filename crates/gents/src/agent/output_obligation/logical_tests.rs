@@ -423,12 +423,12 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                         !case["authenticated_child"].as_bool().unwrap(),
                         "{}: unexpected ancestry error {}",
                         case["name"],
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     );
                     assert!(
                         error.to_string().contains("parent is absent"),
                         "{}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     );
                     "reject"
                 }
@@ -439,12 +439,12 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                             !case["count_valid"].as_bool().unwrap(),
                             "{}: unexpected gate error {}",
                             case["name"],
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         );
                         assert!(
                             error.to_string().contains("disagree"),
                             "{}",
-                            ErrorChain(error.as_ref())
+                            ErrorChain(&error)
                         );
                         "reject"
                     }
@@ -537,7 +537,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
         assert!(
             error.to_string().contains("expected_count_field"),
             "{reason}: unexpected error {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         node.shutdown().await;
     }
@@ -647,12 +647,12 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
     assert!(
         error.to_string().contains("disagree"),
         "the per-tool count conflict must be detected as a disagreement: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert!(
         !error.to_string().contains("unique physical tool binding"),
         "two same-tool writes must resolve individually, not surface as name ambiguity: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     node.shutdown().await;
 }

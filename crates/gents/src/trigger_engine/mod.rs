@@ -152,7 +152,7 @@ fn materialize_skip(error: &TriggerEngineError) -> Option<&MaterializeSkip> {
     }
 }
 
-fn materialize_duplicate(error: &TriggerEngineError) -> Option<&MaterializeDuplicate> {
+pub(crate) fn materialize_duplicate(error: &TriggerEngineError) -> Option<&MaterializeDuplicate> {
     use crate::trigger_engine::production_materializer::MaterializerError;
     match error {
         TriggerEngineError::MaterializeDuplicate(duplicate) => Some(duplicate),

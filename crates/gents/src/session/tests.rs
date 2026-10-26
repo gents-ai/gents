@@ -438,11 +438,11 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     );
     let loser = left.err().unwrap_or_else(|| right.unwrap_err());
     assert!(
-        ErrorChain(loser.as_ref())
+        ErrorChain(&loser)
             .to_string()
             .contains("stale compaction generation"),
         "unexpected loser error: {}",
-        ErrorChain(loser.as_ref())
+        ErrorChain(&loser)
     );
 
     let entries = load_compaction_entries(&node, "session-race", "did:test:test", None)

@@ -248,7 +248,7 @@ impl MaterializerHandle for SpyMaterializer {
         durable_fire_key: &str,
         delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
         _prepared_ids: Option<(&str, &str)>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         let entry = (
             trigger_id.map(str::to_owned),
             trigger_kind,
@@ -336,7 +336,7 @@ impl MaterializerHandle for SpyMaterializer {
         node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         let set = self.nonterminal_for.clone();
         let dids = self.gate_dids.clone();
         let owner = node_did.to_owned();
@@ -356,7 +356,7 @@ impl MaterializerHandle for SpyMaterializer {
         node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
         let set = self.nonterminal_for.clone();
         let dids = self.supersede_dids.clone();
         let calls = self.supersede_calls.clone();
@@ -378,7 +378,7 @@ impl MaterializerHandle for SpyMaterializer {
         &self,
         task: &ResolvedTask,
         durable_fire_key: &str,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send + '_>> {
         let request_ids = self.materialized_request_ids.clone();
         let request_id = crate::goal::task_goal_fire_identity(
             "did:test:spy-materializer",
@@ -400,7 +400,7 @@ impl MaterializerHandle for SpyMaterializer {
         node_did: &str,
         trigger_id: &str,
         durable_fire_key: &str,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         let markers = self.group_markers.clone();
         let key = (
             node_did.to_string(),

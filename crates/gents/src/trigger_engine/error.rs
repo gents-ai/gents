@@ -112,6 +112,8 @@ pub enum TriggerEngineError {
     Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     GoalSource(#[from] crate::trigger_engine::goal_source::GoalSourceError),
+    #[error(transparent)]
+    EventSourceCursor(#[from] crate::config_client::event_source_cursor::EventSourceCursorError),
 }
 
 impl From<crate::lifecycle::materialize::MaterializeError> for TriggerEngineError {

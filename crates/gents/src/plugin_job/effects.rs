@@ -447,6 +447,9 @@ fn body_digest(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::plugin_job::origin::PluginJobError;
+
+    type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
     use gents_protocol::error_chain::ErrorChain;
     use std::path::Path;
     use std::sync::Arc;
@@ -864,7 +867,7 @@ mod tests {
         fresh: &[JobSpawn],
         effects: &JobEffects,
         row: &StepRow,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), PluginJobError> {
         let fresh_refs: Vec<&JobSpawn> = fresh.iter().collect();
         let job = super::JobContext {
             ctx: &harness.ctx,
@@ -1020,7 +1023,7 @@ mod tests {
         assert!(
             error.to_string().contains("integrity"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         harness.close().await;
     }
@@ -1069,7 +1072,7 @@ mod tests {
         assert!(
             error.to_string().contains("integrity"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);

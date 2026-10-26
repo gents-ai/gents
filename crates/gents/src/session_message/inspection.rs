@@ -803,7 +803,7 @@ mod tests {
         assert!(
             error.to_string().contains("not messageable"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         drop(worker);
         node.shutdown().await;

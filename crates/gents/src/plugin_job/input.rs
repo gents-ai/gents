@@ -777,6 +777,7 @@ pub async fn build_step_input(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
     use gents_protocol::error_chain::ErrorChain;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -1729,7 +1730,7 @@ pub(crate) mod tests {
         }
 
         async fn later(&self, row: &str) -> Result<(JobStepInput, u64)> {
-            build_step_input(&self.access, &self.runtime, row, StepKind::Later).await
+            Ok(build_step_input(&self.access, &self.runtime, row, StepKind::Later).await?)
         }
     }
 

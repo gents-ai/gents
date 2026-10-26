@@ -54,7 +54,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     assert!(
         invalid.to_string().contains("non-empty"),
         "{}",
-        ErrorChain(invalid.as_ref())
+        ErrorChain(&invalid)
     );
     assert!(
         crate::goal::load_canonical_goal(node.as_ref(), &node_did, &identity.session_id)
@@ -360,8 +360,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         .unwrap();
     let duplicate = publish().await.unwrap_err();
     assert_eq!(
-        duplicate
-            .downcast_ref::<MaterializeDuplicate>()
+        crate::trigger_engine::materialize_duplicate(&duplicate)
             .unwrap()
             .request_id,
         prepared.receipt.request_id
@@ -511,7 +510,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
     assert!(
         error.to_string().contains("identity conflicts"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -662,7 +661,7 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
     assert!(
         error.to_string().contains("not found"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert!(
         workspace_requests(&node, "ws-owner").await.is_empty(),
@@ -938,7 +937,7 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
             .to_string()
             .contains("isolated workspace ws-foreign-ownerless not found"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert!(workspace_requests(&node, "ws-foreign-ownerless")
         .await
@@ -1111,7 +1110,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
     assert!(
         error.to_string().contains("unique Active ReadWrite"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     let rows = workspace_requests(node.as_ref(), "ws-rw").await;
     assert_eq!(rows.len(), 2, "{rows:?}");

@@ -390,7 +390,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
     assert!(
         error.to_string().contains("escapes operator tool root"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -450,7 +450,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
     assert!(
         error.to_string().contains("escapes operator tool root"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -1097,7 +1097,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             .to_string()
             .contains("not a registered backgroundable tool"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -1160,7 +1160,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
     assert!(
         error.to_string().contains("escapes operator tool root"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -1344,11 +1344,11 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         Err(error) => error,
     };
     assert!(
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
             .to_string()
             .contains("unsupported bounded write field type"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -2085,7 +2085,7 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
     assert!(
         error.to_string().contains("current WorkspaceRoot policy"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -2129,7 +2129,7 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
     assert!(
         error.to_string().contains("no explicit root"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 

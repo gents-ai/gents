@@ -207,6 +207,10 @@ pub enum PluginJobError {
     Std(#[from] std::io::Error),
     #[error(transparent)]
     Transition(#[from] crate::tool_call_lifecycle::TransitionError),
+    #[error(transparent)]
+    Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Lifecycle(#[from] crate::lifecycle::LifecycleError),
 }
 
 impl From<crate::lifecycle::materialize::MaterializeError> for PluginJobError {

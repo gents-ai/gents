@@ -75,6 +75,24 @@ pub enum StreamingError {
     StreamProcessor(#[from] gents_loop::stream_processor::StreamProcessorError),
 }
 
+impl StreamingError {
+    /// The queued input changed before the authored message published.
+    pub(crate) fn is_pending_input_changed(&self) -> bool {
+        matches!(
+            self,
+            Self::CanonicalStream(error)
+                if matches!(
+                    &**error,
+                    crate::streaming::canonical::CanonicalStreamError::Queue(queue)
+                        if matches!(
+                            &**queue,
+                            crate::lifecycle::queue::QueueError::PendingInputChanged(_)
+                        )
+                )
+        )
+    }
+}
+
 impl From<crate::lifecycle::LifecycleError> for StreamingError {
     fn from(error: crate::lifecycle::LifecycleError) -> Self {
         Self::Lifecycle(Box::new(error))
@@ -688,18 +706,7 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         match DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await {
             Ok(id) => Ok(Some(id)),
             Err(error)
-                if matches!(
-                    &error,
-                    StreamingError::CanonicalStream(error)
-                        if matches!(
-                            &**error,
-                            crate::streaming::canonical::CanonicalStreamError::Queue(queue)
-                                if matches!(
-                                    &**queue,
-                                    crate::lifecycle::queue::QueueError::PendingInputChanged(_)
-                                )
-                        )
-                ) =>
+                if error.is_pending_input_changed() =>
             {
                 Ok(None)
             }

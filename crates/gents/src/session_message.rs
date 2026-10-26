@@ -1465,7 +1465,7 @@ mod hop_tests {
         assert!(
             error.to_string().contains("moved to hop"),
             "unexpected error: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         let PlannedWrite::Request { create, .. } = &planned.write else {
             panic!("a message without a Goal is a request");
