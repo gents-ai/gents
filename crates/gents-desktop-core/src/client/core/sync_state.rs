@@ -316,9 +316,9 @@ impl ClientSyncStateOwner {
         local: &Arc<defra_node::EmbeddedNode>,
         observation: &RuntimeSchemaObservation,
         status: &Value,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let local = self.local_replicated_schema(local).await?;
-        Ok(self.record_runtime_schema(observation, local, status)?)
+        self.record_runtime_schema(observation, local, status)
     }
 
     /// Compare without recording; enrollment uses this before the offer is
@@ -328,9 +328,9 @@ impl ClientSyncStateOwner {
         local: &Arc<defra_node::EmbeddedNode>,
         runtime_did: &str,
         status: &Value,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let local = self.local_replicated_schema(local).await?;
-        Ok(compare_runtime_status(local, runtime_did, status)?)
+        compare_runtime_status(local, runtime_did, status)
     }
 
     async fn local_replicated_schema(

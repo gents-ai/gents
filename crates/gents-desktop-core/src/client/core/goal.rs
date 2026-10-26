@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use chrono::Utc;
 #[cfg(test)]
 use gents::goal::bind_goal_input;
@@ -9,8 +8,10 @@ use gents_protocol::goal_control::{
 use gents_protocol::request_input::{GoalAssignmentInput, QueueDelivery, RequestInput};
 
 use super::writes::ensure_peer_chat_ready_at;
-use super::ClientCore;
+use super::{ClientCore, ClientCoreError};
 use crate::client::mutations::{prepare_request_submission, SubmitRequestOptions};
+
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 
 impl ClientCore {
     pub(super) async fn prepare_goal_input(
@@ -41,7 +42,7 @@ impl ClientCore {
             input,
         )
         .await
-        .map_err(anyhow::Error::from)
+        .map_err(ClientCoreError::from)
     }
 
     /// DefraDB returns successful empty data for an anonymous NAC denial. A cold
@@ -57,7 +58,7 @@ impl ClientCore {
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
-            .context("no saved deployment route owns this node")?;
+            .ok_or(ClientCoreError::NoRouteOwnsNode)?;
         gents::goal::load_session_goal_observation(
             &self
                 .operator_observation_graphql(node_did)
@@ -70,7 +71,7 @@ impl ClientCore {
             Some(&self.requester_did(&record)),
         )
         .await
-        .map_err(anyhow::Error::from)
+        .map_err(ClientCoreError::from)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -160,13 +161,14 @@ impl ClientCore {
             command,
         )
         .await
-        .map_err(anyhow::Error::from)
+        .map_err(ClientCoreError::from)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestResult;
     use gents::goal::SessionGoalObservationState;
     use gents_protocol::error_chain::ErrorChain;
     use gents_protocol::goal_control::ObservedGoal;
@@ -248,7 +250,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn followup_preparation_verifies_the_hosted_assignment_before_queueing() -> Result<()> {
+    async fn followup_preparation_verifies_the_hosted_assignment_before_queueing() -> TestResult {
         use crate::client::{ClientCoreOptions, DesktopPaths};
         use gents::NodeIdentity;
         use std::sync::Arc;
@@ -388,7 +390,7 @@ mod tests {
                 assert!(
                     error.to_string().contains("still syncing"),
                     "{mode}: {}",
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 );
                 let requests = server.received_requests().await.unwrap();
                 assert!(
@@ -426,7 +428,7 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
-    async fn cold_operator_goal_observation_stays_unknown_without_unlocking() -> Result<()> {
+    async fn cold_operator_goal_observation_stays_unknown_without_unlocking() -> TestResult {
         use crate::client::{ClientCoreOptions, DesktopPaths};
         use identity::Identity as _;
         use std::sync::Arc;
@@ -439,7 +441,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let key = root.path().join("runtime.key");
         let source_key = key.clone();
-        let did = tokio::task::spawn_blocking(move || -> Result<String> {
+        let did = tokio::task::spawn_blocking(move || -> TestResult<String> {
             let identity = gents::identity::load_or_create_file_identity(&source_key)?;
             Ok(identity.did()?.to_string())
         })

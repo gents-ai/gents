@@ -14,6 +14,10 @@ pub(super) enum SnapshotSessionError {
     MissingAccountingField { field: &'static str },
     #[error("decoding context_accounting_json: {error}")]
     DecodeAccounting { error: serde_json::Error },
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    SessionHistory(#[from] gents::toolset::SessionHistoryError),
 }
 
 pub(super) async fn load_latest_session_request_context(
@@ -21,7 +25,7 @@ pub(super) async fn load_latest_session_request_context(
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
-) -> anyhow::Result<Option<LoadedRequestContext>> {
+) -> Result<Option<LoadedRequestContext>, SnapshotSessionError> {
     let request_bindings =
         gents::toolset::load_session_request_doc_ids(access, node_did, requester_did, session_id)
             .await?;
@@ -60,10 +64,7 @@ pub(super) async fn load_latest_session_request_context(
         node_did = gents::graphql::escape_graphql_string(node_did),
     );
     let data = access.execute(&query).await?;
-    Ok(decode_latest_session_request_context(
-        &data,
-        &request_bindings,
-    )?)
+    decode_latest_session_request_context(&data, &request_bindings)
 }
 
 fn decode_latest_session_request_context(
@@ -89,7 +90,7 @@ pub(super) async fn load_session_request_context_history(
     session_id: &str,
     requester_did: Option<&str>,
     request_doc_ids: &[String],
-) -> anyhow::Result<Vec<LoadedRequestContext>> {
+) -> Result<Vec<LoadedRequestContext>, SnapshotSessionError> {
     if request_doc_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -123,7 +124,7 @@ pub(super) async fn load_session_request_context_history(
         session_id = gents::graphql::escape_graphql_string(session_id),
     );
     let data = access.execute(&query).await?;
-    Ok(decode_request_context_history(&data)?)
+    decode_request_context_history(&data)
 }
 
 fn decode_request_context_history(

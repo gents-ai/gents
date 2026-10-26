@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{
@@ -15,6 +14,8 @@ use serde_json::Value;
 use super::bootstrap::normalize_required;
 use super::writes::{ensure_peer_chat_ready_at, find_request_in_scope};
 use super::{ClientCore, ClientCoreError};
+
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 
 const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
 
@@ -42,15 +43,15 @@ impl ClientCore {
         else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            row.session_id.as_deref() == Some(session_id)
-                && row.requester_did == projection.requester_did,
-            "file changes crossed the selected request scope"
-        );
+        if !(row.session_id.as_deref() == Some(session_id)
+            && row.requester_did == projection.requester_did)
+        {
+            return Err(ClientCoreError::FileChangesCrossedScope);
+        }
         let request_doc_id = row
             .doc_id
             .as_deref()
-            .context("request lacks physical identity")?;
+            .ok_or(ClientCoreError::RequestLacksPhysicalIdentity)?;
         if let Some(graphql) = self.operator_observation_graphql(node_did) {
             return Ok(gents::tool_call_lifecycle::load_tool_call_file_changes(
                 &ConfigAccess::Graphql(graphql),
@@ -65,11 +66,10 @@ impl ClientCore {
         let requester_did = row
             .requester_did
             .as_deref()
-            .context("file review lacks its requester")?;
-        anyhow::ensure!(
-            requester_did == self.node_identity.did(),
-            "file review requester differs from the enrolled client"
-        );
+            .ok_or(ClientCoreError::FileReviewLacksRequester)?;
+        if requester_did != self.node_identity.did() {
+            return Err(ClientCoreError::FileReviewRequesterDiffers);
+        }
         let mut demand = FileImageDemand {
             admission: HydrationRequest {
                 request_key: String::new(),
@@ -92,7 +92,7 @@ impl ClientCore {
                 .lock()
                 .await
                 .as_ref()
-                .context("local store access is unavailable")?
+                .ok_or(ClientCoreError::LocalStoreAccessUnavailable)?
                 .clone();
             demand = resumable_image_demand(&access, &demand, &self.node_identity).await?;
         }
@@ -112,7 +112,7 @@ impl ClientCore {
             .lock()
             .await
             .as_ref()
-            .context("local store access is unavailable")?
+            .ok_or(ClientCoreError::LocalStoreAccessUnavailable)?
             .clone();
         let mut sync = self.sync_state.subscribe();
         let mut observed_demand = false;
@@ -120,10 +120,9 @@ impl ClientCore {
             loop {
                 let response = access.execute(&demand_query(&demand)).await?;
                 let row = demand_row(&response)?;
-                anyhow::ensure!(
-                    row.is_some() || !observed_demand,
-                    "file review demand disappeared"
-                );
+                if row.is_none() && observed_demand {
+                    return Err(ClientCoreError::FileReviewDemandDisappeared);
+                }
                 let receipt = match row {
                     Some(row) => {
                         observed_demand = true;
@@ -134,7 +133,9 @@ impl ClientCore {
                 if let Some(receipt) = receipt {
                     match receipt.selection() {
                         FileImageSelection::Rejected => {
-                            anyhow::bail!("Runtime rejected file review: {}", receipt.detail())
+                            return Err(ClientCoreError::FileReviewRejected {
+                                detail: receipt.detail().to_owned(),
+                            })
                         }
                         FileImageSelection::Missing => return Ok(None),
                         FileImageSelection::Selected { document } => {
@@ -153,14 +154,15 @@ impl ClientCore {
                                         document_id,
                                         changes,
                                     } => {
-                                        anyhow::ensure!(
-                                        &document_id == document,
-                                        "file review observation differs from the signed receipt"
-                                    );
+                                        if &document_id != document {
+                                            return Err(
+                                                ClientCoreError::FileReviewObservationDiffers,
+                                            );
+                                        }
                                         return Ok(Some(changes));
                                     }
                                     ToolFileChangeRead::Unsupported => {
-                                        anyhow::bail!("local file-image collection is unavailable")
+                                        return Err(ClientCoreError::FileImageCollectionUnavailable)
                                     }
                                     ToolFileChangeRead::Missing | ToolFileChangeRead::Pending => {}
                                 }
@@ -173,20 +175,23 @@ impl ClientCore {
                     .iter()
                     .find(|record| record.node_did == demand.admission.node_did);
                 ensure_peer_chat_ready_at(&demand.admission.node_did, peer, chrono::Utc::now())
-                    .context("Reconnect this runtime to load new file versions.")?;
+                    .map_err(|source| ClientCoreError::FileReviewReconnect {
+                        source: Box::new(source),
+                    })?;
                 if row.is_none() {
                     admit_image_demand(&self.node, &demand).await?;
                     observed_demand = true;
                     continue;
                 }
                 tokio::select! {
-                    event = changes.recv() => { event.context("file review observation subscription closed")?; }
-                    update = sync.changed() => { update.context("file review route observation closed")?; }
+                    event = changes.recv() => { event.ok_or(ClientCoreError::FileReviewSubscriptionClosed)?; }
+                    update = sync.changed() => { update.map_err(ClientCoreError::FileReviewRouteObservationClosed)?; }
                 }
             }
         };
-        tokio::time::timeout(std::time::Duration::from_secs(30), read).await
-            .context("File review is waiting for the runtime. Open the changes again when the connection is ready.")?
+        tokio::time::timeout(std::time::Duration::from_secs(30), read)
+            .await
+            .map_err(ClientCoreError::FileReviewWaiting)?
     }
 }
 
@@ -208,24 +213,23 @@ async fn resumable_image_demand(
     let response = access.execute(&query).await?;
     let rows = response["data"]["FileImageHydrationRequest"]
         .as_array()
-        .context("file review lookup omitted demand rows")?;
+        .ok_or(ClientCoreError::FileReviewLookupOmittedRows)?;
     let mut candidates = Vec::new();
     let mut selected_document = None;
     for row in rows {
         let mut demand = original.clone();
         demand.admission.request_key = row["request_key"]
             .as_str()
-            .context("file review demand omitted its request key")?
+            .ok_or(ClientCoreError::FileReviewDemandOmittedKey)?
             .into();
         demand.validate_reference()?;
         let receipt = verified_receipt(row, &demand, identity).await?;
         let rank = match receipt.as_ref().map(VerifiedFileImageReceipt::selection) {
             Some(FileImageSelection::Selected { document }) => {
                 if let Some(previous) = &selected_document {
-                    anyhow::ensure!(
-                        previous == document,
-                        "file review receipts selected conflicting images"
-                    );
+                    if previous != document {
+                        return Err(ClientCoreError::FileReviewConflictingImages);
+                    }
                 }
                 selected_document = Some(document.clone());
                 0
@@ -233,7 +237,7 @@ async fn resumable_image_demand(
             Some(FileImageSelection::Missing) => 1,
             None => 2,
             Some(FileImageSelection::Rejected) => {
-                anyhow::bail!("file review lookup returned a rejected demand")
+                return Err(ClientCoreError::FileReviewLookupRejected)
             }
         };
         candidates.push((rank, demand));
@@ -325,15 +329,16 @@ async fn verified_receipt(
     let text = |field: &str| {
         row[field]
             .as_str()
-            .with_context(|| format!("file review receipt omitted {field}"))
+            .ok_or_else(|| ClientCoreError::FileReviewReceiptOmitted {
+                field: field.to_owned(),
+            })
     };
     let selection = match text("status")? {
         "pending" => return Ok(None),
         "rejected" => {
-            anyhow::ensure!(
-                row["observation_doc_id"].is_null(),
-                "rejected file review selected an image"
-            );
+            if !row["observation_doc_id"].is_null() {
+                return Err(ClientCoreError::RejectedFileReviewSelectedImage);
+            }
             FileImageSelection::Rejected
         }
         "served" => match &row["observation_doc_id"] {
@@ -341,9 +346,9 @@ async fn verified_receipt(
             Value::String(document) => FileImageSelection::Selected {
                 document: document.clone(),
             },
-            _ => anyhow::bail!("file review receipt has an invalid observation identity"),
+            _ => return Err(ClientCoreError::FileReviewInvalidObservationIdentity),
         },
-        _ => anyhow::bail!("file review receipt has an unknown status"),
+        _ => return Err(ClientCoreError::FileReviewUnknownStatus),
     };
     let receipt = FileImageHydrationReceipt {
         version: FILE_IMAGE_RECEIPT_VERSION,

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
@@ -56,12 +56,13 @@ pub async fn delete_skill_on(access: &ConfigAccess, node_did: &str, id: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestError, TestResult};
     use gents::config_client::read_desired_state_record_in_txn;
     use serde_json::json;
 
     #[tokio::test]
     async fn skill_delete_rejects_context_references_without_detaching_or_cross_owner_effects(
-    ) -> Result<()> {
+    ) -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:skill-a", "did:test:skill-b"] {
@@ -82,7 +83,7 @@ mod tests {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;
@@ -122,7 +123,7 @@ mod tests {
                     "context".into(),
                 )])?;
                 apply_desired_state_plan(txn, &plan).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;

@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::config_client::ConfigAccess;
@@ -40,7 +39,9 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
-pub(crate) use error::ClientCoreError;
+pub use error::{ClientCoreError, ClientStoreKeyError};
+
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
 pub use writes::RefreshedRequestProjection;
@@ -88,7 +89,7 @@ pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
         record: &gents::store_key::StoreEncryption,
         key_file: &std::path::Path,
         data_path: &std::path::Path,
-    ) -> Result<gents::store_key::StoreKey>;
+    ) -> Result<gents::store_key::StoreKey, ClientStoreKeyError>;
 }
 
 impl Default for ClientCoreOptions {
@@ -296,12 +297,9 @@ pub struct ClientSyncStateSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum P2PSupervisorCommand {
+pub enum P2PSupervisorCommand {
     RepairNow,
 }
-
-/// A finished shutdown's result, with the error rendered for every waiter.
-type ShutdownOutcome = std::result::Result<(), String>;
 
 pub struct ClientCore {
     store_access: Mutex<Option<ConfigAccess>>,
@@ -318,7 +316,7 @@ pub struct ClientCore {
     observation_scope: observation_scope::ObservationScope,
     request_patch_signatures: tokio::sync::Mutex<RapidHashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
-    shutdown_completion: Mutex<Option<watch::Receiver<Option<ShutdownOutcome>>>>,
+    shutdown_completion: Mutex<Option<watch::Receiver<bool>>>,
     #[cfg(test)]
     shutdown_test_pause: Mutex<Option<Arc<ShutdownTestPause>>>,
     last_mutation_error: StdRwLock<Option<String>>,
@@ -363,7 +361,7 @@ impl ClientCore {
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, node_did: &str) -> Result<()> {
         if self.options.install_replicators_on_bootstrap {
-            return Err(ClientCoreError::SimulatedRouteRequiresLocalOptions.into());
+            return Err(ClientCoreError::SimulatedRouteRequiresLocalOptions);
         }
         self.add_local_standard_peer_route_for_test(
             "Test Local Runtime",
@@ -483,7 +481,7 @@ impl ClientCore {
     }
 
     pub fn observe_all_nodes(&self) -> Result<ClientObservationAttachment> {
-        Ok(self.observation_scope.attach()?)
+        self.observation_scope.attach()
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
@@ -514,9 +512,7 @@ impl ClientCore {
     }
 
     pub async fn request_p2p_repair(&self) -> Result<()> {
-        Ok(self
-            .send_p2p_command(P2PSupervisorCommand::RepairNow)
-            .await?)
+        self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {
@@ -618,35 +614,32 @@ impl ClientCore {
     pub async fn shutdown(self: &Arc<Self>) -> Result<()> {
         let mut completion = self.shutdown_completion.lock().await;
         if completion.is_none() {
-            let (result_tx, result_rx) = watch::channel(None);
-            *completion = Some(result_rx.clone());
+            let (done_tx, done_rx) = watch::channel(false);
+            *completion = Some(done_rx.clone());
             let owner = Arc::clone(self);
             tokio::spawn(async move {
-                let result = owner
-                    .shutdown_inner()
-                    .await
-                    .map_err(|error| error.to_string());
-                result_tx.send_replace(Some(result));
+                owner.shutdown_inner().await;
+                done_tx.send_replace(true);
             });
         }
-        let mut result_rx = completion
+        let mut done_rx = completion
             .as_ref()
             .expect("shutdown owner installed")
             .clone();
         drop(completion);
 
         loop {
-            if let Some(result) = result_rx.borrow().clone() {
-                return result.map_err(anyhow::Error::msg);
+            if *done_rx.borrow() {
+                return Ok(());
             }
-            result_rx
+            done_rx
                 .changed()
                 .await
-                .context("client shutdown owner ended without a result")?;
+                .map_err(ClientCoreError::ShutdownOwnerEnded)?;
         }
     }
 
-    async fn shutdown_inner(&self) -> Result<()> {
+    async fn shutdown_inner(&self) {
         tracing::info!("client core shutdown: begin");
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
@@ -672,6 +665,5 @@ impl ClientCore {
         }
         self.store_access.lock().await.take();
         tracing::info!("client core shutdown: complete");
-        Ok(())
     }
 }

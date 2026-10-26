@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
@@ -115,10 +115,11 @@ pub async fn delete_tool_service_registry_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestError, TestResult};
     use serde_json::json;
 
     #[tokio::test]
-    async fn tools_replacement_revokes_groups_and_service_delete_checks_retained_refs() -> Result<()>
+    async fn tools_replacement_revokes_groups_and_service_delete_checks_retained_refs() -> TestResult
     {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
@@ -169,7 +170,7 @@ mod tests {
                     .unwrap();
                     assert_eq!(serde_json::from_value::<Tools>(value)?, *expected);
                 }
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;

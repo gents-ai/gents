@@ -180,7 +180,7 @@ pub async fn discover_inference_models_for_core(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did = %request.node_did.trim(),
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "resolving node configuration access for model discovery failed"
             );
             BridgeError::new(
@@ -342,14 +342,14 @@ async fn publish_discovered_catalog(
             models,
         )
         .await
-        .map_err(Into::into),
-        Err(error) => Err(error),
+        .map_err(|error| ErrorChain(&error).to_string()),
+        Err(error) => Err(ErrorChain(&error).to_string()),
     };
     if let Err(error) = result {
         tracing::warn!(
             target: LOG_TARGET,
             node_did,
-            error = %ErrorChain(error.as_ref()),
+            error = %error,
             "publishing the discovered model catalog failed; the previous catalog is kept"
         );
     }

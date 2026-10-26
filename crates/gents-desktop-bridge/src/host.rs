@@ -1,6 +1,7 @@
 mod actions;
 mod approvals;
 mod connection;
+pub use connection::ConnectionError;
 #[cfg(any(unix, windows))]
 pub mod local;
 pub mod permissions;
@@ -11,7 +12,7 @@ pub mod settings;
 pub mod speech;
 
 #[cfg(any(unix, windows))]
-pub use service::ClientHostService;
+pub use service::{ClientHostService, ClientHostServiceError};
 
 use std::sync::Arc;
 
@@ -25,12 +26,6 @@ use crate::config::{AppMeta, BootstrapPolicy, ManagedServerPolicy, ResolvedBridg
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::projection::SnapshotGrants;
 use protocol::ClientCommand;
-
-#[derive(Debug, thiserror::Error)]
-enum HostError {
-    #[error("Connect this local runtime before managing its accounts.")]
-    AccountsNotConnected,
-}
 
 /// Transport attachments share the existing core and never own its shutdown.
 /// The installation host must stop and join attachments before closing the core.
@@ -74,7 +69,11 @@ impl ClientHost {
         }
     }
 
-    pub async fn serve<S>(self: Arc<Self>, stream: S, stop: CancellationToken) -> anyhow::Result<()>
+    pub async fn serve<S>(
+        self: Arc<Self>,
+        stream: S,
+        stop: CancellationToken,
+    ) -> Result<(), ConnectionError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -199,7 +198,7 @@ impl ClientHost {
                     .core
                     .operator_observation_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
-                    .ok_or_else(|| anyhow::Error::from(HostError::AccountsNotConnected));
+                    .ok_or(crate::accounts::AccountsError::NotConnected);
                 encode(
                     crate::accounts::observe_provider_accounts(
                         &self.pending_oauth_credentials,
@@ -214,7 +213,7 @@ impl ClientHost {
                 let provider = crate::accounts::login::provider(request.method)?;
                 let signed = crate::accounts::login::sign_in(&self.pending_oauth_credentials,
                     || self.core.operator_graphql(&request.node_did).map(gents::ConfigAccess::Graphql)
-                        .ok_or_else(|| anyhow::Error::from(HostError::AccountsNotConnected)),
+                        .ok_or(crate::accounts::AccountsError::NotConnected),
                     &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
                     async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
                 ).await?;
@@ -230,7 +229,9 @@ impl ClientHost {
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
-                        BridgeError::untyped(HostError::AccountsNotConnected.to_string())
+                        BridgeError::untyped(
+                            crate::accounts::AccountsError::NotConnected.to_string(),
+                        )
                     })?;
                 gents::oauth_credential::set_account_enabled(
                     &access,
@@ -252,7 +253,9 @@ impl ClientHost {
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
-                        BridgeError::untyped(HostError::AccountsNotConnected.to_string())
+                        BridgeError::untyped(
+                            crate::accounts::AccountsError::NotConnected.to_string(),
+                        )
                     })?;
                 gents::oauth_credential::set_account_label(
                     &access,
@@ -274,7 +277,9 @@ impl ClientHost {
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
-                        BridgeError::untyped(HostError::AccountsNotConnected.to_string())
+                        BridgeError::untyped(
+                            crate::accounts::AccountsError::NotConnected.to_string(),
+                        )
                     })?;
                 gents_server::accounts::remove_account(
                     &access,
@@ -296,7 +301,7 @@ impl ClientHost {
                     .core
                     .operator_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
-                    .ok_or_else(|| anyhow::Error::from(HostError::AccountsNotConnected));
+                    .ok_or(crate::accounts::AccountsError::NotConnected);
                 let credential = crate::accounts::retry_pending_credential(
                     &self.pending_oauth_credentials,
                     access,

@@ -176,7 +176,7 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     assert!(
         error.to_string().contains("ambiguous observations"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     core.shutdown().await.unwrap();
 }

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, HttpConfig, P2PConfig};
 #[cfg(test)]
 use defra_node::{NodeBuilder, StorageBackend};
@@ -25,6 +24,8 @@ use super::{
     ClientCore, ClientCoreError, ClientCoreOptions, ClientPeerStatus, P2PHealth,
     BOOTSTRAP_OPERATION_BACKOFF, BOOTSTRAP_OPERATION_TIMEOUT,
 };
+
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 
 impl ClientCore {
     pub async fn start() -> Result<Self> {
@@ -88,7 +89,7 @@ impl ClientCore {
             node_builder
                 .build()
                 .await
-                .context("starting embedded desktop node")?,
+                .map_err(|error| ClientCoreError::StartEmbeddedNode(Box::new(error)))?,
         );
         let store_access =
             match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
@@ -139,15 +140,17 @@ impl ClientCore {
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
             checkpoint("initial_snapshot");
 
-            let p2p = node
-                .p2p_arc()
-                .context("desktop node started without P2P support")?;
-            let local_peer_id = p2p_local_peer_id(&p2p)
-                .await
-                .context("reading desktop P2P peer id")?;
-            let listen_addresses = p2p_listen_addresses(&p2p)
-                .await
-                .context("reading desktop P2P listen addresses")?;
+            let p2p = node.p2p_arc().ok_or(ClientCoreError::NodeWithoutP2p)?;
+            let local_peer_id = p2p_local_peer_id(&p2p).await.map_err(|source| {
+                ClientCoreError::ReadLocalPeerId {
+                    source: Box::new(source),
+                }
+            })?;
+            let listen_addresses = p2p_listen_addresses(&p2p).await.map_err(|source| {
+                ClientCoreError::ReadListenAddresses {
+                    source: Box::new(source),
+                }
+            })?;
             let route_manager = Arc::new(ClientRouteManager::new(
                 Arc::clone(&node),
                 Arc::clone(&p2p),
@@ -507,22 +510,27 @@ async fn open_or_create_client_store_key(
     use gents::store_key::{upgrade, StoreEncryption};
     let choice = options.store_key_custody;
     let record_path = paths.store_encryption_path();
-    let record = match std::fs::read(record_path) {
-        Ok(bytes) => Some(
-            serde_json::from_slice::<StoreEncryption>(&bytes)
-                .with_context(|| format!("decoding {}", record_path.display()))?,
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(error).with_context(|| format!("reading {}", record_path.display()))
-        }
-    };
+    let record =
+        match std::fs::read(record_path) {
+            Ok(bytes) => Some(serde_json::from_slice::<StoreEncryption>(&bytes).map_err(
+                |source| ClientCoreError::DecodeStoreEncryption {
+                    path: record_path.to_path_buf(),
+                    source,
+                },
+            )?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(ClientCoreError::ReadStoreEncryption {
+                    path: record_path.to_path_buf(),
+                    source: error,
+                })
+            }
+        };
     let pending = upgrade::pending_record(paths.node_data_dir())?;
     if let (Some(record), Some(pending)) = (&record, &pending) {
-        anyhow::ensure!(
-            record == pending,
-            "client encryption metadata does not match its pending upgrade"
-        );
+        if record != pending {
+            return Err(ClientCoreError::StoreEncryptionUpgradeMismatch);
+        }
     }
     if pending.is_some() || (record.is_none() && paths.node_data_dir().join("MANIFEST").exists()) {
         let record = match pending {
@@ -574,14 +582,14 @@ async fn client_store_key(
     data_path: &std::path::Path,
 ) -> Result<gents::store_key::StoreKey> {
     if let Some(provider) = &options.store_key_provider {
-        provider.load(record, key_file, data_path).await
+        Ok(provider.load(record, key_file, data_path).await?)
     } else {
         Ok(record.initialize(key_file, data_path)?)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-enum ClientStoreRecordError {
+pub enum ClientStoreRecordError {
     #[error("staging {}", path.display())]
     Stage {
         path: std::path::PathBuf,
@@ -845,11 +853,11 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            gents_protocol::error_chain::find_source::<gents::home::HomeError>(error.as_ref())
+            gents_protocol::error_chain::find_source::<gents::home::HomeError>(error.cause())
                 .and_then(gents::home::HomeError::lock_held)
                 .is_some(),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
         let core = Arc::new(core);

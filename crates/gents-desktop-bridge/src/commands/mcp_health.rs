@@ -32,7 +32,7 @@ type Result<T, E = McpRegistryError> = std::result::Result<T, E>;
 
 pub async fn load_mcp_services_with_health(
     core: &ClientCore,
-) -> anyhow::Result<Vec<MCPServiceHealthView>> {
+) -> std::result::Result<Vec<MCPServiceHealthView>, BridgeCommandError> {
     let Some(node_did) = core.selected_node_did() else {
         return Ok(Vec::new());
     };
@@ -42,7 +42,7 @@ pub async fn load_mcp_services_with_health(
 pub(crate) async fn load_mcp_services_with_health_for_node(
     core: &ClientCore,
     node_did: &str,
-) -> anyhow::Result<Vec<MCPServiceHealthView>> {
+) -> std::result::Result<Vec<MCPServiceHealthView>, BridgeCommandError> {
     let escaped_node = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
@@ -88,10 +88,9 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
     // health checker's chosen row first.
     rows.dedup_by(|later, first| later.service_id == first.service_id);
 
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .map(view_from_row)
-        .collect::<std::result::Result<_, _>>()?)
+        .collect::<std::result::Result<_, _>>()
 }
 
 pub(crate) fn view_from_row(

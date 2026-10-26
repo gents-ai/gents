@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::util::Result;
 use gents_desktop_core::client::ClientCore;
 
 use crate::types::DesktopBackgroundToolRequest;

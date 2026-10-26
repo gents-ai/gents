@@ -1,17 +1,27 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use gents_desktop_core::client::ClientCore;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use super::{local::LocalListener, ClientHost};
+use super::{
+    local::{LocalError, LocalListener},
+    ClientHost,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClientHostServiceError {
+    #[error("joining the client installation listener")]
+    Join(#[source] tokio::task::JoinError),
+    #[error(transparent)]
+    Listener(#[from] LocalError),
+}
 
 /// The embedding shell must join attachments before shutting down their core.
 /// Dropping a shutdown waiter must not abort submitted writes.
 pub struct ClientHostService {
     stop: CancellationToken,
-    task: Option<JoinHandle<Result<()>>>,
+    task: Option<JoinHandle<Result<(), LocalError>>>,
 }
 
 impl ClientHostService {
@@ -35,13 +45,14 @@ impl ClientHostService {
         }
     }
 
-    pub async fn shutdown(mut self) -> Result<()> {
+    pub async fn shutdown(mut self) -> Result<(), ClientHostServiceError> {
         self.stop.cancel();
-        self.task
+        Ok(self
+            .task
             .take()
             .expect("client host shutdown owns its task")
             .await
-            .context("joining the client installation listener")?
+            .map_err(ClientHostServiceError::Join)??)
     }
 }
 

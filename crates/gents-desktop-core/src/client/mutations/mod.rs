@@ -5,7 +5,7 @@ mod setup;
 
 pub use chat::{
     interrupt_request, rename_session, resend_request, retry_request, submit_request,
-    submit_task_request, SubmitRequestOptions, SubmittedRequest,
+    submit_task_request, ChatMutationError, SubmitRequestOptions, SubmittedRequest,
 };
 pub use chat::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
@@ -21,7 +21,8 @@ pub use manage::{
     select_agent_model_on, set_default_agent_on, upsert_agent_on, upsert_event_source_on,
     upsert_inference_backend_on, upsert_inference_profile_on, upsert_node_on, upsert_schedule_on,
     upsert_skill_on, upsert_task_on, upsert_tool_service_registry_on, upsert_tools_on,
-    upsert_trigger_on, ConfigEditorDocument, ConfigEditorRevision, ManualTaskInvocation,
+    upsert_trigger_on, ConfigEditorDocument, ConfigEditorRevision, ManageMutationError,
+    ManualTaskInvocation, TaskMutationError,
 };
 pub use setup::PeerMutationResult;
 

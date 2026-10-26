@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -20,7 +19,7 @@ use super::protocol::{
 use super::ClientHost;
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum ConnectionError {
+pub enum ConnectionError {
     #[error(transparent)]
     Serialize(#[from] serde_json::Error),
     #[error("client attachment stopped")]
@@ -29,6 +28,36 @@ pub(super) enum ConnectionError {
     OutputClosed(#[source] tokio::sync::mpsc::error::SendError<HostMessage>),
     #[error("client notification exceeds the transport limit")]
     NotificationTooLarge,
+    #[error("client attachment stopped before initialization")]
+    StoppedBeforeInitialization,
+    #[error("client attachment closed before initialization")]
+    ClosedBeforeInitialization,
+    #[error("invalid client initialization")]
+    InvalidInitialization(#[source] serde_json::Error),
+    #[error("client initialization timed out")]
+    InitializationTimedOut(#[source] tokio::time::error::Elapsed),
+    #[error("unsupported client protocol; expected version {PROTOCOL_VERSION}")]
+    UnsupportedProtocol,
+    #[error("client stopped reading")]
+    ClientStoppedReading(#[source] tokio::time::error::Elapsed),
+    #[error("invalid client message")]
+    InvalidMessage(#[source] serde_json::Error),
+    #[error("client is already initialized")]
+    AlreadyInitialized,
+    #[error("duplicate pending request id {id}")]
+    DuplicatePendingRequest { id: u32 },
+    #[error("client operation disappeared")]
+    OperationDisappeared,
+    #[error("client operation panicked")]
+    OperationPanicked(#[source] tokio::task::JoinError),
+    #[error("client notification sequence exhausted")]
+    SequenceExhausted,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Join(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    Core(#[from] gents_desktop_core::client::ClientCoreError),
 }
 
 type Result<T, E = ConnectionError> = std::result::Result<T, E>;
@@ -37,7 +66,7 @@ pub(super) async fn serve<S>(
     host: Arc<ClientHost>,
     stream: S,
     stop: CancellationToken,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -46,20 +75,20 @@ where
         .new_framed(stream);
     let hello = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::select! {
-            _ = stop.cancelled() => bail!("client attachment stopped before initialization"),
+            _ = stop.cancelled() => Err(ConnectionError::StoppedBeforeInitialization),
             frame = frames.next() => {
-                let bytes = frame.context("client attachment closed before initialization")??;
-                serde_json::from_slice::<ClientMessage>(&bytes).context("invalid client initialization")
+                let bytes = frame.ok_or(ConnectionError::ClosedBeforeInitialization)??;
+                serde_json::from_slice::<ClientMessage>(&bytes).map_err(ConnectionError::InvalidInitialization)
             }
         }
-    }).await.context("client initialization timed out")??;
+    }).await.map_err(ConnectionError::InitializationTimedOut)??;
     if !matches!(
         hello,
         ClientMessage::Hello {
             version: PROTOCOL_VERSION
         }
     ) {
-        bail!("unsupported client protocol; expected version {PROTOCOL_VERSION}");
+        return Err(ConnectionError::UnsupportedProtocol);
     }
 
     let _observation = host.core.observe_all_nodes()?;
@@ -84,11 +113,11 @@ where
     let writer_stop = local_stop.clone();
     let (out, mut replies) = mpsc::channel::<HostMessage>(MAX_PENDING_CALLS);
     let writer = tokio::spawn(async move {
-        let result: anyhow::Result<()> = async {
+        let result: Result<()> = async {
             while let Some(message) = replies.recv().await {
                 tokio::time::timeout(Duration::from_secs(30), sink.send(pack(message)?))
                     .await
-                    .context("client stopped reading")??;
+                    .map_err(ConnectionError::ClientStoppedReading)??;
             }
             Ok(())
         }
@@ -101,21 +130,21 @@ where
     let mut sequence = 0_u64;
     let approvals = Arc::new(super::approvals::AttachmentApprovals::default());
     let mut approval_changes = approvals.changes();
-    let result: anyhow::Result<()> = async {
+    let result: Result<()> = async {
         loop {
             tokio::select! {
                 _ = local_stop.cancelled() => break,
                 frame = source.next() => {
                     let Some(frame) = frame else { break };
                     let message = serde_json::from_slice::<ClientMessage>(&frame?)
-                        .context("invalid client message")?;
+                        .map_err(ConnectionError::InvalidMessage)?;
                     match message {
-                        ClientMessage::Hello { .. } => bail!("client is already initialized"),
+                        ClientMessage::Hello { .. } => return Err(ConnectionError::AlreadyInitialized),
                         ClientMessage::Cancel { id } => {
                             if let Some(cancel) = pending.get(&id) { cancel.cancel(); }
                         }
                         ClientMessage::Call { id, command } => {
-                            if pending.contains_key(&id) { bail!("duplicate pending request id {id}"); }
+                            if pending.contains_key(&id) { return Err(ConnectionError::DuplicatePendingRequest { id }); }
                             if pending.len() >= MAX_PENDING_CALLS {
                                 publish(&out, &local_stop, HostMessage::response(id, Err(
                                     BridgeError::new(BridgeErrorCode::Backend, "too many pending client operations"),
@@ -144,21 +173,21 @@ where
                     }
                 }
                 completed = calls.join_next(), if !calls.is_empty() => {
-                    let (id, result) = completed.context("client operation disappeared")?
-                        .context("client operation panicked")?;
+                    let (id, result) = completed.ok_or(ConnectionError::OperationDisappeared)?
+                        .map_err(ConnectionError::OperationPanicked)?;
                     pending.remove(&id);
                     publish(&out, &local_stop, HostMessage::response(id, result)).await?;
                 }
                 changed = store.changed() => {
                     if changed.is_err() { break; }
-                    sequence = sequence.checked_add(1).context("client notification sequence exhausted")?;
+                    sequence = sequence.checked_add(1).ok_or(ConnectionError::SequenceExhausted)?;
                     let payload = ClientUpdateEvent::store(*store.borrow_and_update());
                     publish(&out, &local_stop, HostMessage::Updated { sequence, payload }).await?;
                 }
                 changed = health.changed() => {
                     if changed.is_err() { break; }
                     health.borrow_and_update();
-                    sequence = sequence.checked_add(1).context("client notification sequence exhausted")?;
+                    sequence = sequence.checked_add(1).ok_or(ConnectionError::SequenceExhausted)?;
                     publish(&out, &local_stop, HostMessage::Updated {
                         sequence, payload: ClientUpdateEvent::coarse("health"),
                     }).await?;
@@ -166,7 +195,7 @@ where
                 changed = approval_changes.changed() => {
                     if changed.is_err() { break; }
                     approval_changes.borrow_and_update();
-                    sequence = sequence.checked_add(1).context("client notification sequence exhausted")?;
+                    sequence = sequence.checked_add(1).ok_or(ConnectionError::SequenceExhausted)?;
                     publish(&out, &local_stop, HostMessage::Updated {
                         sequence, payload: ClientUpdateEvent::coarse("approvals"),
                     }).await?;

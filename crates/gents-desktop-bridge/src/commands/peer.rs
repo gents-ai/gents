@@ -1,7 +1,7 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::time::Duration;
 
-use anyhow::Result;
+use super::util::Result;
 use gents_desktop_core::client::{ClientCore, PeerMutationResult};
 
 use super::util::require_trimmed;
@@ -14,7 +14,7 @@ pub async fn repair_p2p(core: &ClientCore, settle_delay: Duration) -> Result<()>
 
 pub async fn remove_peer(core: &ClientCore, peer_id: String) -> Result<PeerMutationResult> {
     let peer_id = require_trimmed("peer_id", peer_id)?;
-    core.remove_peer(&peer_id).await
+    Ok(core.remove_peer(&peer_id).await?)
 }
 
 pub async fn rename_peer(core: &ClientCore, peer_id: String, label: String) -> Result<()> {
@@ -51,5 +51,5 @@ pub async fn request_status_enrollment(
             view.server_label = server_label;
             view
         })
-        .map_err(|error| BridgeError::untyped(ErrorChain(error.as_ref()).to_string()))
+        .map_err(|error| BridgeError::untyped(ErrorChain(&error).to_string()))
 }

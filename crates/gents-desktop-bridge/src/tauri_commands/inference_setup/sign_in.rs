@@ -87,7 +87,7 @@ where
     };
     let signed = crate::accounts::login::sign_in(
         &state.pending_oauth_credentials,
-        || core.operator_access(node_did),
+        || core.operator_access(node_did).map_err(Into::into),
         node_did,
         method,
         provider,

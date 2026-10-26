@@ -13,6 +13,18 @@ use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ProvenanceError {
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    SessionOrigin(#[from] gents::session_origin::SessionOriginError),
+    #[error(transparent)]
+    Session(#[from] gents::session::SessionError),
+}
+
+type Result<T, E = ProvenanceError> = std::result::Result<T, E>;
+
 use crate::types::{
     CausedCallView, CausedRequestView, DesktopSessionProvenanceRequest, LinkedSessionView,
     SessionProvenanceView, TurnSenderView,
@@ -21,7 +33,7 @@ use crate::types::{
 pub async fn session_provenance_request(
     core: &Arc<ClientCore>,
     request: DesktopSessionProvenanceRequest,
-) -> Result<SessionProvenanceView, String> {
+) -> std::result::Result<SessionProvenanceView, String> {
     let node_did = request
         .node_did
         .as_deref()
@@ -44,9 +56,9 @@ pub async fn session_provenance_request(
 pub async fn session_provenance(
     core: &Arc<ClientCore>,
     scope: SessionScope,
-) -> Result<SessionProvenanceView, String> {
+) -> std::result::Result<SessionProvenanceView, String> {
     let access = crate::snapshot::node_reads(core, &scope.node_did);
-    let fail = |error: anyhow::Error| format!("session provenance: {}", ErrorChain(error.as_ref()));
+    let fail = |error: ProvenanceError| format!("session provenance: {}", ErrorChain(&error));
     let lineage = lineage(&access, &scope)
         .await
         .map_err(|error| fail(error.into()))?;
@@ -94,7 +106,7 @@ pub async fn session_provenance(
     })
 }
 
-async fn rows(access: &ConfigAccess, query: &str, collection: &str) -> anyhow::Result<Vec<Value>> {
+async fn rows(access: &ConfigAccess, query: &str, collection: &str) -> Result<Vec<Value>> {
     Ok(access
         .execute(query)
         .await?
@@ -118,14 +130,11 @@ fn text(row: &Value, field: &str) -> Option<String> {
 async fn opening_request(
     access: &ConfigAccess,
     link: &SessionLink,
-) -> anyhow::Result<Option<AgentRequestRow>> {
+) -> Result<Option<AgentRequestRow>> {
     Ok(starting_request(access, link).await?)
 }
 
-async fn caused_calls(
-    access: &ConfigAccess,
-    scope: &SessionScope,
-) -> anyhow::Result<Vec<CausedCallView>> {
+async fn caused_calls(access: &ConfigAccess, scope: &SessionScope) -> Result<Vec<CausedCallView>> {
     let own = rows(
         access,
         &format!(
@@ -245,7 +254,7 @@ fn turn_senders(lineage: &gents::session_origin::SessionLineage) -> Vec<(String,
 async fn related_session_metadata<'a>(
     core: &ClientCore,
     links: impl Iterator<Item = &'a SessionLink>,
-) -> anyhow::Result<Vec<crate::types::SessionSummary>> {
+) -> Result<Vec<crate::types::SessionSummary>> {
     let mut scopes =
         BTreeMap::<String, std::collections::BTreeSet<(String, Option<String>)>>::new();
     for link in links {

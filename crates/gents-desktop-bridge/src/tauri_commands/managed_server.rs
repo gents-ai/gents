@@ -2511,7 +2511,7 @@ where
     if let (Some(core), Some(node_did)) = (current_core(&state), previous_did.as_deref()) {
         if let Err(error) = core.mark_managed_runtime_restarting(node_did).await {
             let message = format!(
-                "The node was stopped, but desktop restart bookkeeping failed: {}. Retry Restart Node.", ErrorChain(error.as_ref())
+                "The node was stopped, but desktop restart bookkeeping failed: {}. Retry Restart Node.", ErrorChain(&error)
             );
             state.managed_server.lock().await.last_error = Some(message.clone());
             emit_status(&app, &state).await;
@@ -4049,7 +4049,11 @@ mod tests {
                 continue;
             }
             assert!(plan
-                .retire_with_key_cleanup(disposition, None, |_, _| anyhow::bail!("Keychain locked"))
+                .retire_with_key_cleanup(disposition, None, |_, _| {
+                    Err(gents::store_key::StoreKeyError::KeychainUnavailable {
+                        label: "Keychain locked".into(),
+                    })
+                })
                 .is_err());
             assert!(!home.join("data").exists());
             assert!(!desktop.node_data_dir().exists());

@@ -5,10 +5,11 @@
 //! that invites a fresh resend. A later send carrying `resolveRequestId`
 //! reconciles that exact request rather than minting a new one.
 
-use anyhow::Result;
 use gents_desktop_core::client::{ClientCore, ReceiptError, SubmittedRequest};
 
+use super::util::{BridgeCommandError, Result};
 use crate::types::{ChatSendOutcome, ChatSendRequest, ChatSendResult};
+use gents_desktop_core::client::ClientCoreError;
 
 /// The earlier send this request asks to reconcile, if any.
 pub(super) fn resolve_target(request: &ChatSendRequest) -> Option<&str> {
@@ -20,27 +21,27 @@ pub(super) fn resolve_target(request: &ChatSendRequest) -> Option<&str> {
 }
 
 /// Report a submission, turning an unknown owner outcome into a typed result.
-pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult> {
+pub(super) fn sent(submitted: Result<SubmittedRequest, ClientCoreError>) -> Result<ChatSendResult> {
     let error = match submitted {
         Ok(receipt) => return Ok(receipt.into()),
         Err(error) => error,
     };
-    match error.downcast::<ReceiptError>() {
-        Ok(ReceiptError::OutcomeUnknown(unknown)) => Ok(ChatSendResult::with_outcome(
-            unknown.pending.result,
-            ChatSendOutcome::DeliveryUnknown,
-        )),
-        Ok(ReceiptError::DeliveryUnconfirmed(unconfirmed)) => Ok(ChatSendResult::with_outcome(
-            SubmittedRequest {
-                request_id: unconfirmed.request_id,
-                session_id: unconfirmed.session_id,
-                node_did: unconfirmed.node_did,
-                agent_id: None,
-            },
-            ChatSendOutcome::DeliveryUnknown,
-        )),
-        Ok(error) => Err(error.into()),
-        Err(error) => Err(error),
+    match error {
+        ClientCoreError::Receipt(ReceiptError::OutcomeUnknown(unknown)) => Ok(
+            ChatSendResult::with_outcome(unknown.pending.result, ChatSendOutcome::DeliveryUnknown),
+        ),
+        ClientCoreError::Receipt(ReceiptError::DeliveryUnconfirmed(unconfirmed)) => {
+            Ok(ChatSendResult::with_outcome(
+                SubmittedRequest {
+                    request_id: unconfirmed.request_id,
+                    session_id: unconfirmed.session_id,
+                    node_did: unconfirmed.node_did,
+                    agent_id: None,
+                },
+                ChatSendOutcome::DeliveryUnknown,
+            ))
+        }
+        error => Err(error.into()),
     }
 }
 
@@ -56,7 +57,7 @@ pub(super) async fn resolve_chat_submission(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("resolving an earlier send requires its session_id"))?;
+        .ok_or(BridgeCommandError::ResolveRequiresSessionId)?;
     core.verify_submission_attachments(
         node_did,
         session_id,

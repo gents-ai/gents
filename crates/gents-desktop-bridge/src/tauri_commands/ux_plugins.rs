@@ -45,7 +45,7 @@ fn operator_access(
             BridgeErrorCode::EndpointUnreachable,
             format!(
                 "resolving the operator's access to node {node_did}: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             ),
         )
     })

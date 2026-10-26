@@ -8,6 +8,9 @@ pub mod remote_admin;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    pub(crate) type TestError = Box<dyn std::error::Error + Send + Sync>;
+    pub(crate) type TestResult<T = ()> = Result<T, TestError>;
+
     pub(crate) fn node_builder() -> defra_node::NodeBuilder {
         use gents::NodeIdentity as _;
 

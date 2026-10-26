@@ -1,6 +1,4 @@
-use anyhow::{ensure, Context, Result};
-
-use super::super::ManageMutationError;
+use super::super::{ManageMutationError, Result};
 use gents::config_client::{
     patch::{SelfConfigPatch, SelfConfigTarget},
     read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn,
@@ -39,10 +37,7 @@ fn editable_fields(target: SelfConfigTarget) -> Vec<&'static str> {
         .collect()
 }
 
-fn visible(
-    target: SelfConfigTarget,
-    value: &Value,
-) -> Result<Map<String, Value>, ManageMutationError> {
+fn visible(target: SelfConfigTarget, value: &Value) -> Result<Map<String, Value>> {
     let object = value
         .as_object()
         .ok_or(ManageMutationError::ConfigurationNotObject)?;
@@ -65,14 +60,14 @@ async fn read_in_txn(
     let (document_id, value) =
         read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
             .await?
-            .context("This configuration no longer exists. Reopen Runtime Settings.")?;
+            .ok_or(ManageMutationError::ConfigurationMissing)?;
     let composite = gents::graphql::newest_document_composite_commit_in_txn(
         txn,
         &document_id,
         "client.settings.read",
     )
     .await?
-    .context("Configuration has no unambiguous composite revision.")?;
+    .ok_or(ManageMutationError::ConfigurationRevisionAmbiguous)?;
     Ok((
         ConfigEditorRevision {
             document_id,
@@ -135,15 +130,28 @@ pub async fn save_backend_authentication_on(
     auth: &gents::document_config::BackendAuth,
 ) -> Result<()> {
     let patch = vec![("auth".to_owned(), Some(serde_json::to_value(auth)?))];
-    access.transact_write("client.backend.authentication.save", |txn| {
-        let patch = &patch;
-        Box::pin(async move {
-            let (current, _) = read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
-            ensure!(revision_matches(Some(expected), Some(&current)), "Configuration changed since Accounts opened. Reopen Accounts before changing authentication.");
-            super::patch_config_components_in_txn(txn, node_did,
-                &[(SelfConfigTarget::InferenceBackend, id.to_owned(), patch.clone())]).await
+    access
+        .transact_write("client.backend.authentication.save", |txn| {
+            let patch = &patch;
+            Box::pin(async move {
+                let (current, _) =
+                    read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
+                if !revision_matches(Some(expected), Some(&current)) {
+                    return Err(ManageMutationError::AuthenticationRevisionChanged);
+                }
+                super::patch_config_components_in_txn(
+                    txn,
+                    node_did,
+                    &[(
+                        SelfConfigTarget::InferenceBackend,
+                        id.to_owned(),
+                        patch.clone(),
+                    )],
+                )
+                .await
+            })
         })
-    }).await
+        .await
 }
 
 /// A committed save remains successful when its follow-up observation fails.
@@ -157,35 +165,47 @@ pub async fn save_config_editor_on(
     expected: &ConfigEditorRevision,
     content: &str,
 ) -> Result<Option<ConfigEditorDocument>> {
-    ensure!(
-        content.len() <= 512 * 1024,
-        "Configuration exceeds 512 KiB."
-    );
+    if content.len() > 512 * 1024 {
+        return Err(ManageMutationError::ConfigurationTooLarge);
+    }
     let proposed: Map<String, Value> =
-        serde_json::from_str(content).context("Enter a JSON object for configuration.")?;
+        serde_json::from_str(content).map_err(ManageMutationError::ConfigurationNotJson)?;
     let fields = editable_fields(target);
-    ensure!(
-        proposed.keys().all(|key| fields.contains(&key.as_str())),
-        "Only editable configuration fields are allowed. Authentication belongs in Accounts."
-    );
-    let approved = access.transact_write("client.settings.save", |txn| {
-        let proposed = &proposed;
-        let fields = &fields;
-        Box::pin(async move {
-            let (current, retained) = read_in_txn(txn, node_did, target, id).await?;
-            ensure!(revision_matches(Some(expected), Some(&current)),
-                "Configuration changed since this editor opened. Reopen Runtime Settings and apply your edits to the current version.");
-            let retained = visible(target, &retained)?;
-            let patch: SelfConfigPatch = fields.iter().filter_map(|field| {
-                let candidate = proposed.get(*field);
-                (retained.get(*field) != candidate).then(|| ((*field).to_owned(), candidate.cloned()))
-            }).collect();
-            super::patch_config_components_in_txn(txn, node_did, &[(target, id.to_owned(), patch)]).await?;
-            let (_, canonical) = read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
-                .await?.context("Saved configuration disappeared in its transaction.")?;
-            visible(target, &canonical).map_err(anyhow::Error::from)
+    if !proposed.keys().all(|key| fields.contains(&key.as_str())) {
+        return Err(ManageMutationError::ConfigurationFieldNotEditable);
+    }
+    let approved = access
+        .transact_write("client.settings.save", |txn| {
+            let proposed = &proposed;
+            let fields = &fields;
+            Box::pin(async move {
+                let (current, retained) = read_in_txn(txn, node_did, target, id).await?;
+                if !revision_matches(Some(expected), Some(&current)) {
+                    return Err(ManageMutationError::EditorRevisionChanged);
+                }
+                let retained = visible(target, &retained)?;
+                let patch: SelfConfigPatch = fields
+                    .iter()
+                    .filter_map(|field| {
+                        let candidate = proposed.get(*field);
+                        (retained.get(*field) != candidate)
+                            .then(|| ((*field).to_owned(), candidate.cloned()))
+                    })
+                    .collect();
+                super::patch_config_components_in_txn(
+                    txn,
+                    node_did,
+                    &[(target, id.to_owned(), patch)],
+                )
+                .await?;
+                let (_, canonical) =
+                    read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
+                        .await?
+                        .ok_or(ManageMutationError::SavedConfigurationDisappeared)?;
+                visible(target, &canonical)
+            })
         })
-    }).await?;
+        .await?;
     match read_config_editor_on(access, node_did, target, id).await {
         Ok(document) => {
             let content_matches = serde_json::from_str::<Map<String, Value>>(&document.content)
@@ -207,12 +227,13 @@ pub async fn save_config_editor_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestError, TestResult};
     use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
     use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
     use std::sync::Arc;
 
-    async fn fixture() -> Result<ConfigAccess> {
+    async fn fixture() -> TestResult<ConfigAccess> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let config = serde_json::from_value(json!({
@@ -228,7 +249,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -236,7 +257,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_editor_saves_canonical_fields_and_retains_private_authentication() -> Result<()>
+    async fn config_editor_saves_canonical_fields_and_retains_private_authentication() -> TestResult
     {
         let access = fixture().await?;
         let original = read_config_editor_on(
@@ -260,7 +281,7 @@ mod tests {
             &serde_json::to_string(&content)?,
         )
         .await?
-        .context("saved projection")?;
+        .ok_or("saved projection")?;
         assert_eq!(saved.revision.document_id, original.revision.document_id);
         assert_ne!(
             saved.revision.composite_cid,
@@ -278,7 +299,7 @@ mod tests {
                     .await?;
                     assert_eq!(value["name"], "Updated");
                     assert_eq!(value["auth"]["key"], "private-test-credential");
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -306,7 +327,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_editor_allows_only_one_writer_from_the_same_revision() -> Result<()> {
+    async fn config_editor_allows_only_one_writer_from_the_same_revision() -> TestResult {
         let access = fixture().await?;
         let original = read_config_editor_on(
             &access,
@@ -340,7 +361,7 @@ mod tests {
         assert!(
             conflict.to_string().contains("Configuration changed"),
             "{}",
-            ErrorChain(conflict.as_ref())
+            ErrorChain(&conflict)
         );
         let current = read_config_editor_on(
             &access,
@@ -355,7 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn config_editor_native_authentication_rejects_stale_edits_and_retains_public_settings(
-    ) -> Result<()> {
+    ) -> TestResult {
         let access = fixture().await?;
         let (revision, original) =
             read_backend_authentication_on(&access, "did:test:editor", "backend").await?;

@@ -15,7 +15,6 @@ name = "runtime"
 required-features = ["runtime-e2e"]
 
 [dependencies]
-anyhow.workspace = true
 async-trait = "0.1"
 bytes.workspace = true
 clap.workspace = true

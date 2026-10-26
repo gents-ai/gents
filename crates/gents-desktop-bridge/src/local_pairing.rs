@@ -193,7 +193,7 @@ pub(crate) async fn observe_managed_runtime_schema(
         fetch_managed_runtime_status(endpoint, &tokio_util::sync::CancellationToken::new()).await?;
     core.finish_runtime_schema_observation(&observation, &status)
         .await
-        .map_err(|error| ErrorChain(error.as_ref()).to_string())
+        .map_err(|error| ErrorChain(&error).to_string())
 }
 
 pub(crate) async fn ensure_managed_runtime_pairing(
@@ -234,14 +234,14 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                 .map(|requests| {
                     select_managed_request(requests, &target.node_did, live_peer.as_deref())
                 })
-                .map_err(|error| ErrorChain(error.as_ref()).to_string())
+                .map_err(|error| ErrorChain(&error).to_string())
         },
         |request_id| {
             let core = Arc::clone(&core);
             async move {
                 core.resend_status_enrollment(&request_id)
                     .await
-                    .map_err(|error| ErrorChain(error.as_ref()).to_string())
+                    .map_err(|error| ErrorChain(&error).to_string())
             }
         },
         || async {
@@ -251,7 +251,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                 .map_err(|error| {
                     PairingFailure::classify(format!(
                         "requesting managed runtime enrollment: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     ))
                 })
         },
@@ -297,7 +297,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
             core.request_p2p_repair().await.map_err(|error| {
                 format!(
                     "requesting managed route reconciliation: {}",
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 )
             })
         },

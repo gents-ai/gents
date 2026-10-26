@@ -5,12 +5,10 @@
 //! A restart still permits exact replay. Older sends with no retained payload
 //! remain unresolved when the owner cannot prove delivery.
 
-use anyhow::Result;
-
 use super::super::super::mutations::{
     reconcile_unretained_submission, resolve_unresolved_submission, ReceiptError, SubmittedRequest,
 };
-use super::{observe_submitted_request, ClientCore};
+use super::{observe_submitted_request, ClientCore, ClientCoreError, Result};
 
 impl ClientCore {
     pub async fn verify_submission_attachments(
@@ -24,29 +22,27 @@ impl ClientCore {
             super::super::super::mutations::submission_journal::load(&self.node, request_id)
                 .await?;
         if let Some(pending) = retained {
-            anyhow::ensure!(
-                pending.node_did == node_did && pending.session_id == session_id,
-                "The retained request belongs to another session"
-            );
-            anyhow::ensure!(
-                pending.create.input.attachments == attachments,
-                "The retained request contains different attachments"
-            );
+            if !(pending.node_did == node_did && pending.session_id == session_id) {
+                return Err(ClientCoreError::RetainedRequestOtherSession);
+            }
+            if pending.create.input.attachments != attachments {
+                return Err(ClientCoreError::RetainedRequestDifferentAttachments);
+            }
         } else if let Ok(row) = self.request_in_scope(request_id, Some(node_did)) {
-            anyhow::ensure!(
-                row.session_id.as_deref() == Some(session_id),
-                "The retained request belongs to another session"
-            );
-            anyhow::ensure!(
-                row.input
-                    .as_ref()
-                    .map(|i| i.attachments.as_slice())
-                    .unwrap_or_default()
-                    == attachments,
-                "The retained request contains different attachments"
-            );
-        } else {
-            anyhow::ensure!(attachments.is_empty(), "Attachment delivery is still unknown; reconnect to recover the original request before retrying");
+            if row.session_id.as_deref() != Some(session_id) {
+                return Err(ClientCoreError::RetainedRequestOtherSession);
+            }
+            if row
+                .input
+                .as_ref()
+                .map(|i| i.attachments.as_slice())
+                .unwrap_or_default()
+                != attachments
+            {
+                return Err(ClientCoreError::RetainedRequestDifferentAttachments);
+            }
+        } else if !attachments.is_empty() {
+            return Err(ClientCoreError::AttachmentDeliveryUnknown);
         }
         Ok(())
     }
@@ -54,11 +50,15 @@ impl ClientCore {
     /// Map a submit failure, keeping the signed payload of an unknown-outcome
     /// send for identical replay. An unknown outcome is not recorded as a
     /// mutation failure: the request may have been delivered.
-    pub(super) fn submit_failure(&self, error: anyhow::Error) -> anyhow::Error {
-        if !error
-            .downcast_ref::<ReceiptError>()
-            .is_some_and(|error| matches!(error, ReceiptError::OutcomeUnknown(_)))
-        {
+    pub(super) fn submit_failure<E>(&self, error: E) -> ClientCoreError
+    where
+        E: Into<ClientCoreError>,
+    {
+        let error = error.into();
+        if !matches!(
+            error,
+            ClientCoreError::Receipt(ReceiptError::OutcomeUnknown(_))
+        ) {
             return self.record_mutation_error("submit request", error);
         }
         error
@@ -83,16 +83,18 @@ impl ClientCore {
                 .await?;
         let resolved = match retained {
             Some(pending) => {
-                anyhow::ensure!(
-                    pending.node_did == node_did && pending.session_id == session_id,
-                    "unresolved submission {request_id} belongs to another session"
-                );
+                if !(pending.node_did == node_did && pending.session_id == session_id) {
+                    return Err(ClientCoreError::UnresolvedSubmissionOtherSession {
+                        request_id: request_id.to_owned(),
+                    });
+                }
                 // Mailbox answers carry no composer content; they are keyed by
                 // their mailbox item instead.
-                anyhow::ensure!(
-                    pending.accepts_composer_content(content),
-                    "unresolved submission {request_id} is a different message"
-                );
+                if !pending.accepts_composer_content(content) {
+                    return Err(ClientCoreError::UnresolvedSubmissionDifferentMessage {
+                        request_id: request_id.to_owned(),
+                    });
+                }
                 let access = self.session_queue_access(&pending.node_did);
                 match resolve_unresolved_submission(&access, &pending).await {
                     Ok(receipt) => {

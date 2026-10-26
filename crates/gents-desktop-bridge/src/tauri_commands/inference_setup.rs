@@ -49,7 +49,7 @@ where
     if let Err(error) = core.refresh_store().await {
         tracing::warn!(
             target: LOG_TARGET,
-            error = %ErrorChain(error.as_ref()),
+            error = %ErrorChain(&error),
             "refreshing the client store after a configuration write failed"
         );
     }
@@ -291,7 +291,7 @@ pub(crate) async fn desktop_provider_accounts_list(
     let node_did = request.node_did.trim();
     observe_provider_accounts(
         &state.pending_oauth_credentials,
-        core.operator_access(node_did),
+        core.operator_access(node_did).map_err(Into::into),
         node_did,
     )
     .await
@@ -405,12 +405,20 @@ where
     Ok(())
 }
 
+#[derive(Debug, thiserror::Error)]
+enum UsageViewsError {
+    #[error(transparent)]
+    InferenceBackend(#[from] gents::config_client::InferenceBackendError),
+    #[error(transparent)]
+    UsageObservation(#[from] gents::usage_observation::UsageObservationError),
+}
+
 async fn backend_usage_views(
     access: &gents::ConfigAccess,
     node_did: &str,
     reads: Option<&gents_server::accounts::UsageReads>,
     now: chrono::DateTime<chrono::Utc>,
-) -> anyhow::Result<Vec<BackendUsageView>> {
+) -> Result<Vec<BackendUsageView>, UsageViewsError> {
     use gents::backend_provider::BackendProviderOauthExt as _;
     use gents::usage_observation::{account_usage::UsageSource, UsageRead};
 
@@ -545,7 +553,7 @@ where
     let provider = request.provider.trim();
     let credential = retry_pending_credential(
         &state.pending_oauth_credentials,
-        core.operator_access(node_did),
+        core.operator_access(node_did).map_err(Into::into),
         node_did,
         provider,
     )
@@ -685,9 +693,7 @@ mod provider_account_tests {
         assert_user_facing(&error);
 
         let missing_endpoint = require_reachable_configuration(
-            Err(anyhow::anyhow!(
-                "managed node did:key:zAgent has no operator GraphQL endpoint"
-            )),
+            Err(crate::accounts::AccountsError::NotConnected),
             "did:key:zAgent",
             gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         )
@@ -792,7 +798,7 @@ mod provider_account_tests {
 
         let still_down = retry_pending_credential(
             &pending,
-            Err(anyhow::anyhow!("no operator GraphQL endpoint")),
+            Err(crate::accounts::AccountsError::NotConnected),
             node_did,
             provider,
         )
@@ -914,8 +920,10 @@ mod provider_account_tests {
 
     type Writes = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 
-    fn failed_write(_: OAuthCredential) -> std::future::Ready<anyhow::Result<()>> {
-        std::future::ready(Err(anyhow::anyhow!("configuration owner unavailable")))
+    fn failed_write(
+        _: OAuthCredential,
+    ) -> std::future::Ready<Result<(), crate::accounts::AccountsError>> {
+        std::future::ready(Err(crate::accounts::AccountsError::NotConnected))
     }
 
     #[tokio::test]
@@ -942,7 +950,7 @@ mod provider_account_tests {
                         let _ = older_started.send(());
                         let _ = older_released.await;
                         writes.lock().unwrap().push(credential.access_token);
-                        anyhow::Ok(())
+                        Ok::<_, crate::accounts::AccountsError>(())
                     })
                     .await
                     .map(|(_, saved)| saved.is_ok())
@@ -983,7 +991,7 @@ mod provider_account_tests {
                 let writes = writes.clone();
                 move |credential| async move {
                     writes.lock().unwrap().push(credential.access_token);
-                    anyhow::Ok(())
+                    Ok::<_, crate::accounts::AccountsError>(())
                 }
             })
             .await
@@ -1015,7 +1023,7 @@ mod provider_account_tests {
                             let _ = newer_started.send(());
                             let _ = newer_released.await;
                             writes.lock().unwrap().push(credential.access_token);
-                            anyhow::Ok(())
+                            Ok::<_, crate::accounts::AccountsError>(())
                         })
                         .await,
                     CredentialSave::Saved(())
@@ -1032,7 +1040,7 @@ mod provider_account_tests {
                     pending
                         .save(older, move |credential| async move {
                             writes.lock().unwrap().push(credential.access_token);
-                            anyhow::Ok(())
+                            Ok::<_, crate::accounts::AccountsError>(())
                         })
                         .await,
                     CredentialSave::Superseded
@@ -1057,7 +1065,7 @@ mod provider_account_tests {
                     let writes = writes.clone();
                     move |credential| async move {
                         writes.lock().unwrap().push(credential.access_token);
-                        anyhow::Ok(())
+                        Ok::<_, crate::accounts::AccountsError>(())
                     }
                 })
                 .await,
@@ -1100,7 +1108,9 @@ mod provider_account_tests {
         )
     }
 
-    fn saved_write(_: OAuthCredential) -> std::future::Ready<anyhow::Result<()>> {
+    fn saved_write(
+        _: OAuthCredential,
+    ) -> std::future::Ready<Result<(), crate::accounts::AccountsError>> {
         std::future::ready(Ok(()))
     }
 
@@ -1265,7 +1275,7 @@ mod provider_account_tests {
         for account in [a, b] {
             save_issued_credential(
                 &pending,
-                core.operator_access(node_did),
+                core.operator_access(node_did).map_err(Into::into),
                 pending.issue(account),
             )
             .await

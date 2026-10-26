@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::util::Result;
 use gents_desktop_core::client::ClientCore;
 
 use super::super::types::MailboxItemView;
@@ -75,7 +75,8 @@ fn question_reply_for_item(
 }
 
 pub async fn dismiss_mailbox(core: &ClientCore, item_id: &str) -> Result<()> {
-    core.dismiss_mailbox_item(item_id).await.map(|_| ())
+    core.dismiss_mailbox_item(item_id).await?;
+    Ok(())
 }
 
 #[cfg(test)]

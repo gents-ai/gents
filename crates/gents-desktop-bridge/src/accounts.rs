@@ -3,6 +3,16 @@ use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn
 use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+
+#[derive(Debug, thiserror::Error)]
+pub enum AccountsError {
+    #[error("Connect this local runtime before managing its accounts.")]
+    NotConnected,
+    #[error(transparent)]
+    Core(#[from] gents_desktop_core::client::ClientCoreError),
+    #[error(transparent)]
+    OAuthCredential(#[from] gents::oauth_credential::OAuthCredentialError),
+}
 pub(crate) mod login;
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -127,7 +137,7 @@ impl IssuedOAuthCredential {
 pub enum CredentialSave<T> {
     Saved(T),
     Superseded,
-    Failed(anyhow::Error),
+    Failed(AccountsError),
 }
 
 #[derive(Default)]
@@ -182,7 +192,7 @@ impl PendingOAuthCredentials {
     ) -> CredentialSave<T>
     where
         F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<T>>,
+        Fut: std::future::Future<Output = Result<T, AccountsError>>,
     {
         let key = issued.key();
         let gate = self.write_gate(&key);
@@ -215,10 +225,13 @@ impl PendingOAuthCredentials {
         node_did: &str,
         provider: &str,
         write: F,
-    ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
+    ) -> Option<(
+        gents::oauth_credential::OAuthCredential,
+        Result<T, AccountsError>,
+    )>
     where
         F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<T>>,
+        Fut: std::future::Future<Output = Result<T, AccountsError>>,
     {
         let key = self
             .slots()
@@ -267,7 +280,7 @@ pub(crate) fn provider_label(provider: &str) -> &'static str {
 }
 
 pub(crate) async fn require_reachable_configuration(
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: Result<gents::ConfigAccess, AccountsError>,
     node_did: &str,
     provider: &str,
 ) -> Result<(), BridgeError> {
@@ -275,7 +288,7 @@ pub(crate) async fn require_reachable_configuration(
         Ok(access) => list_oauth_credentials_on(&access, node_did)
             .await
             .map(|_| ())
-            .map_err(anyhow::Error::from),
+            .map_err(AccountsError::from),
         Err(error) => Err(error),
     };
     probe.map_err(|error| {
@@ -283,7 +296,7 @@ pub(crate) async fn require_reachable_configuration(
             target: LOG_TARGET,
             node_did,
             provider,
-            error = %ErrorChain(error.as_ref()),
+            error = %ErrorChain(&error),
             "node configuration is not reachable; not starting provider sign-in"
         );
         BridgeError::new(
@@ -297,9 +310,9 @@ pub(crate) async fn require_reachable_configuration(
 }
 
 pub(crate) async fn upsert_through(
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: Result<gents::ConfigAccess, AccountsError>,
     credential: OAuthCredential,
-) -> anyhow::Result<SignIn> {
+) -> Result<SignIn, AccountsError> {
     let access = access?;
     let label = credential.label.clone();
     let mut signed = gents::oauth_credential::store_sign_in(&access, credential, None).await?;
@@ -353,7 +366,7 @@ fn credential_not_saved(credential: &OAuthCredential) -> BridgeError {
 
 pub(crate) async fn save_issued_credential(
     pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: Result<gents::ConfigAccess, AccountsError>,
     issued: IssuedOAuthCredential,
 ) -> Result<SignIn, BridgeError> {
     let credential = issued.credential().clone();
@@ -372,7 +385,7 @@ pub(crate) async fn save_issued_credential(
 
 pub(crate) async fn retry_pending_credential(
     pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: Result<gents::ConfigAccess, AccountsError>,
     node_did: &str,
     provider: &str,
 ) -> Result<OAuthCredential, BridgeError> {
@@ -395,7 +408,7 @@ pub(crate) async fn retry_pending_credential(
 
 pub(crate) async fn observe_provider_accounts(
     pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: Result<gents::ConfigAccess, AccountsError>,
     node_did: &str,
 ) -> Result<Vec<ProviderAccountView>, BridgeError> {
     let held: Vec<ProviderAccountView> = pending
@@ -406,7 +419,7 @@ pub(crate) async fn observe_provider_accounts(
     let stored = match access {
         Ok(access) => list_oauth_credentials_on(&access, node_did)
             .await
-            .map_err(anyhow::Error::from),
+            .map_err(AccountsError::from),
         Err(error) => Err(error),
     };
     match stored {
@@ -419,7 +432,7 @@ pub(crate) async fn observe_provider_accounts(
             tracing::warn!(
                 target: LOG_TARGET,
                 node_did,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "reading stored provider accounts failed; reporting held sign-ins only"
             );
             Ok(held)

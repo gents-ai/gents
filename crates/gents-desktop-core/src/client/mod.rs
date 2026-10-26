@@ -15,13 +15,16 @@ pub(crate) use query::load_inference_configuration;
 
 pub use collection_resolver::{CollectionResolver, CollectionResolverError};
 pub use core::{
-    ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
-    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentRequestResult,
-    P2PHealth, P2PHealthStatus, PairingCollectionStatus, RefreshedRequestProjection,
-    RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
+    ClientCore, ClientCoreError, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
+    ClientRouteStatus, ClientStoreKeyError, ClientStoreKeyProvider, ClientSyncStateSnapshot,
+    EnrollmentRequestResult, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
+    RefreshedRequestProjection, RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
-pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
+pub use mutations::{
+    ChatMutationError, ConfigEditorDocument, ConfigEditorRevision, ManageMutationError,
+    TaskMutationError,
+};
 pub use mutations::{
     DeliveryUnconfirmed, ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
 };

@@ -51,7 +51,35 @@ pub enum BridgeCommandError {
         service_id: String,
         status: Option<String>,
     },
+    #[error("an answer renders its own content; send empty content")]
+    AnswerHasContent,
+    #[error("resolving an earlier send requires its session_id")]
+    ResolveRequiresSessionId,
+    #[error("manual task run request {request_id} was not found")]
+    ManualRunRequestNotFound { request_id: String },
+    #[error("manual schedule run request has no _docID")]
+    ManualScheduleRunNoDocId,
+    #[error("manual task run request has no _docID")]
+    ManualTaskRunNoDocId,
+    #[error("MCP list_tools timed out")]
+    McpListToolsTimedOut(#[source] tokio::time::error::Elapsed),
+    #[error(transparent)]
+    Core(#[from] gents_desktop_core::client::ClientCoreError),
+    #[error(transparent)]
+    McpRegistry(#[from] super::mcp_health::McpRegistryError),
+    #[error(transparent)]
+    Receipt(#[from] gents_desktop_core::client::ReceiptError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    ConfigClient(#[from] gents::config_client::ConfigClientError),
+    #[error(transparent)]
+    BackgroundTools(#[from] gents::background_tools::BackgroundToolsError),
+    #[error(transparent)]
+    McpPool(#[from] gents::mcp_pool::McpPoolError),
 }
+
+pub(crate) type Result<T, E = BridgeCommandError> = std::result::Result<T, E>;
 
 pub(super) fn trim_optional(value: Option<String>) -> Option<String> {
     value

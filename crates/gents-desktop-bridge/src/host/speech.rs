@@ -1,4 +1,3 @@
-use anyhow::{ensure, Context, Result};
 use std::sync::OnceLock;
 
 mod transport;
@@ -59,7 +58,39 @@ pub(super) enum SpeechError {
     WorkerStart,
     #[error("Speech language and voice identifiers must be at most 256 bytes and contain no control characters.")]
     InvalidLabel,
+    #[error("The speech worker returned an invalid tool list.")]
+    InvalidToolList,
+    #[error("The speech worker returned an invalid tool result.")]
+    InvalidToolResult,
+    #[error("The transcription tool must return a nonempty text field of at most 64 KiB.")]
+    InvalidTranscription,
+    #[error("Choose a speech segment of at most 4 KiB.")]
+    SegmentTooLarge,
+    #[error("The playback sample rate is unsupported.")]
+    UnsupportedSampleRate,
+    #[error("The speech tool must return pcm and sampleRate fields for mono signed 16-bit PCM.")]
+    InvalidSpeechClip,
+    #[error("The speech tool returned audio at a different sample rate. Check its speech adapter configuration.")]
+    SampleRateMismatch,
+    #[error("Choose a configured speech tool.")]
+    ToolRequired,
+    #[error("Choose a connected runtime with an operator configuration route to configure speech services.")]
+    RuntimeRequired,
+    #[error("Speech configuration cannot be read for this runtime. Use Gents: Connect Local Runtime on this machine, or choose another service runtime.")]
+    ConfigurationUnreadable,
+    #[error("The selected speech service is no longer enabled for this runtime. Open Gents voice settings.")]
+    ServiceDisabled,
+    #[error(transparent)]
+    Transport(#[from] transport::SpeechTransportError),
+    #[error(transparent)]
+    Clip(#[from] gents_protocol::client_media::MediaPcmError),
+    #[error(transparent)]
+    Registry(#[from] gents::registry::RegistryError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
+
+type Result<T, E = SpeechError> = std::result::Result<T, E>;
 
 #[derive(Default)]
 pub(super) struct SpeechClient {
@@ -104,7 +135,7 @@ impl SpeechClient {
             .await?;
         match result {
             Response::Tools(tools) => Ok(tools),
-            Response::Value(_) => anyhow::bail!("The speech worker returned an invalid tool list."),
+            Response::Value(_) => Err(SpeechError::InvalidToolList),
         }
     }
 
@@ -126,9 +157,7 @@ impl SpeechClient {
             .get("text")
             .and_then(Value::as_str)
             .filter(|text| !text.trim().is_empty() && text.len() <= 64 * 1024)
-            .context(
-                "The transcription tool must return a nonempty text field of at most 64 KiB.",
-            )?;
+            .ok_or(SpeechError::InvalidTranscription)?;
         Ok(text.to_owned())
     }
 
@@ -137,14 +166,12 @@ impl SpeechClient {
         core: &ClientCore,
         request: SpeechSynthesizeRequest,
     ) -> Result<MediaPcmClip> {
-        ensure!(
-            !request.text.trim().is_empty() && request.text.len() <= 4096,
-            "Choose a speech segment of at most 4 KiB."
-        );
-        ensure!(
-            (8_000..=192_000).contains(&request.sample_rate),
-            "The playback sample rate is unsupported."
-        );
+        if request.text.trim().is_empty() || request.text.len() > 4096 {
+            return Err(SpeechError::SegmentTooLarge);
+        }
+        if !(8_000..=192_000).contains(&request.sample_rate) {
+            return Err(SpeechError::UnsupportedSampleRate);
+        }
         validate_label(request.language.as_deref())?;
         validate_label(request.voice.as_deref())?;
         let mut arguments = json!({
@@ -159,13 +186,12 @@ impl SpeechClient {
             arguments["voice"] = json!(voice);
         }
         let result = self.call(core, &request.tool, arguments).await?;
-        let clip: MediaPcmClip = serde_json::from_value(result).map_err(|_| {
-            anyhow::anyhow!(
-                "The speech tool must return pcm and sampleRate fields for mono signed 16-bit PCM."
-            )
-        })?;
+        let clip: MediaPcmClip =
+            serde_json::from_value(result).map_err(|_| SpeechError::InvalidSpeechClip)?;
         clip.validate()?;
-        ensure!(clip.sample_rate == request.sample_rate, "The speech tool returned audio at a different sample rate. Check its speech adapter configuration.");
+        if clip.sample_rate != request.sample_rate {
+            return Err(SpeechError::SampleRateMismatch);
+        }
         Ok(clip)
     }
 
@@ -178,10 +204,9 @@ impl SpeechClient {
         tool: &SpeechToolReference,
         arguments: Value,
     ) -> Result<Value> {
-        ensure!(
-            !tool.tool_name.trim().is_empty() && tool.tool_name.len() <= 256,
-            "Choose a configured speech tool."
-        );
+        if tool.tool_name.trim().is_empty() || tool.tool_name.len() > 256 {
+            return Err(SpeechError::ToolRequired);
+        }
         let route = route(core, &tool.node_did, &tool.service_id).await?;
         let result = self
             .transport()?
@@ -198,13 +223,11 @@ impl SpeechClient {
             .await?;
         match result {
             Response::Value(value) => Ok(value),
-            Response::Tools(_) => {
-                anyhow::bail!("The speech worker returned an invalid tool result.")
-            }
+            Response::Tools(_) => Err(SpeechError::InvalidToolResult),
         }
     }
 
-    fn transport(&self) -> Result<&SpeechTransport, SpeechError> {
+    fn transport(&self) -> Result<&SpeechTransport> {
         self.transport
             .get_or_init(|| SpeechTransport::new().ok())
             .as_ref()
@@ -217,11 +240,18 @@ async fn services(
     node_did: &str,
 ) -> Result<Vec<gents::document_config::ToolServiceRegistry>> {
     let records = core.peer_records().await;
-    ensure!(records.iter().filter(|record| record.node_did == node_did).count() == 1,
-        "Choose a connected runtime with an operator configuration route to configure speech services.");
-    let access = core.operator_graphql(node_did).map(gents::ConfigAccess::Graphql).context(
-        "Speech configuration cannot be read for this runtime. Use Gents: Connect Local Runtime on this machine, or choose another service runtime."
-    )?;
+    if records
+        .iter()
+        .filter(|record| record.node_did == node_did)
+        .count()
+        != 1
+    {
+        return Err(SpeechError::RuntimeRequired);
+    }
+    let access = core
+        .operator_graphql(node_did)
+        .map(gents::ConfigAccess::Graphql)
+        .ok_or(SpeechError::ConfigurationUnreadable)?;
     Ok(gents::registry::configured_mcp_services_on(&access, node_did).await?)
 }
 
@@ -230,15 +260,18 @@ async fn route(
     node_did: &str,
     service_id: &str,
 ) -> Result<gents::registry::ResolvedMcpService> {
-    let service = services(core, node_did).await?.into_iter().find(|service| service.enabled && service.service_id == service_id)
-        .context("The selected speech service is no longer enabled for this runtime. Open Gents voice settings.")?;
+    let service = services(core, node_did)
+        .await?
+        .into_iter()
+        .find(|service| service.enabled && service.service_id == service_id)
+        .ok_or(SpeechError::ServiceDisabled)?;
     let hostname = hostname::get()?.to_string_lossy().into_owned();
     Ok(gents::registry::resolve_mcp_service(
         &service, &hostname, None,
     )?)
 }
 
-fn validate_label(value: Option<&str>) -> Result<(), SpeechError> {
+fn validate_label(value: Option<&str>) -> Result<()> {
     if value.is_some_and(|value| value.len() > 256 || value.chars().any(char::is_control)) {
         return Err(SpeechError::InvalidLabel);
     }

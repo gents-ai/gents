@@ -179,11 +179,9 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> TestR
         .await
         .expect_err("an unavailable managed operator endpoint must fail closed");
     assert!(
-        ErrorChain(error.as_ref())
-            .to_string()
-            .contains("127.0.0.1:1"),
+        ErrorChain(&error).to_string().contains("127.0.0.1:1"),
         "the managed endpoint error must stay visible: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     let response = core
@@ -494,11 +492,11 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> TestResult<()> {
         .await
         .expect_err("tampered terminal receipt must not produce hydration progress");
     assert!(
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
             .to_string()
             .contains("signature verification failed"),
         "unexpected fail-closed reason: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     Arc::new(core).shutdown().await?;

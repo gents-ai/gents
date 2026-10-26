@@ -8,8 +8,8 @@ pub use request::{
     ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
 pub use request::{
-    resend_request, retry_request, submit_request, submit_task_request, SubmitRequestOptions,
-    SubmittedRequest,
+    resend_request, retry_request, submit_request, submit_task_request, ChatMutationError,
+    SubmitRequestOptions, SubmittedRequest,
 };
 pub use session::rename_session;
 

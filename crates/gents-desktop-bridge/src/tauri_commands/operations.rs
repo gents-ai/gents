@@ -1,7 +1,6 @@
 use crate::error::BridgeError;
 use gents_protocol::error_chain::ErrorChain;
 
-use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -357,10 +356,18 @@ pub async fn list_backends_with_health_for_core(
     Ok(views)
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("list InferenceCall for backend {backend_id}")]
+struct RecentCallsError {
+    backend_id: String,
+    #[source]
+    source: gents::config_client::ConfigClientError,
+}
+
 async fn fetch_recent_calls(
     node: &EmbeddedNode,
     backend_id: &str,
-) -> Result<Vec<InferenceCallSummaryView>, anyhow::Error> {
+) -> Result<Vec<InferenceCallSummaryView>, RecentCallsError> {
     let escaped_id = escape_graphql_string(backend_id);
     let query = format!(
         r#"query {{
@@ -387,7 +394,10 @@ async fn fetch_recent_calls(
 
     let resp = graphql_with_transaction_retry(node, &query, "list InferenceCall by backend")
         .await
-        .with_context(|| format!("list InferenceCall for backend {backend_id}"))?;
+        .map_err(|source| RecentCallsError {
+            backend_id: backend_id.to_owned(),
+            source,
+        })?;
 
     Ok(resp
         .data

@@ -3,7 +3,6 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, RwLock as StdRwLock};
 
-use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
@@ -29,6 +28,8 @@ use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
 use super::{ClientCore, ClientCoreError};
+
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 mod pending_submissions;
 
 #[cfg(test)]
@@ -196,17 +197,17 @@ async fn merge_accepted_edit_projection(
             rapidhash::RapidHashSet::with_capacity_and_hasher(doc_ids.len(), Default::default());
         doc_ids.retain(|doc_id| unique.insert(doc_id.clone()));
         if doc_ids.is_empty() {
-            return anyhow::Result::<()>::Ok(());
+            return Ok::<(), ClientCoreError>(());
         }
         let captured = store.capture_read();
         let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
         for row in &rows {
-            anyhow::ensure!(
-                row.node_did.as_deref() == Some(node_did)
-                    && row.session_id.as_deref() == Some(session_id)
-                    && row.requester_did.as_deref() == Some(requester_did),
-                "pending edit request patch crossed its node, session, or requester scope"
-            );
+            if !(row.node_did.as_deref() == Some(node_did)
+                && row.session_id.as_deref() == Some(session_id)
+                && row.requester_did.as_deref() == Some(requester_did))
+            {
+                return Err(ClientCoreError::PendingEditCrossedScope);
+            }
         }
         let patch = ClientStore::from_rows(ClientStoreRows {
             requests: rows,
@@ -214,9 +215,9 @@ async fn merge_accepted_edit_projection(
         });
         if store.merge_chat_patch_at_read(&captured, patch).is_none() {
             store.request_resync(Some(node_did));
-            anyhow::bail!("accepted edit projection read became stale before publication");
+            return Err(ClientCoreError::AcceptedEditProjectionStale);
         }
-        anyhow::Result::<()>::Ok(())
+        Ok(())
     }
     .await;
     if let Err(error) = result {
@@ -355,10 +356,10 @@ pub(super) fn ensure_peer_chat_ready_at(
 ) -> Result<()> {
     match peer_record {
         Some(record) if record.is_chat_ready_at(now) => Ok(()),
-        Some(_) => bail!(
-            "the selected deployment route is not ready; no request was saved (wait for pairing repair or inspect pairing status)"
-        ),
-        None => bail!("no saved deployment route owns node {node_did}; no request was saved"),
+        Some(_) => Err(ClientCoreError::DeploymentRouteNotReady),
+        None => Err(ClientCoreError::NoDeploymentRoute {
+            node_did: node_did.to_owned(),
+        }),
     }
 }
 
@@ -399,8 +400,7 @@ impl ClientCore {
         graphql: &str,
         node_home: &str,
     ) -> Result<PeerRecord> {
-        Ok(self
-            .sync_state
+        self.sync_state
             .upsert_local_standard_peer(
                 normalize_required("label", label)?,
                 normalize_required("addr", addr)?,
@@ -408,7 +408,7 @@ impl ClientCore {
                 normalize_required("graphql", graphql)?,
                 normalize_required("node_home", node_home)?,
             )
-            .await?)
+            .await
     }
 
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
@@ -421,7 +421,7 @@ impl ClientCore {
                 self.clear_mutation_error();
                 Ok(item)
             }
-            Err(error) => Err(self.record_mutation_error("dismiss mailbox item", error.into())),
+            Err(error) => Err(self.record_mutation_error("dismiss mailbox item", error)),
         }
     }
 
@@ -521,11 +521,10 @@ impl ClientCore {
             return Ok(());
         };
         match super::super::query::session_unsendable_reason(session, sender_did) {
-            Some(reason) => Err(crate::error::BridgeError::new(
+            Some(reason) => Err(ClientCoreError::Bridge(crate::error::BridgeError::new(
                 crate::error::BridgeErrorCode::SessionNotOwned,
                 reason,
-            )
-            .into()),
+            ))),
             None => Ok(()),
         }
     }
@@ -594,7 +593,7 @@ impl ClientCore {
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
-            .context("no saved deployment route owns this node")?;
+            .ok_or(ClientCoreError::NoRouteOwnsNode)?;
         Ok(gents::lifecycle::pending_user_queue_projection(
             &self
                 .operator_observation_graphql(node_did)
@@ -695,7 +694,7 @@ impl ClientCore {
                 self.clear_mutation_error();
                 Ok(receipt)
             }
-            Err(error) => Err(self.record_mutation_error("edit pending messages", error.into())),
+            Err(error) => Err(self.record_mutation_error("edit pending messages", error)),
         }
     }
 
@@ -718,18 +717,17 @@ impl ClientCore {
         else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            row.session_id.as_deref() == Some(session_id),
-            "request output crossed the selected session scope"
-        );
+        if row.session_id.as_deref() != Some(session_id) {
+            return Err(ClientCoreError::RequestOutputCrossedSession);
+        }
         let refs = projection.requests.iter().collect::<Vec<_>>();
         let answer = super::super::store::request_answer_owner(&refs, &row);
-        anyhow::ensure!(
-            answer.node_did.as_deref() == Some(node_did)
-                && answer.session_id.as_deref() == Some(session_id)
-                && answer.requester_did == row.requester_did,
-            "request answer crossed its admitted scope"
-        );
+        if !(answer.node_did.as_deref() == Some(node_did)
+            && answer.session_id.as_deref() == Some(session_id)
+            && answer.requester_did == row.requester_did)
+        {
+            return Err(ClientCoreError::RequestAnswerCrossedScope);
+        }
         if !answer.is_terminal() || gents::lifecycle::folded_into(answer).is_some() {
             return Ok(None);
         }
@@ -740,7 +738,7 @@ impl ClientCore {
                 .lock()
                 .await
                 .as_ref()
-                .context("local store access is unavailable")?
+                .ok_or(ClientCoreError::LocalStoreAccessUnavailable)?
                 .clone(),
         };
         Ok(Some(
@@ -761,8 +759,12 @@ impl ClientCore {
             gents::run_timeline_fetch::load_run_timeline(&access, request_id),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
-        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
+        .map_err(|_| ClientCoreError::TimelineTimedOut {
+            request_id: request_id.to_owned(),
+        })?
+        .map_err(|error| ClientCoreError::LoadTimeline {
+            detail: strip_cli_operator_hints(&error.to_string()),
+        })?;
         Ok(timeline)
     }
 
@@ -814,7 +816,9 @@ impl ClientCore {
                 self.sync_state
                     .set_pairing_ready(&stale, false)
                     .await
-                    .context("persisting expired enrollment write fence")?;
+                    .map_err(|source| ClientCoreError::PersistExpiredEnrollmentFence {
+                        source: Box::new(source),
+                    })?;
             }
             ensure_peer_chat_ready_at(node_did, Some(&stale), now)?;
         }
@@ -830,7 +834,7 @@ impl ClientCore {
         AgentRequestAdmissionRecord,
         String,
     )> {
-        let record = record.context("chat target has no current owned peer route")?;
+        let record = record.ok_or(ClientCoreError::NoOwnedPeerRoute)?;
         if record.is_enrollment() {
             let request_id = required_peer_generation(
                 "enrollment_request_id",
@@ -847,7 +851,7 @@ impl ClientCore {
             let sequence = record
                 .enrollment_authorization_sequence
                 .filter(|value| *value > 0)
-                .context("enrollment authorization sequence is missing")?;
+                .ok_or(ClientCoreError::EnrollmentAuthorizationSequenceMissing)?;
             let expires_at = required_peer_generation(
                 "enrollment_authorization_expires_at",
                 record.enrollment_authorization_expires_at.as_deref(),
@@ -864,10 +868,9 @@ impl ClientCore {
             );
             return Ok((signer, admission, self.requester_did(record)));
         }
-        anyhow::ensure!(
-            record.source.as_deref() == Some("local-standard") && record.node_did == node_did,
-            "chat target is not owned by enrollment or a local standard runtime"
-        );
+        if !(record.source.as_deref() == Some("local-standard") && record.node_did == node_did) {
+            return Err(ClientCoreError::ChatTargetNotOwned);
+        }
         let signer: Arc<dyn gents::identity::NodeIdentity> =
             match gents::identity::RegisteredIdentity::from_registered_did(node_did, None) {
                 Ok(identity) => Arc::new(identity),
@@ -879,10 +882,9 @@ impl ClientCore {
                     crate::local_runtime::load_standard_runtime_identity(Path::new(home))?
                 }
             };
-        anyhow::ensure!(
-            signer.did() == node_did,
-            "local request signer does not own target node"
-        );
+        if signer.did() != node_did {
+            return Err(ClientCoreError::SignerDoesNotOwnNode);
+        }
         Ok((
             signer,
             AgentRequestAdmissionRecord::local_self(node_did),
@@ -927,7 +929,7 @@ impl ClientCore {
                     .lock()
                     .await
                     .as_ref()
-                    .context("local store access is unavailable")?
+                    .ok_or(ClientCoreError::LocalStoreAccessUnavailable)?
                     .clone(),
                 "local",
             ),
@@ -1067,18 +1069,18 @@ impl ClientCore {
     ) -> Result<gents::session::ForkOutcome> {
         let node_did = normalize_required("node_did", node_did)?;
         let session_id = normalize_required("session_id", session_id)?;
-        anyhow::ensure!(!message_key.trim().is_empty(), "message_key is required");
+        if message_key.trim().is_empty() {
+            return Err(ClientCoreError::MessageKeyRequired);
+        }
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
-        let requester = self.requester_did(
-            peer.as_ref()
-                .context("chat target has no current owned peer route")?,
-        );
-        let access = self.operator_graphql(node_did)
+        let requester = self.requester_did(peer.as_ref().ok_or(ClientCoreError::NoOwnedPeerRoute)?);
+        let access = self
+            .operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .context("Editing a message requires a direct runtime connection. Reconnect the local runtime and try again.")?;
+            .ok_or(ClientCoreError::DirectRuntimeRequiredForEdit)?;
         gents::session::fork_on(
             &access,
             gents::session::ForkParams {
@@ -1090,7 +1092,7 @@ impl ClientCore {
             },
         )
         .await
-        .map_err(Into::into)
+        .map_err(ClientCoreError::from)
     }
 
     pub async fn rename_session(
@@ -1123,7 +1125,7 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("rename session", error.into())),
+            Err(error) => Err(self.record_mutation_error("rename session", error)),
         }
     }
 
@@ -1132,7 +1134,10 @@ impl ClientCore {
         let result = async {
             let deleted = mutations::delete_skill_on(&access, source_node_did, skill_id).await?;
             if deleted == 0 {
-                bail!("no Skill document with skill_id {skill_id:?} for {source_node_did}");
+                return Err(ClientCoreError::NoSkillDeleted {
+                    skill_id: skill_id.to_owned(),
+                    node_did: source_node_did.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1161,7 +1166,11 @@ impl ClientCore {
         let result = async {
             let deleted = mutations::delete_task_on(&access, source_node_did, task_id).await?;
             if deleted == 0 {
-                bail!("no Task document with task_id {task_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "Task",
+                    field: "task_id",
+                    id: task_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1191,7 +1200,11 @@ impl ClientCore {
             let deleted =
                 mutations::delete_schedule_on(&access, source_node_did, schedule_id).await?;
             if deleted == 0 {
-                bail!("no Schedule document with schedule_id {schedule_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "Schedule",
+                    field: "schedule_id",
+                    id: schedule_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1221,7 +1234,11 @@ impl ClientCore {
             let deleted =
                 mutations::delete_trigger_on(&access, source_node_did, trigger_id).await?;
             if deleted == 0 {
-                bail!("no Trigger document with trigger_id {trigger_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "Trigger",
+                    field: "trigger_id",
+                    id: trigger_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1256,7 +1273,11 @@ impl ClientCore {
                 mutations::delete_inference_backend_on(&access, source_node_did, backend_id)
                     .await?;
             if deleted == 0 {
-                bail!("no InferenceBackend document with backend_id {backend_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "InferenceBackend",
+                    field: "backend_id",
+                    id: backend_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1291,7 +1312,11 @@ impl ClientCore {
                 mutations::delete_inference_profile_on(&access, source_node_did, profile_id)
                     .await?;
             if deleted == 0 {
-                bail!("no InferenceProfile document with profile_id {profile_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "InferenceProfile",
+                    field: "profile_id",
+                    id: profile_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1320,7 +1345,11 @@ impl ClientCore {
         let result = async {
             let deleted = mutations::delete_tools_on(&access, source_node_did, tools_id).await?;
             if deleted == 0 {
-                bail!("no Tools document with tools_id {tools_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "Tools",
+                    field: "tools_id",
+                    id: tools_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1346,7 +1375,11 @@ impl ClientCore {
                 mutations::delete_tool_service_registry_on(&access, source_node_did, service_id)
                     .await?;
             if deleted == 0 {
-                bail!("no ToolServiceRegistry document with service_id {service_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "ToolServiceRegistry",
+                    field: "service_id",
+                    id: service_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1375,7 +1408,11 @@ impl ClientCore {
         let result = async {
             let deleted = mutations::delete_agent_on(&access, source_node_did, agent_id).await?;
             if deleted == 0 {
-                bail!("no Agent document with agent_id {agent_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "Agent",
+                    field: "agent_id",
+                    id: agent_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1400,7 +1437,11 @@ impl ClientCore {
             let deleted =
                 mutations::delete_agent_context_on(&access, source_node_did, context_id).await?;
             if deleted == 0 {
-                bail!("no AgentContext document with context_id {context_id:?}");
+                return Err(ClientCoreError::NoDocumentDeleted {
+                    collection: "AgentContext",
+                    field: "context_id",
+                    id: context_id.to_owned(),
+                });
             }
             Ok(())
         }
@@ -1469,11 +1510,7 @@ impl ClientCore {
         request_id: &str,
         node_did: Option<&str>,
     ) -> Result<AgentRequestRow> {
-        Ok(request_in_scope(
-            &self.store.snapshot().requests,
-            request_id,
-            node_did,
-        )?)
+        request_in_scope(&self.store.snapshot().requests, request_id, node_did)
     }
 
     pub async fn resend_request_in_scope(
@@ -1486,7 +1523,7 @@ impl ClientCore {
         let node_did = stale
             .node_did
             .as_deref()
-            .context("stale request has no node_did")?;
+            .ok_or(ClientCoreError::StaleRequestNoNodeDid)?;
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
@@ -1535,17 +1572,21 @@ impl ClientCore {
                     .as_deref()
                     .is_none_or(|selected| request.node_did.as_deref() == Some(selected))
             });
-        let request = requests
-            .next()
-            .with_context(|| format!("request {request_id} is absent from the selected node"))?;
-        anyhow::ensure!(
-            requests.next().is_none(),
-            "request {request_id} is ambiguous across the selected node scope"
-        );
+        let request =
+            requests
+                .next()
+                .ok_or_else(|| ClientCoreError::RequestAbsentFromSelectedNode {
+                    request_id: request_id.to_owned(),
+                })?;
+        if requests.next().is_some() {
+            return Err(ClientCoreError::RequestAmbiguousInSelectedNode {
+                request_id: request_id.to_owned(),
+            });
+        }
         let node_did = request
             .node_did
             .as_deref()
-            .context("request has no node_did")?;
+            .ok_or(ClientCoreError::RequestNoNodeDid)?;
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
@@ -1561,7 +1602,7 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("interrupt request", error.into())),
+            Err(error) => Err(self.record_mutation_error("interrupt request", error)),
         }
     }
 
@@ -1570,7 +1611,7 @@ impl ClientCore {
         let node_did = parent
             .node_did
             .as_deref()
-            .context("retry parent has no node_did")?;
+            .ok_or(ClientCoreError::RetryParentNoNodeDid)?;
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
@@ -1618,13 +1659,17 @@ impl ClientCore {
             .iter()
             .find(|record| record.peer_id == peer_id)
             .cloned()
-            .with_context(|| format!("peer {peer_id} not found"))?;
+            .ok_or_else(|| ClientCoreError::PeerNotFound {
+                peer_id: peer_id.to_owned(),
+            })?;
         let mut renamed = record.clone();
         renamed.label = label.to_string();
         self.sync_state
             .replace_record(&record, renamed)
             .await?
-            .with_context(|| format!("peer {peer_id} changed while it was being renamed"))?;
+            .ok_or_else(|| ClientCoreError::PeerChangedDuringRename {
+                peer_id: peer_id.to_owned(),
+            })?;
         self.clear_mutation_error();
         Ok(())
     }
@@ -1712,8 +1757,8 @@ impl ClientCore {
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
-            .context("no runtime record for this node")?;
-        crate::local_runtime::operator_signer(&record).map_err(anyhow::Error::from)
+            .ok_or(ClientCoreError::NoRuntimeRecord)?;
+        Ok(crate::local_runtime::operator_signer(&record)?)
     }
 
     pub fn operator_access(&self, node_did: &str) -> Result<ConfigAccess> {
@@ -1726,11 +1771,11 @@ impl ClientCore {
             Some(record) if record.operator_graphql().is_some() => {
                 crate::local_runtime::operator_endpoint(&record)
                     .map(ConfigAccess::Graphql)
-                    .context("local standard runtime has no operator GraphQL endpoint")
+                    .ok_or(ClientCoreError::LocalStandardNoOperatorEndpoint)
             }
-            Some(_) => anyhow::bail!(
-                "managed node {node_did} has no operator GraphQL endpoint; refusing a desktop-replica configuration fallback"
-            ),
+            Some(_) => Err(ClientCoreError::ManagedNodeNoOperatorEndpoint {
+                node_did: node_did.to_owned(),
+            }),
             None => Ok(ConfigAccess::local(self.node_arc())),
         }
     }
@@ -1783,8 +1828,8 @@ impl ClientCore {
         let access = self
             .operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .context("Connect this local runtime before editing its configuration.")?;
-        mutations::read_config_editor_on(&access, node_did, target, id).await
+            .ok_or(ClientCoreError::ConnectBeforeEditingConfiguration)?;
+        Ok(mutations::read_config_editor_on(&access, node_did, target, id).await?)
     }
 
     pub async fn read_backend_authentication(
@@ -1795,8 +1840,8 @@ impl ClientCore {
         let access = self
             .operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .context("Connect this local runtime before changing authentication.")?;
-        mutations::read_backend_authentication_on(&access, node_did, id).await
+            .ok_or(ClientCoreError::ConnectBeforeChangingAuthentication)?;
+        Ok(mutations::read_backend_authentication_on(&access, node_did, id).await?)
     }
 
     pub async fn save_backend_authentication(
@@ -1809,7 +1854,7 @@ impl ClientCore {
         let access = self
             .operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .context("Connect this local runtime before changing authentication.")?;
+            .ok_or(ClientCoreError::ConnectBeforeChangingAuthentication)?;
         mutations::save_backend_authentication_on(&access, node_did, id, revision, auth).await?;
         if self.refresh_config_source(node_did).await.is_err() {
             tracing::warn!("Authentication saved; client observation will resynchronize");
@@ -1829,7 +1874,7 @@ impl ClientCore {
         let access = self
             .operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .context("Connect this local runtime before editing its configuration.")?;
+            .ok_or(ClientCoreError::ConnectBeforeEditingConfiguration)?;
         let saved =
             mutations::save_config_editor_on(&access, node_did, target, id, revision, content)
                 .await?;
@@ -2003,13 +2048,14 @@ impl ClientCore {
             .records()
             .into_iter()
             .find(|record| record.node_did == node)
-            .context("Connect this runtime before setting up access review.")?;
-        anyhow::ensure!(gents::identity::can_mint_defradb_bearer(node),
-            "Open Runtime Settings to connect this runtime's configuration before choosing Approve for me.");
+            .ok_or(ClientCoreError::ConnectBeforeAccessReview)?;
+        if !gents::identity::can_mint_defradb_bearer(node) {
+            return Err(ClientCoreError::AccessReviewRequiresConfiguration);
+        }
         let access = crate::local_runtime::operator_endpoint(&record)
             .map(ConfigAccess::Graphql)
-            .context("Access review setup requires this runtime's operator endpoint.")?;
-        mutations::prepare_access_review_task_on(&access, node, agent, preferred).await
+            .ok_or(ClientCoreError::AccessReviewRequiresOperatorEndpoint)?;
+        Ok(mutations::prepare_access_review_task_on(&access, node, agent, preferred).await?)
     }
 
     pub async fn save_task(&self, row: &gents::document_config::Task) -> Result<()> {
@@ -2104,7 +2150,11 @@ impl ClientCore {
         match mutations::delete_event_source_on(&access, node_did, event_source_id).await {
             Ok(0) => Err(self.record_mutation_error(
                 "delete event source",
-                anyhow::anyhow!("no EventSource document with event_source_id {event_source_id:?}"),
+                ClientCoreError::NoDocumentDeleted {
+                    collection: "EventSource",
+                    field: "event_source_id",
+                    id: event_source_id.to_owned(),
+                },
             )),
             Ok(_) => {
                 self.refresh_config_source(node_did).await?;
@@ -2117,7 +2167,7 @@ impl ClientCore {
 
     pub async fn fire_task_now(&self, task_row: &Task, args: serde_json::Value) -> Result<String> {
         let actor = identity::Did::new(self.node_identity.did().to_owned())
-            .context("desktop node DID is not ACP-addressable")?;
+            .map_err(ClientCoreError::NodeDidNotAcpAddressable)?;
         match mutations::fire_task_now(&self.node, actor, task_row, args).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
@@ -2150,7 +2200,7 @@ impl ClientCore {
 
     pub async fn fire_schedule_now(&self, row: &Schedule) -> Result<String> {
         let actor = identity::Did::new(self.node_identity.did().to_owned())
-            .context("desktop node DID is not ACP-addressable")?;
+            .map_err(ClientCoreError::NodeDidNotAcpAddressable)?;
         match mutations::fire_schedule_now(&self.node, actor, row).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
@@ -2348,7 +2398,7 @@ impl ClientCore {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
         if let Some(reason) = self.session_unreadable_reason(session_id, node_did) {
-            bail!("{reason}");
+            return Err(ClientCoreError::SessionUnreadable { reason });
         }
         let (progress, _, request) = self
             .load_hydration_observation(session_id, node_did)
@@ -2364,7 +2414,7 @@ impl ClientCore {
             false,
             false,
         ) {
-            bail!("session hydration retry requires a failed attempt for the selected session");
+            return Err(ClientCoreError::HydrationRetryRequiresFailedAttempt);
         }
         if !self
             .admit_session_hydration_request(
@@ -2376,7 +2426,7 @@ impl ClientCore {
             )
             .await?
         {
-            bail!("session hydration retry requires a failed attempt for the selected session");
+            return Err(ClientCoreError::HydrationRetryRequiresFailedAttempt);
         }
         Ok(())
     }
@@ -2394,14 +2444,13 @@ impl ClientCore {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
         let evidence = match action {
-            Action::PassiveStart => Some(
-                evidence.context("passive hydration admission requires local start evidence")?,
-            ),
+            Action::PassiveStart => {
+                Some(evidence.ok_or(ClientCoreError::PassiveHydrationRequiresEvidence)?)
+            }
             Action::ExplicitRetry => {
-                anyhow::ensure!(
-                    evidence.is_none(),
-                    "explicit hydration retry does not accept passive start evidence"
-                );
+                if evidence.is_some() {
+                    return Err(ClientCoreError::ExplicitHydrationRetryWithEvidence);
+                }
                 None
             }
         };
@@ -2482,10 +2531,9 @@ impl ClientCore {
                         &request_response,
                         "SessionHydrationRequest",
                     )?;
-                    anyhow::ensure!(
-                        requests.len() <= 1,
-                        "session hydration request key resolved to multiple rows"
-                    );
+                    if requests.len() > 1 {
+                        return Err(ClientCoreError::HydrationRequestKeyAmbiguous);
+                    }
                     let request = requests.first();
                     if let Some(request) = request {
                         request.ensure_target(&request_key, &expected_requester_did, node_did, session_id)?;
@@ -2507,8 +2555,12 @@ impl ClientCore {
                             Some(_) | None if action == Action::PassiveStart => {
                                 gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
                             }
-                            Some(status) => anyhow::bail!("unknown session hydration request status {status:?}"),
-                            None => anyhow::bail!("session hydration request is missing status"),
+                            Some(status) => {
+                                return Err(ClientCoreError::UnknownHydrationStatus {
+                                    status: status.to_owned(),
+                                })
+                            }
+                            None => return Err(ClientCoreError::HydrationStatusMissing),
                         },
                     };
                     let evidence = evidence.as_ref();
@@ -2532,12 +2584,10 @@ impl ClientCore {
                     };
                     let rows = gents::graphql::mutation_documents(&response, field)?;
                     let changed = rows.is_some_and(|rows| !rows.is_empty());
-                    if action == Action::PassiveStart {
-                        anyhow::ensure!(
-                            changed,
-                            "initial session hydration request create returned no document"
-                        );
-                    }
+                    if action == Action::PassiveStart
+                        && !changed {
+                            return Err(ClientCoreError::HydrationCreateReturnedNoDocument);
+                        }
                     Ok(changed)
                 })
             },
@@ -2603,7 +2653,11 @@ impl ClientCore {
             .expect("mutation error lock poisoned") = None;
     }
 
-    fn record_mutation_error(&self, operation: &str, error: anyhow::Error) -> anyhow::Error {
+    fn record_mutation_error<E>(&self, operation: &str, error: E) -> ClientCoreError
+    where
+        E: Into<ClientCoreError>,
+    {
+        let error = error.into();
         let message = format!("{operation} failed: {error}");
         *self
             .last_mutation_error
@@ -2652,10 +2706,9 @@ impl HydrationAdmissionRequestRow {
             ("node_did", self.node_did.as_deref(), node_did),
             ("session_id", self.session_id.as_deref(), session_id),
         ] {
-            anyhow::ensure!(
-                actual == Some(expected),
-                "session hydration request {field} does not match the selected target"
-            );
+            if actual != Some(expected) {
+                return Err(ClientCoreError::HydrationTargetMismatch { field });
+            }
         }
         Ok(())
     }
@@ -2668,11 +2721,16 @@ where
     let data = response
         .get("data")
         .and_then(serde_json::Value::as_object)
-        .context("hydration admission transaction omitted response data")?;
+        .ok_or(ClientCoreError::HydrationResponseMissingData)?;
     let rows = data
         .get(field)
-        .with_context(|| format!("hydration admission transaction omitted {field}"))?;
-    Vec::<T>::deserialize(rows).with_context(|| format!("decode {field} transaction rows"))
+        .ok_or_else(|| ClientCoreError::HydrationResponseMissingField {
+            field: field.to_owned(),
+        })?;
+    Vec::<T>::deserialize(rows).map_err(|source| ClientCoreError::DecodeHydrationRows {
+        field: field.to_owned(),
+        source,
+    })
 }
 
 fn hydration_request_admission_query(request_key_gql: &str) -> String {
@@ -2847,7 +2905,7 @@ async fn load_hydration_server_state(
         .cloned()
         .unwrap_or_default();
     if rows.len() > 1 {
-        bail!("session hydration request key resolved to multiple rows");
+        return Err(ClientCoreError::HydrationRequestKeyAmbiguous);
     }
     let Some(row) = rows.first() else {
         return Ok((ClientHydrationRequestState::Missing, None));
@@ -2859,7 +2917,7 @@ async fn load_hydration_server_state(
         ("session_id", session_id),
     ] {
         if row.get(field).and_then(|value| value.as_str()) != Some(expected) {
-            bail!("session hydration request {field} does not match the selected target");
+            return Err(ClientCoreError::HydrationTargetMismatch { field });
         }
     }
     let status = row
@@ -2870,29 +2928,35 @@ async fn load_hydration_server_state(
         return Ok((ClientHydrationRequestState::Pending, None));
     }
     if !matches!(status, "served" | "rejected") {
-        bail!("unknown session hydration request status {status:?}");
+        return Err(ClientCoreError::UnknownHydrationStatus {
+            status: status.to_owned(),
+        });
     }
     let served_count = row
         .get("served_doc_count")
         .and_then(|value| value.as_i64())
         .map(usize::try_from)
         .transpose()
-        .context("session hydration served_doc_count must be non-negative")?;
+        .map_err(ClientCoreError::HydrationServedCountNegative)?;
     let manifest = decode_manifest_json(
         row.get("served_manifest_json")
             .and_then(|value| value.as_str())
-            .context("terminal hydration request is missing served_manifest_json")?,
+            .ok_or(ClientCoreError::HydrationFieldMissing {
+                field: "served_manifest_json",
+            })?,
     )?;
     if served_count != Some(manifest.len()) {
-        bail!("session hydration served_doc_count does not match signed manifest");
+        return Err(ClientCoreError::HydrationServedCountMismatch);
     }
     let signature = bs58::decode(
         row.get("outcome_signature")
             .and_then(|value| value.as_str())
-            .context("terminal hydration request is missing outcome_signature")?,
+            .ok_or(ClientCoreError::HydrationFieldMissing {
+                field: "outcome_signature",
+            })?,
     )
     .into_vec()
-    .context("decode session hydration receipt signature")?;
+    .map_err(ClientCoreError::DecodeHydrationSignature)?;
     let receipt = SessionHydrationReceipt {
         version: SESSION_HYDRATION_RECEIPT_VERSION,
         request_key: expected_request_key,
@@ -2909,12 +2973,16 @@ async fn load_hydration_server_state(
         processed_at: row
             .get("processed_at")
             .and_then(|value| value.as_str())
-            .context("terminal hydration request is missing processed_at")?
+            .ok_or(ClientCoreError::HydrationFieldMissing {
+                field: "processed_at",
+            })?
             .to_string(),
         signer_did: row
             .get("outcome_signer_did")
             .and_then(|value| value.as_str())
-            .context("terminal hydration request is missing outcome_signer_did")?
+            .ok_or(ClientCoreError::HydrationFieldMissing {
+                field: "outcome_signer_did",
+            })?
             .to_string(),
         signature,
     };
@@ -2923,7 +2991,7 @@ async fn load_hydration_server_state(
         .verify(node_did, &receipt.signing_payload()?, &receipt.signature)
         .await?
     {
-        bail!("session hydration receipt signature is invalid");
+        return Err(ClientCoreError::HydrationSignatureInvalid);
     }
     let documents = receipt.served_manifest.into_iter().collect::<BTreeSet<_>>();
     match status {
@@ -3011,7 +3079,6 @@ fn complete_confirmed_delete(
 #[cfg(test)]
 mod delete_source_tests {
     use super::*;
-    use anyhow::anyhow;
     use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
 
@@ -3028,11 +3095,9 @@ mod delete_source_tests {
         let error = local_hydration_start_evidence_from_response(&response)
             .expect_err("unknown lifecycle state must fail at the row boundary");
         assert!(
-            ErrorChain(error.as_ref())
-                .to_string()
-                .contains("notARequestState"),
+            ErrorChain(&error).to_string().contains("notARequestState"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -3107,7 +3172,9 @@ mod delete_source_tests {
         complete_confirmed_delete(
             store.as_ref(),
             &last_mutation_error,
-            Err(anyhow!("replica unavailable")),
+            Err(ClientCoreError::SessionUnreadable {
+                reason: "replica unavailable",
+            }),
             "delete task",
             "config_task_delete",
             "deleted",
@@ -3188,7 +3255,9 @@ mod accepted_edit_projection_tests {
         };
         let before = store.projection_revision();
         let accepted = observe_submitted_request(&store, receipt.clone(), async {
-            anyhow::bail!("projection unavailable after commit")
+            Err(ClientCoreError::SessionUnreadable {
+                reason: "projection unavailable after commit",
+            })
         })
         .await;
         assert_eq!(accepted, receipt);

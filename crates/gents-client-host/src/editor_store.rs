@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyError};
 use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
+use gents_desktop_core::client::{ClientStoreKeyError, ClientStoreKeyProvider, DesktopPaths};
 use gents_protocol::error_chain::find_source;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -42,6 +42,8 @@ pub(crate) enum EditorStoreError {
     KeyTask(#[source] tokio::task::JoinError),
     #[error("editor did not retain the store key")]
     KeyNotRetained,
+    #[error(transparent)]
+    StoreKey(#[from] StoreKeyError),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -135,12 +137,13 @@ where
     }
 
     pub async fn failed(&self, error: &(dyn std::error::Error + 'static)) -> Result<()> {
-        let (code, message) = if matches!(
-            find_source::<EditorStoreError>(error),
-            Some(EditorStoreError::HistoryUnlockRequired)
-        ) || find_source::<StoreKeyError>(error)
-            .and_then(StoreKeyError::unavailable)
-            .is_some()
+        let editor = find_source::<EditorStoreError>(error);
+        let store_key = find_source::<StoreKeyError>(error).or(match editor {
+            Some(EditorStoreError::StoreKey(error)) => Some(error),
+            _ => None,
+        });
+        let (code, message) = if matches!(editor, Some(EditorStoreError::HistoryUnlockRequired))
+            || store_key.and_then(StoreKeyError::unavailable).is_some()
         {
             (
                     BridgeErrorCode::LocalHistoryLocked,
@@ -182,9 +185,25 @@ where
         record: &StoreEncryption,
         key_file: &Path,
         data_path: &Path,
-    ) -> anyhow::Result<StoreKey> {
+    ) -> std::result::Result<StoreKey, ClientStoreKeyError> {
+        self.load_key(record, key_file, data_path)
+            .await
+            .map_err(ClientStoreKeyError::new)
+    }
+}
+
+impl<S> Provider<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    async fn load_key(
+        &self,
+        record: &StoreEncryption,
+        key_file: &Path,
+        data_path: &Path,
+    ) -> Result<StoreKey> {
         if record.version != gents::store_key::STORE_ENCRYPTION_VERSION {
-            return Err(EditorStoreError::UnsupportedEncryptionVersion.into());
+            return Err(EditorStoreError::UnsupportedEncryptionVersion);
         }
         if matches!(record.custody, StoreKeyCustody::File) {
             return Ok(record.initialize(key_file, data_path)?);
@@ -204,12 +223,12 @@ where
         match reply {
             Reply::Use { bytes: Some(bytes) } => return Ok(StoreKey::from_host(&bytes)?),
             Reply::Use { bytes: None } => {}
-            Reply::Stored => return Err(EditorStoreError::KeyAcknowledgedEarly.into()),
+            Reply::Stored => return Err(EditorStoreError::KeyAcknowledgedEarly),
         }
         // Background startup must never call Keychain: an updated ad hoc signed
         // helper can trigger system consent even when the login keychain is open.
         if !self.interactive {
-            return Err(EditorStoreError::HistoryUnlockRequired.into());
+            return Err(EditorStoreError::HistoryUnlockRequired);
         }
         let record = record.clone();
         let key_file = key_file.to_owned();
@@ -224,7 +243,7 @@ where
         let reply: Reply = serde_json::from_slice(&receive(&mut channel).await?)
             .map_err(EditorStoreError::InvalidAcknowledgement)?;
         if !matches!(reply, Reply::Stored) {
-            return Err(EditorStoreError::KeyNotRetained.into());
+            return Err(EditorStoreError::KeyNotRetained);
         }
         Ok(key)
     }
@@ -305,6 +324,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap_err()
+            .host_error()
             .downcast_ref::<EditorStoreError>()
             .is_some_and(|error| matches!(error, EditorStoreError::HistoryUnlockRequired)));
     }

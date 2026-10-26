@@ -4816,7 +4816,6 @@ dependencies = [
 name = "gents-client-host"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "axum",
  "bs58",
@@ -4917,7 +4916,6 @@ dependencies = [
 name = "gents-desktop-core"
 version = "0.21.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "blake3",
  "bs58",

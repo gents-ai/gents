@@ -1,4 +1,3 @@
-use anyhow::{anyhow, Result};
 use gents::document_config::{Schedule, Task};
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
@@ -8,7 +7,7 @@ use super::super::types::{
     EventSourceDeleteRequest, EventSourceSaveRequest, ScheduleRunRequest, ScheduleSaveRequest,
     TaskRunRequest, TaskRunResult, TaskSaveRequest, TriggerSaveRequest,
 };
-use super::util::{require_trimmed, BridgeCommandError};
+use super::util::{require_trimmed, BridgeCommandError, Result};
 
 fn schedule_for_run<'a>(
     rows: &'a [Schedule],
@@ -83,16 +82,18 @@ async fn load_agent_request_by_request_id(
     let row = response
         .pointer("/data/AgentRequest/0")
         .cloned()
-        .ok_or_else(|| anyhow!("manual task run request {request_id} was not found"))?;
+        .ok_or_else(|| BridgeCommandError::ManualRunRequestNotFound {
+            request_id: request_id.to_owned(),
+        })?;
     serde_json::from_value(row).map_err(Into::into)
 }
 
 pub async fn save_task_config(core: &ClientCore, request: TaskSaveRequest) -> Result<()> {
-    core.save_task(&request.document).await
+    Ok(core.save_task(&request.document).await?)
 }
 
 pub async fn save_schedule_config(core: &ClientCore, request: ScheduleSaveRequest) -> Result<()> {
-    core.save_schedule(&request.document).await
+    Ok(core.save_schedule(&request.document).await?)
 }
 
 pub async fn run_schedule_config(
@@ -115,7 +116,7 @@ pub async fn run_schedule_config(
     let request_doc_id = row
         .doc_id
         .clone()
-        .ok_or_else(|| anyhow!("manual schedule run request has no _docID"))?;
+        .ok_or(BridgeCommandError::ManualScheduleRunNoDocId)?;
 
     Ok(TaskRunResult {
         request_doc_id,
@@ -128,7 +129,7 @@ pub async fn run_schedule_config(
 }
 
 pub async fn save_trigger_config(core: &ClientCore, request: TriggerSaveRequest) -> Result<()> {
-    core.save_trigger(&request.document).await
+    Ok(core.save_trigger(&request.document).await?)
 }
 
 pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Result<TaskRunResult> {
@@ -149,7 +150,7 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
     let request_doc_id = row
         .doc_id
         .clone()
-        .ok_or_else(|| anyhow!("manual task run request has no _docID"))?;
+        .ok_or(BridgeCommandError::ManualTaskRunNoDocId)?;
 
     Ok(TaskRunResult {
         request_doc_id,
@@ -165,13 +166,14 @@ pub async fn save_event_source_config(
     core: &ClientCore,
     request: EventSourceSaveRequest,
 ) -> Result<()> {
-    core.save_event_source(&request.document).await
+    Ok(core.save_event_source(&request.document).await?)
 }
 
 pub async fn delete_event_source_config(
     core: &ClientCore,
     request: EventSourceDeleteRequest,
 ) -> Result<()> {
-    core.delete_event_source(&request.event_source_id, &request.node_did)
-        .await
+    Ok(core
+        .delete_event_source(&request.event_source_id, &request.node_did)
+        .await?)
 }

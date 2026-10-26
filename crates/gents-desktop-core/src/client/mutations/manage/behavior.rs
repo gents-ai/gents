@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
@@ -94,12 +94,13 @@ pub async fn delete_agent_context_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestError, TestResult};
     use gents_protocol::error_chain::ErrorChain;
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn context_delete_removes_the_scoped_document() -> Result<()> {
+    async fn context_delete_removes_the_scoped_document() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:context-delete";
@@ -119,7 +120,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -130,7 +131,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {
+    async fn agent_and_profile_deletion_obey_canonical_owned_references() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
@@ -174,7 +175,7 @@ mod tests {
                 let plan = &target_plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -200,7 +201,7 @@ mod tests {
                 let plan = &remove_target;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -231,7 +232,7 @@ mod tests {
                             update: value,
                         }])?;
                         apply_desired_state_plan(txn, &plan).await?;
-                        Ok::<_, anyhow::Error>(())
+                        Ok::<_, TestError>(())
                     })
                 })
                 .await?;
@@ -251,11 +252,9 @@ mod tests {
                 .await
                 .unwrap_err();
                 assert!(
-                    ErrorChain(disable.as_ref())
-                        .to_string()
-                        .contains("must be enabled"),
+                    ErrorChain(&disable).to_string().contains("must be enabled"),
                     "{}",
-                    ErrorChain(disable.as_ref())
+                    ErrorChain(&disable)
                 );
             }
         }

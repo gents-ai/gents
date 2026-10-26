@@ -2,7 +2,6 @@ use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::agent::p2p_reconcile::{
@@ -29,6 +28,8 @@ use super::{
 };
 use crate::remote_admin::{classify_remote_admin_error, HttpRemoteP2pAdmin};
 
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
+
 pub(super) struct ClientRouteManager {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
@@ -44,7 +45,7 @@ pub(super) struct ClientRouteLifecycle<'a> {
 
 pub(super) struct RouteRemoval {
     pub(super) record: PeerRecord,
-    pub(super) cleanup_error: Option<anyhow::Error>,
+    pub(super) cleanup_error: Option<ClientCoreError>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,15 +104,22 @@ impl ClientRouteManager {
             .iter()
             .find(|record| record.peer_id == peer_id)
             .cloned()
-            .with_context(|| format!("peer {peer_id} not found"))?;
+            .ok_or_else(|| ClientCoreError::PeerNotFound {
+                peer_id: peer_id.to_owned(),
+            })?;
         if record.is_managed_runtime() {
-            anyhow::bail!("the local runtime deployment cannot be removed");
+            return Err(ClientCoreError::LocalRuntimeNotRemovable);
         }
         let removed = sync_state
             .queue_removal(&record, cause)
             .await
-            .with_context(|| format!("queueing peer {peer_id} for durable route teardown"))?
-            .with_context(|| format!("peer {peer_id} not found while queueing removal"))?;
+            .map_err(|source| ClientCoreError::QueuePeerRemoval {
+                peer_id: peer_id.to_owned(),
+                source: Box::new(source),
+            })?
+            .ok_or_else(|| ClientCoreError::PeerNotFoundWhileQueueing {
+                peer_id: peer_id.to_owned(),
+            })?;
         let cleanup_error = lifecycle
             .cleanup_pending_removal_if_current(sync_state, &record)
             .await
@@ -134,10 +142,9 @@ impl ClientRouteManager {
     }
 
     pub(super) async fn configure_enrollment_peer(&self, record: &PeerRecord) -> Result<()> {
-        anyhow::ensure!(
-            is_enrollment_peer(record),
-            "enrollment route configuration requires enrollment-owned peer"
-        );
+        if !is_enrollment_peer(record) {
+            return Err(ClientCoreError::EnrollmentRouteRequiresEnrollmentPeer);
+        }
         self.lock().await.configure(record).await
     }
 
@@ -148,10 +155,9 @@ impl ClientRouteManager {
             self.actor.did(),
             &record.node_did,
         )?;
-        anyhow::ensure!(
-            is_enrollment_peer(record),
-            "authenticated enrollment is required to configure a remote client route"
-        );
+        if !is_enrollment_peer(record) {
+            return Err(ClientCoreError::RemoteRouteRequiresEnrollment);
+        }
         self.upsert_desired(&outbound, PairingDirection::ClientToRuntime, record)
             .await
     }
@@ -472,24 +478,27 @@ impl ClientRouteManager {
         let now = escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
-        anyhow::ensure!(
-            record.is_enrollment(),
-            "manual pairing desired authority is disabled"
-        );
-        let request_digest = escape_graphql_string(
-            record
-                .enrollment_request_digest
-                .as_deref()
-                .context("enrollment record has no request digest")?,
-        );
-        let authorization_sequence = record
-            .enrollment_authorization_sequence
-            .context("enrollment record has no authorization sequence")?;
+        if !record.is_enrollment() {
+            return Err(ClientCoreError::ManualPairingDesiredDisabled);
+        }
+        let request_digest =
+            escape_graphql_string(record.enrollment_request_digest.as_deref().ok_or(
+                ClientCoreError::EnrollmentRecordMissing {
+                    field: "request digest",
+                },
+            )?);
+        let authorization_sequence = record.enrollment_authorization_sequence.ok_or(
+            ClientCoreError::EnrollmentRecordMissing {
+                field: "authorization sequence",
+            },
+        )?;
         let authorization_expires_at = escape_graphql_string(
             record
                 .enrollment_authorization_expires_at
                 .as_deref()
-                .context("enrollment record has no authorization expiry")?,
+                .ok_or(ClientCoreError::EnrollmentRecordMissing {
+                    field: "authorization expiry",
+                })?,
         );
         let mutation = format!(
             r#"mutation {{ upsert_PeerPairingDesired(
@@ -551,7 +560,7 @@ impl ClientRouteManager {
         let graphql = record
             .graphql
             .as_deref()
-            .context("remote GraphQL endpoint is required to teardown the return route")?;
+            .ok_or(ClientCoreError::TeardownRequiresGraphql)?;
         let admin = self.remote_admin(record, graphql)?;
         for address in &addresses {
             teardown_owned_replicators_at_endpoint(&admin, address).await?;
@@ -591,17 +600,21 @@ impl ClientRouteManager {
                 self.actor.clone(),
             ));
         }
-        let request_digest = record
-            .enrollment_request_digest
-            .clone()
-            .context("enrollment record has no request digest")?;
-        let authorization_sequence = record
-            .enrollment_authorization_sequence
-            .context("enrollment record has no authorization sequence")?;
-        let authorization_expires_at = record
-            .enrollment_authorization_expires_at
-            .clone()
-            .context("enrollment record has no authorization expiry")?;
+        let request_digest = record.enrollment_request_digest.clone().ok_or(
+            ClientCoreError::EnrollmentRecordMissing {
+                field: "request digest",
+            },
+        )?;
+        let authorization_sequence = record.enrollment_authorization_sequence.ok_or(
+            ClientCoreError::EnrollmentRecordMissing {
+                field: "authorization sequence",
+            },
+        )?;
+        let authorization_expires_at = record.enrollment_authorization_expires_at.clone().ok_or(
+            ClientCoreError::EnrollmentRecordMissing {
+                field: "authorization expiry",
+            },
+        )?;
         Ok(GraphqlPairingStateStore::for_enrollment_materialization(
             Arc::clone(&self.node),
             self.actor.clone(),
@@ -679,26 +692,24 @@ impl ClientRouteLifecycle<'_> {
                     if let Err(error) = remote_result {
                         failures.push(format!("remote return-route cleanup: {error}"));
                     }
-                    anyhow::bail!("{}", failures.join("; "));
+                    return Err(ClientCoreError::RemovalCleanupFailed {
+                        failures: failures.join("; "),
+                    });
                 }
             }
             self.delete_local_state(&record.peer_id).await?;
-            Result::<()>::Ok(())
+            Ok::<(), ClientCoreError>(())
         };
         tokio::time::timeout(P2P_OPERATION_TIMEOUT, cleanup)
             .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "cleanup exceeded {}s timeout",
-                    P2P_OPERATION_TIMEOUT.as_secs()
-                )
+            .map_err(|_| ClientCoreError::CleanupTimedOut {
+                seconds: P2P_OPERATION_TIMEOUT.as_secs(),
             })??;
 
         if !sync_state.complete_removal_if_matches(record).await? {
-            anyhow::bail!(
-                "pending removal intent changed while route lifecycle owned {}",
-                record.peer_id
-            );
+            return Err(ClientCoreError::RemovalIntentChanged {
+                peer_id: record.peer_id.clone(),
+            });
         }
         Ok(PendingRemovalCleanup::Completed)
     }
@@ -709,7 +720,7 @@ impl ClientRouteLifecycle<'_> {
         _route: &ClientRouteIdentity,
         _direction: PairingDirection,
     ) -> Result<()> {
-        anyhow::bail!("manual PeerPairingDesired authoring is disabled")
+        Err(ClientCoreError::ManualPairingDesiredAuthoringDisabled)
     }
 }
 

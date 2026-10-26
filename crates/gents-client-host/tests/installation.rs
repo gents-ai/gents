@@ -70,11 +70,12 @@ async fn standalone_installation_shares_one_store_between_stdio_clients_and_rele
     };
     assert!(
         error
+            .cause()
             .downcast_ref::<gents::home::HomeError>()
             .and_then(gents::home::HomeError::lock_held)
             .is_some(),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     first.close().await;
     assert_eq!(second.snapshot(2).await["client"]["localPeerId"], peer_id);

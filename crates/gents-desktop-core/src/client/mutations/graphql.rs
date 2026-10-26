@@ -1,5 +1,5 @@
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum GraphqlError {
+pub enum GraphqlError {
     #[error("{field} must not be empty")]
     EmptyField { field: &'static str },
 }

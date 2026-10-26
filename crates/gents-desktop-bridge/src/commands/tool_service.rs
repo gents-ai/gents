@@ -1,13 +1,12 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use gents::mcp_pool::{resolve_mcp_url, McpPool};
 use gents_desktop_core::client::ClientCore;
 
 use super::super::types::{
     ToolServiceSaveRequest, ToolServiceTestRequest, ToolServiceTestResult, ToolServiceToolView,
 };
-use super::util::{require_trimmed, trim_optional, BridgeCommandError};
+use super::util::{require_trimmed, trim_optional, BridgeCommandError, Result};
 
 fn resolve_tool_service_endpoint(
     request: &ToolServiceTestRequest,
@@ -40,7 +39,7 @@ pub async fn save_tool_service_config(
     core: &ClientCore,
     request: ToolServiceSaveRequest,
 ) -> Result<()> {
-    core.save_tool_service_registry(&request.document).await
+    Ok(core.save_tool_service_registry(&request.document).await?)
 }
 
 pub async fn test_tool_service_config(
@@ -54,7 +53,7 @@ pub async fn test_tool_service_config(
         pool.list_tools(&service_id, &endpoint),
     )
     .await
-    .context("MCP list_tools timed out")??;
+    .map_err(BridgeCommandError::McpListToolsTimedOut)??;
     let tools = result
         .tools
         .iter()

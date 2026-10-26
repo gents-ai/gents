@@ -722,7 +722,7 @@ pub(crate) fn is_claim_admission_error(error: &(dyn std::error::Error + 'static)
         )
 }
 
-pub use gents_loop::execution_origin::ExecutionOrigin;
+pub use gents_loop::execution_origin::{ExecutionOrigin, ExecutionOriginError};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TriggerLineage {

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use super::{ManageMutationError, Result};
 #[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
@@ -22,17 +22,19 @@ pub async fn select_agent_model_on(
     reasoning_effort: Option<gents::config::ReasoningEffort>,
     service_tier: Option<gents::config::ServiceTier>,
 ) -> Result<InferenceProfile> {
-    anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
+    if model_name.trim().is_empty() {
+        return Err(ManageMutationError::ModelRequired);
+    }
     access
         .transact_write("desktop.agent.model", |txn| {
             Box::pin(async move {
                 let (_, mut agent) =
                     read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
                         .await?
-                        .context("The selected agent no longer exists.")?;
+                        .ok_or(ManageMutationError::SelectedAgentMissing)?;
                 let profile_id = agent["inference_profile_id"]
                     .as_str()
-                    .context("The selected agent has no inference profile.")?;
+                    .ok_or(ManageMutationError::SelectedAgentHasNoProfile)?;
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceProfile,
@@ -40,7 +42,7 @@ pub async fn select_agent_model_on(
                     profile_id,
                 )
                 .await?
-                .context("The agent's inference profile is unavailable.")?;
+                .ok_or(ManageMutationError::AgentProfileUnavailable)?;
                 let current: InferenceProfile = serde_json::from_value(value)?;
                 let mut selected = current.clone();
                 selected.backend_id = backend_id.to_owned();
@@ -153,11 +155,12 @@ pub async fn delete_inference_profile_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestError, TestResult};
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn model_selection_preserves_shared_consumers_and_reuses_profiles() -> Result<()> {
+    async fn model_selection_preserves_shared_consumers_and_reuses_profiles() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:model-selection";
@@ -251,7 +254,7 @@ mod tests {
                         assert_eq!(agent["display_name"], id);
                         assert_eq!(agent["tags"], json!(["preserved"]));
                     }
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -354,7 +357,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profile_save_validates_bounds_and_resolves_backend_in_exact_owner_scope() -> Result<()>
+    async fn profile_save_validates_bounds_and_resolves_backend_in_exact_owner_scope() -> TestResult
     {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
@@ -394,7 +397,7 @@ mod tests {
                     retained.reasoning_effort,
                     Some(gents::config::ReasoningEffort::High)
                 );
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;

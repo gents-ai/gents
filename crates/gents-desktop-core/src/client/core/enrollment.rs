@@ -2,7 +2,6 @@ use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::QueryResponse;
 use defra_p2p_adapter::{P2POperations as P2POps, TransportPeerId};
@@ -40,6 +39,8 @@ use super::route_manager::ClientRouteManager;
 use super::sync_state::{ClientSyncStateOwner, RuntimeSchemaObservation};
 use super::{ClientCore, ClientCoreError, P2P_OPERATION_TIMEOUT};
 use crate::client::peer_directory::RemovalCause;
+
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
@@ -87,7 +88,9 @@ impl ClientCore {
         self.sync_state
             .finish_runtime_schema_observation(&self.node, observation, status)
             .await
-            .context("runtime cannot sync with this app")
+            .map_err(|source| ClientCoreError::RuntimeCannotSync {
+                source: Box::new(source),
+            })
     }
 
     pub async fn request_status_enrollment(
@@ -107,12 +110,15 @@ impl ClientCore {
             .pointer("/enrollment/token")
             .and_then(Value::as_str)
             .filter(|token| !token.trim().is_empty())
-            .context("server does not advertise authenticated status enrollment")?;
-        let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
+            .ok_or(ClientCoreError::StatusEnrollmentNotAdvertised)?;
+        let offer =
+            decode_offer(offer_token).map_err(ClientCoreError::DecodeServerEnrollmentOffer)?;
         self.sync_state
             .compare_runtime_schema(&self.node, &offer.owner_agent, status)
             .await
-            .context("refusing to enroll with an incompatible runtime")?;
+            .map_err(|source| ClientCoreError::IncompatibleEnrollmentRuntime {
+                source: Box::new(source),
+            })?;
         verify_enrollment_offer(&self.p2p, &self.node_identity, &offer).await?;
         confirm_network_admin_pin(&self.node, &offer).await?;
 
@@ -137,13 +143,15 @@ impl ClientCore {
                     Ok(document_id) => document_id,
                     Err(write_error) => {
                         let recovered = self
-                            .existing_request_for_offer(&offer, offer_token, &request.candidate_peer)
+                            .existing_request_for_offer(
+                                &offer,
+                                offer_token,
+                                &request.candidate_peer,
+                            )
                             .await?
                             .filter(|(persisted, _)| persisted == &request)
-                            .with_context(|| {
-                                format!(
-                                    "enrollment request commit was not observably recovered after: {}", ErrorChain(&write_error)
-                                )
+                            .ok_or_else(|| ClientCoreError::EnrollmentCommitNotRecovered {
+                                error: ErrorChain(&write_error).to_string(),
                             })?;
                         recovered.1
                     }
@@ -206,37 +214,37 @@ impl ClientCore {
                 .map(Vec::as_slice)
                 .unwrap_or_default()
             else {
-                anyhow::bail!("network has no unique durable admin pin");
+                return Err(ClientCoreError::NoUniqueAdminPin);
             };
-            anyhow::ensure!(
-                admin_did == &request.admin_did,
-                "request admin does not match the durable network pin"
-            );
+            if admin_did != &request.admin_did {
+                return Err(ClientCoreError::RequestAdminPinMismatch);
+            }
             let offer = decode_offer(&request.offer_token)
-                .context("decoding persisted enrollment offer")?;
+                .map_err(ClientCoreError::DecodePersistedEnrollmentOffer)?;
             request.validate_against_offer(&offer)?;
-            anyhow::ensure!(
-                offer.schema_fingerprint == enrollment_schema_fingerprint(),
-                "persisted enrollment offer has an incompatible schema"
-            );
-            anyhow::ensure!(
-                self.node_identity
-                    .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
-                    .await?,
-                "persisted enrollment offer signature is invalid"
-            );
-            anyhow::ensure!(
-                self.node_identity
-                    .verify(
-                        &request.candidate_did,
-                        &request.signing_payload(),
-                        &request.candidate_sig,
-                    )
-                    .await?,
-                "persisted enrollment request signature is invalid"
-            );
+            if offer.schema_fingerprint != enrollment_schema_fingerprint() {
+                return Err(ClientCoreError::PersistedOfferIncompatibleSchema);
+            }
+            if !self
+                .node_identity
+                .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
+                .await?
+            {
+                return Err(ClientCoreError::PersistedOfferSignatureInvalid);
+            }
+            if !self
+                .node_identity
+                .verify(
+                    &request.candidate_did,
+                    &request.signing_payload(),
+                    &request.candidate_sig,
+                )
+                .await?
+            {
+                return Err(ClientCoreError::PersistedRequestSignatureInvalid);
+            }
             let expires_at = DateTime::parse_from_rfc3339(&request.expires_at)
-                .context("parsing enrollment request expiry")?
+                .map_err(ClientCoreError::ParseEnrollmentExpiry)?
                 .with_timezone(&Utc);
             if expires_at <= now
                 && !peers.iter().any(|peer| {
@@ -257,10 +265,9 @@ impl ClientCore {
                 &self.local_peer_id,
             )
             .await?;
-            anyhow::ensure!(
-                projection.decisions.len() <= 1,
-                "enrollment request has multiple authenticated decisions"
-            );
+            if projection.decisions.len() > 1 {
+                return Err(ClientCoreError::MultipleEnrollmentDecisions);
+            }
             for (decision, _) in &projection.decisions {
                 decision.validate_against_request(&request)?;
             }
@@ -355,17 +362,23 @@ impl ClientCore {
             &self.local_peer_id,
             request_id,
         )?
-        .with_context(|| format!("no local enrollment request {request_id}"))?;
+        .ok_or_else(|| ClientCoreError::NoLocalEnrollmentRequest {
+            request_id: request_id.to_owned(),
+        })?;
         let offer_token = row.to_record()?.offer_token;
-        let offer = decode_offer(&offer_token).context("decoding persisted enrollment offer")?;
+        let offer =
+            decode_offer(&offer_token).map_err(ClientCoreError::DecodePersistedEnrollmentOffer)?;
         let (request, document_id) = self
             .existing_request_for_offer(&offer, &offer_token, &self.local_peer_id)
             .await?
-            .with_context(|| format!("no local enrollment request {request_id}"))?;
-        anyhow::ensure!(
-            request.request_id == request_id,
-            "enrollment request {request_id} is not the request persisted for its offer"
-        );
+            .ok_or_else(|| ClientCoreError::NoLocalEnrollmentRequest {
+                request_id: request_id.to_owned(),
+            })?;
+        if request.request_id != request_id {
+            return Err(ClientCoreError::EnrollmentRequestNotPersistedForOffer {
+                request_id: request_id.to_owned(),
+            });
+        }
         Ok(push_enrollment_request(&self.p2p, &offer, &request.request_id, &document_id).await?)
     }
 
@@ -401,34 +414,34 @@ impl ClientCore {
         };
         // A locally retired request stays durable; a second request under this
         // offer would share its challenge and neither could be approved.
-        anyhow::ensure!(
-            !self
-                .sync_state
-                .retired_enrollment_digests()
-                .await
-                .contains(&row.request_digest),
-            "enrollment request {} for offer {} was removed on this desktop; fetch a fresh \
-             offer from the server's /status to enroll again",
-            row.request_id,
-            offer.offer_id
-        );
+        if self
+            .sync_state
+            .retired_enrollment_digests()
+            .await
+            .contains(&row.request_digest)
+        {
+            return Err(ClientCoreError::EnrollmentRequestRetired {
+                request_id: row.request_id.clone(),
+                offer_id: offer.offer_id.clone(),
+            });
+        }
         let doc_id = row.doc_id.clone();
         let request = row.to_record()?;
-        anyhow::ensure!(
-            request.offer_token == offer_token,
-            "persisted enrollment request embeds a different signed offer"
-        );
+        if request.offer_token != offer_token {
+            return Err(ClientCoreError::PersistedRequestOfferDiffers);
+        }
         request.validate_against_offer(offer)?;
-        anyhow::ensure!(
-            self.node_identity
-                .verify(
-                    &request.candidate_did,
-                    &request.signing_payload(),
-                    &request.candidate_sig,
-                )
-                .await?,
-            "persisted enrollment request signature is invalid"
-        );
+        if !self
+            .node_identity
+            .verify(
+                &request.candidate_did,
+                &request.signing_payload(),
+                &request.candidate_sig,
+            )
+            .await?
+        {
+            return Err(ClientCoreError::PersistedRequestSignatureInvalid);
+        }
         Ok(Some((request, doc_id)))
     }
 }
@@ -444,10 +457,11 @@ fn select_retryable_local_request<'a>(
         .filter(|row| row.candidate_did == candidate_did && row.candidate_peer == candidate_peer)
         .collect::<Vec<_>>();
     let [row] = candidates.as_slice() else {
-        anyhow::ensure!(
-            candidates.is_empty(),
-            "offer {offer_id} has multiple local enrollment requests"
-        );
+        if !candidates.is_empty() {
+            return Err(ClientCoreError::MultipleLocalEnrollmentRequests {
+                offer_id: offer_id.to_owned(),
+            });
+        }
         return Ok(None);
     };
     Ok(Some(*row))
@@ -639,7 +653,7 @@ pub(super) async fn reconcile_status_enrollment_approvals(
             if current.as_ref() != Some(&record) || !record.pairing_ready {
                 route_manager.configure_enrollment_peer(&record).await?;
             }
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, ClientCoreError>(())
         }
         .await;
         match applied {
@@ -674,17 +688,18 @@ async fn authenticate_enrolled_server(
         let resolved = p2p
             .resolve_peer_identity(&peer)
             .await?
-            .context("enrolled server has no authenticated transport identity")?;
+            .ok_or(ClientCoreError::EnrolledServerUnauthenticated)?;
         validate_authenticated_server_did(&approval.admin_did, resolved.as_ref())?;
         Ok(address)
     })
     .await;
-    result.with_context(|| {
-        format!(
-            "timed out re-authenticating enrolled server while {stage} after {} ms",
-            started.elapsed().as_millis()
-        )
-    })?
+    result.map_err(
+        |source| ClientCoreError::ReauthenticateEnrolledServerTimedOut {
+            stage,
+            elapsed_ms: started.elapsed().as_millis(),
+            source,
+        },
+    )?
 }
 
 // Discovery supplies location only: the ticket must name the approved peer,
@@ -700,16 +715,16 @@ async fn enrolled_server_address(
     let home = known
         .local_node_home
         .as_deref()
-        .context("managed enrollment has no local home")?;
+        .ok_or(ClientCoreError::ManagedEnrollmentNoHome)?;
     let live = crate::local_runtime::discover_standard_runtime(std::path::Path::new(home)).await?;
     let (ticket_peer, _) = parse_public_peer_addr(&live.p2p_listen_address)
-        .map_err(|error| anyhow::anyhow!("managed runtime has an invalid P2P address: {error}"))?;
-    anyhow::ensure!(
-        live.node_did == approval.owner_node
-            && live.p2p_peer_id == approval.server_peer
-            && ticket_peer.to_string() == approval.server_peer,
-        "discovered managed runtime identity does not match approved enrollment"
-    );
+        .map_err(|error| ClientCoreError::ManagedRuntimeInvalidP2pAddress { error })?;
+    if !(live.node_did == approval.owner_node
+        && live.p2p_peer_id == approval.server_peer
+        && ticket_peer.to_string() == approval.server_peer)
+    {
+        return Err(ClientCoreError::ManagedRuntimeIdentityMismatch);
+    }
     Ok(live.p2p_listen_address)
 }
 
@@ -1008,10 +1023,7 @@ async fn load_status_enrollment_approvals(
             Err(error) => add_scoped_conflict(
                 &mut conflicts,
                 &server_peer,
-                format!(
-                    "invalid enrollment authority: {}",
-                    ErrorChain(error.as_ref())
-                ),
+                format!("invalid enrollment authority: {}", ErrorChain(&error)),
             ),
         }
     }
@@ -1188,53 +1200,49 @@ async fn project_desktop_approval(
     local_peer_id: &str,
 ) -> Result<DesktopApprovalProjection> {
     let request = request_row.to_record()?;
-    anyhow::ensure!(
-        request.candidate_did == principal.did() && request.candidate_peer == local_peer_id,
-        "enrollment request is not owned by this desktop identity and transport"
-    );
+    if !(request.candidate_did == principal.did() && request.candidate_peer == local_peer_id) {
+        return Err(ClientCoreError::EnrollmentRequestNotOwned);
+    }
     let [admin_did] = pins
         .get(&request.network_id)
         .map(Vec::as_slice)
         .unwrap_or_default()
     else {
-        anyhow::bail!("network has no unique durable admin pin");
+        return Err(ClientCoreError::NoUniqueAdminPin);
     };
-    anyhow::ensure!(
-        admin_did == &request.admin_did,
-        "request admin does not match the durable network pin"
-    );
+    if admin_did != &request.admin_did {
+        return Err(ClientCoreError::RequestAdminPinMismatch);
+    }
 
-    let offer =
-        decode_offer(&request.offer_token).context("decoding persisted enrollment offer")?;
+    let offer = decode_offer(&request.offer_token)
+        .map_err(ClientCoreError::DecodePersistedEnrollmentOffer)?;
     request
         .validate_against_offer(&offer)
-        .context("validating persisted enrollment request against offer")?;
-    anyhow::ensure!(
-        offer.schema_fingerprint == enrollment_schema_fingerprint(),
-        "persisted enrollment offer has an incompatible schema"
-    );
+        .map_err(ClientCoreError::ValidatePersistedEnrollmentRequest)?;
+    if offer.schema_fingerprint != enrollment_schema_fingerprint() {
+        return Err(ClientCoreError::PersistedOfferIncompatibleSchema);
+    }
     let (server_ticket_peer, _) = parse_public_peer_addr(&offer.server_ticket)
-        .context("persisted enrollment offer contains an invalid server ticket")?;
-    anyhow::ensure!(
-        server_ticket_peer.to_string() == request.server_peer,
-        "persisted server ticket is bound to another transport peer"
-    );
-    anyhow::ensure!(
-        principal
-            .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
-            .await?,
-        "persisted enrollment offer signature is invalid"
-    );
-    anyhow::ensure!(
-        principal
-            .verify(
-                &request.candidate_did,
-                &request.signing_payload(),
-                &request.candidate_sig,
-            )
-            .await?,
-        "persisted enrollment request signature is invalid"
-    );
+        .map_err(ClientCoreError::PersistedOfferInvalidTicket)?;
+    if server_ticket_peer.to_string() != request.server_peer {
+        return Err(ClientCoreError::PersistedTicketOtherPeer);
+    }
+    if !principal
+        .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
+        .await?
+    {
+        return Err(ClientCoreError::PersistedOfferSignatureInvalid);
+    }
+    if !principal
+        .verify(
+            &request.candidate_did,
+            &request.signing_payload(),
+            &request.candidate_sig,
+        )
+        .await?
+    {
+        return Err(ClientCoreError::PersistedRequestSignatureInvalid);
+    }
 
     let mut projection = assemble_durable_enrollment_documents(
         &offer,
@@ -1386,7 +1394,7 @@ async fn assemble_durable_enrollment_documents(
     for row in request_rows {
         let candidate = match row.to_record() {
             Ok(candidate) => candidate,
-            Err(error) if row.server_peer == request.server_peer => return Err(error.into()),
+            Err(error) if row.server_peer == request.server_peer => return Err(error),
             Err(_) => continue,
         };
         let verified = principal
@@ -3540,7 +3548,7 @@ mod tests {
         assert!(
             error.to_string().contains("fetch a fresh offer"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
 
         Arc::new(core).shutdown().await.unwrap();

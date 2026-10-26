@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
@@ -77,13 +77,14 @@ pub async fn delete_inference_backend_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestResult;
     use gents::document_config::{BackendAuth, BackendModelCatalog, InferenceProfile};
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn backend_save_preserves_catalog_and_scoped_delete_rejects_retained_profile(
-    ) -> Result<()> {
+    ) -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {

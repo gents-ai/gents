@@ -591,7 +591,10 @@ async fn acquire_client_lifecycle(
             )
         })
 }
-type ClientStartDelivery<T> = (anyhow::Result<T>, ClientLifecycleGuard);
+type ClientStartDelivery<T> = (
+    Result<T, gents_desktop_core::client::ClientCoreError>,
+    ClientLifecycleGuard,
+);
 
 type ClientStartFailure = (
     BridgeError,
@@ -648,7 +651,7 @@ async fn start_client_core_async(
 /// store that is still open.
 async fn deliver_client_start<T, S, SF, E>(
     tx: tokio::sync::oneshot::Sender<ClientStartDelivery<T>>,
-    result: anyhow::Result<T>,
+    result: Result<T, gents_desktop_core::client::ClientCoreError>,
     lifecycle: ClientLifecycleGuard,
     shutdown: S,
 ) where
@@ -681,7 +684,7 @@ async fn bounded_client_start<T>(
                 return match delivered {
                     Ok((Ok(core), lifecycle)) => Ok((core, lifecycle)),
                     Ok((Err(error), _)) => {
-                        Err(classify_client_start_error(error.as_ref(), node_data_dir))
+                        Err(classify_client_start_error(error.cause(), node_data_dir))
                     }
                     Err(_) => Err((
                         BridgeError::new(
@@ -904,12 +907,11 @@ mod tests {
     #[test]
     fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
         let node = std::path::Path::new("/tmp/desktop/node");
-        let refused = anyhow::Error::new(gents::migration::MigrationError::UnknownLineage {
+        let refused = gents::migration::MigrationError::UnknownLineage {
             collection: "AgentSession".into(),
             versions: "bafy-old".into(),
-        })
-        .context("ensure_migrations");
-        let (error, store) = classify_client_start_error(refused.as_ref(), node);
+        };
+        let (error, store) = classify_client_start_error(&refused, node);
         assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
         assert!(
             error.message.contains("/tmp/desktop/node"),
@@ -922,7 +924,7 @@ mod tests {
         );
 
         let (error, store) =
-            classify_client_start_error(anyhow::anyhow!("peer directory is locked").as_ref(), node);
+            classify_client_start_error(&std::io::Error::other("peer directory is locked"), node);
         assert_eq!(error.code, BridgeErrorCode::Unknown);
         assert!(store.is_none());
     }

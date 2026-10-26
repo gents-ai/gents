@@ -128,10 +128,10 @@ pub async fn session_snapshot(
                 ));
             }
             Err(error) => {
-                if let Some(ClientQueryError::ProjectionPending(error)) =
-                    error.downcast_ref::<ClientQueryError>()
-                {
-                    return Err(error.clone());
+                if let gents_desktop_core::client::ClientCoreError::ClientQuery(query) = &error {
+                    if let ClientQueryError::ProjectionPending(error) = query.as_ref() {
+                        return Err(error.clone());
+                    }
                 }
                 tracing::warn!(
                     target: "gents_desktop::chat",

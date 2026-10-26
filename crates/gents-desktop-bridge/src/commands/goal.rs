@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::util::Result;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
@@ -116,7 +116,7 @@ pub async fn control_goal(
             input,
         )
         .await
-        .map_err(|error| BridgeError::classify_transport_error(error.as_ref()))?;
+        .map_err(|error| BridgeError::classify_transport_error(error.cause()))?;
     goal_control_result(session_id, receipt.outcome)
 }
 

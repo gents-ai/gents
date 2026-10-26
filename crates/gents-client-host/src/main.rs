@@ -2,7 +2,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{ExitCode, ExitStatus};
 
-use anyhow::Result;
 use clap::Parser;
 use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::error_chain::ErrorChain;
@@ -50,7 +49,23 @@ pub(crate) enum ClientHostError {
     LocalHistoryNeedsAttention,
     #[error("client host exited with {status}; inspect the Gents output for the startup error")]
     HostExited { status: ExitStatus },
+    #[error(transparent)]
+    Core(#[from] gents_desktop_core::client::ClientCoreError),
+    #[error(transparent)]
+    Paths(#[from] gents_desktop_core::client::PathsError),
+    #[cfg(any(unix, windows))]
+    #[error(transparent)]
+    Listener(#[from] gents_desktop_bridge::host::local::LocalError),
+    #[cfg(any(unix, windows))]
+    #[error(transparent)]
+    EditorStore(#[from] editor_store::EditorStoreError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
+
+type Result<T, E = ClientHostError> = std::result::Result<T, E>;
 
 /// Prints the error with its source chain to stderr and exits non-zero.
 #[tokio::main]
@@ -58,7 +73,7 @@ async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("Error: {}", ErrorChain(error.as_ref()));
+            eprintln!("Error: {}", ErrorChain(&error));
             ExitCode::FAILURE
         }
     }
@@ -93,7 +108,7 @@ async fn run() -> Result<()> {
     let paths = match args.home {
         Some(home) => {
             if !home.is_absolute() {
-                return Err(ClientHostError::HomeNotAbsolute.into());
+                return Err(ClientHostError::HomeNotAbsolute);
             }
             DesktopPaths::from_root(home)
         }
@@ -108,6 +123,6 @@ async fn run() -> Result<()> {
     #[cfg(not(any(unix, windows)))]
     {
         let _ = paths;
-        Err(ClientHostError::TransportUnavailable.into())
+        Err(ClientHostError::TransportUnavailable)
     }
 }

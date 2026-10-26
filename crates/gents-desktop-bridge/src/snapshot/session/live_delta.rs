@@ -171,7 +171,7 @@ pub async fn build_session_live_delta(
     base_content_hash: &str,
     base_reasoning_byte_len: usize,
     base_reasoning_hash: &str,
-) -> anyhow::Result<SessionLiveDeltaView> {
+) -> Result<SessionLiveDeltaView, gents_desktop_core::client::ClientQueryError> {
     let started = std::time::Instant::now();
     let (observed, revision) = core.store().snapshot_with_revision();
     let mut live_store = ClientStore::default();

@@ -4,14 +4,13 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use gents_desktop_bridge::host::{local, ClientHost};
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
-use crate::ClientHostError;
+use crate::{ClientHostError, Result};
 
 /// A private bootstrap has no attachment owner until the core reports ready.
 /// Dropping its parent must also dismiss an outstanding system authentication
@@ -50,9 +49,9 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
         Ok(core) => Arc::new(core),
         Err(error) => {
             if let Some(provider) = &provider {
-                let _ = provider.failed(error.as_ref()).await;
+                let _ = provider.failed(error.cause()).await;
             }
-            return Err(error);
+            return Err(error.into());
         }
     };
     let listener = match local::LocalListener::bind(core.paths()).await {
@@ -82,7 +81,8 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
     signal.abort();
     let _ = signal.await;
     let closed = core.shutdown().await;
-    result.and(closed)
+    result?;
+    Ok(closed?)
 }
 
 /// Windows named pipes cannot close only their write side. Stdio EOF must
@@ -175,9 +175,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 }
                 bootstrap.send(frame.freeze()).await?;
                 if failed {
-                    return Err(anyhow::Error::from(
-                        ClientHostError::LocalHistoryNeedsAttention,
-                    ));
+                    return Err(ClientHostError::LocalHistoryNeedsAttention);
                 }
                 if ready {
                     break;
@@ -191,7 +189,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 return Ok(connection);
             }
             if let Some(status) = child.process.try_wait()? {
-                return Err(anyhow::Error::from(ClientHostError::HostExited { status }));
+                return Err(ClientHostError::HostExited { status });
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

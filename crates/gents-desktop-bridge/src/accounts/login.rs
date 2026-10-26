@@ -82,7 +82,7 @@ pub(crate) async fn sign_in<A, O>(
     on_url: O,
 ) -> Result<SignIn, BridgeError>
 where
-    A: Fn() -> anyhow::Result<gents::ConfigAccess>,
+    A: Fn() -> Result<gents::ConfigAccess, super::AccountsError>,
     O: AsyncFnOnce(&str) -> Result<(), BridgeError>,
 {
     provider(method)?;

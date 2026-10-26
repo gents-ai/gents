@@ -1105,7 +1105,7 @@ async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
             .to_string()
             .contains("no local enrollment request enroll-missing"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert!(core
         .active_status_enrollment_requests()
@@ -1250,10 +1250,10 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         STATUS_REPLICATED_SCHEMA_FIELD: changed_request,
     });
     let error = ErrorChain(
-        core.request_status_enrollment(&request_skew)
+        &core
+            .request_status_enrollment(&request_skew)
             .await
-            .unwrap_err()
-            .as_ref(),
+            .unwrap_err(),
     )
     .to_string();
     assert!(
@@ -1266,13 +1266,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "enrollment": { "token": offer },
         STATUS_REPLICATED_SCHEMA_FIELD: next_release,
     });
-    let error = ErrorChain(
-        core.request_status_enrollment(&skewed)
-            .await
-            .unwrap_err()
-            .as_ref(),
-    )
-    .to_string();
+    let error = ErrorChain(&core.request_status_enrollment(&skewed).await.unwrap_err()).to_string();
     assert!(
         error.contains("update the app and the runtime to the same version")
             && error.contains("AgentSession"),
@@ -1351,7 +1345,7 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         Err(error) => error,
     };
     assert_eq!(
-        gents::storage_backend::incompatible_store(error.as_ref(), paths.node_data_dir())
+        gents::storage_backend::incompatible_store(error.cause(), paths.node_data_dir())
             .map(|store| store.kind),
         Some(gents::storage_backend::IncompatibleStoreKind::MissingStoreKey)
     );
@@ -1791,7 +1785,7 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> Tes
         .await
         .expect_err("a send into a node-owned session must be refused");
     let refusal =
-        gents_protocol::error_chain::find_source::<crate::error::BridgeError>(error.as_ref())
+        gents_protocol::error_chain::find_source::<crate::error::BridgeError>(error.cause())
             .expect("the refusal is a typed bridge error");
     assert_eq!(refusal.code, crate::error::BridgeErrorCode::SessionNotOwned);
     assert_eq!(

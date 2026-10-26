@@ -1,4 +1,4 @@
-use anyhow::Result;
+use super::{ManageMutationError, Result};
 mod editor;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
@@ -70,15 +70,16 @@ async fn set_default_agent_in_txn(
     node_did: &str,
     agent_id: &str,
 ) -> Result<()> {
-    use anyhow::Context;
     use gents::config_client::read_desired_state_record_in_txn;
     let (_, mut node) = read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
         .await?
-        .context("default agent requires an existing node")?;
+        .ok_or(ManageMutationError::DefaultAgentRequiresNode)?;
     let (_, mut agent) =
         read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
             .await?
-            .with_context(|| format!("Agent {agent_id:?} does not exist"))?;
+            .ok_or_else(|| ManageMutationError::AgentDoesNotExist {
+                agent_id: agent_id.to_owned(),
+            })?;
     node["default_agent_id"] = agent_id.into();
     agent["enabled"] = true.into();
     let plan = DesiredStateApplyPlan::new(
@@ -100,7 +101,6 @@ pub async fn apply_config_components(
     node: &Arc<EmbeddedNode>,
     document: &gents::document_config::PackConfig,
 ) -> Result<()> {
-    use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
     ConfigAccess::transact_local_write(node, None, "desktop.config.components", |txn| {
         let plan = &plan;
@@ -113,7 +113,7 @@ pub async fn apply_config_components(
                 owner,
             )
             .await?
-            .context("component apply requires an existing node")?;
+            .ok_or(ManageMutationError::ComponentApplyRequiresNode)?;
             apply_desired_state_plan(txn, plan).await?;
             Ok(())
         })
@@ -125,7 +125,6 @@ pub async fn apply_config_components_on(
     access: &ConfigAccess,
     document: &gents::document_config::PackConfig,
 ) -> Result<()> {
-    use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
     access
         .transact_write("desktop.config.components", |txn| {
@@ -139,7 +138,7 @@ pub async fn apply_config_components_on(
                     owner,
                 )
                 .await?
-                .context("component apply requires an existing node")?;
+                .ok_or(ManageMutationError::ComponentApplyRequiresNode)?;
                 apply_desired_state_plan(txn, plan).await?;
                 Ok(())
             })
@@ -152,23 +151,22 @@ fn config_components_plan(
 ) -> Result<(String, DesiredStateApplyPlan)> {
     let owner = document.node.node_did.clone();
     let scope: Node = serde_json::from_value(serde_json::json!({"node_did":owner}))?;
-    anyhow::ensure!(
-        serde_json::to_value(&document.node)? == serde_json::to_value(&scope)?,
-        "component apply requires scope-only node; use node save for node settings"
-    );
-    anyhow::ensure!(
-        document.graph_intents.is_empty() && document.graph_capabilities.is_empty(),
-        "component apply does not compile graph inputs; use the graph installer"
-    );
+    if serde_json::to_value(&document.node)? != serde_json::to_value(&scope)? {
+        return Err(ManageMutationError::ComponentApplyRequiresScopeOnlyNode);
+    }
+    if !(document.graph_intents.is_empty() && document.graph_capabilities.is_empty()) {
+        return Err(ManageMutationError::ComponentApplyGraphInputs);
+    }
     let plan = DesiredStateApplyPlan::from_pack_config(document)?;
-    anyhow::ensure!(
-        plan.documents().iter().all(|entry| entry
+    if !plan.documents().iter().all(|entry| {
+        entry
             .add
             .get("node_did")
             .and_then(serde_json::Value::as_str)
-            == Some(owner.as_str())),
-        "component owner does not match the selected node"
-    );
+            == Some(owner.as_str())
+    }) {
+        return Err(ManageMutationError::ComponentOwnerMismatch);
+    }
     let plan = DesiredStateApplyPlan::new(
         plan.documents()
             .iter()
@@ -234,45 +232,38 @@ async fn patch_config_components_in_txn(
         gents::config_client::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
-    use anyhow::Context;
     use gents::config_client::{
         patch::{apply_patch, ensure_admissible},
         read_desired_state_record_in_txn,
     };
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "component patch requires an owner"
-    );
+    if node_did.trim().is_empty() {
+        return Err(ManageMutationError::ComponentPatchRequiresOwner);
+    }
     let mut identities = rapidhash::RapidHashSet::default();
     for (target, id, patch) in patches {
-        anyhow::ensure!(
-            !id.trim().is_empty(),
-            "component patch requires a document ID"
-        );
-        anyhow::ensure!(
-            identities.insert((*target, id)),
-            "duplicate component patch identity"
-        );
+        if id.trim().is_empty() {
+            return Err(ManageMutationError::ComponentPatchRequiresDocumentId);
+        }
+        if !identities.insert((*target, id)) {
+            return Err(ManageMutationError::DuplicateComponentPatchIdentity);
+        }
         ensure_admissible(*target, patch)?;
     }
     read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
         .await?
-        .context("component patch requires an existing node")?;
+        .ok_or(ManageMutationError::ComponentPatchRequiresNode)?;
     let mut documents = Vec::with_capacity(patches.len());
     for (target, id, patch) in patches {
         let (_, retained) =
             read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
                 .await?
-                .with_context(|| {
-                    format!(
-                        "component patch requires existing {} {}",
-                        target.collection_name(),
-                        id
-                    )
+                .ok_or_else(|| ManageMutationError::ComponentPatchRequiresDocument {
+                    collection: target.collection_name(),
+                    id: id.clone(),
                 })?;
         let retained = retained
             .as_object()
-            .context("canonical config document must be an object")?;
+            .ok_or(ManageMutationError::CanonicalDocumentNotObject)?;
         let value = serde_json::Value::Object(apply_patch(*target, retained, patch));
         documents.push(DesiredStateApplyDocument {
             collection: target.collection(),
@@ -288,11 +279,12 @@ async fn patch_config_components_in_txn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestError, TestResult};
     use gents::config_client::read_desired_state_record_in_txn;
     use serde_json::json;
 
     #[tokio::test]
-    async fn node_replacement_keeps_authored_metadata_and_scoped_default_binding() -> Result<()> {
+    async fn node_replacement_keeps_authored_metadata_and_scoped_default_binding() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let config: gents::document_config::PackConfig = serde_json::from_value(json!({
@@ -306,7 +298,7 @@ mod tests {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;
@@ -331,14 +323,14 @@ mod tests {
                 assert_eq!(saved.created_by.as_deref(), Some("did:test:creator"));
                 assert_eq!(saved.tags, vec!["team"]);
                 assert!(saved.default_agent_id.is_none());
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;
         Ok(())
     }
     #[tokio::test]
-    async fn setting_the_default_enables_it_and_recovers_a_stored_disabled_default() -> Result<()> {
+    async fn setting_the_default_enables_it_and_recovers_a_stored_disabled_default() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:default";
@@ -356,7 +348,7 @@ mod tests {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;
@@ -393,7 +385,7 @@ mod tests {
                 .await?
                 .unwrap();
                 assert_eq!(second["enabled"], true);
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;
@@ -401,7 +393,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn component_apply_is_partial_atomic_scoped_and_preserves_node() -> Result<()> {
+    async fn component_apply_is_partial_atomic_scoped_and_preserves_node() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:components";
@@ -417,7 +409,7 @@ mod tests {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;
@@ -511,14 +503,14 @@ mod tests {
                     context["system_prompt"],
                     "literal ${NOT_AN_ENV} {{ not_a_template }}"
                 );
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;
         Ok(())
     }
     #[tokio::test]
-    async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
+    async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> TestResult
     {
         use gents::config_client::patch::SelfConfigTarget;
         let node = Arc::new(crate::test_support::node_builder().build().await?);
@@ -535,7 +527,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -588,7 +580,7 @@ mod tests {
                     )
                     .await?
                     .unwrap();
-                    Ok::<_, anyhow::Error>((backend, profile))
+                    Ok::<_, TestError>((backend, profile))
                 })
             })
         };
@@ -668,7 +660,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(other["auth"]["key"], "secret-retained");
                 assert_eq!(other["name"], "Backend");
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;

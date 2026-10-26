@@ -294,7 +294,7 @@ fn upgrade_retirement(
     data: &Path,
     key_file: PathBuf,
 ) -> Result<(Vec<PathBuf>, Option<RetiredStoreKey>), BridgeError> {
-    let read = || -> anyhow::Result<_> {
+    let read = || -> Result<_, gents::store_key::upgrade::UpgradeError> {
         let entries = gents::store_key::upgrade::retirement_entries(data)?;
         let key = gents::store_key::upgrade::pending_record(data)?.map(|record| RetiredStoreKey {
             record,
@@ -306,7 +306,7 @@ fn upgrade_retirement(
     read().map_err(|error| {
         BridgeError::new(
             BridgeErrorCode::Backend,
-            format!("Inspecting store upgrade: {}", ErrorChain(error.as_ref())),
+            format!("Inspecting store upgrade: {}", ErrorChain(&error)),
         )
     })
 }
@@ -1035,7 +1035,7 @@ impl HomeResetPlan {
         backup: Option<&Path>,
     ) -> Result<ManagedServerResetResult, BridgeError> {
         self.retire_with_key_cleanup(disposition, backup, |record, key_file| {
-            Ok(record.delete_key(key_file)?)
+            record.delete_key(key_file)
         })
     }
 
@@ -1043,7 +1043,10 @@ impl HomeResetPlan {
         &self,
         disposition: HomeResetDisposition,
         backup: Option<&Path>,
-        mut delete_key: impl FnMut(&gents::store_key::StoreEncryption, &Path) -> anyhow::Result<()>,
+        mut delete_key: impl FnMut(
+            &gents::store_key::StoreEncryption,
+            &Path,
+        ) -> Result<(), gents::store_key::StoreKeyError>,
     ) -> Result<ManagedServerResetResult, BridgeError> {
         let retire_as = match (disposition, backup) {
             (HomeResetDisposition::Archive, Some(backup)) => {
@@ -1140,7 +1143,7 @@ impl HomeResetPlan {
             delete_key(&key.record, &key.key_file).map_err(|error| {
                 BridgeError::new(
                     BridgeErrorCode::Backend,
-                    format!("Removing retired store key: {}", ErrorChain(error.as_ref())),
+                    format!("Removing retired store key: {}", ErrorChain(&error)),
                 )
             })?;
             retired.extend(

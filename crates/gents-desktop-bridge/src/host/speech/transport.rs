@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::types::ToolServiceToolView;
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum SpeechTransportError {
+pub(in crate::host) enum SpeechTransportError {
     #[error("The speech worker could not start. Restart the Gents client.")]
     Spawn(#[source] std::io::Error),
     #[error("The speech worker is busy or unavailable. Stop voice and try again.")]

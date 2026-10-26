@@ -22,7 +22,7 @@ use super::super::graphql::{
 use super::binding::resolve_agent_binding;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ChatMutationError {
+pub enum ChatMutationError {
     #[error(transparent)]
     Graphql(#[from] GraphqlError),
     #[error("content must not be empty")]
@@ -140,6 +140,38 @@ pub(crate) enum ChatMutationError {
     StaleRequestNodeDidMissing,
     #[error("stale request has no content")]
     StaleRequestContentMissing,
+    #[error(transparent)]
+    Receipt(#[from] receipt::ReceiptError),
+    #[error(transparent)]
+    ReceiptJournal(Box<receipt::journal::ReceiptJournalError>),
+    #[error(transparent)]
+    Lifecycle(Box<gents::lifecycle::LifecycleError>),
+    #[error(transparent)]
+    Materialize(#[from] gents::lifecycle::MaterializeError),
+    #[error(transparent)]
+    ExecutionOrigin(#[from] gents::lifecycle::ExecutionOriginError),
+    #[error(transparent)]
+    Goal(#[from] gents::goal::GoalError),
+}
+
+impl From<receipt::journal::ReceiptJournalError> for ChatMutationError {
+    fn from(error: receipt::journal::ReceiptJournalError) -> Self {
+        Self::ReceiptJournal(Box::new(error))
+    }
+}
+
+impl gents::config_client::TransactionFailure for ChatMutationError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Client(error)
+            | Self::FetchRequest { source: error, .. }
+            | Self::FetchRetryLineage { source: error, .. } => Some(error),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 /// The durable submission receipt. Replica observation may still be pending;
@@ -188,7 +220,7 @@ pub async fn submit_request(
     content: &str,
     agent_id: Option<&str>,
     options: SubmitRequestOptions,
-) -> anyhow::Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ChatMutationError> {
     let (result, create) = prepare_request_submission(
         node,
         store,
@@ -232,7 +264,7 @@ pub async fn submit_goal_backed_request(
     mut options: SubmitRequestOptions,
     objective: &str,
     token_budget: Option<i64>,
-) -> anyhow::Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ChatMutationError> {
     if options.retry_key.is_none() {
         options.retry_key = Some(format!(
             "desktop-goal-request:{}",
@@ -277,7 +309,7 @@ pub async fn submit_task_request(
     content: &str,
     agent_id: Option<&str>,
     mut options: SubmitRequestOptions,
-) -> anyhow::Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ChatMutationError> {
     options.retry_key = Some(fire.fire_key.clone());
     let (result, create) = prepare_request_submission(
         node,
@@ -314,10 +346,13 @@ pub(crate) async fn prepare_request_submission(
     agent_id: Option<&str>,
     options: SubmitRequestOptions,
     request_id: Option<&str>,
-) -> anyhow::Result<(
-    SubmittedRequest,
-    gents_protocol::request_admission::AgentRequestCreate,
-)> {
+) -> Result<
+    (
+        SubmittedRequest,
+        gents_protocol::request_admission::AgentRequestCreate,
+    ),
+    ChatMutationError,
+> {
     let session_id = normalize_required("session_id", session_id)?;
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
@@ -488,7 +523,7 @@ pub async fn retry_request(
     requester_did: &str,
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-) -> anyhow::Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ChatMutationError> {
     retry_request_with_request_id(
         node,
         store,
@@ -509,7 +544,7 @@ async fn retry_request_with_request_id(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     request_id: String,
-) -> anyhow::Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ChatMutationError> {
     let request_id = normalize_required("new_request_id", &request_id)?.to_string();
     let parent_request_id = normalize_required("request_id", &parent.request_id)?;
     let node_did = normalize_required(
@@ -560,7 +595,7 @@ async fn retry_request_in_txn(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     candidate_request_id: &str,
-) -> anyhow::Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ChatMutationError> {
     let (parent_doc_id, parent) =
         load_retry_parent_in_txn(txn, parent_request_id, node_did, requester_did).await?;
     let retry_key = retry_successor_key(&parent_doc_id);
@@ -605,8 +640,7 @@ async fn retry_request_in_txn(
         return Err(ChatMutationError::RetryParentNotLatest {
             session_id: parent_session_id.to_string(),
             latest_request_id: effective_latest_request_id,
-        }
-        .into());
+        });
     }
     ensure_retry_candidate_is_fresh_in_txn(txn, parent_session_id, candidate_request_id).await?;
 
@@ -972,7 +1006,7 @@ pub async fn resend_request(
     requester_did: &str,
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-) -> anyhow::Result<SubmittedRequest> {
+) -> Result<SubmittedRequest, ChatMutationError> {
     let stale = fetch_request_view(node, stale_request_id, node_did, requester_did).await?;
     if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
         || stale.failure_reason.as_deref() != Some("Stale")
@@ -988,8 +1022,7 @@ pub async fn resend_request(
                 .as_deref()
                 .unwrap_or("<missing>")
                 .to_string(),
-        }
-        .into());
+        });
     }
     let stale_node_did = stale
         .node_did
@@ -1176,3 +1209,9 @@ pub use receipt::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
     ReceiptError, SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
+
+impl From<gents::lifecycle::LifecycleError> for ChatMutationError {
+    fn from(error: gents::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}

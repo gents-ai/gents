@@ -1,15 +1,142 @@
-use super::super::graphql::{escape_graphql_string, normalize_required};
-use anyhow::{anyhow, bail, Context, Result};
+use super::super::graphql::{escape_graphql_string, normalize_required, GraphqlError};
+use super::ManageMutationError;
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
 use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::config_client::{
+    ConfigAccess, ConfigClientError, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    DesiredStateError, TransactionFailure,
+};
 use gents::document_config::{EventSource, Schedule, Task, Trigger};
 use gents::task_session_title;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::Arc;
+
+#[derive(Debug, thiserror::Error)]
+pub enum TaskMutationError {
+    #[error("Choose an existing agent before setting workspace permissions.")]
+    ReviewAgentMissing,
+    #[error("The configured access reviewer is missing. Restore its Task in Runtime Settings.")]
+    ReviewerMissing,
+    #[error("task {task_id} is disabled")]
+    TaskDisabled { task_id: String },
+    #[error("fetch agent for task {task_id}")]
+    FetchAgent {
+        task_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("no Agent with agent_id = {agent_id} (referenced by task {task_id})")]
+    TaskAgentMissing { agent_id: String, task_id: String },
+    #[error("Agent {agent_id} has no node_did")]
+    AgentHasNoNodeDid { agent_id: String },
+    #[error("Agent {agent_id} belongs to a different node")]
+    AgentOnOtherNode { agent_id: String },
+    #[error("Agent {agent_id} is disabled")]
+    AgentDisabled { agent_id: String },
+    #[error("{operation}")]
+    ConfigQuery {
+        operation: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("{operation} returned errors: {errors}")]
+    ConfigQueryRejected { operation: String, errors: Value },
+    #[error("{operation} returned no {root} rows")]
+    ConfigQueryNoRows { operation: String, root: String },
+    #[error("deserialize {root} for {operation}")]
+    DecodeConfigRow {
+        root: String,
+        operation: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("task {task_id} was not found for {node_did}")]
+    TaskNotFoundFor { task_id: String, node_did: String },
+    #[error("task {task_id} is ambiguous for {node_did}")]
+    TaskAmbiguous { task_id: String, node_did: String },
+    #[error("Task has no physical document ID")]
+    TaskHasNoDocId,
+    #[error("no Agent with agent_id = {agent_id} for {node_did}")]
+    AgentNotFoundFor { agent_id: String, node_did: String },
+    #[error("Agent {agent_id} is ambiguous for {node_did}")]
+    AgentAmbiguous { agent_id: String, node_did: String },
+    #[error("render manual template for task {task_id}: {error}")]
+    RenderManualTemplate {
+        task_id: String,
+        error: gents::template::TemplateError,
+    },
+    #[error("render goal template for task {task_id}: {error}")]
+    RenderGoalTemplate {
+        task_id: String,
+        error: gents::template::TemplateError,
+    },
+    #[error("task {task_id} rendered an empty goal objective")]
+    EmptyGoalObjective { task_id: String },
+    #[error("Task identity query omitted rows")]
+    TaskIdentityOmittedRows,
+    #[error("Task identity is absent or ambiguous")]
+    TaskIdentityAmbiguous,
+    #[error("fetch triggers for schedule {schedule_id}")]
+    FetchScheduleTriggers {
+        schedule_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("schedule {schedule_id} has no enabled Trigger")]
+    ScheduleHasNoTrigger { schedule_id: String },
+    #[error("schedule {schedule_id} has multiple enabled Triggers; run a Trigger explicitly")]
+    ScheduleHasMultipleTriggers { schedule_id: String },
+    #[error("fetch task for schedule {schedule_id}")]
+    FetchScheduleTask {
+        schedule_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("task {task_id} not found")]
+    TaskNotFound { task_id: String },
+    #[error("deserialize Task: {error}")]
+    DecodeTask { error: serde_json::Error },
+    #[error("schedule {schedule_id} was {outcome} for {node_did}")]
+    ScheduleUnresolved {
+        schedule_id: String,
+        node_did: String,
+        outcome: &'static str,
+    },
+    #[error(transparent)]
+    Graphql(#[from] GraphqlError),
+    #[error(transparent)]
+    Manage(Box<ManageMutationError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error(transparent)]
+    Approval(#[from] gents::plugin::approval::PluginApprovalError),
+    #[error(transparent)]
+    Goal(#[from] gents::goal::GoalError),
+    #[error(transparent)]
+    Materialize(#[from] gents::lifecycle::MaterializeError),
+    #[error(transparent)]
+    Lifecycle(Box<gents::lifecycle::LifecycleError>),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+}
+
+impl TransactionFailure for TaskMutationError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::Manage(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = TaskMutationError> = std::result::Result<T, E>;
 
 #[cfg(test)]
 pub async fn upsert_task(node: &Arc<EmbeddedNode>, document: &Task) -> Result<()> {
@@ -19,7 +146,7 @@ pub async fn upsert_task(node: &Arc<EmbeddedNode>, document: &Task) -> Result<()
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan_local(node, "desktop.task.save", plan).await
+    Ok(super::apply_plan_local(node, "desktop.task.save", plan).await?)
 }
 
 pub async fn upsert_task_on(access: &ConfigAccess, document: &Task) -> Result<()> {
@@ -29,7 +156,7 @@ pub async fn upsert_task_on(access: &ConfigAccess, document: &Task) -> Result<()
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan(access, "desktop.task.save", plan).await
+    Ok(super::apply_plan(access, "desktop.task.save", plan).await?)
 }
 
 pub async fn prepare_access_review_task_on(
@@ -42,49 +169,60 @@ pub async fn prepare_access_review_task_on(
 
     let default = default_review_task(node, agent);
     let task_id = preferred.unwrap_or(&default.task_id);
-    access.transact_write("desktop.access_review.prepare", |txn| {
-        let default = &default;
-        Box::pin(async move {
-            anyhow::ensure!(
-                read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.is_some(),
-                "Choose an existing agent before setting workspace permissions."
-            );
-            let existing = read_desired_state_record_in_txn(txn, Collection::Task, node, task_id).await?;
-            let task = match existing {
-                Some((_, value)) => serde_json::from_value::<Task>(value)?,
-                None if preferred.is_none() => {
-                    let value = serde_json::to_value(default)?;
-                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                        collection: Collection::Task,
-                        add: value.clone(),
-                        update: value,
-                    }])?;
-                    apply_desired_state_plan(txn, &plan).await?;
-                    default.clone()
+    access
+        .transact_write("desktop.access_review.prepare", |txn| {
+            let default = &default;
+            Box::pin(async move {
+                if read_desired_state_record_in_txn(txn, Collection::Agent, node, agent)
+                    .await?
+                    .is_none()
+                {
+                    return Err(TaskMutationError::ReviewAgentMissing);
                 }
-                None => anyhow::bail!("The configured access reviewer is missing. Restore its Task in Runtime Settings."),
-            };
-            review_task_policy(&task, node, task_id, agent, "access-review")?;
-            Ok(gents::plugin::approval::workspace::ReviewTaskSelection::for_task(&task))
+                let existing =
+                    read_desired_state_record_in_txn(txn, Collection::Task, node, task_id).await?;
+                let task = match existing {
+                    Some((_, value)) => serde_json::from_value::<Task>(value)?,
+                    None if preferred.is_none() => {
+                        let value = serde_json::to_value(default)?;
+                        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                            collection: Collection::Task,
+                            add: value.clone(),
+                            update: value,
+                        }])?;
+                        apply_desired_state_plan(txn, &plan).await?;
+                        default.clone()
+                    }
+                    None => return Err(TaskMutationError::ReviewerMissing),
+                };
+                review_task_policy(&task, node, task_id, agent, "access-review")?;
+                Ok(gents::plugin::approval::workspace::ReviewTaskSelection::for_task(&task))
+            })
         })
-    }).await
+        .await
 }
 
 #[cfg(test)]
 pub async fn delete_task(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
-    super::delete_scoped_document_local(node, "desktop.task.delete", Collection::Task, node_did, id)
-        .await
+    Ok(super::delete_scoped_document_local(
+        node,
+        "desktop.task.delete",
+        Collection::Task,
+        node_did,
+        id,
+    )
+    .await?)
 }
 
 pub async fn delete_task_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
-    super::delete_scoped_document(
+    Ok(super::delete_scoped_document(
         access,
         "desktop.task.delete",
         Collection::Task,
         node_did,
         id,
     )
-    .await
+    .await?)
 }
 
 #[cfg(test)]
@@ -95,7 +233,7 @@ pub async fn upsert_schedule(node: &Arc<EmbeddedNode>, document: &Schedule) -> R
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan_local(node, "desktop.schedule.save", plan).await
+    Ok(super::apply_plan_local(node, "desktop.schedule.save", plan).await?)
 }
 
 pub async fn upsert_schedule_on(access: &ConfigAccess, document: &Schedule) -> Result<()> {
@@ -105,30 +243,30 @@ pub async fn upsert_schedule_on(access: &ConfigAccess, document: &Schedule) -> R
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan(access, "desktop.schedule.save", plan).await
+    Ok(super::apply_plan(access, "desktop.schedule.save", plan).await?)
 }
 
 #[cfg(test)]
 pub async fn delete_schedule(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
-    super::delete_scoped_document_local(
+    Ok(super::delete_scoped_document_local(
         node,
         "desktop.schedule.delete",
         Collection::Schedule,
         node_did,
         id,
     )
-    .await
+    .await?)
 }
 
 pub async fn delete_schedule_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
-    super::delete_scoped_document(
+    Ok(super::delete_scoped_document(
         access,
         "desktop.schedule.delete",
         Collection::Schedule,
         node_did,
         id,
     )
-    .await
+    .await?)
 }
 
 #[cfg(test)]
@@ -139,7 +277,7 @@ pub async fn upsert_trigger(node: &Arc<EmbeddedNode>, document: &Trigger) -> Res
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan_local(node, "desktop.trigger.save", plan).await
+    Ok(super::apply_plan_local(node, "desktop.trigger.save", plan).await?)
 }
 
 pub async fn upsert_trigger_on(access: &ConfigAccess, document: &Trigger) -> Result<()> {
@@ -149,30 +287,30 @@ pub async fn upsert_trigger_on(access: &ConfigAccess, document: &Trigger) -> Res
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan(access, "desktop.trigger.save", plan).await
+    Ok(super::apply_plan(access, "desktop.trigger.save", plan).await?)
 }
 
 #[cfg(test)]
 pub async fn delete_trigger(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
-    super::delete_scoped_document_local(
+    Ok(super::delete_scoped_document_local(
         node,
         "desktop.trigger.delete",
         Collection::Trigger,
         node_did,
         id,
     )
-    .await
+    .await?)
 }
 
 pub async fn delete_trigger_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
-    super::delete_scoped_document(
+    Ok(super::delete_scoped_document(
         access,
         "desktop.trigger.delete",
         Collection::Trigger,
         node_did,
         id,
     )
-    .await
+    .await?)
 }
 
 #[cfg(test)]
@@ -183,7 +321,7 @@ pub async fn upsert_event_source(node: &Arc<EmbeddedNode>, document: &EventSourc
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan_local(node, "desktop.event_source.save", plan).await
+    Ok(super::apply_plan_local(node, "desktop.event_source.save", plan).await?)
 }
 
 pub async fn upsert_event_source_on(access: &ConfigAccess, document: &EventSource) -> Result<()> {
@@ -193,7 +331,7 @@ pub async fn upsert_event_source_on(access: &ConfigAccess, document: &EventSourc
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan(access, "desktop.event_source.save", plan).await
+    Ok(super::apply_plan(access, "desktop.event_source.save", plan).await?)
 }
 
 #[cfg(test)]
@@ -202,14 +340,14 @@ pub async fn delete_event_source(
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
-    super::delete_scoped_document_local(
+    Ok(super::delete_scoped_document_local(
         node,
         "desktop.event_source.delete",
         Collection::EventSource,
         node_did,
         id,
     )
-    .await
+    .await?)
 }
 
 pub async fn delete_event_source_on(
@@ -217,14 +355,14 @@ pub async fn delete_event_source_on(
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
-    super::delete_scoped_document(
+    Ok(super::delete_scoped_document(
         access,
         "desktop.event_source.delete",
         Collection::EventSource,
         node_did,
         id,
     )
-    .await
+    .await?)
 }
 
 /// Desktop calls this in-process and the CLI writes the mutation remotely;
@@ -241,7 +379,9 @@ pub async fn fire_task_now(
     let agent_id = normalize_required("agent_id", &task_row.agent_id)?;
     normalize_required("prompt_template", &task_row.prompt_template)?;
     if !task_row.enabled {
-        bail!("task {task_id} is disabled");
+        return Err(TaskMutationError::TaskDisabled {
+            task_id: task_id.to_owned(),
+        });
     }
 
     let agent_query = format!(
@@ -260,33 +400,40 @@ pub async fn fire_task_now(
     let agent_response =
         gents::graphql::graphql_with_transaction_retry(node, &agent_query, "fetch task agent")
             .await
-            .with_context(|| format!("fetch agent for task {task_id}"))?;
+            .map_err(|source| TaskMutationError::FetchAgent {
+                task_id: task_id.to_owned(),
+                source,
+            })?;
     let agent_row = agent_response
         .data
         .as_ref()
         .and_then(|data| data.get("Agent"))
         .and_then(|arr| arr.as_array())
         .and_then(|arr| arr.first())
-        .ok_or_else(|| {
-            anyhow!(
-                "no Agent with agent_id = {} (referenced by task {task_id})",
-                agent_id
-            )
+        .ok_or_else(|| TaskMutationError::TaskAgentMissing {
+            agent_id: agent_id.to_owned(),
+            task_id: task_id.to_owned(),
         })?;
     let agent_node_did = agent_row
         .get("node_did")
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("Agent {agent_id} has no node_did"))?;
+        .ok_or_else(|| TaskMutationError::AgentHasNoNodeDid {
+            agent_id: agent_id.to_owned(),
+        })?;
     if agent_node_did != node_did {
-        bail!("Agent {agent_id} belongs to a different node");
+        return Err(TaskMutationError::AgentOnOtherNode {
+            agent_id: agent_id.to_owned(),
+        });
     }
     if !agent_row
         .get("enabled")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
     {
-        bail!("Agent {agent_id} is disabled");
+        return Err(TaskMutationError::AgentDisabled {
+            agent_id: agent_id.to_owned(),
+        });
     }
 
     enqueue_task_now(node, actor, task_row, args).await
@@ -304,27 +451,36 @@ where
     let body = access
         .execute(query)
         .await
-        .with_context(|| operation.to_string())?;
+        .map_err(|source| TaskMutationError::ConfigQuery {
+            operation: operation.to_owned(),
+            source,
+        })?;
     if body
         .get("errors")
         .and_then(Value::as_array)
         .is_some_and(|errors| !errors.is_empty())
     {
-        bail!(
-            "{operation} returned errors: {}",
-            body.get("errors").unwrap_or(&Value::Null)
-        );
+        return Err(TaskMutationError::ConfigQueryRejected {
+            operation: operation.to_owned(),
+            errors: body.get("errors").cloned().unwrap_or(Value::Null),
+        });
     }
     let rows = body
         .get("data")
         .and_then(|data| data.get(root))
         .and_then(Value::as_array)
-        .with_context(|| format!("{operation} returned no {root} rows"))?;
+        .ok_or_else(|| TaskMutationError::ConfigQueryNoRows {
+            operation: operation.to_owned(),
+            root: root.to_owned(),
+        })?;
     rows.iter()
         .cloned()
         .map(|row| {
-            serde_json::from_value(row)
-                .with_context(|| format!("deserialize {root} for {operation}"))
+            serde_json::from_value(row).map_err(|source| TaskMutationError::DecodeConfigRow {
+                root: root.to_owned(),
+                operation: operation.to_owned(),
+                source,
+            })
         })
         .collect()
 }
@@ -367,15 +523,21 @@ async fn load_task_on(
             .into_iter();
     let mut row = rows
         .next()
-        .ok_or_else(|| anyhow!("task {task_id} was not found for {node_did}"))?;
+        .ok_or_else(|| TaskMutationError::TaskNotFoundFor {
+            task_id: task_id.to_owned(),
+            node_did: node_did.to_owned(),
+        })?;
     if rows.next().is_some() {
-        bail!("task {task_id} is ambiguous for {node_did}");
+        return Err(TaskMutationError::TaskAmbiguous {
+            task_id: task_id.to_owned(),
+            node_did: node_did.to_owned(),
+        });
     }
     let doc_id = row
         .as_object_mut()
         .and_then(|row| row.remove("_docID"))
         .and_then(|value| value.as_str().map(str::to_owned))
-        .context("Task has no physical document ID")?;
+        .ok_or(TaskMutationError::TaskHasNoDocId)?;
     Ok((doc_id, serde_json::from_value(row)?))
 }
 
@@ -410,15 +572,25 @@ async fn ensure_agent_enabled_on(
             .into_iter();
     let row = rows
         .next()
-        .ok_or_else(|| anyhow!("no Agent with agent_id = {agent_id} for {node_did}"))?;
+        .ok_or_else(|| TaskMutationError::AgentNotFoundFor {
+            agent_id: agent_id.to_owned(),
+            node_did: node_did.to_owned(),
+        })?;
     if rows.next().is_some() {
-        bail!("Agent {agent_id} is ambiguous for {node_did}");
+        return Err(TaskMutationError::AgentAmbiguous {
+            agent_id: agent_id.to_owned(),
+            node_did: node_did.to_owned(),
+        });
     }
     if row.node_did != node_did || row.agent_id != agent_id {
-        bail!("Agent {agent_id} belongs to a different node");
+        return Err(TaskMutationError::AgentOnOtherNode {
+            agent_id: agent_id.to_owned(),
+        });
     }
     if !row.enabled {
-        bail!("Agent {agent_id} is disabled");
+        return Err(TaskMutationError::AgentDisabled {
+            agent_id: agent_id.to_owned(),
+        });
     }
     Ok(())
 }
@@ -445,7 +617,9 @@ fn render_task_invocation(
     let agent_id = normalize_required("agent_id", &task.agent_id)?;
     let prompt_template = normalize_required("prompt_template", &task.prompt_template)?;
     if !task.enabled {
-        bail!("task {task_id} is disabled");
+        return Err(TaskMutationError::TaskDisabled {
+            task_id: task_id.to_owned(),
+        });
     }
     gents::goal::validate_task_goal_declaration(
         task.goal_objective_template.as_deref(),
@@ -477,23 +651,33 @@ fn render_task_invocation(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let content = gents::render_template(prompt_template, &scope)
-        .map_err(|error| anyhow!("render manual template for task {task_id}: {error}"))?;
+    let content = gents::render_template(prompt_template, &scope).map_err(|error| {
+        TaskMutationError::RenderManualTemplate {
+            task_id: task_id.to_owned(),
+            error,
+        }
+    })?;
     let goal_objective = task
         .goal_objective_template
         .as_deref()
         .map(str::trim)
         .filter(|template| !template.is_empty())
         .map(|template| {
-            gents::render_template(template, &scope)
-                .map_err(|error| anyhow!("render goal template for task {task_id}: {error}"))
+            gents::render_template(template, &scope).map_err(|error| {
+                TaskMutationError::RenderGoalTemplate {
+                    task_id: task_id.to_owned(),
+                    error,
+                }
+            })
         })
         .transpose()?;
     if goal_objective
         .as_deref()
         .is_some_and(|objective| objective.trim().is_empty())
     {
-        bail!("task {task_id} rendered an empty goal objective");
+        return Err(TaskMutationError::EmptyGoalObjective {
+            task_id: task_id.to_owned(),
+        });
     }
     let task_label = task
         .display_name
@@ -546,7 +730,9 @@ pub async fn resolve_task_now_on(
     let task_id = normalize_required("task_id", task_id)?;
     let (task_doc_id, task) = load_task_on(config_access, node_did, task_id).await?;
     if !task.enabled {
-        bail!("task {task_id} is disabled");
+        return Err(TaskMutationError::TaskDisabled {
+            task_id: task_id.to_owned(),
+        });
     }
     let agent_id = normalize_required("agent_id", &task.agent_id)?;
     ensure_agent_enabled_on(config_access, node_did, agent_id).await?;
@@ -569,11 +755,13 @@ async fn enqueue_task_now(
         .as_ref()
         .and_then(|data| data.get("Task"))
         .and_then(Value::as_array)
-        .context("Task identity query omitted rows")?;
-    anyhow::ensure!(rows.len() == 1, "Task identity is absent or ambiguous");
+        .ok_or(TaskMutationError::TaskIdentityOmittedRows)?;
+    if rows.len() != 1 {
+        return Err(TaskMutationError::TaskIdentityAmbiguous);
+    }
     let doc_id = rows[0]["_docID"]
         .as_str()
-        .context("Task has no physical document ID")?;
+        .ok_or(TaskMutationError::TaskHasNoDocId)?;
     let invocation = render_task_invocation(task_row, doc_id, args)?;
     let create =
         gents::build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
@@ -638,7 +826,10 @@ pub async fn fire_schedule_now(
         "fetch schedule triggers",
     )
     .await
-    .with_context(|| format!("fetch triggers for schedule {schedule_id}"))?;
+    .map_err(|source| TaskMutationError::FetchScheduleTriggers {
+        schedule_id: schedule_id.to_owned(),
+        source,
+    })?;
     let mut matching = trigger_response
         .data
         .as_ref()
@@ -657,9 +848,13 @@ pub async fn fire_schedule_now(
         });
     let trigger = matching
         .next()
-        .ok_or_else(|| anyhow!("schedule {schedule_id} has no enabled Trigger"))?;
+        .ok_or_else(|| TaskMutationError::ScheduleHasNoTrigger {
+            schedule_id: schedule_id.to_owned(),
+        })?;
     if matching.next().is_some() {
-        bail!("schedule {schedule_id} has multiple enabled Triggers; run a Trigger explicitly");
+        return Err(TaskMutationError::ScheduleHasMultipleTriggers {
+            schedule_id: schedule_id.to_owned(),
+        });
     }
     let task_id = trigger.task_id.as_str();
     let task_query = format!(
@@ -688,16 +883,21 @@ pub async fn fire_schedule_now(
     let task_response =
         gents::graphql::graphql_with_transaction_retry(node, &task_query, "fetch schedule task")
             .await
-            .with_context(|| format!("fetch task for schedule {schedule_id}"))?;
+            .map_err(|source| TaskMutationError::FetchScheduleTask {
+                schedule_id: schedule_id.to_owned(),
+                source,
+            })?;
     let task_row_json = task_response
         .data
         .as_ref()
         .and_then(|d| d.get("Task"))
         .and_then(|arr| arr.as_array())
         .and_then(|arr| arr.first())
-        .ok_or_else(|| anyhow!("task {task_id} not found"))?;
+        .ok_or_else(|| TaskMutationError::TaskNotFound {
+            task_id: task_id.to_owned(),
+        })?;
     let task_row: Task = serde_json::from_value(task_row_json.clone())
-        .map_err(|e| anyhow!("deserialize Task: {e}"))?;
+        .map_err(|error| TaskMutationError::DecodeTask { error })?;
 
     fire_task_now(node, actor, &task_row, serde_json::json!({})).await
 }
@@ -731,14 +931,15 @@ pub async fn resolve_schedule_now_on(
     )
     .await?;
     if schedules.len() != 1 {
-        bail!(
-            "schedule {schedule_id} was {} for {node_did}",
-            if schedules.is_empty() {
+        return Err(TaskMutationError::ScheduleUnresolved {
+            schedule_id: schedule_id.to_owned(),
+            node_did: node_did.to_owned(),
+            outcome: if schedules.is_empty() {
                 "not found"
             } else {
                 "ambiguous"
-            }
-        );
+            },
+        });
     }
 
     let trigger_query = format!(
@@ -776,27 +977,46 @@ pub async fn resolve_schedule_now_on(
     });
     let trigger = matching
         .next()
-        .ok_or_else(|| anyhow!("schedule {schedule_id} has no enabled Trigger"))?;
+        .ok_or_else(|| TaskMutationError::ScheduleHasNoTrigger {
+            schedule_id: schedule_id.to_owned(),
+        })?;
     if matching.next().is_some() {
-        bail!("schedule {schedule_id} has multiple enabled Triggers; run a Trigger explicitly");
+        return Err(TaskMutationError::ScheduleHasMultipleTriggers {
+            schedule_id: schedule_id.to_owned(),
+        });
     }
     let (task_doc_id, task) = load_task_on(config_access, node_did, &trigger.task_id).await?;
     if !task.enabled {
-        bail!("task {} is disabled", task.task_id);
+        return Err(TaskMutationError::TaskDisabled {
+            task_id: task.task_id.clone(),
+        });
     }
     let agent_id = normalize_required("agent_id", &task.agent_id)?;
     ensure_agent_enabled_on(config_access, node_did, agent_id).await?;
     render_task_invocation(&task, &task_doc_id, serde_json::json!({}))
 }
 
+impl From<gents::lifecycle::LifecycleError> for TaskMutationError {
+    fn from(error: gents::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<ManageMutationError> for TaskMutationError {
+    fn from(error: ManageMutationError) -> Self {
+        Self::Manage(Box::new(error))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestError, TestResult};
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn access_reviewer_setup_preserves_policy_and_rejects_task_side_effects() -> Result<()> {
+    async fn access_reviewer_setup_preserves_policy_and_rejects_task_side_effects() -> TestResult {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:access-review-setup";
@@ -865,7 +1085,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_task_resolution_ignores_stale_desktop_revision() -> Result<()> {
+    async fn canonical_task_resolution_ignores_stale_desktop_revision() -> TestResult {
         let operator = Arc::new(crate::test_support::node_builder().build().await?);
         let desktop = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(operator.as_ref()).await?;
@@ -883,7 +1103,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -947,7 +1167,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schedule_manual_fire_never_selects_another_nodes_same_named_task() -> Result<()> {
+    async fn schedule_manual_fire_never_selects_another_nodes_same_named_task() -> TestResult {
         use gents::NodeIdentity as _;
 
         let identity_home = tempfile::tempdir()?;
@@ -1024,7 +1244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automation_replacements_preserve_scoped_references_and_goal_hook_rules() -> Result<()>
+    async fn automation_replacements_preserve_scoped_references_and_goal_hook_rules() -> TestResult
     {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
@@ -1040,7 +1260,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, TestError>(())
                 })
             })
             .await?;
@@ -1096,7 +1316,7 @@ mod tests {
                 assert_eq!(saved.hooks.len(), 1);
                 assert_eq!(saved.hooks[0].command, vec!["true"]);
                 assert!(saved.hooks[0].timeout_secs.is_none());
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, TestError>(())
             })
         })
         .await?;

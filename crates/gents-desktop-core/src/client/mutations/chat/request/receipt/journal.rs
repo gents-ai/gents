@@ -19,7 +19,7 @@ pub enum ReceiptJournalError {
     #[error("decoding retained submission")]
     Decode(#[source] serde_json::Error),
     #[error(transparent)]
-    Mutation(#[from] ChatMutationError),
+    Mutation(Box<ChatMutationError>),
     #[error("retained submission is inconsistent with its signed request")]
     Inconsistent,
 }
@@ -96,5 +96,11 @@ pub(crate) async fn forget(node: &Arc<EmbeddedNode>, request_id: &str) {
         &format!("mutation {{ delete_PendingChatSubmission(filter: {{request_id: {{_eq: \"{id}\"}}}}) {{ _docID }} }}"),
     ).await {
         tracing::warn!(%request_id, %error, "retained submission cleanup failed after its outcome was resolved");
+    }
+}
+
+impl From<ChatMutationError> for ReceiptJournalError {
+    fn from(error: ChatMutationError) -> Self {
+        Self::Mutation(Box::new(error))
     }
 }

@@ -69,7 +69,11 @@ impl LocalListener {
         })
     }
 
-    pub async fn serve(self, host: Arc<ClientHost>, stop: CancellationToken) -> anyhow::Result<()> {
+    pub async fn serve(
+        self,
+        host: Arc<ClientHost>,
+        stop: CancellationToken,
+    ) -> Result<(), LocalError> {
         self.serve_with_idle_timeout(host, stop, None).await
     }
 
@@ -77,7 +81,7 @@ impl LocalListener {
         self,
         host: Arc<ClientHost>,
         stop: CancellationToken,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), LocalError> {
         self.serve_with_idle_timeout(host, stop, Some(Duration::from_secs(180)))
             .await
     }
@@ -87,11 +91,11 @@ impl LocalListener {
         host: Arc<ClientHost>,
         stop: CancellationToken,
         idle_timeout: Option<Duration>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), LocalError> {
         let mut attachments = JoinSet::new();
         let idle = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(180)));
         tokio::pin!(idle);
-        let result: anyhow::Result<()> = async {
+        let result: Result<(), LocalError> = async {
             loop {
                 tokio::select! {
                     _ = stop.cancelled() => break,
@@ -120,7 +124,9 @@ impl LocalListener {
     }
 }
 
-fn report_attachment(result: Option<Result<anyhow::Result<()>, tokio::task::JoinError>>) {
+fn report_attachment(
+    result: Option<Result<Result<(), super::ConnectionError>, tokio::task::JoinError>>,
+) {
     match result {
         Some(Ok(Err(error))) => tracing::debug!(%error, "client attachment closed"),
         Some(Err(error)) => tracing::error!(%error, "client attachment task failed"),

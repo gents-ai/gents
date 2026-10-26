@@ -1,9 +1,8 @@
-use anyhow::{bail, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
-use super::util::BridgeCommandError;
+use super::util::{BridgeCommandError, Result};
 
 pub async fn tool_file_changes(
     core: &ClientCore,
@@ -13,14 +12,15 @@ pub async fn tool_file_changes(
     tool_call_doc_id: String,
     retry_id: Option<String>,
 ) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>> {
-    core.tool_file_changes(
-        &node_did,
-        &session_id,
-        &request_id,
-        &tool_call_doc_id,
-        retry_id.as_deref(),
-    )
-    .await
+    Ok(core
+        .tool_file_changes(
+            &node_did,
+            &session_id,
+            &request_id,
+            &tool_call_doc_id,
+            retry_id.as_deref(),
+        )
+        .await?)
 }
 
 pub async fn request_output(
@@ -62,7 +62,7 @@ pub async fn send_chat_message(
 ) -> Result<ChatSendResult> {
     let node_did = request.node_did.trim().to_string();
     if node_did.is_empty() {
-        bail!("node_did is required");
+        return Err(BridgeCommandError::Required { name: "node_did" });
     }
     if let Some(request_id) = super::chat_resolve::resolve_target(&request) {
         return super::chat_resolve::resolve_chat_submission(core, &node_did, &request, request_id)
@@ -77,7 +77,7 @@ pub async fn send_chat_message(
                 || !captured_context.is_empty()
                 || !attachments.is_empty()
             {
-                bail!("an answer renders its own content; send empty content");
+                return Err(BridgeCommandError::AnswerHasContent);
             }
             super::mailbox::question_reply_content(
                 core,
@@ -90,7 +90,7 @@ pub async fn send_chat_message(
         None => request.content.trim().to_string(),
     };
     if content.is_empty() && captured_context.is_empty() && attachments.is_empty() {
-        bail!("content is required");
+        return Err(BridgeCommandError::Required { name: "content" });
     }
 
     let agent_id = request
@@ -178,15 +178,15 @@ pub async fn fork_session_before_message(
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
     let node_did = request.node_did.trim().to_string();
     if node_did.is_empty() {
-        bail!("node_did is required");
+        return Err(BridgeCommandError::Required { name: "node_did" });
     }
     let session_id = request.session_id.trim().to_string();
     if session_id.is_empty() {
-        bail!("session_id is required");
+        return Err(BridgeCommandError::Required { name: "session_id" });
     }
     let title = request.title.trim().to_string();
     if title.is_empty() {
-        bail!("title is required");
+        return Err(BridgeCommandError::Required { name: "title" });
     }
     core.rename_session(&node_did, &session_id, &title).await?;
     Ok(())
