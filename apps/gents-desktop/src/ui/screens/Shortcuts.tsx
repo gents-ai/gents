@@ -10,17 +10,19 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedNodeDid } from "@/hooks/useClient";
+import { openSearch } from "./SearchPalette";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 export const MOD = IS_MAC ? "⌘" : "Ctrl+";
 const IN_DESKTOP = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
-const DESKTOP_ONLY = new Set(["1", "2", "3", "n"]);
+const DESKTOP_ONLY = new Set(["1", "2", "3", "n", "l"]);
 const ROWS: [string, string][] = [
   [`${MOD}1`, "Nodes"],
   [`${MOD}2`, "Sessions"],
   [`${MOD}3`, "Configuration"],
   [`${MOD}N`, "New session"],
-  [`${MOD}K`, "Focus the composer"],
+  [`${MOD}K`, "Search"],
+  [`${MOD}L`, "Focus the composer"],
   [`${MOD}↵`, "Send a follow-up the other way: steer or queue"],
   [`${IS_MAC ? "⌥⌘↑ / ⌥⌘↓" : "Ctrl+Alt+↑ / ↓"}`, "Previous / next turn"],
   [`${MOD}/`, "Show this reference"],
@@ -63,7 +65,11 @@ export function Shortcuts() {
           );
         case "n":
           return go({ name: "session", sessionId: null });
-        case "k": {
+        case "k":
+          e.preventDefault();
+          openSearch();
+          return;
+        case "l": {
           e.preventDefault();
           document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
           return;
