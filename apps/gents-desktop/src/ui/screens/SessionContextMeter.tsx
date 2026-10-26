@@ -488,7 +488,7 @@ export function SessionContext({
             ) : (
               <>
                 {compactTokens(used)} / {compactTokens(threshold)} ·{" "}
-                <span className="text-heading">{percentageLabel}</span>
+                <span className="font-semibold text-heading">{percentageLabel}</span>
               </>
             )}
           </span>
