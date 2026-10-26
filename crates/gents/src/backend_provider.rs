@@ -4,7 +4,7 @@ use tracing::Instrument;
 
 use crate::document_config::AdvertisedModel;
 
-pub use gents_loop::backend_provider::BackendProviderKind;
+pub use gents_loop::backend_provider::{BackendProviderKind, BackendProviderKindError};
 
 pub trait BackendProviderOauthExt {
     fn oauth_provider(self) -> Option<&'static str>;

@@ -48,12 +48,18 @@ pub enum CheckError {
     #[error(transparent)]
     Loader(#[from] crate::pack::LoaderError),
     #[error(transparent)]
-    DesiredState(#[from] crate::config_client::DesiredStateError),
+    DesiredState(Box<crate::config_client::DesiredStateError>),
     #[error(transparent)]
     Archive(#[from] crate::pack_archive::PackArchiveError),
 }
 
 type Result<T, E = CheckError> = std::result::Result<T, E>;
+
+impl From<crate::config_client::DesiredStateError> for CheckError {
+    fn from(error: crate::config_client::DesiredStateError) -> Self {
+        Self::DesiredState(Box::new(error))
+    }
+}
 
 pub const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
 const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 use gents::{cli_tool, BackendProviderKind, OpenAiWireApi};
 
 use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg, ToolCeilingArg, ToolPackageArg};
@@ -19,7 +18,11 @@ pub(crate) enum ResolveHelpersError {
     ReadwriteRequiresRoot,
     #[error("provide either --api-key or --api-key-env-var, not both")]
     ApiKeyConflict,
+    #[error(transparent)]
+    ProviderKind(#[from] gents::backend_provider::BackendProviderKindError),
 }
+
+type Result<T, E = ResolveHelpersError> = std::result::Result<T, E>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BackendResolutionMode {
@@ -39,7 +42,7 @@ pub(crate) fn resolve_backend_config_with_preset(
     let api_key = normalize_optional_string(explicit_api_key);
     let explicit_api_key_env_var = normalize_optional_string(explicit_api_key_env_var);
     if api_key.is_some() && explicit_api_key_env_var.is_some() {
-        return Err(ResolveHelpersError::ApiKeyConflict.into());
+        return Err(ResolveHelpersError::ApiKeyConflict);
     }
 
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;

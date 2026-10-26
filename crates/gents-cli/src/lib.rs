@@ -9,7 +9,9 @@ use gents::defra_node::NodeBuilder;
 use serde::de::DeserializeOwned;
 
 pub mod accounts {
-    pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
+    pub use crate::commands::accounts::{
+        remove_account, request_usage_reads, AccountsError, UsageReads,
+    };
 }
 /// The job next-call rules the desktop shares with `gents job`.
 pub mod jobs {

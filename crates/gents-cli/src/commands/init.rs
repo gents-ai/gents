@@ -1556,7 +1556,9 @@ fn is_probably_llama_server_endpoint(endpoint: &str) -> bool {
     endpoint.contains("localhost:8080") || endpoint.contains("127.0.0.1:8080")
 }
 
-fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig> {
+fn resolve_init_backend_config(
+    args: &InitArgs,
+) -> Result<ResolvedBackendConfig, crate::resolve_helpers::ResolveHelpersError> {
     crate::resolve_backend_config_with_preset(
         args.backend_preset,
         args.resolved_inference_endpoint(),

@@ -280,7 +280,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
             {
                 Ok(()) => Ok(PairingApproval::Committed),
                 Err(error) => {
-                    let message = ErrorChain(error.as_ref()).to_string();
+                    let message = ErrorChain(&error).to_string();
                     if enrollment_request_is_not_visible_yet(&message) {
                         tracing::debug!(
                             request_id = %request_id,

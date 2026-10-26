@@ -43,6 +43,38 @@ pub(crate) enum P2pCommandError {
     TemplatesTableRow(#[source] io::Error),
     #[error("flushing p2p templates table")]
     TemplatesTableFlush(#[source] io::Error),
+    #[error("request_id must not be empty")]
+    EmptyRequestId,
+    #[error("loading operator identity for {purpose}")]
+    LoadOperatorIdentity {
+        purpose: &'static str,
+        #[source]
+        source: Box<P2pCommandError>,
+    },
+    #[error("parsing runtime GraphQL endpoint")]
+    ParseGraphqlEndpoint(#[source] url::ParseError),
+    #[error("signing {what}")]
+    SignOperatorCommand {
+        what: &'static str,
+        #[source]
+        source: gents::identity::IdentityError,
+    },
+    #[error("{what}")]
+    OperatorRequest {
+        what: &'static str,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("runtime rejected {what} ({status}): {message}")]
+    OperatorRejected {
+        what: &'static str,
+        status: reqwest::StatusCode,
+        message: String,
+    },
+    #[error(transparent)]
+    Identity(#[from] gents::identity::IdentityError),
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
 }
 
 pub(super) type Result<T, E = P2pCommandError> = std::result::Result<T, E>;

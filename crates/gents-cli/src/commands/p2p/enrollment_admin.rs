@@ -1,5 +1,4 @@
-use super::error::P2pCommandError;
-use anyhow::{Context, Result};
+use super::error::{P2pCommandError, Result};
 use chrono::{SecondsFormat, Utc};
 use gents_protocol::enrollment::{
     EnrollmentOperatorAction, EnrollmentOperatorDecisionCommand, EnrollmentOperatorQuery,
@@ -28,7 +27,9 @@ pub(super) async fn decide_enrollment(
     action: EnrollmentOperatorAction,
 ) -> Result<()> {
     let request_id = args.request_id.trim();
-    anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
+    if request_id.is_empty() {
+        return Err(P2pCommandError::EmptyRequestId);
+    }
     let home = resolve_home_dir(args.home.as_deref());
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let body = submit_enrollment_decision(
@@ -54,10 +55,16 @@ pub(crate) async fn submit_enrollment_decision(
     lease_seconds: u64,
 ) -> Result<serde_json::Value> {
     let request_id = request_id.trim();
-    anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
-    let identity = resolve_home_identity(Some(home))
-        .context("loading operator identity for enrollment decision")?;
-    let mut url = reqwest::Url::parse(graphql).context("parsing runtime GraphQL endpoint")?;
+    if request_id.is_empty() {
+        return Err(P2pCommandError::EmptyRequestId);
+    }
+    let identity = resolve_home_identity(Some(home)).map_err(|source| {
+        P2pCommandError::LoadOperatorIdentity {
+            purpose: "enrollment decision",
+            source: Box::new(source),
+        }
+    })?;
+    let mut url = reqwest::Url::parse(graphql).map_err(P2pCommandError::ParseGraphqlEndpoint)?;
     url.set_path("/enrollment/decisions");
     url.set_query(None);
     url.set_fragment(None);
@@ -75,7 +82,10 @@ pub(crate) async fn submit_enrollment_decision(
     command.admin_sig = identity
         .sign(&command.signing_payload())
         .await
-        .context("signing enrollment operator command")?;
+        .map_err(|source| P2pCommandError::SignOperatorCommand {
+            what: "enrollment operator command",
+            source,
+        })?;
 
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -84,27 +94,43 @@ pub(crate) async fn submit_enrollment_decision(
         .json(&command)
         .send()
         .await
-        .context("submitting signed enrollment decision to live runtime")?;
+        .map_err(|source| P2pCommandError::OperatorRequest {
+            what: "submitting signed enrollment decision to live runtime",
+            source,
+        })?;
     let status = response.status();
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .context("decoding enrollment decision response")?;
-    anyhow::ensure!(
-        status.is_success(),
-        "runtime rejected enrollment decision ({status}): {}",
-        body.get("error")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown error")
-    );
+    let body: serde_json::Value =
+        response
+            .json()
+            .await
+            .map_err(|source| P2pCommandError::OperatorRequest {
+                what: "decoding enrollment decision response",
+                source,
+            })?;
+    if !status.is_success() {
+        return Err(P2pCommandError::OperatorRejected {
+            what: "enrollment decision",
+            status,
+            message: body
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown error")
+                .to_owned(),
+        });
+    }
     Ok(body)
 }
 
 pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
-    let identity = resolve_home_identity(args.home.as_deref())
-        .context("loading operator identity for pending enrollments")?;
+    let identity = resolve_home_identity(args.home.as_deref()).map_err(|source| {
+        P2pCommandError::LoadOperatorIdentity {
+            purpose: "pending enrollments",
+            source: Box::new(source),
+        }
+    })?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let mut url = reqwest::Url::parse(graphql.url()).context("parsing runtime GraphQL endpoint")?;
+    let mut url =
+        reqwest::Url::parse(graphql.url()).map_err(P2pCommandError::ParseGraphqlEndpoint)?;
     url.set_path("/enrollment/pending");
     url.set_query(None);
     url.set_fragment(None);
@@ -119,7 +145,10 @@ pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
     command.admin_sig = identity
         .sign(&command.signing_payload())
         .await
-        .context("signing pending enrollment query")?;
+        .map_err(|source| P2pCommandError::SignOperatorCommand {
+            what: "pending enrollment query",
+            source,
+        })?;
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?
@@ -127,18 +156,29 @@ pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
         .json(&command)
         .send()
         .await
-        .context("loading pending enrollment requests from live runtime")?;
+        .map_err(|source| P2pCommandError::OperatorRequest {
+            what: "loading pending enrollment requests from live runtime",
+            source,
+        })?;
     let status = response.status();
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .context("decoding pending enrollment response")?;
-    anyhow::ensure!(
-        status.is_success(),
-        "runtime rejected enrollment pending query ({status}): {}",
-        body.get("error")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown error")
-    );
+    let body: serde_json::Value =
+        response
+            .json()
+            .await
+            .map_err(|source| P2pCommandError::OperatorRequest {
+                what: "decoding pending enrollment response",
+                source,
+            })?;
+    if !status.is_success() {
+        return Err(P2pCommandError::OperatorRejected {
+            what: "enrollment pending query",
+            status,
+            message: body
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown error")
+                .to_owned(),
+        });
+    }
     Ok(print_json(&body)?)
 }

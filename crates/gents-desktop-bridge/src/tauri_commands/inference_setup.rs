@@ -406,6 +406,16 @@ where
 }
 
 #[derive(Debug, thiserror::Error)]
+enum UsageReadsError {
+    #[error("the node has no operator endpoint")]
+    NoOperatorEndpoint,
+    #[error(transparent)]
+    Core(#[from] gents_desktop_core::client::ClientCoreError),
+    #[error(transparent)]
+    Accounts(#[from] gents_server::accounts::AccountsError),
+}
+
+#[derive(Debug, thiserror::Error)]
 enum UsageViewsError {
     #[error(transparent)]
     InferenceBackend(#[from] gents::config_client::InferenceBackendError),
@@ -507,14 +517,16 @@ pub(crate) async fn desktop_provider_usage_read(
         let signer = core.operator_signer(node_did)?;
         let graphql = core
             .operator_graphql(node_did)
-            .ok_or_else(|| anyhow::anyhow!("the node has no operator endpoint"))?;
-        gents_server::accounts::request_usage_reads(
-            signer.as_ref(),
-            &graphql,
-            trigger,
-            request.provider.as_deref(),
+            .ok_or(UsageReadsError::NoOperatorEndpoint)?;
+        Ok::<_, UsageReadsError>(
+            gents_server::accounts::request_usage_reads(
+                signer.as_ref(),
+                &graphql,
+                trigger,
+                request.provider.as_deref(),
+            )
+            .await?,
         )
-        .await
     }
     .await;
     let reads = match reads {
@@ -522,7 +534,7 @@ pub(crate) async fn desktop_provider_usage_read(
         Err(error) if !request.refresh => {
             tracing::warn!(
                 target: LOG_TARGET,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "usage read on open failed; showing stored usage"
             );
             None

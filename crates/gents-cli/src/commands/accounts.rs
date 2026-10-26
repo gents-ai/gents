@@ -1,7 +1,7 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::io::{IsTerminal, Write};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::backend_provider::BackendProviderOauthExt;
 use gents::document_config::InferenceProfile;
 use gents::oauth_credential::{backend_account, AccountSummary};
@@ -18,7 +18,7 @@ use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access, resolve_node_did};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum AccountsError {
+pub enum AccountsError {
     #[error("invalid usage read signature length")]
     SignatureLength,
     #[error("usage read issued_at")]
@@ -54,6 +54,16 @@ pub(crate) enum AccountsError {
     ProbesFailed { report: String, labels: String },
     #[error(transparent)]
     UsageObservation(#[from] gents::usage_observation::UsageObservationError),
+    #[error("signing the usage read request")]
+    SignUsageRead(#[source] gents::identity::IdentityError),
+    #[error("parsing runtime GraphQL endpoint")]
+    ParseGraphqlEndpoint(#[source] url::ParseError),
+    #[error("asking the runtime to read usage")]
+    AskUsageRead(#[source] reqwest::Error),
+    #[error("decoding the runtime's usage reads")]
+    DecodeUsageReads(#[source] reqwest::Error),
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -90,7 +100,7 @@ impl UsageReadCommand {
         identity: &dyn gents::NodeIdentity,
         trigger: UsageTrigger,
         provider: Option<&str>,
-    ) -> Result<Self> {
+    ) -> Result<Self, AccountsError> {
         let mut command = Self {
             trigger,
             provider: provider.map(str::to_owned),
@@ -102,7 +112,7 @@ impl UsageReadCommand {
         command.sig = identity
             .sign(&command.signing_payload())
             .await
-            .context("signing the usage read request")?;
+            .map_err(AccountsError::SignUsageRead)?;
         Ok(command)
     }
 
@@ -445,9 +455,10 @@ pub async fn request_usage_reads(
     graphql: &gents::config_client::GraphqlEndpoint,
     trigger: UsageTrigger,
     provider: Option<&str>,
-) -> Result<UsageReads> {
+) -> Result<UsageReads, AccountsError> {
     let command = UsageReadCommand::signed(identity, trigger, provider).await?;
-    let mut url = reqwest::Url::parse(graphql.url()).context("parsing runtime GraphQL endpoint")?;
+    let mut url =
+        reqwest::Url::parse(graphql.url()).map_err(AccountsError::ParseGraphqlEndpoint)?;
     url.set_path("/accounts/usage/read");
     url.set_query(None);
     url.set_fragment(None);
@@ -458,7 +469,7 @@ pub async fn request_usage_reads(
         .json(&command)
         .send()
         .await
-        .context("asking the runtime to read usage")?;
+        .map_err(AccountsError::AskUsageRead)?;
     let status = response.status();
     if !status.is_success() {
         let body: Value = response.json().await.unwrap_or_default();
@@ -469,13 +480,12 @@ pub async fn request_usage_reads(
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error")
                 .to_owned(),
-        }
-        .into());
+        });
     }
     response
         .json()
         .await
-        .context("decoding the runtime's usage reads")
+        .map_err(AccountsError::DecodeUsageReads)
 }
 
 pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did: &str) {
@@ -516,7 +526,9 @@ pub(crate) async fn list_with_usage(
             let requested = async {
                 let identity =
                     crate::commands::p2p::enrollment_admin::resolve_home_identity(Some(home))?;
-                request_usage_reads(identity.as_ref(), graphql, trigger, provider).await
+                Ok::<_, anyhow::Error>(
+                    request_usage_reads(identity.as_ref(), graphql, trigger, provider).await?,
+                )
             }
             .await;
             match requested {

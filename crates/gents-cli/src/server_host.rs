@@ -10,9 +10,11 @@ use gents_protocol::enrollment::{
 use crate::cli::{Cli, Command};
 
 #[derive(Debug, thiserror::Error)]
-enum ServerHostError {
+pub enum ServerHostError {
     #[error("managed enrollment request id is empty")]
     EmptyEnrollmentRequest,
+    #[error("approving desktop enrollment on managed runtime: {error}")]
+    ApproveEnrollment { error: String },
 }
 
 pub use crate::cli::args::ToolCeilingArg as ManagedToolCeiling;
@@ -109,10 +111,10 @@ pub async fn approve_managed_client_enrollment(
     home: &Path,
     graphql: &str,
     request_id: &str,
-) -> Result<()> {
+) -> Result<(), ServerHostError> {
     let request_id = request_id.trim();
     if request_id.is_empty() {
-        return Err(ServerHostError::EmptyEnrollmentRequest.into());
+        return Err(ServerHostError::EmptyEnrollmentRequest);
     }
     crate::commands::p2p::enrollment_admin::submit_enrollment_decision(
         home,
@@ -122,7 +124,9 @@ pub async fn approve_managed_client_enrollment(
         DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
     )
     .await
-    .context("approving desktop enrollment on managed runtime")?;
+    .map_err(|error| ServerHostError::ApproveEnrollment {
+        error: gents_protocol::error_chain::ErrorChain(&error).to_string(),
+    })?;
     Ok(())
 }
 

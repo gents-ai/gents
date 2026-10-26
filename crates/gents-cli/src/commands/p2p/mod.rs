@@ -4,6 +4,7 @@ mod connect;
 mod documents;
 pub(crate) mod enrollment_admin;
 mod error;
+pub(crate) use error::P2pCommandError;
 mod network;
 mod output;
 mod pairings;
@@ -17,7 +18,7 @@ use crate::cli::args::{
     P2pNetworkCommand, P2pPairingsCommand, P2pReplicatorsCommand, P2pTemplatesCommand,
 };
 
-use error::{P2pCommandError, Result};
+use error::Result;
 
 pub(crate) use output::{
     fetch_live_http_p2p_status, flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status,
@@ -33,29 +34,23 @@ pub(crate) async fn dispatch(command: P2pCommand) -> anyhow::Result<()> {
         },
         P2pCommand::Enrollment { command } => match command {
             P2pEnrollmentCommand::Pending(args) => {
-                enrollment_admin::pending_enrollments(args).await
+                Ok(enrollment_admin::pending_enrollments(args).await?)
             }
-            P2pEnrollmentCommand::Approve(args) => {
-                enrollment_admin::decide_enrollment(
-                    args,
-                    gents_protocol::enrollment::EnrollmentOperatorAction::Approve,
-                )
-                .await
-            }
-            P2pEnrollmentCommand::Deny(args) => {
-                enrollment_admin::decide_enrollment(
-                    args,
-                    gents_protocol::enrollment::EnrollmentOperatorAction::Deny,
-                )
-                .await
-            }
-            P2pEnrollmentCommand::Revoke(args) => {
-                enrollment_admin::decide_enrollment(
-                    args,
-                    gents_protocol::enrollment::EnrollmentOperatorAction::Revoke,
-                )
-                .await
-            }
+            P2pEnrollmentCommand::Approve(args) => Ok(enrollment_admin::decide_enrollment(
+                args,
+                gents_protocol::enrollment::EnrollmentOperatorAction::Approve,
+            )
+            .await?),
+            P2pEnrollmentCommand::Deny(args) => Ok(enrollment_admin::decide_enrollment(
+                args,
+                gents_protocol::enrollment::EnrollmentOperatorAction::Deny,
+            )
+            .await?),
+            P2pEnrollmentCommand::Revoke(args) => Ok(enrollment_admin::decide_enrollment(
+                args,
+                gents_protocol::enrollment::EnrollmentOperatorAction::Revoke,
+            )
+            .await?),
         },
         P2pCommand::Network { command } => match command {
             P2pNetworkCommand::Register(args) => network::p2p_network_register(args).await,
