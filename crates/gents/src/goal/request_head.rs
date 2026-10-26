@@ -130,35 +130,11 @@ pub(crate) fn latest_goal_request<'a>(
     goal: &GoalDocument,
     rows: &'a [AgentRequestRow],
 ) -> Option<&'a AgentRequestRow> {
-    let members = if goal.assignment_root_request_doc_id.is_some() {
-        let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, rows).ok()?;
-        let openings = assignment_openings(std::slice::from_ref(goal));
-        Some(
-            rows.iter()
-                .filter_map(|row| {
-                    let entry = authenticated_assignment_entry(
-                        &goal.node_did,
-                        &goal.session_id,
-                        row,
-                        &by_doc,
-                        Some(&goal.goal_id),
-                        &openings,
-                    )
-                    .inspect_err(|error| {
-                        tracing::debug!(
-                            goal_id = %goal.goal_id,
-                            request_doc_id = ?row.doc_id,
-                            %error,
-                            "Goal assignment ancestry is unavailable"
-                        );
-                    })
-                    .ok()?;
-                    super::request_assignment::request_belongs_to_goal(goal, entry)
-                        .then(|| row.doc_id.clone())
-                        .flatten()
-                })
-                .collect::<Vec<_>>(),
-        )
+    let assignment = if goal.assignment_root_request_doc_id.is_some() {
+        Some((
+            request_rows_by_doc(&goal.node_did, &goal.session_id, rows).ok()?,
+            assignment_openings(std::slice::from_ref(goal)),
+        ))
     } else {
         None
     };
@@ -167,7 +143,28 @@ pub(crate) fn latest_goal_request<'a>(
         &goal.session_id,
         Some(&goal.goal_id),
         rows,
-        members.as_deref(),
+        |row| {
+            let Some((by_doc, openings)) = assignment.as_ref() else {
+                return true;
+            };
+            authenticated_assignment_entry(
+                &goal.node_did,
+                &goal.session_id,
+                row,
+                by_doc,
+                Some(&goal.goal_id),
+                openings,
+            )
+            .inspect_err(|error| {
+                tracing::debug!(
+                    goal_id = %goal.goal_id,
+                    request_doc_id = ?row.doc_id,
+                    %error,
+                    "Goal assignment ancestry is unavailable"
+                );
+            })
+            .is_ok_and(|entry| super::request_assignment::request_belongs_to_goal(goal, entry))
+        },
     )
 }
 
@@ -176,29 +173,32 @@ pub(crate) fn latest_authenticated_session_request<'a>(
     session_id: &str,
     rows: &'a [AgentRequestRow],
 ) -> Option<&'a AgentRequestRow> {
-    latest_scoped_request(node_did, session_id, None, rows, None)
+    latest_scoped_request(node_did, session_id, None, rows, |_| true)
 }
 
-fn latest_scoped_request<'a>(
+fn latest_scoped_request<'a, F>(
     node_did: &str,
     session_id: &str,
     goal_id: Option<&str>,
     rows: &'a [AgentRequestRow],
-    allowed_docs: Option<&[String]>,
-) -> Option<&'a AgentRequestRow> {
-    let in_scope = |row: &&AgentRequestRow| {
-        allowed_docs.is_none_or(|docs| row.doc_id.as_ref().is_some_and(|doc| docs.contains(doc)))
-            && row.purpose == Some(RequestPurpose::Normal)
+    allowed: F,
+) -> Option<&'a AgentRequestRow>
+where
+    F: Fn(&AgentRequestRow) -> bool,
+{
+    let in_scope = |row: &AgentRequestRow| {
+        row.purpose == Some(RequestPurpose::Normal)
             && row.node_did.as_deref() == Some(node_did)
             && row.session_id.as_deref() == Some(session_id)
+            && allowed(row)
     };
-    rows.iter().filter(in_scope).find(|parent| {
+    rows.iter().filter(|row| in_scope(row)).find(|parent| {
         if crate::lifecycle::folded_into(parent).is_some()
             || crate::lifecycle::retired_by_author(parent)
         {
             return false;
         }
-        !rows.iter().filter(in_scope).any(|child| {
+        !rows.iter().any(|child| {
             let Some(original_goal_id) = child.caused_by_trigger_id.as_deref() else {
                 return false;
             };
@@ -208,6 +208,7 @@ fn latest_scoped_request<'a>(
                 && child.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
                 && child.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
                 && goal_id.is_none_or(|expected| expected == original_goal_id)
+                && in_scope(child)
                 && verify_goal_continuation_edge(
                     node_did,
                     session_id,
