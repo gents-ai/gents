@@ -159,7 +159,7 @@ pub(crate) async fn install_job_fixture(
         &PackInstallOptions {
             node_did: did.clone(),
         },
-        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|path| archive.asset(path).map(<[u8]>::to_vec),
         &|_| None,
     )
     .expect("load the job fixture pack config");

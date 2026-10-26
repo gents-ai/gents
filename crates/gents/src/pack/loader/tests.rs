@@ -2,6 +2,8 @@ use super::*;
 use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 
+type TestError = Box<dyn std::error::Error + Send + Sync>;
+
 fn manifest(graph: bool) -> PackManifest {
     serde_json::from_value(json!({
         "manifest_version":1,"name":"example","version":"1","description":"Example",
@@ -12,16 +14,16 @@ fn manifest(graph: bool) -> PackManifest {
     })).unwrap()
 }
 
-fn load(value: Value, graph: bool) -> anyhow::Result<PackConfig> {
+fn load(value: Value, graph: bool) -> Result<PackConfig> {
     load_pack_config(
         &manifest(graph),
         &PackInstallOptions {
             node_did: "did:key:owner".into(),
         },
         &|path| match path {
-            "config/bundle.json" => Ok(serde_json::to_vec(&value)?),
+            "config/bundle.json" => Ok::<_, TestError>(serde_json::to_vec(&value)?),
             "config/prompt.md" => Ok(b"literal {{ task.input }} ${HOST_SHELL}".to_vec()),
-            _ => anyhow::bail!("unexpected asset {path}"),
+            _ => Err(format!("unexpected asset {path}").into()),
         },
         &|name| (name == "TEXT").then(|| "quoted \"value\"\nsecond line".into()),
     )
@@ -40,7 +42,7 @@ fn explicit_pack_caller_uses_selected_owner_and_cannot_be_spoofed_by_environment
         &PackInstallOptions {
             node_did: "did:key:selected".into(),
         },
-        &|_| Ok(serde_json::to_vec(&value)?),
+        &|_| serde_json::to_vec(&value),
         &|_| Some("did:key:spoofed".into()),
     )
     .unwrap();
@@ -135,9 +137,9 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
         )
         .unwrap_err();
         assert!(
-            !format!("{}", ErrorChain(error.as_ref())).contains("unexpected asset"),
+            !format!("{}", ErrorChain(&error)).contains("unexpected asset"),
             "resolver must not receive forbidden path: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
     let mut undeclared = manifest(false);
@@ -147,7 +149,7 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
         &PackInstallOptions {
             node_did: "did:key:owner".into(),
         },
-        &|_| panic!("invalid manifest must fail before read"),
+        &|_| -> Result<Vec<u8>, TestError> { panic!("invalid manifest must fail before read") },
         &|_| None,
     );
     assert!(result.is_err());
@@ -164,7 +166,7 @@ fn plugin_documents_fixture_loads_slot_authoring_and_literal_prompt_assets() {
         &PackInstallOptions {
             node_did: "did:key:review-owner".into(),
         },
-        &|path| Ok(std::fs::read(root.join(path))?),
+        &|path| std::fs::read(root.join(path)),
         &|_| None,
     )
     .unwrap();
@@ -225,10 +227,10 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
             &PackInstallOptions {
                 node_did: "did:key:fixture-owner".into(),
             },
-            &|path| Ok(std::fs::read(root.join(path))?),
+            &|path| std::fs::read(root.join(path)),
             &|_| None,
         )
-        .unwrap_or_else(|error| panic!("{name} config: {}", ErrorChain(error.as_ref())));
+        .unwrap_or_else(|error| panic!("{name} config: {}", ErrorChain(&error)));
     }
 }
 
@@ -252,19 +254,19 @@ fn eval_config(cases: Value) -> Value {
 
 const SIDECAR_CASE: &str = r#"{"case_id":"one","split":"train","stages":[{"stage_id":"s","prompt":"literal ${NOT_INTERPOLATED}","deadline_secs":60,"checks":[{"check":"finding_count","params":{"count":1},"tier":"acceptance"}]}]}"#;
 
-fn load_eval(manifest: &PackManifest, config: Value) -> anyhow::Result<PackConfig> {
+fn load_eval(manifest: &PackManifest, config: Value) -> Result<PackConfig> {
     load_pack_config(
         manifest,
         &PackInstallOptions {
             node_did: "did:key:owner".into(),
         },
         &|path| match path {
-            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
+            "config/bundle.json" => Ok::<_, TestError>(serde_json::to_vec(&config)?),
             "config/cases/one.json" => Ok(SIDECAR_CASE.as_bytes().to_vec()),
             "config/cases/bad.json" => {
                 Ok(br#"{"case_id":"bad","split":"train","stages":[],"surprise":1}"#.to_vec())
             }
-            _ => anyhow::bail!("unexpected asset {path}"),
+            _ => Err(format!("unexpected asset {path}").into()),
         },
         &|_| None,
     )
@@ -303,10 +305,10 @@ fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_p
     )
     .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(undeclared.as_ref()))
+        format!("{}", ErrorChain(&undeclared))
             .contains("undeclared pack sidecar: config/cases/one.json"),
         "{}",
-        ErrorChain(undeclared.as_ref())
+        ErrorChain(&undeclared)
     );
 
     let manifest = eval_manifest(&[
@@ -322,17 +324,17 @@ fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_p
     ] {
         let error = load_eval(&manifest, eval_config(json!([path]))).unwrap_err();
         assert!(
-            !format!("{}", ErrorChain(error.as_ref())).contains("unexpected asset"),
+            !format!("{}", ErrorChain(&error)).contains("unexpected asset"),
             "the reader must not receive {path}: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
     let malformed = load_eval(&manifest, eval_config(json!(["./cases/bad.json"]))).unwrap_err();
     assert!(
-        format!("{}", ErrorChain(malformed.as_ref()))
+        format!("{}", ErrorChain(&malformed))
             .contains("./cases/bad.json is not one EvalCase"),
         "{}",
-        ErrorChain(malformed.as_ref())
+        ErrorChain(&malformed)
     );
 }
 
@@ -352,7 +354,7 @@ fn skill_instructions_load_from_a_literal_sidecar() {
     );
 }
 
-fn plugin_pack_config(target: Value) -> anyhow::Result<PackConfig> {
+fn plugin_pack_config(target: Value) -> Result<PackConfig> {
     let manifest: PackManifest = serde_json::from_value(json!({
         "manifest_version":1,"name":"example","namespace":"team","version":"1",
         "description":"Example","kind":"graph","authors":["Example"],
@@ -372,9 +374,9 @@ fn plugin_pack_config(target: Value) -> anyhow::Result<PackConfig> {
             node_did: "did:key:owner".into(),
         },
         &|path| match path {
-            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
+            "config/bundle.json" => Ok::<_, TestError>(serde_json::to_vec(&config)?),
             "plugins/lint.afb" => Ok(b"artifact bytes".to_vec()),
-            _ => anyhow::bail!("unexpected asset {path}"),
+            _ => Err(format!("unexpected asset {path}").into()),
         },
         &|_| None,
     )
@@ -404,12 +406,12 @@ fn a_plugin_node_runs_the_packs_own_artifact() {
 #[test]
 fn a_plugin_node_the_pack_cannot_run_is_refused() {
     let undeclared = plugin_pack_config(json!({"kind":"plugin","plugin":"missing"})).unwrap_err();
-    assert!(format!("{}", ErrorChain(undeclared.as_ref())).contains("does not declare"));
+    assert!(format!("{}", ErrorChain(&undeclared)).contains("does not declare"));
     let wrong_pin = plugin_pack_config(
         json!({"kind":"plugin","plugin":"lint","digest":format!("sha256:{}", "0".repeat(64))}),
     )
     .unwrap_err();
-    assert!(format!("{}", ErrorChain(wrong_pin.as_ref())).contains("the pack ships"));
+    assert!(format!("{}", ErrorChain(&wrong_pin)).contains("the pack ships"));
     let external = plugin_pack_config(json!({"kind":"plugin","plugin":"other/tool"})).unwrap();
     assert_eq!(
         external.graph_capabilities[0].target,
@@ -421,7 +423,7 @@ fn a_plugin_node_the_pack_cannot_run_is_refused() {
     );
 }
 
-fn prepare_pack_config(entry_extra: Value) -> anyhow::Result<PackConfig> {
+fn prepare_pack_config(entry_extra: Value) -> Result<PackConfig> {
     let manifest: PackManifest = serde_json::from_value(json!({
         "manifest_version":1,"name":"example","namespace":"team","version":"1",
         "description":"Example","kind":"graph","authors":["Example"],
@@ -455,9 +457,9 @@ fn prepare_pack_config(entry_extra: Value) -> anyhow::Result<PackConfig> {
             node_did: "did:key:owner".into(),
         },
         &|path| match path {
-            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
+            "config/bundle.json" => Ok::<_, TestError>(serde_json::to_vec(&config)?),
             "plugins/prepare.afb" => Ok(b"artifact bytes".to_vec()),
-            _ => anyhow::bail!("unexpected asset {path}"),
+            _ => Err(format!("unexpected asset {path}").into()),
         },
         &|_| None,
     )
@@ -482,9 +484,9 @@ fn an_entry_prepare_plugin_the_pack_cannot_run_is_refused() {
     let prepare = json!({"host": [], "plugin": "missing", "writes": ["FixtureEvidence"]});
     let error = prepare_pack_config(json!({"prepare": prepare})).unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("does not declare"),
+        format!("{}", ErrorChain(&error)).contains("does not declare"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -492,24 +494,24 @@ fn an_entry_prepare_plugin_the_pack_cannot_run_is_refused() {
 fn an_entry_input_schema_must_compile_and_declare_an_object() {
     let error = prepare_pack_config(json!({"input_schema": {"type": "string"}})).unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("\"type\": \"object\""),
+        format!("{}", ErrorChain(&error)).contains("\"type\": \"object\""),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 
     let too_big = json!({"type": "object", "filler": "a".repeat(70 * 1024)});
     let error = prepare_pack_config(json!({"input_schema": too_big})).unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("byte ceiling"),
+        format!("{}", ErrorChain(&error)).contains("byte ceiling"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
 #[test]
 fn a_pack_that_selects_the_default_agent_is_refused() {
     let error = load(json!({"node":{"default_agent_id":"worker"}}), false).unwrap_err();
-    let message = format!("{}", ErrorChain(error.as_ref()));
+    let message = format!("{}", ErrorChain(&error));
     assert!(
         message.contains("must not choose the default agent") && message.contains("worker"),
         "{message}"

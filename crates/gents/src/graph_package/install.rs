@@ -97,6 +97,8 @@ pub enum GraphPackageInstallError {
     #[error("package install requires graph owner authority")]
     ActorNotOwner,
     #[error(transparent)]
+    Stale(#[from] crate::config_client::StaleExpectation),
+    #[error(transparent)]
     Inference(#[from] crate::pack::InferenceError),
     #[error(transparent)]
     Compile(#[from] crate::graph_pipeline::GraphCompileError),
@@ -643,9 +645,9 @@ pub async fn install_loaded_graph_package(
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
     record: &GraphInstallRecord,
-) -> anyhow::Result<GraphPackageInstallReceipt> {
+) -> Result<GraphPackageInstallReceipt> {
     if actor_did != options.node_did {
-        return Err(GraphPackageInstallError::ActorNotOwner.into());
+        return Err(GraphPackageInstallError::ActorNotOwner);
     }
     let prepared = prepare_package(access, package, options, graph_id).await?;
     commit_prepared_graph_package_install(access, &options.node_did, package, &prepared, record)
@@ -658,7 +660,7 @@ async fn commit_prepared_graph_package_install(
     package: &LoadedGraphPackage,
     prepared: &PreparedGraphPackageInstall,
     record: &GraphInstallRecord,
-) -> anyhow::Result<GraphPackageInstallReceipt> {
+) -> Result<GraphPackageInstallReceipt> {
     ensure_package_schemas(access, package).await?;
     let desired = &prepared.desired_state;
     let plan = &prepared.plan;
@@ -678,7 +680,7 @@ async fn commit_prepared_graph_package_install(
                         .await?,
                 )?;
                 if live_active_revision_digest != *expected_active_revision_digest {
-                    return Err(anyhow::Error::new(crate::config_client::StaleExpectation {
+                    return Err(GraphPackageInstallError::Stale(crate::config_client::StaleExpectation {
                         drifted: vec![crate::config_client::DriftedDocument {
                             collection: Collection::GraphDefinition,
                             owner: owner.to_owned(),

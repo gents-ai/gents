@@ -464,7 +464,7 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     )
     .await
     .unwrap_err();
-    let stale = crate::config_client::stale_expectation(error.as_ref()).expect("StaleExpectation");
+    let stale = crate::config_client::stale_expectation(&error).expect("StaleExpectation");
     assert_eq!(stale.drifted.len(), 1);
     assert_eq!(stale.drifted[0].collection, Collection::GraphDefinition);
     assert_eq!(

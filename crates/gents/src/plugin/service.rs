@@ -34,7 +34,7 @@ impl Drop for Service {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ServiceError {
+pub enum ServiceError {
     #[error(transparent)]
     Store(#[from] crate::pack_store::PackStoreError),
     #[error(transparent)]

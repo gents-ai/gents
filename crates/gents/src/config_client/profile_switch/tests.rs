@@ -397,7 +397,7 @@ async fn next_turns_use_the_target_credentials() {
             std::time::Duration::from_secs(5),
         )
         .await
-        .unwrap_or_else(|error| panic!("{agent_id}: {}", ErrorChain(error.as_ref())));
+        .unwrap_or_else(|error| panic!("{agent_id}: {}", ErrorChain(&error)));
         let bearer = crate::oauth_credential::test_support::bound_bearer(
             &fixture.credentials["b"].credential_id,
         )

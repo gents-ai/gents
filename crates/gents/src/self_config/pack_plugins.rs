@@ -124,7 +124,7 @@ impl PackInstaller {
                             Some(&identity),
                         )
                         .await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     }
                 },
             )

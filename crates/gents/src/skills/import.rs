@@ -321,7 +321,7 @@ mod tests {
         )
         .unwrap();
         let allowed = root.path().canonicalize().unwrap();
-        let result = load_skill_source(root.path(), "review", "did:test", |path| {
+        let result: TestResult<_> = load_skill_source(root.path(), "review", "did:test", |path| {
             let path = resolve(path)?;
             if !path.starts_with(&allowed) {
                 return Err("outside allowed root".into());

@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-
 use super::InstallationError;
+
+type Result<T, E = InstallationError> = std::result::Result<T, E>;
 
 use crate::config_client::{ConfigAccess, SchemaInstallPlan};
 use crate::document_config::PackConfig;
@@ -33,7 +33,7 @@ fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSe
 
 pub fn document_pack_schema_paths(
     manifest: &super::super::PackManifest,
-) -> std::result::Result<Vec<&str>, InstallationError> {
+) -> Result<Vec<&str>> {
     for path in manifest
         .metadata
         .assets
@@ -102,11 +102,14 @@ pub type CollectionFields = BTreeMap<String, Vec<String>>;
 /// Checks `plugin`'s `data` and `asset_mounts` against the pack that ships it
 /// and returns each declared collection's unique key field sets and field
 /// names. Every path that installs a pack plugin goes through this check.
-pub fn plugin_data_unique_keys<'a>(
+pub fn plugin_data_unique_keys<'a, E>(
     manifest: &super::super::PackManifest,
     plugin: &super::super::PackPlugin,
-    asset: &dyn Fn(&str) -> Result<&'a [u8]>,
-) -> Result<(UniqueKeySets, CollectionFields)> {
+    asset: &dyn Fn(&str) -> Result<&'a [u8], E>,
+) -> Result<(UniqueKeySets, CollectionFields)>
+where
+    E: Into<super::super::CallbackError>,
+{
     let name = &plugin.name;
     for mount in &plugin.asset_mounts {
         let prefix = format!("{}/", mount.class);
@@ -117,8 +120,7 @@ pub fn plugin_data_unique_keys<'a>(
                 plugin: name.clone(),
                 class: mount.class.clone(),
                 prefix,
-            }
-            .into());
+            });
         }
     }
     let Some(data) = &plugin.data else {
@@ -126,7 +128,8 @@ pub fn plugin_data_unique_keys<'a>(
     };
     let mut types = BTreeMap::new();
     for path in sdl_paths(manifest) {
-        types.extend(sdl_types(std::str::from_utf8(asset(path)?)?)?);
+        let bytes = asset(path).map_err(|error| InstallationError::Asset(error.into()))?;
+        types.extend(sdl_types(std::str::from_utf8(bytes)?)?);
     }
     let mut keys = BTreeMap::new();
     let mut fields = BTreeMap::new();
@@ -153,8 +156,7 @@ pub fn plugin_data_unique_keys<'a>(
             return Err(InstallationError::StampedFieldUndeclared {
                 plugin: name.clone(),
                 field: field.clone(),
-            }
-            .into());
+            });
         }
     }
     Ok((keys, fields))
@@ -236,15 +238,13 @@ pub async fn prepare_document_pack_install(
                 namespace: dependency.metadata.namespace.clone(),
                 name: dependency.name.clone(),
                 kind: dependency.metadata.kind.clone(),
-            }
-            .into());
+            });
         }
         if !dependency.metadata.dependencies.is_empty() {
             return Err(InstallationError::DependencyNested {
                 namespace: dependency.metadata.namespace.clone(),
                 name: dependency.name.clone(),
-            }
-            .into());
+            });
         }
     }
     for slot in requested.keys() {
@@ -260,8 +260,7 @@ pub async fn prepare_document_pack_install(
             return Err(InstallationError::InferenceSlotUnknown {
                 pack: manifest.name.clone(),
                 slot: slot.clone(),
-            }
-            .into());
+            });
         }
     }
     let selected = |manifest: &super::super::PackManifest| {
@@ -298,7 +297,7 @@ pub async fn prepare_document_pack_install(
             let authored = super::super::load_pack_config(
                 archive.manifest(),
                 &options,
-                &|path| Ok(archive.asset(path).map(<[u8]>::to_vec)?),
+                &|path| archive.asset(path).map(<[u8]>::to_vec),
                 environment,
             )?;
             let config = super::super::bind_pack_install_config(
@@ -393,12 +392,12 @@ pub async fn install_prepared_document_pack(
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
     for plugin in &archive.manifest().metadata.plugins {
-        plugin_data_unique_keys(archive.manifest(), plugin, &|path| Ok(archive.asset(path)?))?;
+        plugin_data_unique_keys(archive.manifest(), plugin, &|path| archive.asset(path))?;
     }
     for dependency in dependency_archives {
         for plugin in &dependency.manifest().metadata.plugins {
             plugin_data_unique_keys(dependency.manifest(), plugin, &|path| {
-                Ok(dependency.asset(path)?)
+                dependency.asset(path)
             })?;
         }
     }
@@ -459,7 +458,7 @@ pub async fn install_prepared_document_pack(
                     &package.manifest,
                     &package.package_digest,
                     &bindings.inference_slots,
-                    &|path| package.asset(path).map_err(anyhow::Error::from),
+                    &|path| package.asset(path).map_err(InstallationError::from),
                     grant_authority,
                 )?;
                 let identity =
@@ -472,7 +471,7 @@ pub async fn install_prepared_document_pack(
                     access, owner, package, bindings, None, &record,
                 )
                 .await
-                .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
+                .map_err(|error| InstallationError::GraphInstallFailed(Box::new(error)))?;
                 crate::graph_pipeline::activate_graph_revision_with_access(
                     access,
                     owner,
@@ -481,7 +480,7 @@ pub async fn install_prepared_document_pack(
                     receipt.predecessor_revision_digest.as_deref(),
                 )
                 .await
-                .context("graph activation failed after local pack plugins were published; the plugins remain installed")?;
+                .map_err(InstallationError::GraphActivationFailed)?;
                 if let Some(home) = plugin_home {
                     record_home_install(
                         home,
@@ -521,7 +520,9 @@ pub async fn install_prepared_document_pack(
                         assets
                             .get(path)
                             .map(Vec::as_slice)
-                            .with_context(|| format!("dependency asset {path} was not prepared"))
+                            .ok_or_else(|| InstallationError::DependencyAssetNotPrepared {
+                                path: path.to_owned(),
+                            })
                     },
                     grant_authority,
                 )?;
@@ -531,7 +532,7 @@ pub async fn install_prepared_document_pack(
                 };
                 super::super::install_pack_documents(access, owner, &identity, config, policy)
                     .await
-                    .context("document pack installation failed after local pack plugins were published; the plugins remain installed")?;
+                    .map_err(|error| InstallationError::DocumentInstallFailed(Box::new(error)))?;
             }
         }
     }
@@ -549,7 +550,7 @@ pub async fn install_prepared_document_pack(
         archive.manifest(),
         archive.digest(),
         &prepared.inference.bindings,
-        &|path| Ok(archive.asset(path)?),
+        &|path| archive.asset(path).map_err(InstallationError::from),
         grant_authority,
     )?;
     let mut identity = PackIdentity::new(archive.manifest(), archive.digest(), plugins);
@@ -561,7 +562,7 @@ pub async fn install_prepared_document_pack(
     let report =
         super::super::install_pack_documents(access, owner, &identity, &prepared.config, policy)
             .await
-            .context("document pack installation failed after local pack plugins were published; the plugins remain installed")?;
+            .map_err(|error| InstallationError::DocumentInstallFailed(Box::new(error)))?;
     if let Some(home) = plugin_home {
         record_home_install(
             home,
@@ -619,7 +620,7 @@ fn install_plugins<'a>(
     if manifest.metadata.plugins.is_empty() {
         return Ok(Vec::new());
     }
-    let home = home.context("pack plugins require the node's local plugin home")?;
+    let home = home.ok_or(InstallationError::PluginHomeRequired)?;
     let plugins = crate::plugin::install::install_pack_plugins_with_bindings(
         home,
         manifest,
@@ -628,7 +629,7 @@ fn install_plugins<'a>(
         grant_authority,
         Some(owner),
         bindings,
-        |_| Ok(()),
+        |_| Ok::<_, InstallationError>(()),
     )?;
     Ok(plugins
         .iter()

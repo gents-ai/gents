@@ -126,7 +126,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
                         }
                         Err(error) => report
                             .problems
-                            .push(format!("{}", ErrorChain(error.as_ref()))),
+                            .push(format!("{}", ErrorChain(&error))),
                     }
                     check_topology(dir, &config, &mut report.problems);
                 }
@@ -243,7 +243,7 @@ pub fn load_config(archive: &PackArchive) -> anyhow::Result<crate::document_conf
         &crate::pack::PackInstallOptions {
             node_did: PLACEHOLDER_OWNER.into(),
         },
-        &|path| Ok(archive.asset(path).map(Vec::from)?),
+        &|path| archive.asset(path).map(Vec::from),
         &|_| None,
     )?;
     crate::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;

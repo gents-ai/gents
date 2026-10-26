@@ -100,7 +100,7 @@ pub async fn run_step0(
                 lifecycle,
                 FailureClass::ServiceUnavailable,
                 Refusal::NotAvailable.code(),
-                &format!("{}", ErrorChain(error.as_ref())),
+                &format!("{}", ErrorChain(&error)),
                 &format!("Next: ask the operator to reinstall the pack that provides {coordinate}"),
             )
             .await
@@ -164,7 +164,7 @@ pub async fn run_step0(
                 lifecycle,
                 FailureClass::ToolReturnedError,
                 None,
-                &format!("{}", ErrorChain(error.as_ref())),
+                &format!("{}", ErrorChain(&error)),
                 &format!("Next: call `{tool}` again with different arguments"),
             )
             .await

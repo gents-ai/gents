@@ -177,7 +177,7 @@ async fn resolves_a_dev_module_with_the_css_beside_it() {
         Some(".a{color:red}"),
     );
     let listing = find(home.path(), "styled").unwrap();
-    let module = resolve_module(home.path(), &listing, |_, _| async { unreachable!() })
+    let module = resolve_module::<_, _, UxPluginError>(home.path(), &listing, |_, _| async { unreachable!() })
         .await
         .unwrap();
     assert_eq!(module.source, "export default { id: 'styled' }");
@@ -199,7 +199,7 @@ async fn resolves_a_pack_file_module_and_its_declared_css() {
     .unwrap();
     std::fs::write(dir.join("ux/board/plugin.css"), ".b{}").unwrap();
     let listing = find(home.path(), "acme/board/board").unwrap();
-    let module = resolve_module(home.path(), &listing, |_, _| async { unreachable!() })
+    let module = resolve_module::<_, _, UxPluginError>(home.path(), &listing, |_, _| async { unreachable!() })
         .await
         .unwrap();
     assert_eq!(module.source, "export default { id: 'board' }");
@@ -219,7 +219,7 @@ async fn resolves_an_afb_produced_module_through_the_supplied_runner() {
         }],
     );
     let listing = find(home.path(), "acme/gen/report").unwrap();
-    let module = resolve_module(home.path(), &listing, |namespace, plugin| async move {
+    let module = resolve_module::<_, _, UxPluginError>(home.path(), &listing, |namespace, plugin| async move {
         assert_eq!(namespace, "acme");
         assert_eq!(plugin, "report_ui");
         Ok(serde_json::json!({ "module": "export default { id: 'report' }", "css": ".r{}" }))

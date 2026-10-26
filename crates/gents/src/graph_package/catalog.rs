@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -71,7 +70,42 @@ pub enum GraphPackageError {
         shipped_compiler: String,
         compiled_compiler: String,
     },
+    #[error(transparent)]
+    Pack(#[from] crate::pack::PackError),
+    #[error(transparent)]
+    Loader(#[from] crate::pack::LoaderError),
+    #[error(transparent)]
+    Archive(#[from] crate::pack_archive::PackArchiveError),
+    #[error(transparent)]
+    Asset(crate::pack::CallbackError),
+    #[error("a graph pack declares at least one graph")]
+    NoGraphs,
+    #[error("graph {graph_id} does not compile")]
+    Compile {
+        graph_id: String,
+        #[source]
+        source: crate::graph_pipeline::GraphCompileError,
+    },
+    #[error("pack is not a graph")]
+    NotGraphPack,
+    #[error("graph distribution digest changed after resolution")]
+    DigestChanged,
+    #[error("invalid datastore surface {surface_id}")]
+    DatastoreSurface {
+        surface_id: String,
+        #[source]
+        source: crate::document_config::DocumentConfigError,
+    },
+    #[error("foreign graph capability owner")]
+    ForeignCapabilityOwner,
+    #[error("graph capability {capability_id} must reference exactly one owned task {task_id}")]
+    CapabilityTask {
+        capability_id: String,
+        task_id: String,
+    },
 }
+
+type Result<T, E = GraphPackageError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GraphPackageCatalogEntry {
@@ -145,7 +179,7 @@ pub fn load_archive_graph_package_with_environment(
         archive.manifest().clone(),
         archive.digest().to_owned(),
         options,
-        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|path| archive.asset(path).map(<[u8]>::to_vec),
         environment,
     )
 }
@@ -154,19 +188,21 @@ pub fn graph_plan_path(graph_id: &str) -> String {
     format!("graphs/{}.plan.json", graph_id.replace('-', "_"))
 }
 
-pub fn compile_pack_graphs(
+pub fn compile_pack_graphs<E>(
     manifest: &crate::pack::PackManifest,
-    asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    asset: &dyn Fn(&str) -> Result<Vec<u8>, E>,
     node_did: &str,
-) -> Result<Vec<crate::graph_pipeline::GraphPlan>> {
+) -> Result<Vec<crate::graph_pipeline::GraphPlan>>
+where
+    E: Into<crate::pack::CallbackError>,
+{
     let options = PackInstallOptions {
         node_did: node_did.to_owned(),
     };
     let config = crate::pack::load_pack_config(manifest, &options, asset, &|_| None)?;
-    anyhow::ensure!(
-        !config.graph_intents.is_empty(),
-        "a graph pack declares at least one graph"
-    );
+    if config.graph_intents.is_empty() {
+        return Err(GraphPackageError::NoGraphs);
+    }
     config
         .graph_intents
         .iter()
@@ -177,7 +213,10 @@ pub fn compile_pack_graphs(
                 node_did,
                 &crate::graph_pipeline::CompilerPolicy::default(),
             )
-            .with_context(|| format!("graph {} does not compile", intent.graph_id))
+            .map_err(|source| GraphPackageError::Compile {
+                graph_id: intent.graph_id.clone(),
+                source,
+            })
         })
         .collect()
 }
@@ -192,7 +231,7 @@ pub fn check_graph_pack(
     load_archive_graph_package_with_environment(archive, &options, &|_| None)?;
     let plans = compile_pack_graphs(
         archive.manifest(),
-        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|path| archive.asset(path).map(<[u8]>::to_vec),
         node_did,
     )?;
     for plan in &plans {
@@ -223,18 +262,20 @@ pub fn verify_shipped_plan(
     Ok(())
 }
 
-fn load_package_from_assets(
+fn load_package_from_assets<E>(
     manifest: crate::pack::PackManifest,
     package_digest: String,
     options: &PackInstallOptions,
-    asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    asset: &dyn Fn(&str) -> Result<Vec<u8>, E>,
     environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<LoadedGraphPackage> {
+) -> Result<LoadedGraphPackage>
+where
+    E: Into<crate::pack::CallbackError>,
+{
     crate::pack::validate_pack_manifest(&manifest)?;
-    anyhow::ensure!(
-        manifest.metadata.kind == crate::pack::PackKind::Graph,
-        "pack is not a graph"
-    );
+    if manifest.metadata.kind != crate::pack::PackKind::Graph {
+        return Err(GraphPackageError::NotGraphPack);
+    }
     let config = crate::pack::load_pack_config(&manifest, options, asset, environment)?;
     let mut asset_paths = manifest.metadata.assets.clone();
     asset_paths.push("manifest.json".to_owned());
@@ -242,39 +283,46 @@ fn load_package_from_assets(
     asset_paths.dedup();
     let assets = asset_paths
         .iter()
-        .map(|path| Ok((path.clone(), asset(path)?)))
+        .map(|path| {
+            asset(path)
+                .map(|bytes| (path.clone(), bytes))
+                .map_err(|error| GraphPackageError::Asset(error.into()))
+        })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let resolved_digest =
         crate::pack::digest_declared_assets(&manifest, |path| assets.get(path).map(Vec::as_slice))?;
-    anyhow::ensure!(
-        resolved_digest == package_digest,
-        "graph distribution digest changed after resolution"
-    );
+    if resolved_digest != package_digest {
+        return Err(GraphPackageError::DigestChanged);
+    }
     for surface in &config.datastore_tool_surfaces {
         for entry in surface.entries.iter().flatten() {
             entry
                 .validate()
-                .with_context(|| format!("invalid datastore surface {}", surface.surface_id))?;
+                .map_err(|source| GraphPackageError::DatastoreSurface {
+                    surface_id: surface.surface_id.clone(),
+                    source,
+                })?;
         }
     }
     for capability in &config.graph_capabilities {
-        anyhow::ensure!(
-            capability.node_did == options.node_did,
-            "foreign graph capability owner"
-        );
+        if capability.node_did != options.node_did {
+            return Err(GraphPackageError::ForeignCapabilityOwner);
+        }
         let Some(task_id) = capability.target.task_id() else {
             continue;
         };
-        anyhow::ensure!(
-            config
-                .tasks
-                .iter()
-                .filter(|task| task.node_did == capability.node_did && task.task_id == task_id)
-                .count()
-                == 1,
-            "graph capability {} must reference exactly one owned task {task_id}",
-            capability.capability_id,
-        );
+        if config
+            .tasks
+            .iter()
+            .filter(|task| task.node_did == capability.node_did && task.task_id == task_id)
+            .count()
+            != 1
+        {
+            return Err(GraphPackageError::CapabilityTask {
+                capability_id: capability.capability_id.clone(),
+                task_id: task_id.to_owned(),
+            });
+        }
     }
     Ok(LoadedGraphPackage {
         manifest,

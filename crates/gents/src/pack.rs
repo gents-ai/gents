@@ -39,6 +39,7 @@ pub use installation::{
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+    CallbackError, LoaderError,
 };
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
 pub use provenance::{

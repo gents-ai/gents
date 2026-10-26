@@ -172,9 +172,9 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
             .await
             .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("protected runtime permissions"),
+            format!("{}", ErrorChain(&error)).contains("protected runtime permissions"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert_eq!(
             std::fs::read_to_string(&permissions).unwrap(),
@@ -261,9 +261,9 @@ async fn a_removed_plugin_fails_closed_with_a_warm_cache() {
         .await
         .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("is not installed"),
+        format!("{}", ErrorChain(&error)).contains("is not installed"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -480,9 +480,9 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("invocation changed"),
+            format!("{}", ErrorChain(&error)).contains("invocation changed"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(!docs.join("out.json").exists());
 
@@ -508,9 +508,9 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("permissions changed"),
+            format!("{}", ErrorChain(&error)).contains("permissions changed"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(!docs.join("out.json").exists());
     }
@@ -558,11 +558,10 @@ mod bound {
                 Some(bound) => format!(
                     "{}",
                     ErrorChain(
-                        executor
+                        &executor
                             .call_bound(&fx.record, input, bound)
                             .await
                             .unwrap_err()
-                            .as_ref()
                     )
                 ),
                 None => workspace::scope(
@@ -1110,9 +1109,9 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("gents plugin dirs add"),
+            format!("{}", ErrorChain(&error)).contains("gents plugin dirs add"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -1141,9 +1140,9 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains("reinstalled"),
+            format!("{}", ErrorChain(&error)).contains("reinstalled"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 
@@ -1374,9 +1373,9 @@ async fn corrupted_store_bytes_are_refused_and_never_cached() {
         .await
         .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("do not match their digest"),
+        format!("{}", ErrorChain(&error)).contains("do not match their digest"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert_eq!(executor.admitted_len(), 0);
 }
@@ -1484,7 +1483,7 @@ mod mounted {
             .call_bound(&record, serde_json::json!({}), bound)
             .await
             .unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(
             message.contains("this call writes; run it without mounted workflows"),
             "{message}"
@@ -2647,10 +2646,9 @@ mod catalog {
         let message = format!(
             "{}",
             ErrorChain(
-                list(&home, &record, &test_node().await)
+                &*list(&home, &record, &test_node().await)
                     .await
                     .unwrap_err()
-                    .as_ref()
             )
         );
         assert!(
@@ -2666,10 +2664,9 @@ mod catalog {
         let message = format!(
             "{}",
             ErrorChain(
-                list(&home, &record, &test_node().await)
+                &*list(&home, &record, &test_node().await)
                     .await
                     .unwrap_err()
-                    .as_ref()
             )
         );
         assert!(

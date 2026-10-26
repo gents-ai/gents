@@ -289,7 +289,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             &PackInstallOptions {
                 node_did: did.clone(),
             },
-            &|p| Ok(std::fs::read(subject.join(p))?),
+            &|p| std::fs::read(subject.join(p)),
             &|_| None,
         )?;
         config.node.default_agent_id = Some(config.agents[0].agent_id.clone());

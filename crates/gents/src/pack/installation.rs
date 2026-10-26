@@ -150,6 +150,52 @@ pub enum InstallationError {
     GraphRevisionMissingPlan,
     #[error("graph revision plan is not valid JSON")]
     GraphRevisionPlanInvalid(#[source] serde_json::Error),
+    #[error(transparent)]
+    Archive(#[from] crate::pack_archive::PackArchiveError),
+    #[error(transparent)]
+    Sdl(#[from] query::QueryError),
+    #[error(transparent)]
+    Utf8(#[from] std::str::Utf8Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Asset(super::CallbackError),
+    #[error(transparent)]
+    Inference(#[from] super::InferenceError),
+    #[error(transparent)]
+    SchemaInstall(#[from] crate::config_client::SchemaInstallError),
+    #[error(transparent)]
+    Loader(#[from] super::LoaderError),
+    #[error(transparent)]
+    GraphPackage(#[from] crate::graph_package::GraphPackageError),
+    #[error(transparent)]
+    GraphPackageInstall(Box<crate::graph_package::GraphPackageInstallError>),
+    #[error(transparent)]
+    PluginJob(#[from] crate::plugin_job::origin::PluginJobError),
+    #[error(transparent)]
+    PluginInstall(Box<crate::plugin::install::PluginInstallError>),
+    #[error("graph installation failed after local pack plugins were published; the plugins remain installed")]
+    GraphInstallFailed(#[source] Box<crate::graph_package::GraphPackageInstallError>),
+    #[error("graph activation failed after local pack plugins were published; the plugins remain installed")]
+    GraphActivationFailed(#[source] crate::graph_pipeline::GraphPipelineError),
+    #[error("document pack installation failed after local pack plugins were published; the plugins remain installed")]
+    DocumentInstallFailed(#[source] Box<InstallationError>),
+    #[error("dependency asset {path} was not prepared")]
+    DependencyAssetNotPrepared { path: String },
+    #[error("pack plugins require the node's local plugin home")]
+    PluginHomeRequired,
+}
+
+impl From<crate::graph_package::GraphPackageInstallError> for InstallationError {
+    fn from(error: crate::graph_package::GraphPackageInstallError) -> Self {
+        Self::GraphPackageInstall(Box::new(error))
+    }
+}
+
+impl From<crate::plugin::install::PluginInstallError> for InstallationError {
+    fn from(error: crate::plugin::install::PluginInstallError) -> Self {
+        Self::PluginInstall(Box::new(error))
+    }
 }
 
 impl TransactionFailure for InstallationError {

@@ -134,10 +134,9 @@ impl Fixture {
         format!(
             "{}",
             ErrorChain(
-                self.call(surface, tool, json!({}))
+                &self.call(surface, tool, json!({}))
                     .await
                     .unwrap_err()
-                    .as_ref()
             )
         )
     }
@@ -274,29 +273,29 @@ async fn the_tools_own_refusals_reach_the_page() {
         .await
         .unwrap_err();
     assert!(
-        ErrorChain(error.as_ref()).to_string().contains("lane"),
+        ErrorChain(&error).to_string().contains("lane"),
         "the bounded write tool's own refusal: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     let error = fixture
         .call("board", "list_tasks", json!({"fields": ["_docID"]}))
         .await
         .unwrap_err();
     assert!(
-        ErrorChain(error.as_ref()).to_string().contains("allowlist"),
+        ErrorChain(&error).to_string().contains("allowlist"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     let error = fixture
         .call("board", "list_tasks", json!(["title"]))
         .await
         .unwrap_err();
     assert!(
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
             .to_string()
             .contains("args must be a JSON object"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     fixture.node.shutdown().await;
 }
@@ -334,11 +333,10 @@ async fn a_disabled_missing_or_foreign_surface_is_refused() {
     let error = format!(
         "{}",
         ErrorChain(
-            fixture
+            &fixture
                 .call_as(BOARD, OTHER_NODE, "board", "list_tasks", json!({}))
                 .await
                 .unwrap_err()
-                .as_ref()
         )
     );
     assert_eq!(
@@ -369,32 +367,29 @@ async fn a_dev_door_listing_declares_nothing_and_is_refused() {
     let error = format!(
         "{}",
         ErrorChain(
-            fixture
+            &fixture
                 .call_as("loose", NODE, "board", "list_tasks", json!({}))
                 .await
                 .unwrap_err()
-                .as_ref()
         )
     );
     assert_eq!(error, "ux plugin \"loose\" declares no data surfaces");
     let error = format!(
         "{}",
         ErrorChain(
-            surfaces(fixture.home.path(), &fixture.access, "loose", NODE)
+            &surfaces(fixture.home.path(), &fixture.access, "loose", NODE)
                 .await
                 .unwrap_err()
-                .as_ref()
         )
     );
     assert_eq!(error, "ux plugin \"loose\" declares no data surfaces");
     let error = format!(
         "{}",
         ErrorChain(
-            fixture
+            &fixture
                 .call_as("acme/nope/board", NODE, "board", "list_tasks", json!({}))
                 .await
                 .unwrap_err()
-                .as_ref()
         )
     );
     assert!(

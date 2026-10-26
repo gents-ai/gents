@@ -354,7 +354,7 @@ pub async fn install_pack_documents(
     pack: &super::PackIdentity,
     config: &PackConfig,
     policy: super::DriftPolicy,
-) -> anyhow::Result<super::InstallReport> {
+) -> Result<super::InstallReport, super::InstallationError> {
     install_pack_documents_with_expectations(access, owner, pack, config, policy, Vec::new()).await
 }
 
@@ -367,11 +367,8 @@ pub async fn install_pack_documents_with_expectations(
     config: &PackConfig,
     policy: super::DriftPolicy,
     expected: Vec<crate::config_client::DesiredStateExpectation>,
-) -> anyhow::Result<super::InstallReport> {
-    Ok(
-        super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected)
-            .await?,
-    )
+) -> Result<super::InstallReport, super::InstallationError> {
+    super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected).await
 }
 
 pub(super) fn validate_pack_inference_authoring(

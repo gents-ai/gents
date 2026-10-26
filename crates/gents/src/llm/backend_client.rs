@@ -569,7 +569,7 @@ mod tests {
                 .unwrap_or_else(|error| {
                     panic!(
                         "{kind:?} {wire:?} with acct-b: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     )
                 });
             let built = match (&client, wire) {
@@ -635,7 +635,7 @@ mod tests {
                 build_backend_client(node.clone(), agent, "key", Duration::from_secs(5))
                     .await
                     .unwrap_or_else(|error| {
-                        panic!("{kind:?} {credential_id}: {}", ErrorChain(error.as_ref()))
+                        panic!("{kind:?} {credential_id}: {}", ErrorChain(&error))
                     });
                 let bearer = crate::oauth_credential::test_support::bound_bearer(&credential_id)
                     .unwrap_or_else(|| panic!("{kind:?} did not bind {credential_id}"));
@@ -668,9 +668,9 @@ mod tests {
             &crate::oauth_credential::OAuthAuthProblem::Missing,
         );
         assert!(
-            format!("{}", ErrorChain(error.as_ref())).contains(&missing),
+            format!("{}", ErrorChain(&error)).contains(&missing),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 

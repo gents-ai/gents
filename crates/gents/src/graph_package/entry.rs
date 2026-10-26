@@ -23,6 +23,8 @@ pub enum EntryError {
     #[error(transparent)]
     GraphPackage(#[from] GraphPackageError),
     #[error(transparent)]
+    PluginRun(#[from] crate::plugin::executor::PluginRunError),
+    #[error(transparent)]
     GraphPipeline(#[from] GraphPipelineError),
     #[error(transparent)]
     ConfigClient(#[from] ConfigClientError),
@@ -510,7 +512,7 @@ pub async fn prepare_entry_run(
     access: &ConfigAccess,
     principal_did: &str,
     request: EntryRunRequest<'_>,
-) -> anyhow::Result<PreparedEntryRun> {
+) -> Result<PreparedEntryRun> {
     let entry = select_entry(request.plan, request.entry)?;
     let admitted = admit_operator_input(entry, request.input)?;
     let Some(prepare) = entry.prepare.as_ref() else {
@@ -554,7 +556,6 @@ pub async fn prepare_entry_run(
                 &call.outcome.diagnostics,
                 diff_bytes,
             )))
-            .into(),
         );
     }
     let output: PreparePluginOutput =
@@ -567,8 +568,7 @@ pub async fn prepare_entry_run(
     if !output.input.is_object() {
         return Err(EntryError::PrepareInputNotObject {
             coordinate: call.coordinate.clone(),
-        }
-        .into());
+        });
     }
     for document in &output.documents {
         if !prepare
@@ -580,14 +580,12 @@ pub async fn prepare_entry_run(
                 coordinate: call.coordinate.clone(),
                 collection: document.collection.clone(),
                 entry_name: entry.name.clone(),
-            }
-            .into());
+            });
         }
         if !document.fields.is_object() {
             return Err(EntryError::PrepareFieldsNotObject {
                 coordinate: call.coordinate.clone(),
-            }
-            .into());
+            });
         }
     }
     persist_prepared_documents(access, &output.documents).await?;

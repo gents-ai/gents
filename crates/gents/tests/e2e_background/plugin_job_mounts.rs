@@ -190,7 +190,7 @@ async fn install_pack_dir(db: &TestDb, plugin_home: &Path, dir: &Path) {
         &PackInstallOptions {
             node_did: did.clone(),
         },
-        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|path| archive.asset(path).map(<[u8]>::to_vec),
         &|_| None,
     )
     .expect("load the pack config");
@@ -368,7 +368,7 @@ async fn read_write_bind_with_mounts_is_refused_with_the_next_call() {
         )
         .await
         .expect_err("a read-write call cannot mount assets");
-    let message = ErrorChain(error.as_ref()).to_string();
+    let message = ErrorChain(&error).to_string();
     assert!(
         message.contains("this call writes; run it without mounted workflows"),
         "{message}"

@@ -267,7 +267,7 @@ pub(super) async fn execute(
     let record = match plugins.resolve(handler.plugin, Some(handler.digest)) {
         Ok(record) => record,
         Err(error) => {
-            let message = ErrorChain(error.as_ref()).to_string();
+            let message = ErrorChain(&error).to_string();
             return deny(node, invocation, &message).await;
         }
     };
@@ -304,7 +304,7 @@ pub(super) async fn execute(
         .and_then(|node| DataCaller::new(node.clone(), &invocation.owner_node_did).ok());
     let called = plugins.call_bound_data(&record, input, bound, caller).await;
     let failure = match called {
-        Err(error) => Some(ErrorChain(error.as_ref()).to_string()),
+        Err(error) => Some(ErrorChain(&error).to_string()),
         Ok(call) if call.outcome.verdict != PluginVerdict::Success => Some(format!(
             "plugin {} did not return a result: {}",
             call.coordinate, call.outcome.diagnostics

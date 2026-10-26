@@ -220,9 +220,9 @@ async fn prepare_entry_run_refuses_a_document_outside_declared_writes() {
     .await
     .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("does not declare in prepare.writes"),
+        format!("{}", ErrorChain(&error)).contains("does not declare in prepare.writes"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 

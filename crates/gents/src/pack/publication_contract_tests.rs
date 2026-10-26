@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use super::plugin_lifecycle::{install, tests::fixture};
 
+type TestError = Box<dyn std::error::Error + Send + Sync>;
+
 #[tokio::test]
 async fn generated_local_publication_survives_notification_outcomes() {
     let contract = crate::lean_vocab_test::lean_contract_snapshot();
@@ -18,7 +20,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 false,
                 None,
                 &BTreeMap::new(),
-                |_| async { Ok(()) },
+                |_| async { Ok::<_, TestError>(()) },
             )
             .await
             .unwrap();
@@ -31,13 +33,13 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     home.path(),
                     next.manifest(),
                     next.digest(),
-                    |path| Ok(next.asset(path)?),
+                    |path| next.asset(path),
                     false,
                     None,
                     &bindings,
                     |_| {
                         assert!(crate::plugin::store::try_lock_store(home.path()).is_err());
-                        anyhow::bail!("rejected local publication")
+                        Err::<(), TestError>("rejected local publication".into())
                     },
                 );
                 assert!(result.is_err());
@@ -45,7 +47,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
             "notification_success" => {
                 install(home.path(), &next, false, None, &bindings, |_| async {
                     let _guard = crate::plugin::store::try_lock_store(home.path())?;
-                    Ok(())
+                    Ok::<_, TestError>(())
                 })
                 .await
                 .unwrap();
@@ -53,7 +55,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
             "notification_failure" => {
                 let result = install(home.path(), &next, false, None, &bindings, |_| async {
                     let _guard = crate::plugin::store::try_lock_store(home.path())?;
-                    anyhow::bail!("notification response unavailable")
+                    Err::<(), TestError>("notification response unavailable".into())
                 })
                 .await;
                 assert!(result.is_err());
@@ -70,7 +72,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                             let _guard = crate::plugin::store::try_lock_store(home.path())?;
                         }
                         std::future::pending::<()>().await;
-                        Ok(())
+                        Ok::<_, TestError>(())
                     },
                 ));
                 assert!(futures::poll!(operation.as_mut()).is_pending());
@@ -112,25 +114,25 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     let (_dir, _, archive) = fixture("1.0.0", false);
     let bindings = BTreeMap::new();
     install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
+        Ok::<_, TestError>(())
     })
     .await
     .unwrap();
     let prepare_error = super::plugin_lifecycle::remove_local(
         home.path(),
         "fixture/native_echo_pack",
-        |_| -> anyhow::Result<()> {
+        |_| -> Result<(), TestError> {
             assert!(crate::plugin::install::install_pack_plugins(
                 home.path(),
                 archive.manifest(),
                 archive.digest(),
-                |path| Ok(archive.asset(path)?),
+                |path| archive.asset(path),
                 false,
             )
             .is_err());
-            anyhow::bail!("cache is in use")
+            Err("cache is in use".into())
         },
-        |()| Ok(()),
+        |()| Ok::<_, TestError>(()),
     );
     assert!(prepare_error.is_err());
     assert!(
@@ -148,17 +150,17 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     let removal = super::plugin_lifecycle::remove_local(
         home.path(),
         "fixture/native_echo_pack",
-        |_| Ok(()),
+        |_| Ok::<_, TestError>(()),
         |_| {
             assert!(crate::plugin::install::install_pack_plugins(
                 home.path(),
                 archive.manifest(),
                 archive.digest(),
-                |path| Ok(archive.asset(path)?),
+                |path| archive.asset(path),
                 false,
             )
             .is_err());
-            anyhow::bail!("cache cleanup failed")
+            Err::<(), TestError>("cache cleanup failed".into())
         },
     )
     .unwrap();
@@ -172,7 +174,7 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
         .unwrap()
         .is_empty());
     install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
+        Ok::<_, TestError>(())
     })
     .await
     .unwrap();

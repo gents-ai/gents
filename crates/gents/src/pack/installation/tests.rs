@@ -581,7 +581,7 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
         &crate::pack::PackInstallOptions {
             node_did: OWNER.into(),
         },
-        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|path| archive.asset(path).map(<[u8]>::to_vec),
         &|_| None,
     )
     .unwrap();
@@ -929,7 +929,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         &crate::pack::PackInstallOptions {
             node_did: OWNER.into(),
         },
-        &|_| Ok(serde_json::to_vec(&authored)?),
+        &|_| serde_json::to_vec(&authored),
         &|_| None,
     )
     .unwrap();
@@ -1023,7 +1023,7 @@ fn install_fixture_plugins_into(
         home,
         archive.manifest(),
         archive.digest(),
-        |path| Ok(archive.asset(path)?),
+        |path| archive.asset(path),
         false,
     )?)
 }
@@ -1680,7 +1680,7 @@ async fn try_install_dependent_with_dependee(
         &crate::pack::PackInstallOptions {
             node_did: OWNER.into(),
         },
-        &|path| Ok(dependent.asset(path)?.to_vec()),
+        &|path| dependent.asset(path).map(<[u8]>::to_vec),
         &|_| None,
     )
     .unwrap();
@@ -1843,7 +1843,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         &crate::pack::PackInstallOptions {
             node_did: OWNER.into(),
         },
-        &|path| Ok(dependent.asset(path)?.to_vec()),
+        &|path| dependent.asset(path).map(<[u8]>::to_vec),
         &|_| None,
     )
     .unwrap();
@@ -1861,7 +1861,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
     .await
     .err()
     .expect("the dependency is refused");
-    format!("{}", ErrorChain(error.as_ref()))
+    format!("{}", ErrorChain(&error))
 }
 
 const DEPENDENCY_NEXT_STEP: &str = "install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`";

@@ -16,7 +16,7 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
         &PackInstallOptions {
             node_did: "did:key:eval-owner".into(),
         },
-        &|p| Ok(std::fs::read(root.join(p))?),
+        &|p| std::fs::read(root.join(p)),
         &|_| None,
     )
     .unwrap();

@@ -42,10 +42,10 @@ fn load(dir: &Path) -> (PackManifest, PackConfig) {
         &PackInstallOptions {
             node_did: OWNER.into(),
         },
-        &|path| Ok(std::fs::read(dir.join(path))?),
+        &|path| std::fs::read(dir.join(path)),
         &|_| None,
     )
-    .unwrap_or_else(|error| panic!("{}: {}", dir.display(), ErrorChain(error.as_ref())));
+    .unwrap_or_else(|error| panic!("{}: {}", dir.display(), ErrorChain(&error)));
     (manifest, config)
 }
 

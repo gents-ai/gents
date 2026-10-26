@@ -961,10 +961,12 @@ impl ConfigPackDistribution {
         options: &crate::pack::PackInstallOptions,
         environment: &dyn Fn(&str) -> Option<String>,
     ) -> anyhow::Result<crate::graph_package::LoadedGraphPackage> {
-        crate::graph_package::load_archive_graph_package_with_environment(
-            &self.0.archive,
-            options,
-            environment,
+        Ok(
+            crate::graph_package::load_archive_graph_package_with_environment(
+                &self.0.archive,
+                options,
+                environment,
+            )?,
         )
     }
 }
@@ -1273,11 +1275,11 @@ impl PackInstaller {
             distribution.manifest(),
             &scope,
             &|path| {
-                Ok(distribution
+                distribution
                     .0
                     .archive
                     .asset(path)
-                    .map(|asset| asset.to_vec())?)
+                    .map(|asset| asset.to_vec())
             },
             &environment,
         )?;
@@ -1628,11 +1630,11 @@ impl PackInstaller {
             home,
             manifest,
             package_digest,
-            |path| Ok(distribution.0.archive.asset(path)?),
+            |path| distribution.0.archive.asset(path),
             false,
             Some(self.core.node_did()),
             bindings,
-            |_| Ok(()),
+            |_| Ok::<_, crate::plugin::install::PluginInstallError>(()),
         )
         .with_context(|| {
             format!(
@@ -2112,7 +2114,8 @@ impl Tool for RunGraphTool {
                 plugins: &self.plugins,
             },
         )
-        .await?;
+        .await
+        .map_err(anyhow::Error::from)?;
         let receipt = crate::graph_pipeline::start_graph_run_with_access(
             &access,
             self.core.node_did(),

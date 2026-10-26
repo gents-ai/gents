@@ -35,6 +35,20 @@ pub enum PluginInstallError {
     NoModelSlot { coordinate: String },
     #[error("plugin slot bindings require an owner")]
     BindingsNeedOwner,
+    #[error(transparent)]
+    Asset(crate::pack::CallbackError),
+    #[error(transparent)]
+    Publish(crate::pack::CallbackError),
+    #[error(transparent)]
+    Pack(#[from] crate::pack::PackError),
+    #[error(transparent)]
+    Installation(Box<crate::pack::InstallationError>),
+}
+
+impl From<crate::pack::InstallationError> for PluginInstallError {
+    fn from(error: crate::pack::InstallationError) -> Self {
+        Self::Installation(Box::new(error))
+    }
 }
 
 type Result<T, E = PluginInstallError> = std::result::Result<T, E>;
@@ -137,13 +151,16 @@ fn install_from_pack_locked(
     Ok(record)
 }
 
-pub fn install_pack_plugins<'a>(
+pub fn install_pack_plugins<'a, E>(
     home: &Path,
     manifest: &PackManifest,
     pack_digest: &str,
-    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
+    asset: impl Fn(&str) -> std::result::Result<&'a [u8], E>,
     consent: bool,
-) -> anyhow::Result<Vec<InstalledPlugin>> {
+) -> Result<Vec<InstalledPlugin>>
+where
+    E: Into<crate::pack::CallbackError>,
+{
     install_pack_plugins_with_bindings(
         home,
         manifest,
@@ -152,7 +169,7 @@ pub fn install_pack_plugins<'a>(
         consent,
         None,
         &BTreeMap::new(),
-        |_| Ok(()),
+        |_| Ok::<_, PluginInstallError>(()),
     )
 }
 
@@ -160,20 +177,24 @@ pub fn install_pack_plugins<'a>(
     clippy::too_many_arguments,
     reason = "install inputs and policies supplied by each install entry point"
 )]
-pub fn install_pack_plugins_with_bindings<'a>(
+pub fn install_pack_plugins_with_bindings<'a, E, P>(
     home: &Path,
     manifest: &PackManifest,
     pack_digest: &str,
-    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
+    asset: impl Fn(&str) -> std::result::Result<&'a [u8], E>,
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
-    publish_local: impl FnOnce(&[InstalledPlugin]) -> anyhow::Result<()>,
-) -> anyhow::Result<Vec<InstalledPlugin>> {
+    publish_local: impl FnOnce(&[InstalledPlugin]) -> std::result::Result<(), P>,
+) -> Result<Vec<InstalledPlugin>>
+where
+    E: Into<crate::pack::CallbackError>,
+    P: Into<crate::pack::CallbackError>,
+{
     let lock = store::try_lock_store(home)?;
     store::list_records(home)?;
     let previous = snapshot_pack_plugin_records(home, manifest)?;
-    let result = (|| -> anyhow::Result<Vec<InstalledPlugin>> {
+    let result = (|| -> Result<Vec<InstalledPlugin>> {
         let installed =
             install_pack_plugins_locked(&lock, home, manifest, pack_digest, asset, consent)?;
         if !bindings.is_empty() {
@@ -185,7 +206,7 @@ pub fn install_pack_plugins_with_bindings<'a>(
                 bindings,
             )?;
         }
-        publish_local(&installed)?;
+        publish_local(&installed).map_err(|error| PluginInstallError::Publish(error.into()))?;
         Ok(installed)
     })();
     if result.is_err() {
@@ -194,25 +215,34 @@ pub fn install_pack_plugins_with_bindings<'a>(
     result
 }
 
-fn install_pack_plugins_locked<'a>(
+fn install_pack_plugins_locked<'a, E>(
     lock: &store::StoreGuard,
     home: &Path,
     manifest: &PackManifest,
     pack_digest: &str,
-    asset: impl Fn(&str) -> anyhow::Result<&'a [u8]>,
+    asset: impl Fn(&str) -> std::result::Result<&'a [u8], E>,
     consent: bool,
-) -> anyhow::Result<Vec<InstalledPlugin>> {
+) -> Result<Vec<InstalledPlugin>>
+where
+    E: Into<crate::pack::CallbackError>,
+{
+    let asset = |path: &str| asset(path).map_err(|error| PluginInstallError::Asset(error.into()));
     lock.for_home(home)?;
     let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     manifest
         .metadata
         .plugins
         .iter()
-        .map(|plugin| -> anyhow::Result<InstalledPlugin> {
+        .map(|plugin| -> Result<InstalledPlugin> {
             let instructions = plugin
                 .instructions
                 .as_deref()
-                .map(|path| anyhow::Ok(crate::pack::tool_instructions(&plugin.name, asset(path)?)?))
+                .map(|path| {
+                    Ok::<_, PluginInstallError>(crate::pack::tool_instructions(
+                        &plugin.name,
+                        asset(path)?,
+                    )?)
+                })
                 .transpose()?;
             let (data_unique_keys, data_collection_fields) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;

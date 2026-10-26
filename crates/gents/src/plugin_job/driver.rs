@@ -385,18 +385,13 @@ async fn step_on(
     let call = match call {
         Ok(call) => call,
         Err(error) => {
-            let trapped = error.chain().any(|cause| {
-                cause
-                    .downcast_ref::<PluginError>()
-                    .is_some_and(|error| matches!(error, PluginError::Trap(_)))
-                    || cause
-                        .downcast_ref::<crate::plugin::executor::PluginRunError>()
-                        .is_some_and(crate::plugin::executor::PluginRunError::is_trap)
-            });
+            let trapped = error.is_trap()
+                || gents_protocol::error_chain::find_source::<PluginError>(&error)
+                    .is_some_and(|error| matches!(error, PluginError::Trap(_)));
             let error = if trapped {
-                anyhow::Error::new(StepFailure::Trap(format!("{}", ErrorChain(error.as_ref()))))
+                anyhow::Error::new(StepFailure::Trap(format!("{}", ErrorChain(&error))))
             } else {
-                error
+                error.into()
             };
             return Err(error.context(format!("the step of job row {row_doc_id} did not run")));
         }

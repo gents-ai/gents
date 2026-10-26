@@ -25,10 +25,10 @@ fn definitions() -> Vec<EvalDefinition> {
             &PackInstallOptions {
                 node_did: "did:key:eval-owner".into(),
             },
-            &|path| Ok(std::fs::read(dir.join(path))?),
+            &|path| std::fs::read(dir.join(path)),
             &|_| None,
         )
-        .unwrap_or_else(|error| panic!("{}: {}", dir.display(), ErrorChain(error.as_ref())));
+        .unwrap_or_else(|error| panic!("{}: {}", dir.display(), ErrorChain(&error)));
         definitions.extend(config.eval_definitions);
     }
     definitions
@@ -49,7 +49,7 @@ fn every_native_case_validates_and_uses_shipped_checks() {
             &PackInstallOptions {
                 node_did: "did:key:eval-owner".into(),
             },
-            &|path| Ok(std::fs::read(dir.join(path))?),
+            &|path| std::fs::read(dir.join(path)),
             &|_| None,
         )
         .unwrap();

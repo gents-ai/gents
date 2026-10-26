@@ -16,7 +16,7 @@ fn pack_cases_grade_installation_and_preservation_without_graph_execution() {
         &PackInstallOptions {
             node_did: "did:key:eval-owner".into(),
         },
-        &|p| Ok(std::fs::read(root.join(p))?),
+        &|p| std::fs::read(root.join(p)),
         &|_| None,
     )
     .unwrap();

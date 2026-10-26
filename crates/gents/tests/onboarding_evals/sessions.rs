@@ -17,7 +17,7 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
         &PackInstallOptions {
             node_did: "did:key:eval-owner".into(),
         },
-        &|path| Ok(std::fs::read(root.join(path))?),
+        &|path| std::fs::read(root.join(path)),
         &|_| None,
     )
     .unwrap();

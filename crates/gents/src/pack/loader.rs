@@ -1,4 +1,3 @@
-use anyhow::Context;
 use serde_json::Value;
 
 use super::{
@@ -69,27 +68,62 @@ pub enum LoaderError {
         authored: String,
         pinned: String,
     },
+    #[error(transparent)]
+    Pack(#[from] PackError),
+    #[error(transparent)]
+    Inference(#[from] super::inference::InferenceError),
+    #[error("reading pack config {path}")]
+    ReadConfig {
+        path: String,
+        #[source]
+        source: CallbackError,
+    },
+    #[error("reading plugin artifact {artifact}")]
+    ReadPluginArtifact {
+        artifact: String,
+        #[source]
+        source: CallbackError,
+    },
+    #[error("reading pack sidecar {path}")]
+    ReadSidecar {
+        path: String,
+        #[source]
+        source: CallbackError,
+    },
+    #[error(transparent)]
+    Sidecar(CallbackError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
+
+/// The error a caller-supplied asset or sidecar reader returned; the loader
+/// only adds which file it was reading.
+pub type CallbackError = Box<dyn std::error::Error + Send + Sync>;
 
 type Result<T, E = LoaderError> = std::result::Result<T, E>;
 
-pub fn load_pack_config(
+pub fn load_pack_config<E>(
     manifest: &PackManifest,
     options: &PackInstallOptions,
-    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     environment: &dyn Fn(&str) -> Option<String>,
-) -> anyhow::Result<PackConfig> {
+) -> Result<PackConfig> where
+    E: Into<CallbackError>,
+{
     validate_pack_manifest(manifest)?;
     let path = manifest
         .config
         .as_deref()
         .ok_or(LoaderError::ConfigMissing)?;
-    let bytes = read_asset(path).with_context(|| format!("reading pack config {path}"))?;
+    let bytes = read_asset(path).map_err(|source| LoaderError::ReadConfig {
+        path: path.to_owned(),
+        source: source.into(),
+    })?;
     let value: Value = serde_json::from_slice(&bytes).map_err(LoaderError::ConfigJson)?;
     let mut config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
         let mut prompt = reference.to_owned();
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
-        Ok(prompt)
+        Ok::<_, LoaderError>(prompt)
     })?;
     ensure_pack_leaves_default_unselected(&config)?;
     pin_pack_plugins(manifest, read_asset, &mut config)?;
@@ -106,11 +140,13 @@ pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<(), 
     Ok(())
 }
 
-pub fn pin_pack_plugins(
+pub fn pin_pack_plugins<E>(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     config: &mut PackConfig,
-) -> anyhow::Result<()> {
+) -> Result<()> where
+    E: Into<CallbackError>,
+{
     for capability in &mut config.graph_capabilities {
         pin_pack_plugin(manifest, read_asset, capability)?;
     }
@@ -125,12 +161,14 @@ pub fn pin_pack_plugins(
     Ok(())
 }
 
-pub fn decode_pack_config(
+pub fn decode_pack_config<S>(
     mut value: Value,
     options: Option<&PackInstallOptions>,
     environment: &dyn Fn(&str) -> Option<String>,
-    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> anyhow::Result<String>,
-) -> anyhow::Result<PackConfig> {
+    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> std::result::Result<String, S>,
+) -> Result<PackConfig> where
+    S: Into<CallbackError>,
+{
     let authored_owner = if options.is_none() {
         value
             .pointer("/node/node_did")
@@ -151,7 +189,7 @@ pub fn decode_pack_config(
         .or(authored_owner.as_deref())
         .ok_or(LoaderError::OwnerMissing)?;
     if owner.trim().is_empty() {
-        return Err(LoaderError::OwnerBlank.into());
+        return Err(LoaderError::OwnerBlank);
     }
     interpolate_values(&mut value, &|name| {
         if name == "GENTS_PACK_NODE_DID" {
@@ -191,7 +229,8 @@ pub fn decode_pack_config(
         if let Some(prompt) = &mut context.system_prompt {
             if prompt.starts_with("./") {
                 *prompt =
-                    read_sidecar(crate::Collection::AgentContext, &context.context_id, prompt)?;
+                    read_sidecar(crate::Collection::AgentContext, &context.context_id, prompt)
+                        .map_err(sidecar)?;
             }
         }
     }
@@ -199,7 +238,8 @@ pub fn decode_pack_config(
         if let Some(instructions) = &mut skill.instructions {
             if instructions.starts_with("./") {
                 *instructions =
-                    read_sidecar(crate::Collection::Skill, &skill.skill_id, instructions)?;
+                    read_sidecar(crate::Collection::Skill, &skill.skill_id, instructions)
+                        .map_err(sidecar)?;
             }
         }
     }
@@ -209,17 +249,20 @@ pub fn decode_pack_config(
                 crate::Collection::Task,
                 &task.task_id,
                 &task.prompt_template,
-            )?;
+            )
+            .map_err(sidecar)?;
         }
     }
     Ok(config)
 }
 
-fn pin_pack_plugin(
+fn pin_pack_plugin<E>(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     capability: &mut crate::graph_pipeline::StageCapability,
-) -> anyhow::Result<()> {
+) -> Result<()> where
+    E: Into<CallbackError>,
+{
     let crate::graph_pipeline::StageTarget::Plugin { plugin, digest, .. } = &mut capability.target
     else {
         return Ok(());
@@ -234,11 +277,13 @@ fn pin_pack_plugin(
     Ok(())
 }
 
-fn pin_callback_plugin(
+fn pin_callback_plugin<E>(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     callback: &mut crate::document_config::Callback,
-) -> anyhow::Result<()> {
+) -> Result<()> where
+    E: Into<CallbackError>,
+{
     let crate::document_config::CallbackHandler::Plugin { plugin, digest, .. } =
         &mut callback.handler
     else {
@@ -253,11 +298,13 @@ fn pin_callback_plugin(
     Ok(())
 }
 
-fn pin_entry_prepare_plugin(
+fn pin_entry_prepare_plugin<E>(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     entry: &mut crate::graph_pipeline::EntryBinding,
-) -> anyhow::Result<()> {
+) -> Result<()> where
+    E: Into<CallbackError>,
+{
     if let Some(schema) = &entry.input_schema {
         crate::graph_pipeline::validate_input_schema(schema).map_err(|source| {
             LoaderError::EntryInputSchema {
@@ -283,13 +330,15 @@ fn pin_entry_prepare_plugin(
     Ok(())
 }
 
-fn own_plugin(
+fn own_plugin<E>(
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
+    read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
     plugin: &str,
     authored: Option<&str>,
     what: &str,
-) -> anyhow::Result<Option<(String, String)>> {
+) -> Result<Option<(String, String)>> where
+    E: Into<CallbackError>,
+{
     if plugin.contains('/') {
         return Ok(None);
     }
@@ -302,8 +351,11 @@ fn own_plugin(
             what: what.to_owned(),
             plugin: plugin.to_owned(),
         })?;
-    let bytes = read_asset(&declared.artifact)
-        .with_context(|| format!("reading plugin artifact {}", declared.artifact))?;
+    let bytes =
+        read_asset(&declared.artifact).map_err(|source| LoaderError::ReadPluginArtifact {
+            artifact: declared.artifact.clone(),
+            source: source.into(),
+        })?;
     let pinned = format!(
         "sha256:{:x}",
         <sha2::Sha256 as sha2::Digest>::digest(&bytes)
@@ -316,13 +368,20 @@ fn own_plugin(
                 authored: authored.to_owned(),
                 pinned,
             }
-            .into());
+            );
         }
     }
     Ok(Some((
         format!("{}/{}", manifest.metadata.namespace, plugin),
         pinned,
     )))
+}
+
+fn sidecar<S>(error: S) -> LoaderError
+where
+    S: Into<CallbackError>,
+{
+    LoaderError::Sidecar(error.into())
 }
 
 fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
@@ -346,10 +405,12 @@ fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
     Ok(())
 }
 
-fn hydrate_eval_cases(
+fn hydrate_eval_cases<S>(
     root: &mut serde_json::Map<String, Value>,
-    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> anyhow::Result<String>,
-) -> anyhow::Result<()> {
+    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> std::result::Result<String, S>,
+) -> Result<()> where
+    S: Into<CallbackError>,
+{
     let Some(definitions) = root
         .get_mut("eval_definitions")
         .and_then(Value::as_array_mut)
@@ -374,13 +435,14 @@ fn hydrate_eval_cases(
                     definition_id: definition_id.clone(),
                     reference,
                 }
-                .into());
+                );
             }
             let text = read_sidecar(
                 crate::Collection::EvalDefinition,
                 &definition_id,
                 &reference,
-            )?;
+            )
+            .map_err(sidecar)?;
             let parsed: EvalCase =
                 serde_json::from_str(&text).map_err(|source| LoaderError::EvalCaseSidecar {
                     definition_id: definition_id.clone(),
@@ -420,12 +482,14 @@ fn interpolate_values(
     Ok(())
 }
 
-fn hydrate_sidecar(
+fn hydrate_sidecar<E>(
     prompt: &mut String,
     config_path: &str,
     manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> anyhow::Result<Vec<u8>>,
-) -> anyhow::Result<()> {
+    read_asset: &dyn Fn(&str) -> std::result::Result<Vec<u8>, E>,
+) -> Result<()> where
+    E: Into<CallbackError>,
+{
     let Some(relative) = prompt.strip_prefix("./") else {
         return Ok(());
     };
@@ -435,16 +499,19 @@ fn hydrate_sidecar(
         return Err(LoaderError::SidecarPath {
             relative: relative.to_owned(),
         }
-        .into());
+        );
     }
     let path = match config_path.rsplit_once('/') {
         Some((parent, _)) => format!("{parent}/{relative}"),
         None => relative.to_owned(),
     };
     if !manifest.metadata.assets.contains(&path) {
-        return Err(LoaderError::SidecarUndeclared { path }.into());
+        return Err(LoaderError::SidecarUndeclared { path });
     }
-    let bytes = read_asset(&path).with_context(|| format!("reading pack sidecar {path}"))?;
+    let bytes = read_asset(&path).map_err(|source| LoaderError::ReadSidecar {
+        path: path.clone(),
+        source: source.into(),
+    })?;
     *prompt = String::from_utf8(bytes).map_err(|source| LoaderError::SidecarNotUtf8 {
         path: path.clone(),
         source,

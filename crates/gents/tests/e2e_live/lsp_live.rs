@@ -106,7 +106,7 @@ fn load_pack_system_prompt(
         &PackInstallOptions {
             node_did: "did:key:lsp-live-fixture".into(),
         },
-        &|path| Ok(std::fs::read(root.join(path))?),
+        &|path| std::fs::read(root.join(path)),
         &|name| std::env::var(name).ok(),
     )?;
     let agent = config

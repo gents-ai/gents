@@ -3,16 +3,44 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-
-use super::{HomePackInstall, InstalledPackPlugin, PackIdentity, PackKind};
+use super::{CallbackError, HomePackInstall, InstalledPackPlugin, PackIdentity, PackKind};
 use crate::plugin::{install, store};
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginLifecycleError {
+    #[error("expected a plugins or assets pack")]
+    NotPluginsPack,
+    #[error("plugin slot bindings require an owner")]
+    BindingsNeedOwner,
+    #[error("publishing the local pack install record")]
+    PublishRecord(#[source] super::home_install::HomeInstallError),
+    #[error("local pack install did not publish its record")]
+    NotPublished,
+    #[error("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")]
+    NotifyUnconfirmed(#[source] CallbackError),
+    #[error("{coordinate} is not installed")]
+    NotInstalled { coordinate: String },
+    #[error(transparent)]
+    PrepareCache(CallbackError),
+    #[error(transparent)]
+    Install(#[from] install::PluginInstallError),
+    #[error(transparent)]
+    Store(#[from] store::PluginStoreError),
+    #[error(transparent)]
+    HomeInstall(#[from] super::home_install::HomeInstallError),
+    #[error(transparent)]
+    Materialize(#[from] super::materialize::MaterializeError),
+    #[error(transparent)]
+    StripPrefix(#[from] std::path::StripPrefixError),
+}
+
+type Result<T, E = PluginLifecycleError> = std::result::Result<T, E>;
 
 /// Model-facing callers must pass false; model input never constitutes operator consent.
 /// Local publication is durable before node notification: a failed or cancelled notification
 /// cannot roll back a transaction that may already have committed without returning a receipt.
 #[allow(clippy::too_many_arguments)]
-pub async fn install<F>(
+pub async fn install<F, N>(
     home: &Path,
     archive: &crate::pack_archive::PackArchive,
     consent: bool,
@@ -21,26 +49,26 @@ pub async fn install<F>(
     notify: impl FnOnce(PackIdentity) -> F,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
-    F: Future<Output = Result<()>>,
+    F: Future<Output = std::result::Result<(), N>>,
+    N: Into<CallbackError>,
 {
     let manifest = archive.manifest();
-    anyhow::ensure!(
-        matches!(manifest.metadata.kind, PackKind::Plugins | PackKind::Assets),
-        "expected a plugins or assets pack"
-    );
+    if !matches!(manifest.metadata.kind, PackKind::Plugins | PackKind::Assets) {
+        return Err(PluginLifecycleError::NotPluginsPack);
+    }
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     let (root, _cache_lease) = super::materialize::cached(home, archive)?;
     let install_owner = if bindings.is_empty() {
         None
     } else {
-        Some(owner.context("plugin slot bindings require an owner")?)
+        Some(owner.ok_or(PluginLifecycleError::BindingsNeedOwner)?)
     };
     let mut published_record = None;
     let installed = install::install_pack_plugins_with_bindings(
         home,
         manifest,
         archive.digest(),
-        |path| Ok(archive.asset(path)?),
+        |path| archive.asset(path),
         consent,
         install_owner,
         bindings,
@@ -72,13 +100,13 @@ where
                 if let Err(restore_error) = restored {
                     tracing::error!(coordinate = %coordinate, error = %restore_error, "failed to restore pack install record after local publication error");
                 }
-                return Err(error).context("publishing the local pack install record");
+                return Err(PluginLifecycleError::PublishRecord(error));
             }
             published_record = Some(record);
-            Ok(())
+            Ok::<_, PluginLifecycleError>(())
         },
     )?;
-    let record = published_record.context("local pack install did not publish its record")?;
+    let record = published_record.ok_or(PluginLifecycleError::NotPublished)?;
     if !record.plugins.is_empty() {
         if let Err(error) = notify(PackIdentity::new(
             manifest,
@@ -87,9 +115,7 @@ where
         ))
         .await
         {
-            return Err(error).context(
-                "the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record",
-            );
+            return Err(PluginLifecycleError::NotifyUnconfirmed(error.into()));
         }
     }
     Ok((record, installed))
@@ -121,16 +147,24 @@ pub struct LocalPackRemoval {
 
 /// Cache cleanup stays under the publication exclusion so a concurrent reinstall cannot
 /// republish into the cache while it is being retired.
-pub fn remove_local<P>(
+pub fn remove_local<P, E, C>(
     home: &Path,
     coordinate: &str,
-    prepare_cache: impl FnOnce(&HomePackInstall) -> Result<P>,
-    cleanup_cache: impl FnOnce(P) -> Result<()>,
-) -> Result<LocalPackRemoval> {
+    prepare_cache: impl FnOnce(&HomePackInstall) -> std::result::Result<P, E>,
+    cleanup_cache: impl FnOnce(P) -> std::result::Result<(), C>,
+) -> Result<LocalPackRemoval>
+where
+    E: Into<CallbackError>,
+    C: Into<CallbackError>,
+{
     let guard = store::try_lock_store(home)?;
-    let record = super::read_home_install(home, coordinate)?
-        .with_context(|| format!("{coordinate} is not installed"))?;
-    let prepared_cache = prepare_cache(&record)?;
+    let record = super::read_home_install(home, coordinate)?.ok_or_else(|| {
+        PluginLifecycleError::NotInstalled {
+            coordinate: coordinate.to_owned(),
+        }
+    })?;
+    let prepared_cache = prepare_cache(&record)
+        .map_err(|error| PluginLifecycleError::PrepareCache(error.into()))?;
     let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
     let mut previous = Vec::new();
     for plugin in &record.plugins {
@@ -140,7 +174,7 @@ pub fn remove_local<P>(
             Err(error) => return Err(error.into()),
         }
     }
-    let result = (|| {
+    let result = (|| -> Result<Vec<InstalledPackPlugin>> {
         let mut removed = Vec::new();
         for plugin in &record.plugins {
             if store::remove_record_if_owned_locked(
@@ -161,7 +195,10 @@ pub fn remove_local<P>(
         Ok(plugins) => {
             let cache_error = cleanup_cache(prepared_cache)
                 .err()
-                .map(|error| format!("{}", ErrorChain(error.as_ref())));
+                .map(|error| {
+                    let error: CallbackError = error.into();
+                    format!("{}", ErrorChain(&*error))
+                });
             Ok(LocalPackRemoval {
                 record,
                 plugins,
@@ -186,6 +223,8 @@ pub fn remove_local<P>(
 pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+
+    type TestError = Box<dyn std::error::Error + Send + Sync>;
 
     pub(crate) fn fixture(
         version: &str,
@@ -234,11 +273,11 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { anyhow::bail!("notification failed") },
+            |_| async { Err::<(), TestError>("notification failed".into()) },
         )
         .await
         .unwrap_err();
-        assert!(format!("{}", ErrorChain(error.as_ref())).contains("installed locally"));
+        assert!(format!("{}", ErrorChain(&error)).contains("installed locally"));
         let first = super::super::read_home_install(home.path(), coordinate)
             .unwrap()
             .expect("local pin survives a failed notification");
@@ -252,7 +291,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) },
+            |_| async { Ok::<_, TestError>(()) },
         )
         .await
         .unwrap();
@@ -263,7 +302,7 @@ pub(crate) mod tests {
         let cancelled = tokio::time::timeout(
             std::time::Duration::from_millis(50),
             install(home.path(), &updated, false, None, &BTreeMap::new(), |_| {
-                std::future::pending::<Result<()>>()
+                std::future::pending::<std::result::Result<(), TestError>>()
             }),
         )
         .await;
@@ -288,7 +327,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) }
+            |_| async { Ok::<_, TestError>(()) }
         )
         .await
         .is_err());
@@ -300,7 +339,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) },
+            |_| async { Ok::<_, TestError>(()) },
         )
         .await
         .unwrap();
@@ -313,7 +352,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) }
+            |_| async { Ok::<_, TestError>(()) }
         )
         .await
         .is_err());

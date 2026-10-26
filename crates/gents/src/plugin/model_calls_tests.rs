@@ -355,9 +355,9 @@ async fn a_bound_slot_with_no_resolver_fails_loudly() {
         .await
         .unwrap_err();
     assert!(
-        format!("{}", ErrorChain(error.as_ref())).contains("remote_ocr"),
+        format!("{}", ErrorChain(&error)).contains("remote_ocr"),
         "{}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 

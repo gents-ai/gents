@@ -189,7 +189,7 @@ impl ToolDyn for PluginTool {
                 .await;
             let mut deferred_writes = None;
             let result = call
-                .map_err(|error| tool_error(format!("{}", ErrorChain(error.as_ref()))))
+                .map_err(|error| tool_error(format!("{}", ErrorChain(&error))))
                 .and_then(|mut call| match call.outcome.verdict {
                     PluginVerdict::Success => {
                         deferred_writes = self.defer_writes(&mut call.outcome.output)?;

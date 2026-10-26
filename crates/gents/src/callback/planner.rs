@@ -178,7 +178,7 @@ pub fn invoke_plugin_planner(
     };
     let outcome =
         crate::plugin::executor::PluginExecutor::call_sealed_artifact(artifact, input, budget)
-            .map_err(|error| format!("callback plugin denied: {}", ErrorChain(error.as_ref())))?;
+            .map_err(|error| format!("callback plugin denied: {}", ErrorChain(&error)))?;
     if outcome.verdict != crate::plugin::PluginVerdict::Success {
         return Err(format!(
             "callback plugin {:?}: {}",
