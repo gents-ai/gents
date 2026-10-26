@@ -81,8 +81,8 @@ pub use inference_profile::{
     InferenceProfileError,
 };
 pub use profile_switch::{
-    switch_candidates, switch_profile_account, SwitchCandidate, SwitchPlan, SwitchReceipt,
-    SWITCH_COST,
+    switch_candidates, switch_profile_account, ProfileSwitchError, SwitchCandidate, SwitchPlan,
+    SwitchReceipt, SWITCH_COST,
 };
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::{SchemaContractError, SchemaFieldDelta};

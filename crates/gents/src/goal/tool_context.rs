@@ -37,7 +37,7 @@ pub(crate) async fn load_goal_tool_context(
     request_id: &str,
     request_doc_id: Option<&str>,
 ) -> Result<GoalToolContext> {
-    let doc = request_doc_id.context("Goal tool caller has no physical request identity")?;
+    let doc = request_doc_id.ok_or(GoalError::GoalToolCallerHasNoPhysical2)?;
     crate::ConfigAccess::transact_local_readonly(node, None, "goal.tool_context", |txn| {
         Box::pin(load_goal_tool_context_in_txn(
             txn, owner, session, request_id, doc,
@@ -68,12 +68,11 @@ pub(super) async fn load_goal_tool_context_in_txn(
         response
             .pointer("/data/AgentRequest")
             .cloned()
-            .context("Goal tool caller query omitted rows")?,
+            .ok_or(GoalError::GoalToolCallerQueryOmittedRows)?,
     )?;
-    anyhow::ensure!(
-        requests.len() == 1,
-        "Goal tool caller is absent or ambiguous in its owner/session"
-    );
+    if requests.len() != 1 {
+        return Err(GoalError::GoalToolCallerAbsentAmbiguousOwner);
+    }
     let request = requests.pop().expect("one physical caller");
     let assignment = load_request_assignment_in_txn(txn, &request).await?;
     let current = load_canonical_goal_in_txn(txn, owner, session).await?;

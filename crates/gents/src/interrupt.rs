@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
@@ -68,7 +67,15 @@ pub enum InterruptError {
     Config(#[from] ConfigClientError),
     #[error(transparent)]
     Graphql(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+    #[error(transparent)]
+    Goal(#[from] crate::goal::GoalError),
+    #[error(transparent)]
+    Queue(#[from] crate::lifecycle::QueueError),
 }
+
+type Result<T, E = InterruptError> = std::result::Result<T, E>;
 
 impl crate::config_client::TransactionFailure for InterruptError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
@@ -218,11 +225,11 @@ async fn interrupt_request_matching_in_txn(
         .as_array()
         .ok_or(InterruptError::RequestQueryOmitted)?;
     if rows.len() != 1 {
-        return Err(InterruptError::RequestMissingOrAmbiguous.into());
+        return Err(InterruptError::RequestMissingOrAmbiguous);
     }
     let row = rows[0].clone();
     if row["request_id"].as_str().is_none() {
-        return Err(InterruptError::RequestLogicalIdentityMissing.into());
+        return Err(InterruptError::RequestLogicalIdentityMissing);
     }
     let physical = row["_docID"]
         .as_str()
@@ -249,7 +256,7 @@ async fn interrupt_request_matching_in_txn(
         .as_array()
         .ok_or(InterruptError::MutationRowsOmitted)?;
     if !(updated.len() == 1 && updated[0]["_docID"] == row["_docID"]) {
-        return Err(InterruptError::MutationSelectionMismatch.into());
+        return Err(InterruptError::MutationSelectionMismatch);
     }
     Ok(drain_automated_wakeups_in_txn(
         txn,
@@ -280,7 +287,7 @@ pub(crate) async fn interrupt_active_session_in_txn(
         .and_then(serde_json::Value::as_array)
         .ok_or(InterruptError::ActiveSessionRowsOmitted)?;
     if rows.len() > 1 {
-        return Err(InterruptError::ActiveSessionAmbiguous.into());
+        return Err(InterruptError::ActiveSessionAmbiguous);
     }
     let Some(row) = rows.first() else {
         return Ok(None);

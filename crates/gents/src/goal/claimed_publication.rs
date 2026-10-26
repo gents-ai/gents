@@ -1,4 +1,4 @@
-mod wait_observation;
+pub(super) mod wait_observation;
 
 use super::*;
 use crate::config_client::ConfigApplyTxn;
@@ -73,7 +73,7 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
                 || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
                 || gate_claimed_goal_continuation(
                     GoalAgentObservation::Unavailable, true, false,
-                    &goal.state().context("goal has an unknown status")?,
+                    &goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?,
                 ) != GoalClaimedDecision::Stop
             {
                 return Ok(false);
@@ -85,7 +85,7 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
             }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#)).await?;
             let requests: Vec<AgentRequestRow> = serde_json::from_value(
                 response.pointer("/data/AgentRequest").cloned()
-                    .context("claimed stop request query omitted rows")?
+                    .ok_or(GoalError::ClaimedStopRequestQueryOmittedRows)?
             )?;
             if !goal_session_is_idle(&requests)
                 || !latest_goal_request(&goal, &requests).is_some_and(|parent|
@@ -118,10 +118,9 @@ async fn stage_claimed_continuation(
     stopped: &StoppedReason,
 ) -> Result<Option<GoalResumeReceipt>> {
     *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
-    anyhow::ensure!(
-        identity.did() == observed.node_did,
-        "claimed publication requires the goal owner's signing identity"
-    );
+    if identity.did() != observed.node_did {
+        return Err(GoalError::ClaimedPublicationRequiresGoalOwnerS);
+    }
     let Some(goal) =
         load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await?
     else {
@@ -143,16 +142,15 @@ async fn stage_claimed_continuation(
         response
             .pointer("/data/AgentRequest")
             .cloned()
-            .context("claimed parent query omitted rows")?,
+            .ok_or(GoalError::ClaimedParentQueryOmittedRows)?,
     )?;
     let parents: Vec<_> = requests
         .iter()
         .filter(|row| row.request_id == parent_request_id)
         .collect();
-    anyhow::ensure!(
-        parents.len() == 1,
-        "claimed predecessor must uniquely belong to the goal owner and session"
-    );
+    if parents.len() != 1 {
+        return Err(GoalError::ClaimedPredecessorMustUniquelyBelongGoal);
+    }
     let parent_row = parents[0];
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
     let behavior = goal_continuation_agent(txn, &parent).await?;
@@ -166,17 +164,16 @@ async fn stage_claimed_continuation(
         response
             .pointer("/data/AgentRequest")
             .cloned()
-            .context("claimed receipt query omitted rows")?,
+            .ok_or(GoalError::ClaimedReceiptQueryOmittedRows)?,
     )?;
-    anyhow::ensure!(
-        children.len() <= 1,
-        "ambiguous claimed continuation receipt"
-    );
+    if children.len() > 1 {
+        return Err(GoalError::AmbiguousClaimedContinuationReceipt);
+    }
     let session_hop = match children.first() {
         Some(child) => child
             .request_hop
             .and_then(|hop| u32::try_from(hop).ok())
-            .context("claimed continuation receipt lacks its hop")?,
+            .ok_or(GoalError::ClaimedContinuationReceiptLacksHop)?,
         None => {
             crate::session::load_session_current_hop_in_txn(txn, &goal.node_did, &goal.session_id)
                 .await?
@@ -208,18 +205,19 @@ async fn stage_claimed_continuation(
         )?;
         let actual: GoalBackedRequestFingerprint =
             serde_json::from_value(serde_json::to_value(child)?)?;
-        anyhow::ensure!(
-            actual == expected,
-            "claimed continuation receipt conflicts with the observed publication"
-        );
+        if actual != expected {
+            return Err(GoalError::ClaimedContinuationReceiptConflictsObservedPublication);
+        }
         return Ok(Some(GoalResumeReceipt {
-            goal_status: goal.parsed_status().context("goal has an unknown status")?,
+            goal_status: goal
+                .parsed_status()
+                .ok_or(GoalError::GoalHasUnknownStatus2)?,
             goal_id: goal.goal_id,
             request_id: child.request_id.clone(),
             doc_id: child
                 .doc_id
                 .clone()
-                .context("claimed receipt has no document ID")?,
+                .ok_or(GoalError::ClaimedReceiptHasNoDocumentID)?,
             created: false,
         }));
     }
@@ -247,7 +245,7 @@ async fn stage_claimed_continuation(
         parent_row
             .doc_id
             .as_deref()
-            .context("goal predecessor lacks physical document identity")?,
+            .ok_or(GoalError::GoalPredecessorLacksPhysicalDocumentIdentity)?,
         &goal.node_did,
         &goal.session_id,
         parent_row.requester_did.as_deref(),
@@ -256,7 +254,7 @@ async fn stage_claimed_continuation(
     {
         wait_observation::WaitEvidence::Absent => {}
         wait_observation::WaitEvidence::Running => return Ok(None),
-        wait_observation::WaitEvidence::Unavailable(error) => return Err(error),
+        wait_observation::WaitEvidence::Unavailable(error) => return Err(error.into()),
         wait_observation::WaitEvidence::Invalid(error) => {
             *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) =
                 stop_claimed_continuation_in_txn(
@@ -264,7 +262,7 @@ async fn stage_claimed_continuation(
                     &goal,
                     sequence,
                     parent_request_id,
-                    &format!("invalid Goal wait evidence: {}", ErrorChain(error.as_ref())),
+                    &format!("invalid Goal wait evidence: {}", ErrorChain(&error)),
                     true,
                     now,
                 )
@@ -278,7 +276,7 @@ async fn stage_claimed_continuation(
         parent_row
             .doc_id
             .as_deref()
-            .context("goal predecessor lacks document ID")?,
+            .ok_or(GoalError::GoalPredecessorLacksDocumentID)?,
     )
     .await?
     {
@@ -310,17 +308,17 @@ async fn stage_claimed_continuation(
         return Ok(None);
     }
     let response = txn
-        .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+        .execute(&create.graphql_mutation().map_err(|message| GoalError::RequestFields { message })?)
         .await?;
     let child = response
         .pointer("/data/create_AgentRequest")
         .or_else(|| response.pointer("/data/add_AgentRequest"))
-        .context("claimed child create omitted result")?;
+        .ok_or(GoalError::ClaimedChildCreateOmittedResult)?;
     let child_doc = child
         .get("_docID")
         .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
         .and_then(serde_json::Value::as_str)
-        .context("claimed child create omitted document ID")?;
+        .ok_or(GoalError::ClaimedChildCreateOmittedDocumentID)?;
     if goal.assignment_root_request_doc_id.is_none() {
         bind_goal_first_request_in_txn(
             txn,
@@ -331,7 +329,9 @@ async fn stage_claimed_continuation(
         .await?;
     }
     Ok(Some(GoalResumeReceipt {
-        goal_status: goal.parsed_status().context("goal has an unknown status")?,
+        goal_status: goal
+            .parsed_status()
+            .ok_or(GoalError::GoalHasUnknownStatus2)?,
         goal_id: goal.goal_id,
         request_id: create.request_id,
         doc_id: child_doc.to_owned(),
@@ -348,7 +348,7 @@ async fn stop_claimed_continuation_in_txn(
     record_failure: bool,
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
-    let state = goal.state().context("goal has an unknown status")?;
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?;
     let failure_field = if record_failure {
         format!(r#", last_failure: "{}""#, escape_graphql_string(reason))
     } else {

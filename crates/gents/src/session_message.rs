@@ -762,6 +762,7 @@ pub(crate) async fn stage_planned_write_in_txn(
                 create,
             )
             .await
+            .map_err(anyhow::Error::from)
         }
     }
 }
@@ -1032,10 +1033,10 @@ pub(crate) async fn kill_caused_request(
                 }))
             }
             Ok(_) => {}
-            Err(error) if local => return Err(error),
+            Err(error) if local => return Err(error.into()),
             Err(error) => tracing::warn!(
                 caused_request_doc_id = doc_id,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "peer interrupt of a killed session message was not written"
             ),
         }

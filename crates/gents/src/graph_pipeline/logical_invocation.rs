@@ -173,7 +173,7 @@ pub(super) async fn load(
     for root in &root_rows {
         let node_id = routes
             .get(root.caused_by_trigger_id.as_deref().unwrap_or_default())
-            .context("selected graph route is absent from pinned plan")?
+            .ok_or(GraphPipelineError::RouteAbsent)?
             .clone();
         if !authentic_root(root, owner_did) {
             continue;
@@ -229,10 +229,9 @@ pub(super) async fn load(
         let root_doc = root.doc_id.as_deref().unwrap();
         let ancestry =
             crate::goal::authenticated_goal_request_members(owner, session, root_doc, requests)?;
-        anyhow::ensure!(
-            ancestry.entry.doc_id.as_deref() == Some(root_doc),
-            "graph invocation entry differs from its authenticated pinned root"
-        );
+        if ancestry.entry.doc_id.as_deref() != Some(root_doc) {
+            return Err(GraphPipelineError::InvocationEntryMismatch);
+        }
         let members = ancestry.member_doc_ids.into_iter().collect::<BTreeSet<_>>();
         let parents = ancestry.parents;
         let mut invalid = parents.contains_key(root_doc)

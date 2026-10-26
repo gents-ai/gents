@@ -278,6 +278,116 @@ pub enum GraphPipelineError {
     EventSource(Box<crate::trigger_engine::event_source::EventSourceError>),
     #[error(transparent)]
     TriggerEngine(Box<crate::trigger_engine::TriggerEngineError>),
+    #[error("multiple GraphRun rows share run_id {run_id:?}")]
+    DuplicateRunRows { run_id: String },
+    #[error("cannot publish into ambiguous graph invocation ancestry")]
+    AmbiguousInvocationAncestry,
+    #[error("request belongs to multiple authenticated graph invocations")]
+    MultipleInvocations,
+    #[error("running graph run sweep exceeds the bounded 1000-run limit")]
+    SweepLimit,
+    #[error("graph run generation exhausted")]
+    GenerationExhausted,
+    #[error("graph run terminal CAS lost; reload the durable run")]
+    TerminalCasLost,
+    #[error("graph run terminal transition is not legal")]
+    TerminalTransitionIllegal,
+    #[error("graph cancellation reason exceeds {max} bytes")]
+    CancelReasonTooLong { max: usize },
+    #[error("isolated workspace for graph entry is missing")]
+    EntryWorkspaceMissing,
+    #[error("graph input workspace owner mismatch")]
+    InputWorkspaceOwnerMismatch,
+    #[error("malformed reserved graph trigger ID")]
+    ReservedTriggerId,
+    #[error("graph workspace requires run correlation")]
+    WorkspaceWithoutCorrelation,
+    #[error("graph correlation differs from durable run identity")]
+    CorrelationMismatch,
+    #[error("graph request node is not its pinned owner")]
+    RequestNodeNotOwner,
+    #[error("graph run differs from its pinned plan")]
+    RunPlanMismatch,
+    #[error("graph request trigger is not a pinned route")]
+    TriggerNotPinnedRoute,
+    #[error("graph entry seed is absent or ambiguous")]
+    EntrySeedAmbiguous,
+    #[error("graph entry request does not name the pinned seed observation")]
+    EntrySeedMismatch,
+    #[error("graph workspace requires exactly one authenticated selected-entry request")]
+    WorkspaceEntryRequest,
+    #[error("graph controller workspace input conflicts with owner stamp or destination")]
+    ControllerWorkspaceConflict,
+    #[error("current workspace stamp differs from immutable entry seal")]
+    WorkspaceSealDrift,
+    #[error("explicit graph workspace conflicts with authenticated entry or pinned authority")]
+    ExplicitWorkspaceConflict,
+    #[error("signed graph session differs from resolved continuation target")]
+    SignedSessionMismatch,
+    #[error("signed graph workspace tuple differs from resolved publication evidence")]
+    SignedWorkspaceMismatch,
+    #[error("graph session entry target has additional routes")]
+    SessionEntryExtraRoutes,
+    #[error("graph session target is not singleton")]
+    SessionTargetNotSingleton,
+    #[error("graph session target is per-document fan-out")]
+    SessionTargetFanOut,
+    #[error("selected graph route is absent from pinned plan")]
+    RouteAbsent,
+    #[error("graph invocation entry differs from its authenticated pinned root")]
+    InvocationEntryMismatch,
+    #[error(transparent)]
+    Unobservable(#[from] super::run::GraphRunUnobservable),
+    #[error(transparent)]
+    MaterializeSkip(#[from] crate::trigger_engine::MaterializeSkip),
+    #[error(transparent)]
+    Materializer(Box<crate::trigger_engine::production_materializer::MaterializerError>),
+    #[error(transparent)]
+    Overlay(#[from] crate::workspace::overlay::OverlayError),
+    #[error(transparent)]
+    SubscriptionSource(#[from] crate::trigger_engine::subscription_source::SubscriptionSourceError),
+    #[error(transparent)]
+    WorkspaceRuntime(Box<crate::workspace::WorkspaceRuntimeError>),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+    #[error("graph run selected entry is absent from its pinned plan")]
+    GraphRunSelectedEntryAbsentPinned,
+    #[error("authenticated entry lacks workspace owner scope")]
+    AuthenticatedEntryLacksWorkspaceOwnerScope,
+    #[error("pinned firing node is absent from its graph plan")]
+    PinnedFiringNodeAbsentGraphPlan,
+    #[error("graph session target is absent from its pinned plan")]
+    GraphSessionTargetAbsentPinnedPlan,
+    #[error("graph session continuation requires exactly one authenticated singleton root")]
+    GraphSessionContinuationRequiresExactlyOne,
+    #[error(transparent)]
+    Interrupt(#[from] crate::interrupt::InterruptError),
+}
+
+impl From<crate::trigger_engine::production_materializer::MaterializerError> for GraphPipelineError {
+    fn from(error: crate::trigger_engine::production_materializer::MaterializerError) -> Self {
+        Self::Materializer(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::LifecycleError> for GraphPipelineError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<crate::workspace::WorkspaceRuntimeError> for GraphPipelineError {
+    fn from(error: crate::workspace::WorkspaceRuntimeError) -> Self {
+        Self::WorkspaceRuntime(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for GraphPipelineError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
 }
 
 impl From<crate::config_client::DesiredStateError> for GraphPipelineError {
@@ -783,7 +893,7 @@ pub(super) fn graph_publication_denial(
 pub(crate) async fn fence_graph_root_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> anyhow::Result<()> {
+) -> Result<(), GraphPipelineError> {
     super::run::fence_root_workspace_in_txn(txn, request).await
 }
 

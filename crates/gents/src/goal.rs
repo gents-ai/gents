@@ -1,4 +1,3 @@
-use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -212,7 +211,289 @@ pub enum GoalError {
     TaskGoalAssignmentChangedBeforePublicationOrClaim,
     #[error("decoding Goal rows")]
     DecodeGoalRows(#[source] crate::graphql::GraphqlResponseError),
+    #[error(
+        "session work is still settling; retry resume after the interrupted request terminates"
+    )]
+    SessionWorkStillSettlingRetryResume,
+    #[error("{error}; resume was not applied")]
+    ResumeWasNotApplied { error: String },
+    #[error("invalid goal objective or token budget")]
+    InvalidGoalObjectiveTokenBudget,
+    #[error("Goal tool caller has no owner")]
+    GoalToolCallerHasNoOwner,
+    #[error("Goal tool caller has no session")]
+    GoalToolCallerHasNoSession,
+    #[error("Goal creation requires an unassigned caller with no current Goal, or the exact current assignment")]
+    GoalCreationRequiresUnassignedCallerNo,
+    #[error("goal-backed request transaction is not ready to commit")]
+    GoalBackedRequestTransactionNotReady,
+    #[error("goal-backed request recovery failed after ambiguous commit: {detail}; original commit error: {detail2}")]
+    GoalBackedRequestRecoveryFailedAfter { detail: String, detail2: String },
+    #[error("goal/request DID mismatch")]
+    GoalRequestDIDMismatch,
+    #[error("goal/request session mismatch")]
+    GoalRequestSessionMismatch,
+    #[error("goal request retry key is not unique")]
+    GoalRequestRetryKeyNotUnique,
+    #[error("goal request retry key conflicts with different immutable request fields")]
+    GoalRequestRetryKeyConflictsDifferent,
+    #[error("validated goal-backed request could not be staged")]
+    ValidatedGoalBackedRequestCouldNot,
+    #[error("the session already has a non-active goal")]
+    SessionAlreadyHasNonActiveGoal,
+    #[error("created goal-backed request could not be staged")]
+    CreatedGoalBackedRequestCouldNot,
+    #[error("staged goal request is missing or ambiguous")]
+    StagedGoalRequestMissingAmbiguous,
+    #[error("request has multiple Task fire receipts")]
+    RequestHasMultipleTaskFireReceipts,
+    #[error("Task receipt session differs from claimed request")]
+    TaskReceiptSessionDiffersClaimedRequest,
+    #[error("Task Goal budget must be positive")]
+    TaskGoalBudgetMustPositive,
+    #[error("existing Task Goal has an unknown status")]
+    ExistingTaskGoalHasUnknownStatus,
+    #[error("Task Goal assignment lost its continuation fence")]
+    TaskGoalAssignmentLostContinuationFence,
+    #[error("reactivating an existing goal requires goal resume-request --from REQUEST_ID")]
+    ReactivatingExistingGoalRequiresGoalResume,
+    #[error("Goal has an unknown status")]
+    GoalHasUnknownStatus,
+    #[error("graph Goal opening has unknown status")]
+    GraphGoalOpeningHasUnknownStatus,
+    #[error("Goal opening request query omitted rows")]
+    GoalOpeningRequestQueryOmittedRows,
+    #[error("Goal opening head has no physical document ID")]
+    GoalOpeningHeadHasNoPhysical,
+    #[error("decoding transactional Goal rows")]
+    DecodingTransactionalGoalRows(#[source] serde_json::Error),
+    #[error("Goal tool caller has no physical identity")]
+    GoalToolCallerHasNoPhysical,
+    #[error("assigned Goal has no creation identity")]
+    AssignedGoalHasNoCreationIdentity,
+    #[error("created Goal row disappeared before caller binding")]
+    CreatedGoalRowDisappearedBeforeCaller,
+    #[error("bound Goal row disappeared")]
+    BoundGoalRowDisappeared,
+    #[error("committed Goal row not found")]
+    CommittedGoalRowNotFound,
+    #[error("decoding goal-backed request fingerprint")]
+    DecodingGoalBackedRequestFingerprint(#[source] serde_json::Error),
+    #[error("persisted Goal request lacks physical identity")]
+    PersistedGoalRequestLacksPhysicalIdentity,
+    #[error("staged goal request lookup omitted rows")]
+    StagedGoalRequestLookupOmittedRows,
+    #[error("staged goal request lacks _docID")]
+    StagedGoalRequestLacksDocID,
+    #[error("committed goal-backed request was not found by retry key")]
+    CommittedGoalBackedRequestWasNot,
+    #[error("Task assignment lost Goal identity")]
+    TaskAssignmentLostGoalIdentity,
+    #[error("Goal-backed Task has no objective")]
+    GoalBackedTaskHasNoObjective,
+    #[error("Task Goal continuation sequence exhausted")]
+    TaskGoalContinuationSequenceExhausted,
+    #[error("Task Goal assignment has no canonical row")]
+    TaskGoalAssignmentHasNoCanonical,
+    #[error("assigned Task Goal disappeared")]
+    AssignedTaskGoalDisappeared,
+    #[error("a goal objective is required")]
+    GoalObjectiveRequired,
+    #[error("existing Goal has an unknown status")]
+    ExistingGoalHasUnknownStatus,
+    #[error("updated Goal row disappeared")]
+    UpdatedGoalRowDisappeared,
+    #[error("created Goal row not found")]
+    CreatedGoalRowNotFound,
+    #[error("goal continuation sequence exhausted")]
+    GoalContinuationSequenceExhausted,
+    #[error("summing goal inference usage")]
+    SummingGoalInferenceUsage(#[source] anyhow::Error),
+    #[error("Goal usage snapshot has an unknown status")]
+    GoalUsageSnapshotHasUnknownStatus,
+    #[error("the current session already has a goal with a different objective or budget")]
+    CreateConflict,
+    #[error("{message}")]
+    RequestFields { message: &'static str },
+    #[error("Goal tool caller is absent or ambiguous in its owner/session")]
+    GoalToolCallerAbsentAmbiguousOwner,
+    #[error("Goal tool caller has no physical request identity")]
+    GoalToolCallerHasNoPhysical2,
+    #[error("Goal tool caller query omitted rows")]
+    GoalToolCallerQueryOmittedRows,
+    #[error("goal control signer differs from its author")]
+    GoalControlSignerDiffersAuthor,
+    #[error("Goal control {command_id} was saved and is waiting for the runtime; its outcome is not yet confirmed.")]
+    GoalControlWasSavedWaitingRuntime { command_id: String },
+    #[error("claimed publication requires the goal owner's signing identity")]
+    ClaimedPublicationRequiresGoalOwnerS,
+    #[error("claimed predecessor must uniquely belong to the goal owner and session")]
+    ClaimedPredecessorMustUniquelyBelongGoal,
+    #[error("ambiguous claimed continuation receipt")]
+    AmbiguousClaimedContinuationReceipt,
+    #[error("claimed continuation receipt conflicts with the observed publication")]
+    ClaimedContinuationReceiptConflictsObservedPublication,
+    #[error("goal has an unknown status")]
+    GoalHasUnknownStatus2,
+    #[error("claimed stop request query omitted rows")]
+    ClaimedStopRequestQueryOmittedRows,
+    #[error("claimed parent query omitted rows")]
+    ClaimedParentQueryOmittedRows,
+    #[error("claimed receipt query omitted rows")]
+    ClaimedReceiptQueryOmittedRows,
+    #[error("claimed continuation receipt lacks its hop")]
+    ClaimedContinuationReceiptLacksHop,
+    #[error("claimed receipt has no document ID")]
+    ClaimedReceiptHasNoDocumentID,
+    #[error("goal predecessor lacks physical document identity")]
+    GoalPredecessorLacksPhysicalDocumentIdentity,
+    #[error("goal predecessor lacks document ID")]
+    GoalPredecessorLacksDocumentID,
+    #[error("claimed child create omitted result")]
+    ClaimedChildCreateOmittedResult,
+    #[error("claimed child create omitted document ID")]
+    ClaimedChildCreateOmittedDocumentID,
+    #[error("unknown goal observation source")]
+    UnknownGoalObservationSource,
+    #[error("one or more session goal observations remain unresolved")]
+    OneMoreSessionGoalObservationsRemain,
+    #[error("goal observation has conflicting physical documents")]
+    GoalObservationHasConflictingPhysicalDocuments,
+    #[error("Goal state is still syncing. Refresh this chat before sending.")]
+    GoalStateStillSyncingRefreshChat,
+    #[error("Goal input target Agent differs from its canonical session")]
+    GoalInputTargetAgentDiffersCanonical,
+    #[error("goal observation immutable scope differs from canonical session")]
+    GoalObservationImmutableScopeDiffersCanonical,
+    #[error("goal observation source omitted rows")]
+    GoalObservationSourceOmittedRows,
+    #[error("goal session sweep omitted rows")]
+    GoalSessionSweepOmittedRows,
+    #[error("goal observation query omitted rows")]
+    GoalObservationQueryOmittedRows,
+    #[error("goal has no unambiguous composite revision")]
+    GoalHasNoUnambiguousCompositeRevision,
+    #[error("goal observation write omitted its document")]
+    GoalObservationWriteOmittedDocument,
+    #[error("goal resume requires the target node's signing identity")]
+    GoalResumeRequiresTargetNodeS,
+    #[error("resume predecessor must uniquely belong to the goal owner and session")]
+    ResumePredecessorMustUniquelyBelongGoal,
+    #[error("ambiguous goal continuation receipt")]
+    AmbiguousGoalContinuationReceipt,
+    #[error("switch failed; nothing changed: {detail}")]
+    SwitchFailedNothingChanged { detail: String },
+    #[error(
+        "resume failed after the switch committed (profile {profile} is now on {label}); run the \
+                 same command again with the same --from: {detail}"
+    )]
+    ResumeFailedAfterSwitchCommittedProfile {
+        profile: String,
+        label: String,
+        detail: String,
+    },
+    #[error("resume failed; run the same command again with the same --from: {detail}")]
+    ResumeFailedRunSameCommandAgain { detail: String },
+    #[error("profile that hit the limit is unavailable")]
+    ProfileHitLimitUnavailable,
+    #[error("profile that hit the limit is not on target backend {target_backend_id}")]
+    ProfileHitLimitNotTargetBackend { target_backend_id: String },
+    #[error("target backend {target_backend_id} is disabled")]
+    TargetBackendDisabled { target_backend_id: String },
+    #[error("target account for backend {target_backend_id} is unavailable")]
+    TargetAccountBackendUnavailable { target_backend_id: String },
+    #[error("resume predecessor must be terminal")]
+    ResumePredecessorMustTerminal,
+    #[error("resume predecessor is no longer the latest request")]
+    ResumePredecessorNoLongerLatestRequest,
+    #[error("goal session still has unfinished requests")]
+    GoalSessionStillHasUnfinishedRequests,
+    #[error("goal changed while staging resume")]
+    GoalChangedWhileStagingResume,
+    #[error("goal resume requires its node signing identity")]
+    GoalResumeRequiresNodeSigningIdentity,
+    #[error("only a paused goal can resume current work")]
+    OnlyPausedGoalCanResumeCurrent,
+    #[error("no canonical goal exists for this owner and session")]
+    NoCanonicalGoalExistsOwnerSession,
+    #[error("receipt query omitted rows")]
+    ReceiptQueryOmittedRows,
+    #[error("continuation receipt lacks document ID")]
+    ContinuationReceiptLacksDocumentID,
+    #[error(
+        "request {from_request_id} did not stop on a usage limit; move its profile \
+                 with `gents config profile set-account <profile>` and resume with \
+                 `gents goal resume-request --from {from_request_id2}`"
+    )]
+    RequestDidNotStopUsageLimit {
+        from_request_id: String,
+        from_request_id2: String,
+    },
+    #[error(
+        "switch failed; nothing changed: the profile that hit the limit is on \
+                     neither its account nor the target; move it with `gents config profile \
+                     set-account <profile>` and resume with `gents goal resume-request`"
+    )]
+    SwitchFailedNothingChangedProfileHit,
+    #[error("resume predecessor has no failed call")]
+    ResumePredecessorHasNoFailedCall,
+    #[error("target backend has no OAuth provider")]
+    TargetBackendHasNoOAuthProvider,
+    #[error("goal status does not allow operator resume")]
+    GoalStatusDoesNotAllowOperator,
+    #[error("continuation create omitted result")]
+    ContinuationCreateOmittedResult,
+    #[error("continuation create omitted document ID")]
+    ContinuationCreateOmittedDocumentID,
+    #[error("goal status does not allow resume")]
+    GoalStatusDoesNotAllowResume,
+    #[error("goal control requires its node signing identity")]
+    GoalControlRequiresNodeSigningIdentity,
+    #[error("terminal goal was not retired")]
+    TerminalGoalWasNotRetired,
+    #[error("replacement goal reused its prior identity or ancestry")]
+    ReplacementGoalReusedPriorIdentityAncestry,
+    #[error("new goal disappeared during creation")]
+    NewGoalDisappearedDuringCreation,
+    #[error("goal changed while staging its edit")]
+    GoalChangedWhileStagingEdit,
+    #[error(transparent)]
+    BlockedTurn(#[from] crate::blocked_turn::BlockedTurnError),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error(transparent)]
+    OAuthCredential(#[from] crate::oauth_credential::OAuthCredentialError),
+    #[error(transparent)]
+    ProfileSwitch(#[from] crate::config_client::ProfileSwitchError),
+    #[error(transparent)]
+    DocumentConfig(#[from] crate::document_config::DocumentConfigError),
+    #[error(transparent)]
+    GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
+    #[error(transparent)]
+    Session(#[from] crate::session::SessionError),
+    #[error(transparent)]
+    GoalControl(#[from] gents_protocol::goal_control::GoalControlError),
+    #[error(transparent)]
+    Did(#[from] ::identity::Error),
+    #[error(transparent)]
+    Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
+    #[error(transparent)]
+    WaitObservation(#[from] claimed_publication::wait_observation::WaitObservationError),
 }
+
+impl From<crate::lifecycle::materialize::MaterializeError> for GoalError {
+    fn from(error: crate::lifecycle::materialize::MaterializeError) -> Self {
+        Self::Materialize(Box::new(error))
+    }
+}
+
+impl From<crate::graph_pipeline::GraphPipelineError> for GoalError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self::GraphPipeline(Box::new(error))
+    }
+}
+
+type Result<T, E = GoalError> = std::result::Result<T, E>;
 
 impl From<crate::watcher::WatcherError> for GoalError {
     fn from(error: crate::watcher::WatcherError) -> Self {
@@ -256,24 +537,29 @@ pub(crate) async fn stage_session_resume_in_txn(
     session_id: &str,
 ) -> Result<()> {
     let requests = request_head::load_session_requests(txn, node_did, session_id).await?;
-    anyhow::ensure!(
-        !requests
-            .iter()
-            .any(|row| row.lifecycle_state.is_some_and(|state| matches!(
+    if requests.iter().any(|row| {
+        row.lifecycle_state.is_some_and(|state| {
+            matches!(
                 state,
                 RequestLifecycleState::Claimed | RequestLifecycleState::Processing
-            ))),
-        "session work is still settling; retry resume after the interrupted request terminates"
-    );
+            )
+        })
+    }) {
+        return Err(GoalError::SessionWorkStillSettlingRetryResume);
+    }
     let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
         return Ok(());
     };
-    let state = goal.state().context("Goal has an unknown status")?;
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus)?;
     if state.status != GoalStatus::Paused {
         return Ok(());
     }
-    let prepared = client_control::prepare_goal_resume(goal, state, &requests)
-        .map_err(|error| anyhow::anyhow!("{error}; resume was not applied"))?;
+    let prepared =
+        client_control::prepare_goal_resume(goal, state, &requests).map_err(|error| {
+            GoalError::ResumeWasNotApplied {
+                error: error.to_string(),
+            }
+        })?;
     client_control::stage_goal_control(txn, identity, prepared).await?;
     Ok(())
 }
@@ -1127,7 +1413,7 @@ pub enum CreateGoalForSessionError {
     #[error("the current session already has a goal with a different objective or budget")]
     Conflict,
     #[error(transparent)]
-    Storage(#[from] anyhow::Error),
+    Storage(#[from] GoalError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1149,7 +1435,7 @@ async fn fence_opened_graph_goal_in_txn(
 ) -> Result<()> {
     let current = goal
         .state()
-        .context("graph Goal opening has unknown status")?;
+        .ok_or(GoalError::GraphGoalOpeningHasUnknownStatus)?;
     if !current.has_continuation_obligation()
         || previous.is_some_and(GoalState::has_continuation_obligation)
     {
@@ -1169,7 +1455,7 @@ async fn fence_opened_graph_goal_in_txn(
         response
             .pointer("/data/AgentRequest")
             .cloned()
-            .context("Goal opening request query omitted rows")?,
+            .ok_or(GoalError::GoalOpeningRequestQueryOmittedRows)?,
     )?;
     let Some(head) = latest_goal_request(goal, &requests) else {
         return Ok(());
@@ -1182,7 +1468,7 @@ async fn fence_opened_graph_goal_in_txn(
     let head_doc = head
         .doc_id
         .as_deref()
-        .context("Goal opening head has no physical document ID")?;
+        .ok_or(GoalError::GoalOpeningHeadHasNoPhysical)?;
     if let Some(binding) =
         crate::graph_pipeline::graph_binding_for_request_in_txn(txn, head_doc).await?
     {
@@ -1244,10 +1530,9 @@ async fn stage_goal_and_claim(
         goal_tools: true,
         goal_create: true,
     };
-    anyhow::ensure!(
-        decide_model_goal_create(&create_request, None) == GoalCreateDisposition::Fresh,
-        "invalid goal objective or token budget"
-    );
+    if decide_model_goal_create(&create_request, None) != GoalCreateDisposition::Fresh {
+        return Err(GoalError::InvalidGoalObjectiveTokenBudget);
+    }
     let fingerprint = goal_creation_fingerprint(&create_request);
     let objective = fingerprint.objective.as_str();
     let goal_id = identity
@@ -1278,17 +1563,16 @@ async fn stage_goal_and_claim(
             .cloned()
             .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
     )
-    .context("decoding transactional Goal rows")?;
+    .map_err(GoalError::DecodingTransactionalGoalRows)?;
     sort_goals_canonical(&mut goals);
     let claims = response
         .pointer("/data/GoalCreationClaim")
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    anyhow::ensure!(
-        claims.len() <= 1,
-        "goal creation key resolved to multiple claims"
-    );
+    if claims.len() > 1 {
+        return Err(GoalError::GoalCreationKeyMultipleClaims);
+    }
     if let Some(claim) = claims.first() {
         let claim_fingerprint = GoalCreationFingerprint {
             owner: claim
@@ -1315,7 +1599,7 @@ async fn stage_goal_and_claim(
             || decide_model_goal_create(&create_request, Some(&claim_fingerprint))
                 != GoalCreateDisposition::Idempotent
         {
-            return Err(anyhow::Error::new(CreateGoalForSessionError::Conflict));
+            return Err(GoalError::CreateConflict);
         }
     } else {
         let budget_field = optional_int_graphql_field("token_budget", token_budget);
@@ -1337,7 +1621,7 @@ async fn stage_goal_and_claim(
         if !goals.iter().all(|candidate| {
             candidate.objective.trim() == objective && candidate.token_budget == token_budget
         }) {
-            return Err(anyhow::Error::new(CreateGoalForSessionError::Conflict));
+            return Err(GoalError::CreateConflict);
         }
         return Ok(StagedGoal {
             disposition: StagedGoalDisposition::Idempotent,
@@ -1426,12 +1710,14 @@ pub(crate) async fn create_goal_for_request(
     objective: &str,
     token_budget: Option<i64>,
 ) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
-    let owner = caller.node_did.as_deref().ok_or_else(|| {
-        CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal tool caller has no owner"))
-    })?;
-    let session = caller.session_id.as_deref().ok_or_else(|| {
-        CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal tool caller has no session"))
-    })?;
+    let owner = caller
+        .node_did
+        .as_deref()
+        .ok_or_else(|| CreateGoalForSessionError::Storage(GoalError::GoalToolCallerHasNoOwner))?;
+    let session = caller
+        .session_id
+        .as_deref()
+        .ok_or_else(|| CreateGoalForSessionError::Storage(GoalError::GoalToolCallerHasNoSession))?;
     create_goal_for_session_inner(node, owner, session, objective, token_budget, Some(caller)).await
 }
 
@@ -1473,20 +1759,46 @@ async fn create_goal_for_session_inner(
             Box::pin(async move {
                 let context = if let Some(caller) = caller {
                     let context = tool_context::load_goal_tool_context_in_txn(
-                        txn, node_did, session_id,
+                        txn,
+                        node_did,
+                        session_id,
                         &caller.request_id,
-                        caller.doc_id.as_deref().context("Goal tool caller has no physical identity")?,
-                    ).await?;
-                    anyhow::ensure!(context.can_create(), "Goal creation requires an unassigned caller with no current Goal, or the exact current assignment");
+                        caller
+                            .doc_id
+                            .as_deref()
+                            .ok_or(GoalError::GoalToolCallerHasNoPhysical)?,
+                    )
+                    .await?;
+                    if !context.can_create() {
+                        return Err(GoalError::GoalCreationRequiresUnassignedCallerNo);
+                    }
                     Some(context)
-                } else { None };
-                let identity = if let Some(tool_context::GoalToolContext { assignment: RequestAssignmentObservation::Assigned(goal), .. }) = &context {
-                    let response = txn.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{_eq: "{}"}} }}) {{creation_key}} }}"#,
-                        escape_graphql_string(&goal.doc_id))).await?;
-                    let creation_key = response.pointer("/data/Goal/0/creation_key").and_then(serde_json::Value::as_str)
-                        .filter(|value| !value.is_empty()).context("assigned Goal has no creation identity")?;
-                    Some(GoalCreationIdentity { goal_id: goal.goal_id.clone(), creation_key: creation_key.to_string() })
-                } else { None };
+                } else {
+                    None
+                };
+                let identity = if let Some(tool_context::GoalToolContext {
+                    assignment: RequestAssignmentObservation::Assigned(goal),
+                    ..
+                }) = &context
+                {
+                    let response = txn
+                        .execute(&format!(
+                            r#"{{ Goal(filter: {{ _docID: {{_eq: "{}"}} }}) {{creation_key}} }}"#,
+                            escape_graphql_string(&goal.doc_id)
+                        ))
+                        .await?;
+                    let creation_key = response
+                        .pointer("/data/Goal/0/creation_key")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .ok_or(GoalError::AssignedGoalHasNoCreationIdentity)?;
+                    Some(GoalCreationIdentity {
+                        goal_id: goal.goal_id.clone(),
+                        creation_key: creation_key.to_string(),
+                    })
+                } else {
+                    None
+                };
                 let mut staged = stage_goal_and_claim(
                     txn,
                     node_did,
@@ -1501,17 +1813,31 @@ async fn create_goal_for_session_inner(
                     },
                     &Utc::now().to_rfc3339(),
                     identity.as_ref(),
-                ).await?;
+                )
+                .await?;
                 if let Some(context) = context {
                     if matches!(staged.disposition, StagedGoalDisposition::Created) {
-                        let goal = load_canonical_goal_in_txn(txn, node_did, session_id).await?
-                            .context("created Goal row disappeared before caller binding")?;
-                        bind_goal_first_request_in_txn(txn, &goal,
-                            context.request.doc_id.as_deref().context("Goal tool caller has no physical identity")?,
-                            context.request.input.as_ref().and_then(|input| input.goal_assignment.as_ref()),
-                        ).await?;
-                        staged.goal = load_canonical_goal_in_txn(txn, node_did, session_id).await?
-                            .context("bound Goal row disappeared")?;
+                        let goal = load_canonical_goal_in_txn(txn, node_did, session_id)
+                            .await?
+                            .ok_or(GoalError::CreatedGoalRowDisappearedBeforeCaller)?;
+                        bind_goal_first_request_in_txn(
+                            txn,
+                            &goal,
+                            context
+                                .request
+                                .doc_id
+                                .as_deref()
+                                .ok_or(GoalError::GoalToolCallerHasNoPhysical)?,
+                            context
+                                .request
+                                .input
+                                .as_ref()
+                                .and_then(|input| input.goal_assignment.as_ref()),
+                        )
+                        .await?;
+                        staged.goal = load_canonical_goal_in_txn(txn, node_did, session_id)
+                            .await?
+                            .ok_or(GoalError::BoundGoalRowDisappeared)?;
                     }
                 }
                 Ok(staged)
@@ -1528,7 +1854,7 @@ async fn create_goal_for_session_inner(
                 load_canonical_goal(node, node_did, session_id)
                     .await
                     .map_err(CreateGoalForSessionError::Storage)?
-                    .context("committed Goal row not found")
+                    .ok_or(GoalError::CommittedGoalRowNotFound)
                     .map_err(CreateGoalForSessionError::Storage)?
             };
             Ok(match outcome.disposition {
@@ -1536,10 +1862,10 @@ async fn create_goal_for_session_inner(
                 StagedGoalDisposition::Idempotent => CreateGoalForSessionOutcome::Idempotent(goal),
             })
         }
-        Err(error) if caller.is_some() => match error.downcast::<CreateGoalForSessionError>() {
-            Ok(error) => Err(error),
-            Err(error) => Err(CreateGoalForSessionError::Storage(error)),
-        },
+        Err(GoalError::CreateConflict) if caller.is_some() => {
+            Err(CreateGoalForSessionError::Conflict)
+        }
+        Err(error) if caller.is_some() => Err(CreateGoalForSessionError::Storage(error)),
         Err(error) => {
             if let Some(existing) = load_canonical_goal(node, node_did, session_id)
                 .await
@@ -1556,9 +1882,9 @@ async fn create_goal_for_session_inner(
                 }
                 return Err(CreateGoalForSessionError::Conflict);
             }
-            match error.downcast::<CreateGoalForSessionError>() {
-                Ok(error) => Err(error),
-                Err(error) => Err(CreateGoalForSessionError::Storage(error)),
+            match error {
+                GoalError::CreateConflict => Err(CreateGoalForSessionError::Conflict),
+                error => Err(CreateGoalForSessionError::Storage(error)),
             }
         }
     }
@@ -1743,26 +2069,27 @@ fn authorize_goal_submission_commit(
     staged: StagedGoalBackedRequest,
 ) -> Result<GoalBackedRequestDisposition> {
     let committed = goal_submission_step(staged.state, GoalSubmissionAction::Commit);
-    anyhow::ensure!(
-        committed.durable_goal
-            && committed.runnable_request
-            && !committed.staged_goal
-            && !committed.staged_request,
-        "goal-backed request transaction is not ready to commit"
-    );
+    if !(committed.durable_goal
+        && committed.runnable_request
+        && !committed.staged_goal
+        && !committed.staged_request)
+    {
+        return Err(GoalError::GoalBackedRequestTransactionNotReady);
+    }
     Ok(staged.disposition)
 }
 
 fn resolve_ambiguous_goal_submission_commit(
-    commit_error: anyhow::Error,
+    commit_error: GoalError,
     recovery: Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>, GoalError>,
 ) -> Result<GoalBackedRequestDisposition> {
     match recovery {
         Ok(Some(_)) => Ok(GoalBackedRequestDisposition::Idempotent),
         Ok(None) => Err(commit_error),
-        Err(recovery_error) => Err(anyhow::anyhow!(
-            "goal-backed request recovery failed after ambiguous commit: {}; original commit error: {}", ErrorChain(&recovery_error), ErrorChain(commit_error.as_ref())
-        )),
+        Err(recovery_error) => Err(GoalError::GoalBackedRequestRecoveryFailedAfter {
+            detail: ErrorChain(&recovery_error).to_string(),
+            detail2: ErrorChain(&commit_error).to_string(),
+        }),
     }
 }
 
@@ -1776,20 +2103,22 @@ async fn stage_goal_backed_request(
     identity: Option<&GoalCreationIdentity>,
 ) -> Result<StagedGoalBackedRequest> {
     let objective = objective.trim();
-    anyhow::ensure!(!objective.is_empty(), "goal objective must be non-empty");
-    anyhow::ensure!(
-        token_budget.is_none_or(|budget| budget > 0),
-        "goal token budget must be positive"
-    );
-    anyhow::ensure!(request.node_did == node_did, "goal/request DID mismatch");
-    anyhow::ensure!(
-        request.session_id == session_id,
-        "goal/request session mismatch"
-    );
+    if objective.is_empty() {
+        return Err(GoalError::ObjectiveEmpty);
+    }
+    if !token_budget.is_none_or(|budget| budget > 0) {
+        return Err(GoalError::BudgetNotPositive);
+    }
+    if request.node_did != node_did {
+        return Err(GoalError::GoalRequestDIDMismatch);
+    }
+    if request.session_id != session_id {
+        return Err(GoalError::GoalRequestSessionMismatch);
+    }
     let retry_key = request
         .retry_key
         .as_deref()
-        .context("goal-backed request requires a stable retry_key")?;
+        .ok_or(GoalError::GoalBackedRequestRequiresRetryKey)?;
 
     let staged_goal = stage_goal_and_claim(
         txn,
@@ -1831,41 +2160,42 @@ async fn stage_goal_backed_request(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    anyhow::ensure!(requests.len() <= 1, "goal request retry key is not unique");
+    if requests.len() > 1 {
+        return Err(GoalError::GoalRequestRetryKeyNotUnique);
+    }
     if let Some(existing_request) = requests.first() {
         let persisted: GoalBackedRequestFingerprint =
             serde_json::from_value(existing_request.clone())
-                .context("decoding goal-backed request fingerprint")?;
-        anyhow::ensure!(
-            persisted == GoalBackedRequestFingerprint::from_create(request)?,
-            "goal request retry key conflicts with different immutable request fields"
-        );
+                .map_err(GoalError::DecodingGoalBackedRequestFingerprint)?;
+        if persisted != GoalBackedRequestFingerprint::from_create(request)? {
+            return Err(GoalError::GoalRequestRetryKeyConflictsDifferent);
+        }
         bind_goal_first_request_in_txn(
             txn,
             &staged_goal.goal,
             existing_request["_docID"]
                 .as_str()
-                .context("persisted Goal request lacks physical identity")?,
+                .ok_or(GoalError::PersistedGoalRequestLacksPhysicalIdentity)?,
             request.input.goal_assignment.as_ref(),
         )
         .await?;
         submission_state =
             goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
-        anyhow::ensure!(
-            submission_state.staged_request,
-            "validated goal-backed request could not be staged"
-        );
+        if !submission_state.staged_request {
+            return Err(GoalError::ValidatedGoalBackedRequestCouldNot);
+        }
         return Ok(StagedGoalBackedRequest {
             disposition: GoalBackedRequestDisposition::Idempotent,
             state: submission_state,
         });
     }
-    anyhow::ensure!(
-        staged_goal.goal.parsed_status() == Some(GoalStatus::Active),
-        "the session already has a non-active goal"
-    );
+    if staged_goal.goal.parsed_status() != Some(GoalStatus::Active) {
+        return Err(GoalError::SessionAlreadyHasNonActiveGoal);
+    }
     crate::graph_pipeline::fence_graph_root_request_in_txn(txn, request).await?;
-    let request_fields = request.graphql_input_fields().map_err(anyhow::Error::msg)?;
+    let request_fields = request
+        .graphql_input_fields()
+        .map_err(|message| GoalError::RequestFields { message })?;
     let created = txn
         .execute(&format!(
             "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
@@ -1880,10 +2210,9 @@ async fn stage_goal_backed_request(
     )
     .await?;
     submission_state = goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
-    anyhow::ensure!(
-        submission_state.staged_request,
-        "created goal-backed request could not be staged"
-    );
+    if !submission_state.staged_request {
+        return Err(GoalError::CreatedGoalBackedRequestCouldNot);
+    }
     Ok(StagedGoalBackedRequest {
         disposition: GoalBackedRequestDisposition::Created,
         state: submission_state,
@@ -2216,7 +2545,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     let retry_key = request
         .retry_key
         .as_deref()
-        .context("goal-backed request requires a stable retry_key")?;
+        .ok_or(GoalError::GoalBackedRequestRequiresRetryKey)?;
     let staged = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id }} }}"#,
@@ -2226,15 +2555,14 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     let rows = staged
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
-        .context("staged goal request lookup omitted rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "staged goal request is missing or ambiguous"
-    );
+        .ok_or(GoalError::StagedGoalRequestLookupOmittedRows)?;
+    if rows.len() != 1 {
+        return Err(GoalError::StagedGoalRequestMissingAmbiguous);
+    }
     Ok(crate::lifecycle::EnqueuedAgentRequest {
         doc_id: rows[0]["_docID"]
             .as_str()
-            .context("staged goal request lacks _docID")?
+            .ok_or(GoalError::StagedGoalRequestLacksDocID)?
             .to_owned(),
         request_id: request.request_id.clone(),
         session_id: request.session_id.clone(),
@@ -2298,7 +2626,7 @@ pub async fn submit_goal_backed_request_local(
         request,
     )
     .await?
-    .context("committed goal-backed request was not found by retry key")
+    .ok_or(GoalError::CommittedGoalBackedRequestWasNot)
 }
 
 pub async fn load_goals_for_session(
@@ -2458,7 +2786,7 @@ pub(crate) async fn pause_goal_for_interrupt_in_txn(
     let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
         return Ok(());
     };
-    let state = goal.state().context("Goal has an unknown status")?;
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus)?;
     if state.step(GoalAction::Pause).is_some() {
         set_goal_in_txn(
             txn,
@@ -2498,20 +2826,18 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         goal_assignment_applied: bool,
     }
     let assignments: Vec<Assignment> = rows(&response, "TriggerFire")?;
-    anyhow::ensure!(
-        assignments.len() <= 1,
-        "request has multiple Task fire receipts"
-    );
+    if assignments.len() > 1 {
+        return Err(GoalError::RequestHasMultipleTaskFireReceipts);
+    }
     let Some(assignment) = assignments.into_iter().next() else {
         return Ok(());
     };
     if assignment.goal_id.is_none() || assignment.goal_assignment_applied {
         return Ok(());
     }
-    anyhow::ensure!(
-        assignment.session_id == request.session_id,
-        "Task receipt session differs from claimed request"
-    );
+    if assignment.session_id != request.session_id {
+        return Err(GoalError::TaskReceiptSessionDiffersClaimedRequest);
+    }
     validate_task_goal_identity_in_txn(
         txn,
         &request.node_did,
@@ -2519,7 +2845,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         assignment
             .goal_id
             .as_deref()
-            .context("Task assignment lost Goal identity")?,
+            .ok_or(GoalError::TaskAssignmentLostGoalIdentity)?,
         request.input.goal_assignment.as_ref(),
     )
     .await?;
@@ -2528,17 +2854,15 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         .as_deref()
         .map(str::trim)
         .filter(|objective| !objective.is_empty())
-        .context("Goal-backed Task has no objective")?;
-    anyhow::ensure!(
-        assignment.goal_token_budget.is_none_or(|budget| budget > 0),
-        "Task Goal budget must be positive"
-    );
+        .ok_or(GoalError::GoalBackedTaskHasNoObjective)?;
+    if !assignment.goal_token_budget.is_none_or(|budget| budget > 0) {
+        return Err(GoalError::TaskGoalBudgetMustPositive);
+    }
     let previous = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?;
     if let Some(goal) = &previous {
-        anyhow::ensure!(
-            goal.parsed_status().is_some(),
-            "existing Task Goal has an unknown status"
-        );
+        if !(goal.parsed_status().is_some()) {
+            return Err(GoalError::ExistingTaskGoalHasUnknownStatus);
+        }
         crate::trigger_engine::durable::publish_goal_outcomes(
             txn,
             &goal.node_did,
@@ -2556,7 +2880,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         .map(|goal| {
             goal.continuation_sequence()
                 .checked_add(1)
-                .context("Task Goal continuation sequence exhausted")
+                .ok_or(GoalError::TaskGoalContinuationSequenceExhausted)
         })
         .transpose()?
         .unwrap_or(0);
@@ -2574,7 +2898,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
     }
     let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id)
         .await?
-        .context("Task Goal assignment has no canonical row")?;
+        .ok_or(GoalError::TaskGoalAssignmentHasNoCanonical)?;
     let goal_doc_id = escape_graphql_string(&goal.doc_id);
     let expected_sequence = goal.continuation_sequence();
     let objective = escape_graphql_string(objective);
@@ -2607,17 +2931,17 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
     }}"#
         ))
         .await?;
-    anyhow::ensure!(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_Goal"))
-            .is_some_and(mutation_returned_rows),
-        "Task Goal assignment lost its continuation fence"
-    );
+    if !(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_Goal"))
+        .is_some_and(mutation_returned_rows))
+    {
+        return Err(GoalError::TaskGoalAssignmentLostContinuationFence);
+    }
     let updated = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id)
         .await?
-        .context("assigned Task Goal disappeared")?;
+        .ok_or(GoalError::AssignedTaskGoalDisappeared)?;
     request_head::retire_stale_assignment_continuations_in_txn(txn, &updated, None, now).await?;
     fence_opened_graph_goal_in_txn(
         txn,
@@ -2651,24 +2975,23 @@ async fn set_goal_in_txn(
     token_budget: Option<Option<i64>>,
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
-    anyhow::ensure!(
-        objective.is_none_or(|value| !value.trim().is_empty()),
-        "goal objective must be non-empty"
-    );
+    if !(objective.is_none_or(|value| !value.trim().is_empty())) {
+        return Err(GoalError::ObjectiveEmpty);
+    }
     let existing = load_canonical_goal_in_txn(txn, node_did, session_id).await?;
     let objective = objective
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .or_else(|| existing.as_ref().map(|goal| goal.objective.clone()))
-        .context("a goal objective is required")?;
+        .ok_or(GoalError::GoalObjectiveRequired)?;
     let status = status
         .or_else(|| existing.as_ref().and_then(GoalDocument::parsed_status))
         .unwrap_or(GoalStatus::Active);
     let budget =
         token_budget.unwrap_or_else(|| existing.as_ref().and_then(|goal| goal.token_budget));
     if budget.is_some_and(|value| value <= 0) {
-        bail!("goal token budget must be positive");
+        return Err(GoalError::BudgetNotPositive);
     }
     let auto_resume_field = auto_resume
         .map(|on| format!("auto_resume_at_reset: {on},"))
@@ -2679,11 +3002,10 @@ async fn set_goal_in_txn(
     if let Some(existing) = existing {
         let pre = existing
             .state()
-            .context("existing Goal has an unknown status")?;
-        anyhow::ensure!(
-            pre.status == GoalStatus::Active || status != GoalStatus::Active,
-            "reactivating an existing goal requires goal resume-request --from REQUEST_ID"
-        );
+            .ok_or(GoalError::ExistingGoalHasUnknownStatus)?;
+        if !(pre.status == GoalStatus::Active || status != GoalStatus::Active) {
+            return Err(GoalError::ReactivatingExistingGoalRequiresGoalResume);
+        }
         let post = apply_operator_status_transition(pre, status)?;
         let active_time = existing.current_active_time_seconds(now);
         let active_started_at = if post.status.accrues_active_time() {
@@ -2728,7 +3050,7 @@ async fn set_goal_in_txn(
         txn.execute(&mutation).await?;
         let updated = load_canonical_goal_in_txn(txn, node_did, session_id)
             .await?
-            .context("updated Goal row disappeared")?;
+            .ok_or(GoalError::UpdatedGoalRowDisappeared)?;
         fence_opened_graph_goal_in_txn(txn, Some(pre), &updated).await?;
         crate::trigger_engine::durable::publish_goal_outcomes(
             txn,
@@ -2797,7 +3119,7 @@ async fn set_goal_in_txn(
     txn.execute(&mutation).await?;
     let created = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
-        .context("created Goal row not found")?;
+        .ok_or(GoalError::CreatedGoalRowNotFound)?;
     fence_opened_graph_goal_in_txn(txn, None, &created).await?;
     Ok(created)
 }
@@ -2854,7 +3176,7 @@ pub async fn delete_goals_for_session(
             }}"#
                 ))
                 .await?;
-                Ok::<_, anyhow::Error>(
+                Ok::<_, GoalError>(
                     response
                         .pointer("/data/delete_Goal")
                         .map(mutation_row_count)
@@ -2910,7 +3232,7 @@ pub async fn update_goal_fields_if_status(
                 if won {
                     let updated = load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id)
                         .await?
-                        .context("updated Goal row disappeared")?;
+                        .ok_or(GoalError::UpdatedGoalRowDisappeared)?;
                     crate::trigger_engine::durable::publish_goal_outcomes(
                         txn,
                         &updated.node_did,
@@ -2941,7 +3263,7 @@ pub async fn claim_continuation(
     let expected_sequence = goal.continuation_sequence();
     let next_sequence = expected_sequence
         .checked_add(1)
-        .context("goal continuation sequence exhausted")?;
+        .ok_or(GoalError::GoalContinuationSequenceExhausted)?;
     let expected_status = escape_graphql_string(&goal.status);
     let now = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
@@ -2988,7 +3310,7 @@ pub async fn claim_retry_continuation(
     let expected_sequence = goal.continuation_sequence();
     let next_sequence = expected_sequence
         .checked_add(1)
-        .context("goal continuation sequence exhausted")?;
+        .ok_or(GoalError::GoalContinuationSequenceExhausted)?;
     let expected_status = escape_graphql_string(&goal.status);
     let now = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
@@ -3063,7 +3385,7 @@ pub(crate) async fn session_token_usage_breakdown_in_txn(
 ) -> Result<SessionTokenUsage> {
     crate::toolset::load_session_goal_usage(txn, node_did, session_id)
         .await
-        .context("summing goal inference usage")
+        .map_err(GoalError::SummingGoalInferenceUsage)
 }
 
 pub async fn refresh_goal_usage(
@@ -3086,7 +3408,7 @@ pub async fn refresh_goal_usage(
     );
     let status = goal
         .parsed_status()
-        .context("Goal usage snapshot has an unknown status")?;
+        .ok_or(GoalError::GoalUsageSnapshotHasUnknownStatus)?;
     update_goal_fields_if_status(
         node,
         goal,

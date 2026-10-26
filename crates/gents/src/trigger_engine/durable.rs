@@ -15,7 +15,7 @@ pub enum DurableTriggerError {
     #[error(transparent)]
     Config(#[from] ConfigClientError),
     #[error(transparent)]
-    Goal(#[from] crate::goal::GoalError),
+    Goal(Box<crate::goal::GoalError>),
     #[error(transparent)]
     GoalHistory(#[from] crate::goal::GoalHistoryError),
     #[error(transparent)]
@@ -64,6 +64,12 @@ pub enum DurableTriggerError {
     TaskAssignmentHasAmbiguousPhysicalGoalHistory,
     #[error("Task assignment root is reused by a different Goal identity")]
     TaskAssignmentRootIsReusedByA,
+}
+
+impl From<crate::goal::GoalError> for DurableTriggerError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
 }
 
 impl TransactionFailure for DurableTriggerError {

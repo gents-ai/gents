@@ -137,7 +137,14 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
     match result {
         Ok(request_id) => FireResult::Fired { request_id },
         Err(error) => {
-            if let Some(skip) = error.downcast_ref::<MaterializeSkip>() {
+            if let Some(skip) = error.downcast_ref::<MaterializeSkip>().or_else(|| {
+                match error.downcast_ref::<crate::graph_pipeline::GraphPipelineError>() {
+                    Some(crate::graph_pipeline::GraphPipelineError::MaterializeSkip(skip)) => {
+                        Some(skip)
+                    }
+                    _ => None,
+                }
+            }) {
                 FireResult::Skipped {
                     reason: skip.reason.clone(),
                 }

@@ -850,7 +850,8 @@ async fn run_agent_owned(
                 graph_run_owner_did,
                 graph_run_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 

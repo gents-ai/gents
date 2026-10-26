@@ -89,7 +89,7 @@ pub(crate) async fn prepare_goal_control(
                     "goal.replace_preflight",
                 )
                 .await?
-                .context("goal has no unambiguous composite revision")?;
+                .ok_or(GoalError::GoalHasNoUnambiguousCompositeRevision)?;
                 if expected.document != goal.doc_id || expected.composite != current.cid {
                     return Ok(Err(
                         "goal changed; refresh before starting another goal".into()
@@ -219,7 +219,7 @@ pub(crate) async fn prepare_goal_control(
         "goal.control_preflight",
     )
     .await?
-    .context("goal has no unambiguous composite revision")?;
+    .ok_or(GoalError::GoalHasNoUnambiguousCompositeRevision)?;
     if expected.document != goal.doc_id || expected.composite != current.cid {
         return Ok(Err(
             "goal changed; refresh before applying this control".into()
@@ -306,10 +306,9 @@ pub(crate) async fn stage_goal_control(
         | PreparedGoalControl::ResumeCurrent(goal)
         | PreparedGoalControl::ResumeIdle { goal, .. } => &goal.node_did,
     };
-    anyhow::ensure!(
-        identity.did() == node_did,
-        "goal control requires its node signing identity"
-    );
+    if identity.did() != node_did {
+        return Err(GoalError::GoalControlRequiresNodeSigningIdentity);
+    }
     let (goal_id, request_id) = match prepared {
         PreparedGoalControl::Create {
             objective,
@@ -335,10 +334,9 @@ pub(crate) async fn stage_goal_control(
                         escape_graphql_string(&prior.doc_id)
                     ))
                     .await?;
-                anyhow::ensure!(
-                    mutation_row_count(&response["data"]["delete_Goal"]) == 1,
-                    "terminal goal was not retired"
-                );
+                if mutation_row_count(&response["data"]["delete_Goal"]) != 1 {
+                    return Err(GoalError::TerminalGoalWasNotRetired);
+                }
             }
             let submitted = stage_goal_backed_request_with_identity_in_txn(
                 txn,
@@ -352,16 +350,14 @@ pub(crate) async fn stage_goal_control(
             .await?;
             let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id)
                 .await?
-                .context("new goal disappeared during creation")?;
-            anyhow::ensure!(
-                replacement
-                    .as_ref()
-                    .is_none_or(|(prior, identity)| goal.goal_id == identity.goal_id
-                        && goal.doc_id != prior.doc_id
-                        && prior.assignment_root_request_doc_id.as_deref()
-                            != Some(&submitted.doc_id)),
-                "replacement goal reused its prior identity or ancestry"
-            );
+                .ok_or(GoalError::NewGoalDisappearedDuringCreation)?;
+            if !(replacement.as_ref().is_none_or(|(prior, identity)| {
+                goal.goal_id == identity.goal_id
+                    && goal.doc_id != prior.doc_id
+                    && prior.assignment_root_request_doc_id.as_deref() != Some(&submitted.doc_id)
+            })) {
+                return Err(GoalError::ReplacementGoalReusedPriorIdentityAncestry);
+            }
             (goal.goal_id, Some(submitted.request_id))
         }
         PreparedGoalControl::Edit { goal, fields } => {
@@ -372,7 +368,7 @@ pub(crate) async fn stage_goal_control(
                 super::edit::GoalEditOrigin::Client,
             )
             .await?
-            .context("goal changed while staging its edit")?;
+            .ok_or(GoalError::GoalChangedWhileStagingEdit)?;
             (updated.goal_id, None)
         }
         operation @ (PreparedGoalControl::Pause(_) | PreparedGoalControl::Stop(_)) => {

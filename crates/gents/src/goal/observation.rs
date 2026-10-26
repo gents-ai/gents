@@ -24,11 +24,13 @@ pub(crate) async fn reconcile_goal_observations(
         let mut sessions = std::collections::BTreeSet::new();
         let mut full = full;
         for (collection, doc_id) in changed {
-            anyhow::ensure!(SOURCES.contains(collection), "unknown goal observation source");
+            if !SOURCES.contains(collection) {
+ return Err(GoalError::UnknownGoalObservationSource);
+ }
             let response = txn.execute(&format!(r#"{{ {collection}(filter: {{
                 _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{owner}" }}
             }}) {{ session_id }} }}"#, escape_graphql_string(doc_id))).await?;
-            let rows = response["data"][collection].as_array().context("goal observation source omitted rows")?;
+            let rows = response["data"][collection].as_array().ok_or(GoalError::GoalObservationSourceOmittedRows)?;
             if rows.is_empty() { full = true; }
             for row in rows {
                 if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
@@ -42,7 +44,7 @@ pub(crate) async fn reconcile_goal_observations(
         let mut scopes = Vec::new();
         if full {
             let response = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }} }}) {{ session_id requester_did }} }}"#)).await?;
-            let rows = response["data"]["AgentSession"].as_array().context("goal session sweep omitted rows")?;
+            let rows = response["data"]["AgentSession"].as_array().ok_or(GoalError::GoalSessionSweepOmittedRows)?;
             for row in rows {
                 if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
                     scopes.push((session.to_owned(), row["requester_did"].as_str().map(str::to_owned)));
@@ -70,10 +72,9 @@ pub(crate) async fn reconcile_goal_observations(
             tracing::warn!(session_id = session, %error, "session goal observation could not be projected");
         }
     }
-    anyhow::ensure!(
-        !failed,
-        "one or more session goal observations remain unresolved"
-    );
+    if failed {
+        return Err(GoalError::OneMoreSessionGoalObservationsRemain);
+    }
     Ok(())
 }
 
@@ -103,16 +104,15 @@ async fn rows_in_txn(
         response
             .pointer("/data/GoalObservation")
             .cloned()
-            .context("goal observation query omitted rows")?,
+            .ok_or(GoalError::GoalObservationQueryOmittedRows)?,
     )?;
     let rows = rows
         .into_iter()
         .filter(|row| row.session_doc_id == session.doc_id)
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "goal observation has conflicting physical documents"
-    );
+    if rows.len() > 1 {
+        return Err(GoalError::GoalObservationHasConflictingPhysicalDocuments);
+    }
     Ok(rows)
 }
 
@@ -205,7 +205,7 @@ pub fn bind_goal_input(
     let reference = match state {
         SessionGoalObservationState::NoReadableSession => None,
         SessionGoalObservationState::Unknown => {
-            anyhow::bail!("Goal state is still syncing. Refresh this chat before sending.")
+            return Err(GoalError::GoalStateStillSyncingRefreshChat)
         }
         SessionGoalObservationState::Observed(observation) => observation.goal.and_then(|goal| {
             goal.assignment_root_request_doc_id.map(|root| {
@@ -265,10 +265,9 @@ pub async fn prepare_goal_input_in_txn(
     else {
         return Ok(input);
     };
-    anyhow::ensure!(
-        session.session.agent_id == agent_id,
-        "Goal input target Agent differs from its canonical session"
-    );
+    if session.session.agent_id != agent_id {
+        return Err(GoalError::GoalInputTargetAgentDiffersCanonical);
+    }
     let reference = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
         .and_then(|goal| {
@@ -342,7 +341,7 @@ pub(crate) async fn project_session_goal(
             Some(goal) => {
                 let commit = crate::graphql::newest_document_composite_commit_in_txn(
                     txn, &goal.doc_id, "goal.project_observation",
-                ).await?.context("goal has no unambiguous composite revision")?;
+                ).await?.ok_or(GoalError::GoalHasNoUnambiguousCompositeRevision)?;
                 Some(ObservedGoal {
                     assignment_root_request_doc_id: goal.assignment_root_request_doc_id.clone(),
                     revision: GoalRevision { document: goal.doc_id.clone(), composite: commit.cid },
@@ -353,8 +352,9 @@ pub(crate) async fn project_session_goal(
         };
         let rows = rows_in_txn(txn, &session).await?;
         if let Some(row) = rows.first() {
-            anyhow::ensure!(row.requester_did == session.session.requester_did,
-                "goal observation immutable scope differs from canonical session");
+            if row.requester_did != session.session.requester_did {
+ return Err(GoalError::GoalObservationImmutableScopeDiffersCanonical);
+ }
             if let Some(previous) = verified(identity.as_ref(), &session, row).await? {
                 if previous.goal.as_ref().map(|goal| &goal.revision)
                     == goal.as_ref().map(|goal| &goal.revision)
@@ -391,7 +391,7 @@ pub(crate) async fn project_session_goal(
         let response = txn.execute_with_variables(document, &variables).await?;
         let response = defra_node::QueryResponse::success(response["data"].clone());
         crate::graphql::single_mutation_document(&response, field)?
-            .context("goal observation write omitted its document")?;
+            .ok_or(GoalError::GoalObservationWriteOmittedDocument)?;
         Ok(())
     })).await
 }

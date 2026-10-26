@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::{graphql_input_literal, graphql_string_list_literal};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -18,6 +17,8 @@ use crate::graphql::{
 };
 
 use super::runtime::GraphPipelineError;
+
+type Result<T, E = GraphPipelineError> = std::result::Result<T, E>;
 use super::{
     graph_run_terminal_decision, verify_graph_plan_digest, GraphPlan, PlannedResult,
     ResultCardinality,
@@ -291,7 +292,9 @@ async fn query_run_rows(
 async fn query_run(executor: &(impl GraphRunQuery + ?Sized), run_id: &str) -> Result<Value> {
     let found = query_run_rows(executor, run_id).await?;
     if found.len() > 1 {
-        anyhow::bail!("multiple GraphRun rows share run_id {run_id:?}");
+        return Err(GraphPipelineError::DuplicateRunRows {
+            run_id: run_id.to_owned(),
+        });
     }
     found.into_iter().next().ok_or_else(|| {
         GraphRunUnobservable::Missing {
@@ -811,10 +814,9 @@ pub(crate) async fn graph_binding_for_request_in_txn(
         .await?;
         for invocation in projection.invocations {
             if invocation.member_doc_ids.contains(parent_doc_id) {
-                anyhow::ensure!(
-                    !invocation.invalid,
-                    "cannot publish into ambiguous graph invocation ancestry"
-                );
+                if invocation.invalid {
+                    return Err(GraphPipelineError::AmbiguousInvocationAncestry);
+                }
                 bindings.push(GraphInvocationBinding {
                     run_id: required_string(run, "run_id")?.to_owned(),
                     revision_digest: digest.to_owned(),
@@ -822,10 +824,9 @@ pub(crate) async fn graph_binding_for_request_in_txn(
             }
         }
     }
-    anyhow::ensure!(
-        bindings.len() <= 1,
-        "request belongs to multiple authenticated graph invocations"
-    );
+    if bindings.len() > 1 {
+        return Err(GraphPipelineError::MultipleInvocations);
+    }
     Ok(bindings.pop())
 }
 
@@ -997,7 +998,7 @@ pub async fn reconcile_owned_graph_runs(
     let data = json!({ "data": response.data.unwrap_or(Value::Null) });
     let running = rows(&data, "GraphRun");
     if running.len() > 1_000 {
-        anyhow::bail!("running graph run sweep exceeds the bounded 1000-run limit");
+        return Err(GraphPipelineError::SweepLimit);
     }
 
     let mut terminalized = 0;
@@ -1107,7 +1108,7 @@ async fn capture_failure_in_txn(txn: &ConfigApplyTxn<'_>, view: &GraphRunView) -
     let current = query_run(txn, &view.run_id).await?;
     let input = json!({
         "error": serde_json::to_string(&primary)?,
-        "update_generation": fresh.update_generation.checked_add(1).context("graph run generation exhausted")?,
+        "update_generation": fresh.update_generation.checked_add(1).ok_or(GraphPipelineError::GenerationExhausted)?,
     });
     txn.execute(&format!(
         "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
@@ -1130,7 +1131,7 @@ async fn commit_terminal_in_txn(
     // conflicts and the canonical owner replays the complete observation.
     let fresh = load_graph_run_view_with(txn, &view.owner_did, &view.run_id).await?;
     if fresh.status != "running" || fresh.update_generation != view.update_generation {
-        anyhow::bail!("graph run terminal CAS lost; reload the durable run");
+        return Err(GraphPipelineError::TerminalCasLost);
     }
     let decision = graph_run_terminal_decision(
         &fresh.status,
@@ -1148,7 +1149,7 @@ async fn commit_terminal_in_txn(
         _ => false,
     };
     if !allowed {
-        anyhow::bail!("graph run terminal transition is not legal");
+        return Err(GraphPipelineError::TerminalTransitionIllegal);
     }
     let current = query_run(txn, &view.run_id).await?;
     let current_generation = fresh.update_generation;
@@ -1161,7 +1162,7 @@ async fn commit_terminal_in_txn(
         "status": status,
         "error": error.map(serde_json::to_string).transpose()?,
         "result_refs_json": result_refs.as_ref().map(serde_json::to_string).transpose()?,
-        "update_generation": current_generation.checked_add(1).context("graph run generation exhausted")?,
+        "update_generation": current_generation.checked_add(1).ok_or(GraphPipelineError::GenerationExhausted)?,
         "completed_at": completed_at,
     });
     let mutation = format!(
@@ -1314,7 +1315,9 @@ pub async fn request_graph_run_cancellation(
     reason: Option<&str>,
 ) -> Result<GraphRunView> {
     if reason.is_some_and(|reason| reason.len() > MAX_CANCEL_REASON_BYTES) {
-        anyhow::bail!("graph cancellation reason exceeds {MAX_CANCEL_REASON_BYTES} bytes");
+        return Err(GraphPipelineError::CancelReasonTooLong {
+            max: MAX_CANCEL_REASON_BYTES,
+        });
     }
     let before = load_graph_run_view(node, actor_did, run_id).await?;
     if before.is_terminal() {
@@ -1365,7 +1368,7 @@ async fn persist_cancellation_intent_in_txn(
         "cancel_requested_at": requested_at,
         "cancel_requested_by": actor_did,
         "cancel_reason": reason,
-        "update_generation": generation.checked_add(1).context("graph run generation exhausted")?,
+        "update_generation": generation.checked_add(1).ok_or(GraphPipelineError::GenerationExhausted)?,
     });
     txn.execute(&format!(
         "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
@@ -1401,7 +1404,9 @@ pub async fn request_graph_run_cancellation_with_access(
     reason: Option<&str>,
 ) -> Result<GraphRunView> {
     if reason.is_some_and(|reason| reason.len() > MAX_CANCEL_REASON_BYTES) {
-        anyhow::bail!("graph cancellation reason exceeds {MAX_CANCEL_REASON_BYTES} bytes");
+        return Err(GraphPipelineError::CancelReasonTooLong {
+            max: MAX_CANCEL_REASON_BYTES,
+        });
     }
     let before = load_graph_run_view_with_access(access, actor_did, run_id).await?;
     if before.is_terminal() {

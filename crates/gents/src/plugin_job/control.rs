@@ -338,10 +338,10 @@ async fn kill_in_txn(
         .await;
         match interrupted {
             Ok(()) => {}
-            Err(error) if local => return Err(error),
+            Err(error) if local => return Err(error.into()),
             Err(error) => tracing::warn!(
                 caused_request_doc_id = request.doc_id,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "peer interrupt of a killed job child was not written"
             ),
         }

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
@@ -17,7 +16,7 @@ use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use crate::Collection;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum BlockedTurnError {
+pub enum BlockedTurnError {
     #[error(transparent)]
     Config(#[from] ConfigClientError),
     #[error("request {request_id:?} not found")]
@@ -30,7 +29,21 @@ pub(crate) enum BlockedTurnError {
     InferenceCallRowsOmitted,
     #[error("decode failed InferenceCall")]
     DecodeFailedCall(#[source] serde_json::Error),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    OAuthCredential(#[from] crate::oauth_credential::OAuthCredentialError),
+    #[error(transparent)]
+    DocumentConfig(#[from] crate::document_config::DocumentConfigError),
 }
+
+impl From<crate::goal::GoalError> for BlockedTurnError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+type Result<T, E = BlockedTurnError> = std::result::Result<T, E>;
 
 impl crate::config_client::TransactionFailure for BlockedTurnError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {

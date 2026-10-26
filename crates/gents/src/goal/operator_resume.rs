@@ -46,10 +46,9 @@ async fn resume_goal_request_inner<'a>(
     from_request_id: &'a str,
     required_backend: Option<&'a str>,
 ) -> Result<GoalResumeReceipt> {
-    anyhow::ensure!(
-        identity.did() == node_did,
-        "goal resume requires the target node's signing identity"
-    );
+    if identity.did() != node_did {
+        return Err(GoalError::GoalResumeRequiresTargetNodeS);
+    }
     match access {
         crate::ConfigAccess::Local(local) => {
             let node = local.node();
@@ -119,16 +118,15 @@ async fn resume_context_in_txn(
 ) -> Result<(GoalDocument, Vec<AgentRequestRow>, AgentRequestRow)> {
     let goal = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
-        .context("no canonical goal exists for this owner and session")?;
+        .ok_or(GoalError::NoCanonicalGoalExistsOwnerSession)?;
     let requests = super::request_head::load_session_requests(txn, node_did, session_id).await?;
     let parents: Vec<_> = requests
         .iter()
         .filter(|row| row.request_id == from_request_id)
         .collect();
-    anyhow::ensure!(
-        parents.len() == 1,
-        "resume predecessor must uniquely belong to the goal owner and session"
-    );
+    if parents.len() != 1 {
+        return Err(GoalError::ResumePredecessorMustUniquelyBelongGoal);
+    }
     let parent_row = parents[0].clone();
     verify_request_receipt_signature(&parent_row)?;
     Ok((goal, requests, parent_row))
@@ -151,21 +149,25 @@ async fn existing_resume_receipt_in_txn(
         response
             .pointer("/data/AgentRequest")
             .cloned()
-            .context("receipt query omitted rows")?,
+            .ok_or(GoalError::ReceiptQueryOmittedRows)?,
     )?;
-    anyhow::ensure!(children.len() <= 1, "ambiguous goal continuation receipt");
+    if children.len() > 1 {
+        return Err(GoalError::AmbiguousGoalContinuationReceipt);
+    }
     let Some(child) = children.first() else {
         return Ok(None);
     };
     super::request_head::verify_goal_continuation_receipt(goal, parent_row, child)?;
     Ok(Some(GoalResumeReceipt {
-        goal_status: goal.parsed_status().context("goal has an unknown status")?,
+        goal_status: goal
+            .parsed_status()
+            .ok_or(GoalError::GoalHasUnknownStatus2)?,
         goal_id: goal.goal_id.clone(),
         request_id: child.request_id.clone(),
         doc_id: child
             .doc_id
             .clone()
-            .context("continuation receipt lacks document ID")?,
+            .ok_or(GoalError::ContinuationReceiptLacksDocumentID)?,
         created: false,
     }))
 }
@@ -193,16 +195,14 @@ pub async fn resume_goal_on_account(
     plugin_slots: &dyn Fn(&str) -> Result<Vec<String>>,
 ) -> Result<GoalResumeOnReceipt> {
     use crate::blocked_turn::{blocked_turn_from, stopped_request, BlockedReason, FailedCall};
-    anyhow::ensure!(
-        identity.did() == node_did,
-        "goal resume requires the target node's signing identity"
-    );
+    if identity.did() != node_did {
+        return Err(GoalError::GoalResumeRequiresTargetNodeS);
+    }
     let (accounts, references, request, call) =
         stopped_request(access, node_did, from_request_id).await?;
-    anyhow::ensure!(
-        request.session_id.as_deref() == Some(session_id),
-        "resume predecessor must uniquely belong to the goal owner and session"
-    );
+    if request.session_id.as_deref() != Some(session_id) {
+        return Err(GoalError::ResumePredecessorMustUniquelyBelongGoal);
+    }
     if let Some(resume) =
         existing_goal_resume_receipt(access, node_did, session_id, from_request_id).await?
     {
@@ -214,18 +214,15 @@ pub async fn resume_goal_on_account(
     let now = Utc::now();
     let limited = blocked_turn_from(&references, &accounts, &request, call.as_ref(), now)
         .filter(|turn| turn.reason == BlockedReason::UsageLimit)
-        .with_context(|| {
-            format!(
-                "request {from_request_id:?} did not stop on a usage limit; move its profile \
-                 with `gents config profile set-account <profile>` and resume with \
-                 `gents goal resume-request --from {from_request_id}`"
-            )
+        .ok_or_else(|| GoalError::RequestDidNotStopUsageLimit {
+            from_request_id: format!("{:?}", from_request_id),
+            from_request_id2: from_request_id.to_string(),
         })?;
     let switch = match limited.profile {
         Some(profile) => {
             let receipt = async {
                 let slots = plugin_slots(&profile)?;
-                Ok::<_, anyhow::Error>(
+                Ok::<_, GoalError>(
                     crate::config_client::switch_profile_account(
                         access,
                         node_did,
@@ -238,11 +235,8 @@ pub async fn resume_goal_on_account(
                 )
             }
             .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "switch failed; nothing changed: {}",
-                    ErrorChain(error.as_ref())
-                )
+            .map_err(|error| GoalError::SwitchFailedNothingChanged {
+                detail: ErrorChain(&error).to_string(),
             })?;
             Some(receipt)
         }
@@ -255,11 +249,7 @@ pub async fn resume_goal_on_account(
             });
             blocked_turn_from(&references, &accounts, &request, on_target.as_ref(), now)
                 .and_then(|turn| turn.profile)
-                .context(
-                    "switch failed; nothing changed: the profile that hit the limit is on \
-                     neither its account nor the target; move it with `gents config profile \
-                     set-account <profile>` and resume with `gents goal resume-request`",
-                )?;
+                .ok_or(GoalError::SwitchFailedNothingChangedProfileHit)?;
             None
         }
     };
@@ -273,17 +263,14 @@ pub async fn resume_goal_on_account(
     )
     .await
     .map_err(|error| match &switch {
-        Some(receipt) => anyhow::anyhow!(
-            "resume failed after the switch committed (profile {} is now on {}); run the \
-                 same command again with the same --from: {}",
-            receipt.profile,
-            receipt.account.label,
-            ErrorChain(error.as_ref())
-        ),
-        None => anyhow::anyhow!(
-            "resume failed; run the same command again with the same --from: {}",
-            ErrorChain(error.as_ref())
-        ),
+        Some(receipt) => GoalError::ResumeFailedAfterSwitchCommittedProfile {
+            profile: receipt.profile.to_string(),
+            label: receipt.account.label.to_string(),
+            detail: ErrorChain(&error).to_string(),
+        },
+        None => GoalError::ResumeFailedRunSameCommandAgain {
+            detail: ErrorChain(&error).to_string(),
+        },
     })?;
     Ok(GoalResumeOnReceipt { switch, resume })
 }
@@ -321,28 +308,30 @@ async fn stage_resume_inner(
             crate::document_config::ConfigReferences::load_in_txn(txn, node_did).await?;
         let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, from_request_id)
             .await?
-            .context("resume predecessor has no failed call")?;
+            .ok_or(GoalError::ResumePredecessorHasNoFailedCall)?;
         call.backend_id = Some(target_backend_id.to_owned());
         let agent_id = call.agent_id.as_deref().unwrap_or(parent.agent_id.as_str());
         let profile_id = crate::blocked_turn::served_profile(&references, agent_id, &call)
-            .context("profile that hit the limit is unavailable")?;
+            .ok_or(GoalError::ProfileHitLimitUnavailable)?;
         let Some((_, backend)) = references.profile_with_backend(&profile_id)? else {
-            anyhow::bail!("profile that hit the limit is unavailable");
+            return Err(GoalError::ProfileHitLimitUnavailable);
         };
-        anyhow::ensure!(
-            backend.backend_id == target_backend_id,
-            "profile that hit the limit is not on target backend {target_backend_id:?}"
-        );
-        anyhow::ensure!(
-            backend.enabled,
-            "target backend {target_backend_id:?} is disabled"
-        );
+        if backend.backend_id != target_backend_id {
+            return Err(GoalError::ProfileHitLimitNotTargetBackend {
+                target_backend_id: format!("{:?}", target_backend_id),
+            });
+        }
+        if !backend.enabled {
+            return Err(GoalError::TargetBackendDisabled {
+                target_backend_id: format!("{:?}", target_backend_id),
+            });
+        }
         if let crate::document_config::BackendAuth::NodeOAuth { account_ref } = &backend.auth {
             use crate::backend_provider::BackendProviderOauthExt;
             let provider = backend
                 .provider_kind
                 .oauth_provider()
-                .context("target backend has no OAuth provider")?;
+                .ok_or(GoalError::TargetBackendHasNoOAuthProvider)?;
             let account = crate::oauth_credential::resolve_oauth_credential_in_txn(
                 txn,
                 node_did,
@@ -350,35 +339,34 @@ async fn stage_resume_inner(
                 crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
             )
             .await?;
-            anyhow::ensure!(
-                account.is_some_and(|account| account.enabled),
-                "target account for backend {target_backend_id:?} is unavailable"
-            );
+            if !account.is_some_and(|account| account.enabled) {
+                return Err(GoalError::TargetAccountBackendUnavailable {
+                    target_backend_id: format!("{:?}", target_backend_id),
+                });
+            }
         }
     }
 
-    anyhow::ensure!(
-        parent_row
-            .lifecycle_state
-            .is_some_and(RequestLifecycleState::is_terminal),
-        "resume predecessor must be terminal"
-    );
-    anyhow::ensure!(
-        latest_goal_request(&goal, &requests).is_some_and(|row| row.doc_id == parent_row.doc_id),
-        "resume predecessor is no longer the latest request"
-    );
-    anyhow::ensure!(
-        goal_session_is_idle(&requests),
-        "goal session still has unfinished requests"
-    );
-    let state = goal.state().context("goal has an unknown status")?;
+    if !(parent_row
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal))
+    {
+        return Err(GoalError::ResumePredecessorMustTerminal);
+    }
+    if !(latest_goal_request(&goal, &requests).is_some_and(|row| row.doc_id == parent_row.doc_id)) {
+        return Err(GoalError::ResumePredecessorNoLongerLatestRequest);
+    }
+    if !goal_session_is_idle(&requests) {
+        return Err(GoalError::GoalSessionStillHasUnfinishedRequests);
+    }
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?;
     let post = state
         .step(GoalAction::Resume)
-        .context("goal status does not allow operator resume")?;
+        .ok_or(GoalError::GoalStatusDoesNotAllowOperator)?;
     let sequence = goal
         .continuation_sequence()
         .checked_add(1)
-        .context("goal continuation sequence exhausted")?;
+        .ok_or(GoalError::GoalContinuationSequenceExhausted)?;
     let now = Utc::now();
     let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let wrapup = post.wrapup_requested && !post.wrapup_completed;
@@ -402,7 +390,7 @@ async fn stage_resume_inner(
         parent_row
             .doc_id
             .as_deref()
-            .context("goal predecessor lacks document ID")?,
+            .ok_or(GoalError::GoalPredecessorLacksDocumentID)?,
     )
     .await?
     {
@@ -416,17 +404,17 @@ async fn stage_resume_inner(
 
     stage_resume_state(txn, &goal, post, Some((sequence, from_request_id)), now).await?;
     let response = txn
-        .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+        .execute(&create.graphql_mutation().map_err(|message| GoalError::RequestFields { message })?)
         .await?;
     let child = response
         .pointer("/data/create_AgentRequest")
         .or_else(|| response.pointer("/data/add_AgentRequest"))
-        .context("continuation create omitted result")?;
+        .ok_or(GoalError::ContinuationCreateOmittedResult)?;
     let doc_id = child
         .get("_docID")
         .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
         .and_then(serde_json::Value::as_str)
-        .context("continuation create omitted document ID")?
+        .ok_or(GoalError::ContinuationCreateOmittedDocumentID)?
         .to_owned();
     if goal.assignment_root_request_doc_id.is_none() {
         bind_goal_first_request_in_txn(txn, &goal, &doc_id, create.input.goal_assignment.as_ref())
@@ -474,12 +462,12 @@ async fn stage_resume_state(
     }}) {{ _docID }} }}"#,
         status = post.status.as_str(), audits = post.blocked_audits,
         wrapup_requested = post.wrapup_requested, wrapup_completed = post.wrapup_completed)).await?;
-    anyhow::ensure!(
-        response
-            .pointer("/data/update_Goal")
-            .is_some_and(mutation_returned_rows),
-        "goal changed while staging resume"
-    );
+    if !(response
+        .pointer("/data/update_Goal")
+        .is_some_and(mutation_returned_rows))
+    {
+        return Err(GoalError::GoalChangedWhileStagingResume);
+    }
     Ok(())
 }
 
@@ -488,18 +476,16 @@ pub(super) async fn stage_busy_resume(
     identity: &dyn NodeIdentity,
     goal: &GoalDocument,
 ) -> Result<()> {
-    anyhow::ensure!(
-        identity.did() == goal.node_did,
-        "goal resume requires its node signing identity"
-    );
-    let state = goal.state().context("goal has an unknown status")?;
-    anyhow::ensure!(
-        state.status == GoalStatus::Paused,
-        "only a paused goal can resume current work"
-    );
+    if identity.did() != goal.node_did {
+        return Err(GoalError::GoalResumeRequiresNodeSigningIdentity);
+    }
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?;
+    if state.status != GoalStatus::Paused {
+        return Err(GoalError::OnlyPausedGoalCanResumeCurrent);
+    }
     let post = state
         .step(GoalAction::Resume)
-        .context("goal status does not allow resume")?;
+        .ok_or(GoalError::GoalStatusDoesNotAllowResume)?;
     stage_resume_state(txn, goal, post, None, Utc::now()).await
 }
 

@@ -1,4 +1,3 @@
-use anyhow::Context;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use serde_json::Value;
 
@@ -8,7 +7,7 @@ use crate::graphql::escape_graphql_string;
 use crate::tool_call_lifecycle::{query, ToolCallState};
 
 #[derive(Debug, thiserror::Error)]
-enum WaitObservationError {
+pub enum WaitObservationError {
     #[error("Goal wait observation omitted {name} rows")]
     MissingRows { name: String },
     #[error("Goal wait observation omitted {field}")]
@@ -25,6 +24,49 @@ enum WaitObservationError {
     ConflictsWithTargetState,
     #[error("canonical wait_process reply has unknown outcome")]
     UnknownOutcome,
+    #[error("duplicate accepted wait_process physical binding")]
+    DuplicateAcceptedWaitProcessPhysicalBinding,
+    #[error("accepted wait_process control crossed its physical parent")]
+    AcceptedWaitProcessControlCrossedPhysical,
+    #[error("terminal Goal parent has an unsettled wait_process control")]
+    TerminalGoalParentHasUnsettledWait,
+    #[error("invalid accepted wait arguments lack canonical argument error")]
+    InvalidAcceptedWaitArgumentsLackCanonical,
+    #[error("empty wait handle cannot be a running timeout")]
+    EmptyWaitHandleCannotRunningTimeout,
+    #[error("ambiguous waited background handle")]
+    AmbiguousWaitedBackgroundHandle,
+    #[error("waited target is not an authorized background tool")]
+    WaitedTargetNotAuthorizedBackgroundTool,
+    #[error("spawned background handle conflicts with its physical parent")]
+    SpawnedBackgroundHandleConflictsPhysicalParent,
+    #[error("spawned background lacks accepted spawn_process parent")]
+    SpawnedBackgroundLacksAcceptedSpawnProcess,
+    #[error("completed wait_process lacks canonical invocation reply")]
+    CompletedWaitProcessLacksCanonicalInvocation,
+    #[error("completed wait_process lacks exact raw invocation reply")]
+    CompletedWaitProcessLacksExactRaw,
+    #[error("decode canonical invalid wait arguments result")]
+    DecodeCanonicalInvalidWaitArgumentsResult(#[source] serde_json::Error),
+    #[error("waited target has unknown lifecycle state")]
+    WaitedTargetHasUnknownLifecycleState,
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
+}
+
+impl crate::config_client::TransactionFailure for WaitObservationError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::ToolCallQuery(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 type Result<T, E = WaitObservationError> = std::result::Result<T, E>;
@@ -32,8 +74,8 @@ type Result<T, E = WaitObservationError> = std::result::Result<T, E>;
 pub(super) enum WaitEvidence {
     Absent,
     Running,
-    Invalid(anyhow::Error),
-    Unavailable(anyhow::Error),
+    Invalid(WaitObservationError),
+    Unavailable(WaitObservationError),
 }
 
 fn rows<'a>(response: &'a Value, name: &str) -> Result<&'a Vec<Value>> {
@@ -138,7 +180,7 @@ async fn observe_waits(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> anyhow::Result<bool> {
+) -> Result<bool> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let headers = crate::session::load_request_headers_in_txn(
         txn,
@@ -166,10 +208,11 @@ async fn observe_waits(
             } = block
             {
                 if name == "wait_process" {
-                    anyhow::ensure!(
-                        controls.insert(tool_call_doc_id.clone()),
-                        "duplicate accepted wait_process physical binding"
-                    );
+                    if !(controls.insert(tool_call_doc_id.clone())) {
+                        return Err(
+                            WaitObservationError::DuplicateAcceptedWaitProcessPhysicalBinding,
+                        );
+                    }
                 }
             }
         }
@@ -184,43 +227,39 @@ async fn observe_waits(
             requester_did,
         )
         .await?;
-        anyhow::ensure!(
-            accepted.request_doc_id == parent_doc_id && accepted.tool_name == "wait_process",
-            "accepted wait_process control crossed its physical parent"
-        );
-        anyhow::ensure!(
-            accepted.lifecycle_state.is_terminal(),
-            "terminal Goal parent has an unsettled wait_process control"
-        );
+        if !(accepted.request_doc_id == parent_doc_id && accepted.tool_name == "wait_process") {
+            return Err(WaitObservationError::AcceptedWaitProcessControlCrossedPhysical);
+        }
+        if !accepted.lifecycle_state.is_terminal() {
+            return Err(WaitObservationError::TerminalGoalParentHasUnsettledWait);
+        }
         if accepted.lifecycle_state != ToolCallState::Completed {
             continue;
         }
         accepted
             .result
             .as_ref()
-            .context("completed wait_process lacks canonical invocation reply")?;
+            .ok_or(WaitObservationError::CompletedWaitProcessLacksCanonicalInvocation)?;
         let result = accepted
             .raw_result
             .as_deref()
-            .context("completed wait_process lacks exact raw invocation reply")?;
+            .ok_or(WaitObservationError::CompletedWaitProcessLacksExactRaw)?;
         let args: WaitToolArgs = match serde_json::from_str(&accepted.arguments) {
             Ok(args) => args,
             Err(_) => {
                 let value: Value = serde_json::from_str(result)
-                    .context("decode canonical invalid wait arguments result")?;
-                anyhow::ensure!(
-                    valid_argument_error(&value),
-                    "invalid accepted wait arguments lack canonical argument error"
-                );
+                    .map_err(WaitObservationError::DecodeCanonicalInvalidWaitArgumentsResult)?;
+                if !valid_argument_error(&value) {
+                    return Err(WaitObservationError::InvalidAcceptedWaitArgumentsLackCanonical);
+                }
                 continue;
             }
         };
         let handle = args.tool_call_id.trim();
         if handle.is_empty() {
-            anyhow::ensure!(
-                !timed_out_running_handle(result, handle)?,
-                "empty wait handle cannot be a running timeout"
-            );
+            if timed_out_running_handle(result, handle)? {
+                return Err(WaitObservationError::EmptyWaitHandleCannotRunningTimeout);
+            }
             continue;
         }
         if !timed_out_running_handle(result, handle)? {
@@ -235,25 +274,26 @@ async fn observe_waits(
             ))
             .await?;
         let targets = rows(&targets, "AgentToolCall")?;
-        anyhow::ensure!(targets.len() <= 1, "ambiguous waited background handle");
+        if targets.len() > 1 {
+            return Err(WaitObservationError::AmbiguousWaitedBackgroundHandle);
+        }
         let Some(target) = targets.first() else {
             continue;
         };
         required(target, "_docID")?;
-        anyhow::ensure!(
-            required(target, "tool_call_id")? == handle && target["await_mode"] == "background",
-            "waited target is not an authorized background tool"
-        );
+        if !(required(target, "tool_call_id")? == handle && target["await_mode"] == "background") {
+            return Err(WaitObservationError::WaitedTargetNotAuthorizedBackgroundTool);
+        }
         let target_state = required(target, "lifecycle_state")?;
         let target_state = ToolCallState::from_persisted(target_state)
-            .context("waited target has unknown lifecycle state")?;
+            .ok_or(WaitObservationError::WaitedTargetHasUnknownLifecycleState)?;
         let spawn_parent_doc_id = required(target, "spawned_by_tool_call_doc_id")?;
-        anyhow::ensure!(
-            handle == format!("spawned:{spawn_parent_doc_id}")
-                && required(target, "tool_call_key")?
-                    == format!("{spawn_parent_doc_id}:spawned-background"),
-            "spawned background handle conflicts with its physical parent"
-        );
+        if !(handle == format!("spawned:{spawn_parent_doc_id}")
+            && required(target, "tool_call_key")?
+                == format!("{spawn_parent_doc_id}:spawned-background"))
+        {
+            return Err(WaitObservationError::SpawnedBackgroundHandleConflictsPhysicalParent);
+        }
         let spawn_parent = query::load_tool_call_read_in_txn(
             txn,
             spawn_parent_doc_id,
@@ -262,11 +302,11 @@ async fn observe_waits(
             requester_did,
         )
         .await?;
-        anyhow::ensure!(
-            spawn_parent.tool_name == "spawn_process"
-                && spawn_parent.request_doc_id == required(target, "request_doc_id")?,
-            "spawned background lacks accepted spawn_process parent"
-        );
+        if !(spawn_parent.tool_name == "spawn_process"
+            && spawn_parent.request_doc_id == required(target, "request_doc_id")?)
+        {
+            return Err(WaitObservationError::SpawnedBackgroundLacksAcceptedSpawnProcess);
+        }
         let delivery_owed = target_state.is_terminal()
             && target["status"]
                 .as_str()

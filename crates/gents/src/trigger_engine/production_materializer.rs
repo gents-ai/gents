@@ -18,7 +18,7 @@ use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
 use crate::trigger_engine::{MaterializerHandle, TriggerKind};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum MaterializerError {
+pub enum MaterializerError {
     #[error("resolving agent for task {task_id}: {reason}")]
     ResolveAgent { task_id: String, reason: String },
     #[error("agent {agent_id} has no backend binding; scheduled fires require a backend")]
@@ -489,6 +489,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 &owner,
             )
             .await
+            .map_err(anyhow::Error::from)
         })
     }
 

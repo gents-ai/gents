@@ -86,11 +86,10 @@ async fn stamp_from_workspace_owner(
         ))
         .await?;
     let workspace = crate::workspace::decode_isolated_workspace_record_response(&response)?
-        .context("isolated workspace for graph entry is missing")?;
-    anyhow::ensure!(
-        workspace.owner_node_did == owner,
-        "graph input workspace owner mismatch"
-    );
+        .ok_or(GraphPipelineError::EntryWorkspaceMissing)?;
+    if workspace.owner_node_did != owner {
+        return Err(GraphPipelineError::InputWorkspaceOwnerMismatch);
+    }
     Ok(crate::workspace::apply_workspace_lineage_stamp(
         lineage, &workspace,
     )?)
@@ -110,13 +109,12 @@ async fn load_verified_graph_context(
     target_did: &str,
 ) -> Result<Option<VerifiedGraphContext>> {
     let Some(digest) = super::super::runtime::graph_artifact_revision_digest(trigger_id) else {
-        anyhow::ensure!(
-            !super::super::runtime::graph_artifact_is_reserved(trigger_id),
-            "malformed reserved graph trigger ID"
-        );
+        if super::super::runtime::graph_artifact_is_reserved(trigger_id) {
+            return Err(GraphPipelineError::ReservedTriggerId);
+        }
         return Ok(None);
     };
-    let run_id = present(correlation).context("graph workspace requires run correlation")?;
+    let run_id = present(correlation).ok_or(GraphPipelineError::WorkspaceWithoutCorrelation)?;
     let runs = query_run_rows(executor, run_id).await?;
     if let Some(reason) = super::super::runtime::graph_publication_denial(&runs, &digest) {
         return Err(crate::trigger_engine::MaterializeSkip {
@@ -128,24 +126,21 @@ async fn load_verified_graph_context(
         .into_iter()
         .next()
         .expect("publication policy requires one run");
-    anyhow::ensure!(
-        required_string(&run, "correlation")? == run_id,
-        "graph correlation differs from durable run identity"
-    );
+    if required_string(&run, "correlation")? != run_id {
+        return Err(GraphPipelineError::CorrelationMismatch);
+    }
     let owner = required_string(&run, "owner_did")?;
-    anyhow::ensure!(
-        target_did == owner,
-        "graph request node is not its pinned owner"
-    );
+    if target_did != owner {
+        return Err(GraphPipelineError::RequestNodeNotOwner);
+    }
     let plan = load_plan(executor, &digest, owner).await?;
-    anyhow::ensure!(
-        required_string(&run, "graph_id")? == plan.graph_id,
-        "graph run differs from its pinned plan"
-    );
+    if required_string(&run, "graph_id")? != plan.graph_id {
+        return Err(GraphPipelineError::RunPlanMismatch);
+    }
     let routes = planned_trigger_nodes(&plan)?;
     let node_id = routes
         .get(trigger_id)
-        .context("graph request trigger is not a pinned route")?
+        .ok_or(GraphPipelineError::TriggerNotPinnedRoute)?
         .clone();
     Ok(Some(VerifiedGraphContext {
         run,
@@ -179,7 +174,7 @@ pub(crate) async fn derive_graph_workspace(
         .entries
         .iter()
         .find(|entry| run.get("entry_name").and_then(Value::as_str) == Some(entry.name.as_str()))
-        .context("graph run selected entry is absent from its pinned plan")?;
+        .ok_or(GraphPipelineError::GraphRunSelectedEntryAbsentPinned)?;
     let entry_route = crate::graph_pipeline::routes::entry_route_id(&digest, entry)?;
     let source = if trigger_id == entry_route {
         validate_collection_identifier(&entry.collection)?;
@@ -193,13 +188,13 @@ pub(crate) async fn derive_graph_workspace(
             ))
             .await?;
         let [seed] = rows(&response, &entry.collection) else {
-            anyhow::bail!("graph entry seed is absent or ambiguous");
+            return Err(GraphPipelineError::EntrySeedAmbiguous);
         };
-        anyhow::ensure!(
-            present(source_doc_id).is_some()
-                && seed.get("_docID").and_then(Value::as_str) == present(source_doc_id),
-            "graph entry request does not name the pinned seed observation"
-        );
+        if !(present(source_doc_id).is_some()
+            && seed.get("_docID").and_then(Value::as_str) == present(source_doc_id))
+        {
+            return Err(GraphPipelineError::EntrySeedMismatch);
+        }
         let input: Value = serde_json::from_str(required_string(&run, "input_json")?)?;
         let controller = from_input(&input)?;
         validate_tuple(&controller)?;
@@ -216,9 +211,7 @@ pub(crate) async fn derive_graph_workspace(
             .filter(|row| super::logical_invocation::authentic_root(row, owner))
             .collect::<Vec<_>>();
         let [root] = roots.as_slice() else {
-            anyhow::bail!(
-                "graph workspace requires exactly one authenticated selected-entry request"
-            );
+            return Err(GraphPipelineError::WorkspaceEntryRequest);
         };
         let lineage = from_row(root);
         lineage.require_authority_if_workspace_id()?;
@@ -255,26 +248,23 @@ pub(crate) async fn finalize_graph_workspace(
     };
     if resolution.bootstrap {
         stamp_from_workspace_owner(executor, &mut stamped, owner).await?;
-        anyhow::ensure!(
-            explicit_matches(&resolution.source, &stamped, authority),
-            "graph controller workspace input conflicts with owner stamp or destination"
-        );
+        if !explicit_matches(&resolution.source, &stamped, authority) {
+            return Err(GraphPipelineError::ControllerWorkspaceConflict);
+        }
     } else if authority.is_some() && stamped.workspace_id.is_some() {
         let inherited_seal = stamped.workspace_seal_hash.clone();
         let workspace_owner = stamped
             .workspace_owner_node_did
             .clone()
-            .context("authenticated entry lacks workspace owner scope")?;
+            .ok_or(GraphPipelineError::AuthenticatedEntryLacksWorkspaceOwnerScope)?;
         stamp_from_workspace_owner(executor, &mut stamped, &workspace_owner).await?;
-        anyhow::ensure!(
-            stamped.workspace_seal_hash == inherited_seal,
-            "current workspace stamp differs from immutable entry seal"
-        );
+        if stamped.workspace_seal_hash != inherited_seal {
+            return Err(GraphPipelineError::WorkspaceSealDrift);
+        }
     }
-    anyhow::ensure!(
-        explicit_matches(&resolution.explicit, &stamped, authority),
-        "explicit graph workspace conflicts with authenticated entry or pinned authority"
-    );
+    if !explicit_matches(&resolution.explicit, &stamped, authority) {
+        return Err(GraphPipelineError::ExplicitWorkspaceConflict);
+    }
     resolution.lineage = if authority.is_none() {
         WorkspaceLineage::default()
     } else {
@@ -339,23 +329,22 @@ pub(crate) async fn fence_root_workspace_in_txn(
     )
     .await?
     {
-        anyhow::ensure!(
-            request.session_id == session_id,
-            "signed graph session differs from resolved continuation target"
-        );
+        if request.session_id != session_id {
+            return Err(GraphPipelineError::SignedSessionMismatch);
+        }
     }
     let expected = if resolved.lineage.workspace_id.is_some() {
         resolved.lineage
     } else {
         WorkspaceLineage::default()
     };
-    anyhow::ensure!(
-        explicit.workspace_id == expected.workspace_id
-            && explicit.workspace_owner_node_did == expected.workspace_owner_node_did
-            && explicit.workspace_authority == expected.workspace_authority
-            && explicit.workspace_seal_hash == expected.workspace_seal_hash,
-        "signed graph workspace tuple differs from resolved publication evidence"
-    );
+    if !(explicit.workspace_id == expected.workspace_id
+        && explicit.workspace_owner_node_did == expected.workspace_owner_node_did
+        && explicit.workspace_authority == expected.workspace_authority
+        && explicit.workspace_seal_hash == expected.workspace_seal_hash)
+    {
+        return Err(GraphPipelineError::SignedWorkspaceMismatch);
+    }
     Ok(
         super::super::runtime::fence_observed_graph_publication_in_txn(
             txn,
@@ -467,7 +456,7 @@ pub(crate) async fn resolve_graph_session(
         .nodes
         .iter()
         .find(|node| node.node_id == verified.node_id)
-        .context("pinned firing node is absent from its graph plan")?;
+        .ok_or(GraphPipelineError::PinnedFiringNodeAbsentGraphPlan)?;
     let Some(selection) = &node.session else {
         return Ok(None);
     };
@@ -476,7 +465,7 @@ pub(crate) async fn resolve_graph_session(
         .nodes
         .iter()
         .find(|node| node.node_id == selection.continue_node_id)
-        .context("graph session target is absent from its pinned plan")?;
+        .ok_or(GraphPipelineError::GraphSessionTargetAbsentPinnedPlan)?;
     let entry_name = required_string(&verified.run, "entry_name")?;
     let entry = verified
         .plan
@@ -492,19 +481,17 @@ pub(crate) async fn resolve_graph_session(
         .filter(|(_, edge)| edge.to.node_id == target_node.node_id)
         .collect::<Vec<_>>();
     let target_route = if let Some(entry) = selected_entry {
-        anyhow::ensure!(
-            incoming.is_empty(),
-            "graph session entry target has additional routes"
-        );
+        if !incoming.is_empty() {
+            return Err(GraphPipelineError::SessionEntryExtraRoutes);
+        }
         crate::graph_pipeline::routes::entry_route_id(&verified.digest, entry)?
     } else {
         let [(index, edge)] = incoming.as_slice() else {
-            anyhow::bail!("graph session target is not singleton")
+            return Err(GraphPipelineError::SessionTargetNotSingleton);
         };
-        anyhow::ensure!(
-            edge.delivery.is_some(),
-            "graph session target is per-document fan-out"
-        );
+        if edge.delivery.is_none() {
+            return Err(GraphPipelineError::SessionTargetFanOut);
+        }
         crate::graph_pipeline::routes::edge_route_id(&verified.digest, *index, edge)?
     };
     let eligibility = SessionTargetEligibility {
@@ -557,6 +544,6 @@ pub(crate) async fn resolve_graph_session(
         })
         .collect::<Vec<_>>();
     let selected = select_graph_session(&eligibility, &context, &candidates)
-        .context("graph session continuation requires exactly one authenticated singleton root")?;
+        .ok_or(GraphPipelineError::GraphSessionContinuationRequiresExactlyOne)?;
     Ok(Some(selected.session_id))
 }

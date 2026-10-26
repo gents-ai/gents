@@ -898,6 +898,7 @@ impl GoalSource {
             ),
         )
         .await
+        .map_err(anyhow::Error::from)
     }
 
     async fn record_readiness_wait(
@@ -941,6 +942,7 @@ impl GoalSource {
             ),
         )
         .await
+        .map_err(anyhow::Error::from)
     }
 }
 

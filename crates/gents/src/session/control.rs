@@ -221,6 +221,7 @@ pub async fn resume_session(
                     &session_id,
                 )
                 .await
+                .map_err(anyhow::Error::from)
             })
         },
     )

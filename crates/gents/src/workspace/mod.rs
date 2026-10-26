@@ -48,7 +48,7 @@ pub use journal::{
 };
 pub use path_capability::{PathCapabilityError, WorkspacePathCapability};
 pub use quickstart::{provision_read_only_workspace, QuickstartError};
-pub use runtime::cleanup_workspace;
+pub use runtime::{cleanup_workspace, WorkspaceRuntimeError};
 pub(crate) use runtime::{
     integrate_on_integrator_success, materialize_workspace_binding,
     release_terminal_writer_binding, release_writer_binding, seal_on_writer_success,

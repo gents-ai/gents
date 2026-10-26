@@ -14,10 +14,9 @@ pub async fn submit_session_goal_control(
     signer: &dyn NodeIdentity,
     mut command: SessionGoalControl,
 ) -> Result<SessionGoalControlReceipt> {
-    anyhow::ensure!(
-        command.requester_did == signer.did(),
-        "goal control signer differs from its author"
-    );
+    if command.requester_did != signer.did() {
+        return Err(GoalError::GoalControlSignerDiffersAuthor);
+    }
     command.signature = signer.sign(&command.signing_payload()?).await?;
     command.validate_shape()?;
     let peer = command
@@ -65,12 +64,15 @@ pub async fn submit_session_goal_control(
                         .await
                         .unwrap_or(false)
                 {
-                    return Ok::<_, anyhow::Error>(receipt);
+                    return Ok::<_, GoalError>(receipt);
                 }
             }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
     };
-    tokio::time::timeout(std::time::Duration::from_secs(30), answered).await
-        .with_context(|| format!("Goal control {} was saved and is waiting for the runtime; its outcome is not yet confirmed.", command.command_id))?
+    tokio::time::timeout(std::time::Duration::from_secs(30), answered)
+        .await
+        .map_err(|_| GoalError::GoalControlWasSavedWaitingRuntime {
+            command_id: command.command_id.to_string(),
+        })?
 }
