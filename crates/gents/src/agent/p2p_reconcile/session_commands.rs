@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use futures::{Stream, StreamExt};
 use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -129,6 +130,39 @@ pub async fn run_session_command_reconciler(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let changes = crate::subscribe_collections(
+        &node,
+        [
+            "AgentSessionInputEdit",
+            "AgentSessionGoalControl",
+            "Goal",
+            "AgentSession",
+            "GoalObservation",
+        ],
+    )?;
+    let changes = futures::stream::unfold(changes, |mut changes| async move {
+        changes.recv().await.map(|batch| (batch, changes))
+    });
+    let interval = tokio::time::interval(super::intervals::sweep_interval());
+    let ticks = futures::stream::unfold(interval, |mut interval| async move {
+        interval.tick().await;
+        Some(((), interval))
+    });
+    futures::pin_mut!(changes, ticks);
+    run_session_command_reconciler_observing(node, identity, cancel, changes, ticks).await
+}
+
+pub(crate) async fn run_session_command_reconciler_observing<S, T>(
+    node: Arc<EmbeddedNode>,
+    identity: Arc<dyn NodeIdentity>,
+    cancel: CancellationToken,
+    mut changes: S,
+    mut ticks: T,
+) -> Result<()>
+where
+    S: Stream<Item = events::DocumentChangeBatch> + Unpin,
+    T: Stream<Item = ()> + Unpin,
+{
     let mut collections = RapidHashMap::new();
     for kind in CommandKind::ALL {
         let collection = node
@@ -143,13 +177,6 @@ pub async fn run_session_command_reconciler(
             .context("goal observation schema missing")?;
         goal_sources.insert(collection.collection_id, source);
     }
-    let watched = collections
-        .keys()
-        .chain(goal_sources.keys())
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut changes = node.subscribe_collection_changes(watched);
-    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     let mut subscription_open = true;
     let mut deferred: RapidHashMap<(CommandKind, String), DateTime<Utc>> = RapidHashMap::new();
     let mut ids = Vec::new();
@@ -232,8 +259,11 @@ pub async fn run_session_command_reconciler(
             .min()
             .map(|at| (*at - Utc::now()).to_std().unwrap_or_default());
         sweep = tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {
+            tick = ticks.next() => {
+                anyhow::ensure!(tick.is_some(), "session command sweep clock closed");
+                goal_sweep_owed = true;
                 ids.append(&mut failed);
                 Some(if subscription_open && !full_sweep_owed { Sweep::Unanswered } else { Sweep::Unverified })
             }
@@ -242,7 +272,7 @@ pub async fn run_session_command_reconciler(
                 ids.extend(deferred.iter().filter(|(_, at)| **at <= now).map(|(id, _)| id.clone()));
                 None
             }
-            event = changes.recv(), if subscription_open => match event {
+            event = changes.next(), if subscription_open => match event {
                 Some(event) => {
                     for change in event.changes {
                         if let Some(kind) = collections.get(&change.collection_id) {

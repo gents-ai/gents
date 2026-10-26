@@ -585,11 +585,11 @@ fn live_own_children(job: &StepRow) -> impl Iterator<Item = &StepChild> {
         .filter(|child| in_chain(job, child) && child.state == JobChildState::Live)
 }
 
-pub(super) fn live_count(job: &StepRow) -> usize {
+pub fn live_count(job: &StepRow) -> usize {
     live_own_children(job).count()
 }
 
-pub(super) fn terminal_count(job: &StepRow) -> usize {
+pub fn terminal_count(job: &StepRow) -> usize {
     job.children
         .iter()
         .filter(|child| in_chain(job, child) && child.state != JobChildState::Live)

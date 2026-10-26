@@ -157,8 +157,11 @@ impl futures::Stream for ObservedTicks {
         mut self: std::pin::Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<()>> {
-        self.waiting.notify_one();
-        std::pin::Pin::new(&mut self.ticks).poll_next(context)
+        let result = std::pin::Pin::new(&mut self.ticks).poll_next(context);
+        if result.is_pending() {
+            self.waiting.notify_one();
+        }
+        result
     }
 }
 
@@ -193,6 +196,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             tokio::select! {
                 result = &mut run => panic!("reconciler stopped before its first wait: {result:?}"),
                 () = waiting.notified() => {}
+                () = tokio::time::sleep(std::time::Duration::from_secs(10)) => panic!("reconciler did not reach its first wait"),
             }
             let previous = load_session_goal_observation(
                 &access,
@@ -261,6 +265,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             tokio::select! {
                 result = &mut run => panic!("reconciler stopped during durable refresh: {result:?}"),
                 () = waiting.notified() => {}
+                () = tokio::time::sleep(std::time::Duration::from_secs(10)) => panic!("reconciler did not finish its durable refresh"),
             }
             let refreshed = load_session_goal_observation(
                 &access,
