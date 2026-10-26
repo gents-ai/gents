@@ -1957,12 +1957,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await?;
     }
     client.close().await;
-    stop(&mut host)
-        .await
-        .context("stopping the fixture client host")?;
+    // Keep the replica available while the runtime drains its pending pushes.
     stop(&mut runtime)
         .await
         .context("stopping the fixture runtime")?;
+    stop(&mut host)
+        .await
+        .context("stopping the fixture client host")?;
     Ok(())
 }
 
