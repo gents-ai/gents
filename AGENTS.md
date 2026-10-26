@@ -7,81 +7,6 @@ schemas operate or expose its vocabulary. Use DefraDB's DID identity and
 document ACP for database authorization. Reuse its transaction and P2P APIs
 through the existing Gents adapters.
 
-## Configuration refactor stack
-
-[PR #1430](https://github.com/gents-ai/gents/pull/1430) is the specification:
-its description holds the decisions and deletion handoff; canonical config/protocol
-structs define the target shapes. Old runtime code is evidence of existing behavior,
-not permission to restore rejected abstractions.
-
-- Keep the spec branch focused on types. It is intentionally red; per the user,
-  do not run builds/tests or add compatibility code to make it compile here.
-- Implement in stacked PRs: Lean [#1436](https://github.com/gents-ai/gents/pull/1436),
-  then conformance [#1443](https://github.com/gents-ai/gents/pull/1443), then
-  Rust/schema/loading and packs/consumers. Each PR targets its immediate parent.
-  Keep its description current with baseline, owners, deletions and validation.
-- Trace removed concepts through writers, readers and contracts. Preserve their
-  guarantees through existing owners; delete obsolete implementations in their
-  owning layer. Do not duplicate configuration types or graph selection paths.
-- Remove historical migration steps, frozen old schemas and transition-specific
-  tests; retain useful migration infrastructure. No legacy conversions or data wipes.
-- Resolve spec conflicts in #1430 before propagating them. Validate each descendant
-  and the integrated stack; the non-buildable foundation must not merge alone.
-
-## Canonical output stack (#1571)
-
-`gents_protocol::output` and the SDL are the breaking specification; the
-[ownership table](contracts/canonical-output.md) assigns the remaining deletions.
-Keep this layer intentionally red: no builds/tests or compatibility shims.
-Stack Lean, generated conformance, then implementation/consumers, each on its
-parent. Model the new contracts before implementing transitions or projections.
-The foundation must not merge alone; validate the integrated stack before pushing
-its implementation layers.
-
-## Session-message stack (#1938)
-
-The session-message spec layer (`gents_protocol::request_admission`, the
-AgentRequest/AgentToolCall/Node SDL, `AgentTools` and
-`Proofs/Request/CausalHop.lean`) removes the privileged subagent position.
-Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
-L1 spec, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each on its
-parent. The spec layer never merges alone; validate the integrated stack
-before pushing its implementation layers.
-
-## Node/Agent rename stack (#1799)
-
-The rename spec layer (Node and Agent SDL, `gents_protocol` re-exports, the
-Engineer prompt and preset) replaces the old vocabulary in the table below.
-Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
-L0 spec, L1 Lean, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each
-on its parent. The spec layer never merges alone; validate the integrated stack
-before pushing its implementation layers.
-
-| Old | New |
-| --- | --- |
-| AgentPrincipal | Node |
-| AgentBehavior | Agent |
-| SubagentTools, SubagentTarget | AgentTools, AgentTarget |
-| setup steward | Engineer |
-
-## Foundation
-
-For changes to legal transitions, invariants, or provider input, work in this
-order:
-
-1. Update the Lean model in `crates/gents/proofs/` and keep it free of `sorry`.
-2. Update the generated or model-driven conformance tests.
-3. Make the Rust implementation satisfy the contract.
-
-Plumbing and tooling need no proof change when they preserve semantics. The
-[proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
-
-Conformance has one semantic source: the executable Lean owners. Serialize actual
-modeled inputs/actions and derive expectations through those owners; do not keep
-separate fixture constants or test-only Rust policy machines that mirror their behavior.
-Explicit regression expectations must be checked against model execution. Wire
-decoders and native adapters translate representations, not redefine policy.
-
 ## Ownership
 
 - Core is bounded to the owned agent loop and task and data management in
@@ -136,32 +61,23 @@ decoders and native adapters translate representations, not redefine policy.
   with a node-scoped `OAuthCredential` written by `gents claude-login` and
   refreshed by gents; the `claude` binary is not a dependency.
 
-## Documentation and comments
+## Foundation
 
-Sources of truth are the Lean model (`crates/gents/proofs`), the code, and the
-tests that bind them. Do not add prose documentation, design notes, status
-reports or working documents to this repository; derive them with agents when
-needed. User documentation belongs in the docs repository.
+For changes to legal transitions, invariants, or provider input, work in this
+order:
 
-Record decisions, external premises and safety reasons that cannot be derived
-from code or proofs as docstrings on the Lean definitions and theorems they
-justify. For constraints on native interfaces the model does not cover, use a
-docstring on the owning Rust or TypeScript item instead. Other code comments
-state only constraints the code and proofs cannot express (safety, ordering,
-external-system behavior); do not narrate code, restate names or record history.
+1. Update the Lean model in `crates/gents/proofs/` and keep it free of `sorry`.
+2. Update the generated or model-driven conformance tests.
+3. Make the Rust implementation satisfy the contract.
 
-Keep agent instructions (this file), CHANGELOG, license, generated references,
-machine-read manifests and maps, runtime-loaded prompt and pack markdown, and
-minimal install steps. Before deleting prose, move any non-derivable obligation
-it holds to its owner, and never remove a file a build, test or coverage check
-reads.
+Plumbing and tooling need no proof change when they preserve semantics. The
+[proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
 
-Model-facing tool text and agent prompts use progressive disclosure (#2088): a
-small tool core, then help that adds detail per resource and command, and
-errors that name the next call. Prompts hold concepts, tools hold syntax and
-recipes; nothing is repeated across layers or on every response. Model-facing
-tool results read top to bottom: the answer first, then how to proceed, then
-metadata.
+Conformance has one semantic source: the executable Lean owners. Serialize actual
+modeled inputs/actions and derive expectations through those owners; do not keep
+separate fixture constants or test-only Rust policy machines that mirror their behavior.
+Explicit regression expectations must be checked against model execution. Wire
+decoders and native adapters translate representations, not redefine policy.
 
 ## Repository rules
 
@@ -224,6 +140,94 @@ metadata.
   and fills the disk across concurrent worktrees. Run `make sweep` to delete
   stale artifacts, and remove a worktree (`git worktree remove`) once its
   branch merges.
+
+## Documentation and comments
+
+Sources of truth are the Lean model (`crates/gents/proofs`), the code, and the
+tests that bind them. Do not add prose documentation, design notes, status
+reports or working documents to this repository; derive them with agents when
+needed. User documentation belongs in the docs repository.
+
+Record decisions, external premises and safety reasons that cannot be derived
+from code or proofs as docstrings on the Lean definitions and theorems they
+justify. For constraints on native interfaces the model does not cover, use a
+docstring on the owning Rust or TypeScript item instead. Other code comments
+state only constraints the code and proofs cannot express (safety, ordering,
+external-system behavior); do not narrate code, restate names or record history.
+
+Keep agent instructions (this file), CHANGELOG, license, generated references,
+machine-read manifests and maps, runtime-loaded prompt and pack markdown, and
+minimal install steps. Before deleting prose, move any non-derivable obligation
+it holds to its owner, and never remove a file a build, test or coverage check
+reads.
+
+Model-facing tool text and agent prompts use progressive disclosure (#2088): a
+small tool core, then help that adds detail per resource and command, and
+errors that name the next call. Prompts hold concepts, tools hold syntax and
+recipes; nothing is repeated across layers or on every response. Model-facing
+tool results read top to bottom: the answer first, then how to proceed, then
+metadata.
+
+## Specification stacks
+
+### Configuration refactor stack
+
+[PR #1430](https://github.com/gents-ai/gents/pull/1430) is the specification:
+its description holds the decisions and deletion handoff; canonical config/protocol
+structs define the target shapes. Old runtime code is evidence of existing behavior,
+not permission to restore rejected abstractions.
+
+- Keep the spec branch focused on types. It is intentionally red; per the user,
+  do not run builds/tests or add compatibility code to make it compile here.
+- Implement in stacked PRs: Lean [#1436](https://github.com/gents-ai/gents/pull/1436),
+  then conformance [#1443](https://github.com/gents-ai/gents/pull/1443), then
+  Rust/schema/loading and packs/consumers. Each PR targets its immediate parent.
+  Keep its description current with baseline, owners, deletions and validation.
+- Trace removed concepts through writers, readers and contracts. Preserve their
+  guarantees through existing owners; delete obsolete implementations in their
+  owning layer. Do not duplicate configuration types or graph selection paths.
+- Remove historical migration steps, frozen old schemas and transition-specific
+  tests; retain useful migration infrastructure. No legacy conversions or data wipes.
+- Resolve spec conflicts in #1430 before propagating them. Validate each descendant
+  and the integrated stack; the non-buildable foundation must not merge alone.
+
+### Canonical output stack (#1571)
+
+`gents_protocol::output` and the SDL are the breaking specification; the
+[ownership table](contracts/canonical-output.md) assigns the remaining deletions.
+Keep this layer intentionally red: no builds/tests or compatibility shims.
+Stack Lean, generated conformance, then implementation/consumers, each on its
+parent. Model the new contracts before implementing transitions or projections.
+The foundation must not merge alone; validate the integrated stack before pushing
+its implementation layers.
+
+### Session-message stack (#1938)
+
+The session-message spec layer (`gents_protocol::request_admission`, the
+AgentRequest/AgentToolCall/Node SDL, `AgentTools` and
+`Proofs/Request/CausalHop.lean`) removes the privileged subagent position.
+Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
+L1 spec, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each on its
+parent. The spec layer never merges alone; validate the integrated stack
+before pushing its implementation layers.
+
+### Node/Agent rename stack (#1799)
+
+The rename spec layer (Node and Agent SDL, `gents_protocol` re-exports, the
+Engineer prompt and preset) replaces the old vocabulary in the table below.
+Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
+L0 spec, L1 Lean, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each
+on its parent. The spec layer never merges alone; validate the integrated stack
+before pushing its implementation layers.
+
+| Old | New |
+| --- | --- |
+| AgentPrincipal | Node |
+| AgentBehavior | Agent |
+| SubagentTools, SubagentTarget | AgentTools, AgentTarget |
+| setup steward | Engineer |
+
+## Validation
 
 Before pushing, run `cargo test -p gents`, `cargo check --workspace --all-targets`
 and `make lint` (clippy, `-D warnings`). Run `lake build` for proof changes and
