@@ -550,7 +550,7 @@ export function SessionContext({
             >
               {windowError ? "Window unavailable" : `${compactTokens(window)} window`}
             </span>
-            {!!sessionCompactionCount &&
+            {sessionCompactionCount != null &&
               ` · ${sessionCompactionCount} ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`}
           </p>
           {nextRequestSettingsChanged &&

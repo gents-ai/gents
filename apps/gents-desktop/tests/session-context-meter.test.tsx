@@ -63,11 +63,17 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-meter")).toHaveTextContent(
       "compactions unavailable",
     );
+    fireEvent.click(screen.getByTestId("context-meter"));
+    expect(screen.getByTestId("context-footer")).not.toHaveTextContent(/compaction/);
   });
 
   it("shows a queried zero session compaction count", () => {
     render(<SessionContext context={context({ sessionCompactionCount: 0 })} />);
     expect(screen.getByTestId("context-meter")).toHaveTextContent("0 compactions");
+    fireEvent.click(screen.getByTestId("context-meter"));
+    expect(screen.getByTestId("context-footer")).toHaveTextContent(
+      "500k window · 0 compactions",
+    );
   });
 
   it("keeps compact compaction status short and accessible", () => {
@@ -154,7 +160,7 @@ describe("session context meter (#1618)", () => {
       "Request settings510.1%",
     ]);
     const footer = screen.getByTestId("context-footer");
-    expect(footer).toHaveTextContent(/^1M window$/);
+    expect(footer).toHaveTextContent(/^1M window · 0 compactions$/);
     expect(within(footer).getByText("1M window")).toHaveAttribute(
       "title",
       "Model context window: 1,048,576 tokens",
@@ -396,7 +402,9 @@ describe("session context meter (#1618)", () => {
     const tick = within(bar).getByTestId("compaction-threshold");
     expect(tick).toHaveAttribute("data-position", "0.7500");
     expect(tick).toHaveClass("pointer-events-none");
-    expect(screen.getByTestId("context-footer")).toHaveTextContent(/^1M window$/);
+    expect(screen.getByTestId("context-footer")).toHaveTextContent(
+      /^1M window · 0 compactions$/,
+    );
   });
 
   it("links each segment to its legend row on hover and focus", async () => {
