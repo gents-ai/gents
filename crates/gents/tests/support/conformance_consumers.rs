@@ -91,6 +91,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_wire_targets_preserve_endpoint_and_permission_identity",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::request_assignment::scope_tests::generated_ancestry_scope_cases_use_the_lean_composition",
+            package: "gents",
+            source_path: "crates/gents/src/goal/request_assignment/scope_tests.rs",
+            module_path: "goal::request_assignment::scope_tests",
+            function: "generated_ancestry_scope_cases_use_the_lean_composition",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",
             package: "gents-protocol",
             source_path: "crates/gents-protocol/src/database_error.rs",

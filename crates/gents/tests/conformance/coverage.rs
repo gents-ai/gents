@@ -945,6 +945,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalToolContextCases".into(),
         ));
     }
+    if !snapshot.goal_request_scope_cases.is_empty() {
+        emitted.insert((
+            "goal_request_scope_cases".into(),
+            "GoalRequestScopeCases".into(),
+        ));
+    }
     if !snapshot.goal_request_ancestry_cases.is_empty() {
         emitted.insert((
             "goal_request_ancestry_cases".into(),

@@ -12,7 +12,7 @@ import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedNodeDid } from "@/hooks/useClient";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
-const MOD = IS_MAC ? "⌘" : "Ctrl+";
+export const MOD = IS_MAC ? "⌘" : "Ctrl+";
 const IN_DESKTOP = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 const DESKTOP_ONLY = new Set(["1", "2", "3", "n"]);
 const ROWS: [string, string][] = [
@@ -21,6 +21,7 @@ const ROWS: [string, string][] = [
   [`${MOD}3`, "Configuration"],
   [`${MOD}N`, "New session"],
   [`${MOD}K`, "Focus the composer"],
+  [`${MOD}↵`, "Send a follow-up the other way: steer or queue"],
   [`${IS_MAC ? "⌥⌘↑ / ⌥⌘↓" : "Ctrl+Alt+↑ / ↓"}`, "Previous / next turn"],
   [`${MOD}/`, "Show this reference"],
 ];

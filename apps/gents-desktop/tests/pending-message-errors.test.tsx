@@ -237,4 +237,54 @@ describe("pending message failed mutations and async controls", () => {
     expect(reportFailure).toHaveBeenCalledOnce();
     expect(refreshSession).toHaveBeenCalledWith("s1");
   });
+
+  it("names a failed steer as one, and says when the messages already reached the agent", async () => {
+    const stores = shellStores({
+      deployments: [deployment],
+      selection: { nodeDid: deployment.nodeDid, sessionId: "s1" },
+    });
+    writeSession(stores.session, {
+      sessionId: "s1",
+      nodeDid: deployment.nodeDid,
+      pendingQueue: [entry("a"), entry("b")],
+      foldedInputs: [],
+      latestRequestId: "earlier",
+    } as unknown as DesktopSessionSnapshot);
+    const reached = {
+      sessionId: "s1",
+      nodeDid: deployment.nodeDid,
+      pendingQueue: [],
+      foldedInputs: [{ requestId: "a" }, { requestId: "b" }],
+      latestRequestId: "earlier",
+    } as unknown as DesktopSessionSnapshot;
+    const refreshSession = vi
+      .fn()
+      .mockResolvedValueOnce(reached)
+      .mockResolvedValueOnce(null);
+    const reportFailure = vi.fn();
+    const actions = createChatActions({
+      api: {
+        steerPendingMessage: vi
+          .fn()
+          .mockRejectedValue(new Error("This message is no longer pending.")),
+      } as unknown as DesktopApiAdapter,
+      stores,
+      project: () => ({}) as ShellProjection,
+      refreshSession,
+      refreshSnapshot: vi.fn(),
+      reportFailure,
+    });
+    const request = {
+      nodeDid: deployment.nodeDid,
+      sessionId: "s1",
+      expectedRequestDocIds: ["doc-a", "doc-b"],
+      requestDocId: "doc-b",
+    };
+    await expect(actions.steerPendingMessage(request)).rejects.toThrow();
+    expect(reportFailure).toHaveBeenLastCalledWith(
+      "These messages already reached the agent",
+    );
+    await expect(actions.steerPendingMessage(request)).rejects.toThrow();
+    expect(reportFailure.mock.lastCall?.[0]).toMatch(/steer the message/);
+  });
 });

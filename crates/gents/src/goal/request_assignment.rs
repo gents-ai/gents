@@ -327,18 +327,6 @@ impl RequestAssignments {
         Ok((entry, observe_request_assignment(&self.goals, entry)))
     }
 
-    pub(crate) fn scope_for_request(
-        &self,
-        doc: &str,
-        request_id: &str,
-    ) -> anyhow::Result<RequestAssignmentScope> {
-        anyhow::ensure!(
-            self.request(doc)?.request_id == request_id,
-            "assignment request logical identity differs from its physical observation"
-        );
-        self.scope(doc)
-    }
-
     pub(crate) fn scope(&self, request_doc_id: &str) -> anyhow::Result<RequestAssignmentScope> {
         use std::sync::PoisonError;
         if let Some(scope) = self
@@ -367,6 +355,15 @@ pub(crate) async fn load_request_assignments_in_txn(
 ) -> anyhow::Result<RequestAssignments> {
     let rows = super::request_head::load_session_requests(txn, owner, session).await?;
     let versions = super::load_goal_versions_for_session(txn, owner, session).await?;
+    request_assignments(owner, session, rows, latest_assignment_goals(&versions)?)
+}
+
+fn request_assignments(
+    owner: &str,
+    session: &str,
+    rows: Vec<AgentRequestRow>,
+    goals: Vec<GoalDocument>,
+) -> anyhow::Result<RequestAssignments> {
     let by_doc = super::request_head::request_rows_by_doc(owner, session, &rows)?;
     let index = rows
         .iter()
@@ -384,10 +381,108 @@ pub(crate) async fn load_request_assignments_in_txn(
         session: session.to_owned(),
         rows,
         index,
-        goals: latest_assignment_goals(&versions)?,
+        goals,
         scopes: Default::default(),
     })
 }
+
+pub(crate) struct RequestAssignmentScopes<'a, R: crate::config_client::ConfigRead> {
+    access: &'a R,
+    requests: RequestAssignments,
+    history_loaded: bool,
+    scopes: rapidhash::RapidHashMap<String, RequestAssignmentScope>,
+}
+
+impl<R: crate::config_client::ConfigRead> RequestAssignmentScopes<'_, R> {
+    pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
+        self.requests.request(doc)
+    }
+
+    pub(crate) async fn scope(&mut self, doc: &str) -> anyhow::Result<RequestAssignmentScope> {
+        if let Some(scope) = self.scopes.get(doc) {
+            return Ok(scope.clone());
+        }
+        self.requests.request(doc)?;
+        let scope = match signed_scope(&self.requests, doc) {
+            Ok(Some(scope)) => scope,
+            _ => {
+                if !self.history_loaded {
+                    let versions = super::load_goal_versions_for_session(
+                        self.access,
+                        &self.requests.owner,
+                        &self.requests.session,
+                    )
+                    .await?;
+                    self.requests.goals = latest_assignment_goals(&versions)?;
+                    self.history_loaded = true;
+                }
+                self.requests.scope(doc)?
+            }
+        };
+        self.scopes.insert(doc.to_owned(), scope.clone());
+        Ok(scope)
+    }
+
+    pub(crate) async fn scope_for_request(
+        &mut self,
+        doc: &str,
+        request_id: &str,
+    ) -> anyhow::Result<RequestAssignmentScope> {
+        anyhow::ensure!(
+            self.requests.request(doc)?.request_id == request_id,
+            "assignment request logical identity differs from its physical observation"
+        );
+        self.scope(doc).await
+    }
+}
+
+/// A signed physical assignment determines scope independently of Goal status.
+/// Authenticate the existing continuation chain before using that reference;
+/// legacy or incomplete ancestry still requires the full historical owner.
+fn signed_scope(
+    requests: &RequestAssignments,
+    doc: &str,
+) -> anyhow::Result<Option<RequestAssignmentScope>> {
+    let by_doc = super::request_head::request_rows_by_doc(
+        &requests.owner,
+        &requests.session,
+        &requests.rows,
+    )?;
+    let current = requests.request(doc)?;
+    let entry = super::request_head::authenticated_entry(
+        &requests.owner,
+        &requests.session,
+        current,
+        &by_doc,
+        None,
+    )?;
+    if entry
+        .input
+        .as_ref()
+        .is_some_and(|input| input.goal_assignment.is_some())
+    {
+        request_assignment_scope(entry, &RequestAssignmentObservation::Unknown).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) async fn load_request_assignment_scopes<'a, R: crate::config_client::ConfigRead>(
+    access: &'a R,
+    owner: &str,
+    session: &str,
+) -> anyhow::Result<RequestAssignmentScopes<'a, R>> {
+    let rows = super::request_head::load_session_requests(access, owner, session).await?;
+    Ok(RequestAssignmentScopes {
+        access,
+        requests: request_assignments(owner, session, rows, Vec::new())?,
+        history_loaded: false,
+        scopes: Default::default(),
+    })
+}
+
+#[cfg(test)]
+mod scope_tests;
 
 #[cfg(test)]
 mod history_tests;

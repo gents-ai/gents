@@ -131,28 +131,26 @@ async fn wait_for_live_node_readiness(
 ) -> Result<NodeReadinessSummary> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let last_observation =
-            match crate::commands::status::load_live_node_readiness(
-                &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
-                node_did,
-            )
-                .await
-            {
-                Ok(row) => match project_node_readiness_summary(row.as_ref(), node_did) {
-                    ProjectedNodeReadinessSummary::Observed(summary)
-                        if fence.is_none_or(|fence| fence.matches(&summary)) =>
-                    {
-                        return Ok(summary);
-                    }
-                    ProjectedNodeReadinessSummary::Observed(summary) => format!(
-                        "waiting for post-apply runtime projection (current generation={}, default={:?})",
-                        summary.snapshot.active_generation,
-                        summary.snapshot.default_agent_id,
-                    ),
-                    ProjectedNodeReadinessSummary::Unknown(reason) => format!("{reason:?}"),
-                },
-                Err(error) => error.to_string(),
-            };
+        let last_observation = match crate::commands::status::load_live_node_readiness(
+            &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
+            node_did,
+        )
+        .await
+        {
+            Ok(row) => match project_node_readiness_summary(row.as_ref(), node_did) {
+                ProjectedNodeReadinessSummary::Observed(summary)
+                    if fence.is_none_or(|fence| fence.matches(&summary)) =>
+                {
+                    return Ok(summary);
+                }
+                ProjectedNodeReadinessSummary::Observed(summary) => format!(
+                    "waiting for post-apply runtime projection (current generation={}, default={:?})",
+                    summary.snapshot.active_generation, summary.snapshot.default_agent_id,
+                ),
+                ProjectedNodeReadinessSummary::Unknown(reason) => format!("{reason:?}"),
+            },
+            Err(error) => error.to_string(),
+        };
         if Instant::now() >= deadline {
             anyhow::bail!(
                 "runtime readiness never reached an admissible durable generation: \
@@ -777,6 +775,11 @@ async fn serve_foreground(
     let mut node_builder = crate::persistent_node_builder(&home_dir, &data_dir)
         .await?
         .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
+    if args.keychain_startup_approval {
+        drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
+    }
+    let _post_open_keychain_prompt_guard =
+        crate::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
         node_builder = node_builder
             .with_node_identity_did(node_identity_did.clone())

@@ -20,7 +20,6 @@ import {
   Plus,
   Search,
   ChevronRight,
-  SquareStack,
   X,
 } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -61,6 +60,7 @@ import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { NodeAxis } from "./NodeAxis";
 import { SessionStatus } from "./SessionStatus";
+import { StartedCount } from "./StartedCount";
 import { SessionFilters, matchesView } from "./SessionFilters";
 import { emptyFilter, hasFilter } from "@/lib/session-filter";
 import { sessionRows, type SessionRow as Row } from "@/lib/session-rows";
@@ -705,32 +705,7 @@ const SessionRow = memo(function SessionRow({
         </div>
         {/* a column of its own, so counts line up down the list */}
         <span className="flex w-9 justify-end">
-          {started > 0 && (
-            <Tooltip disableHoverablePopup>
-              <TooltipTrigger
-                render={
-                  <a
-                    href={href({
-                      name: "sessionsUnder",
-                      session: sessionKeyOf(session),
-                    })}
-                    data-testid={`sessions-under-${session.sessionId}`}
-                    aria-label={`Explore ${count}`}
-                    className="relative z-10 -mx-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground tabular-nums hover:bg-foreground/6 hover:text-foreground"
-                  />
-                }
-              >
-                <SquareStack className="size-3.5" />
-                {started}
-                {running > 0 && (
-                  <span className="absolute top-0.5 left-4 size-1.5 rounded-full bg-brand" />
-                )}
-              </TooltipTrigger>
-              <TooltipContent side="top" className="pointer-events-none">
-                Explore started sessions
-              </TooltipContent>
-            </Tooltip>
-          )}
+          <StartedCount session={session} started={started} running={running} />
         </span>
         {/* a slot that fits a resting stack of three, so the counts before it
             line up down the list */}
