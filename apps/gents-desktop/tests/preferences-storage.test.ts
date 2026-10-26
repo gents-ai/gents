@@ -146,6 +146,7 @@ describe("list views read back from storage", () => {
   it("leaves out what is not a list of strings, and keeps an empty node pick", () => {
     expect(restoreListViews({ sessionNodes: "a", mailboxNodes: ["a", 1] })).toEqual({
       sessionFilter: emptyFilter,
+      recentFilter: emptyFilter,
       sessionNodes: null,
       mailboxNodes: ["a"],
       mailboxKinds: [],

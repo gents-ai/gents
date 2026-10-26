@@ -13,7 +13,9 @@ import type { ComponentType, ReactNode } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import {
   hasFilter,
-  stateOf,
+  matchesSource,
+  matchesState,
+  passes,
   type SessionFilter,
   type SessionSource,
   type SessionState,
@@ -41,21 +43,6 @@ import {
 import { cn } from "@gents/ui/lib/utils";
 import { AgentInitials } from "./parts";
 
-const matchesState = (c: SessionSummary, state: SessionState) =>
-  stateOf(c.turnState) === state;
-
-const matchesSource = (c: SessionSummary, source: SessionSource) =>
-  source === "task"
-    ? Boolean(c.taskId || c.triggerId)
-    : source === "session"
-      ? Boolean(c.startedBy)
-      : !(c.taskId || c.triggerId || c.startedBy);
-
-const passes = (c: SessionSummary, f: SessionFilter) =>
-  (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
-  (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
-  (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
-
 export const matchesView = (
   c: SessionSummary,
   f: SessionFilter,
@@ -71,7 +58,7 @@ export type Option<V extends string> = {
   tint?: string;
 };
 
-const STATES: Option<SessionState>[] = [
+export const STATES: Option<SessionState>[] = [
   { value: "working", label: "Working", icon: Activity },
   { value: "waiting", label: "Waiting for node", icon: Clock },
   { value: "failed", label: "Failed", icon: CircleX, tint: "text-destructive" },
@@ -79,7 +66,7 @@ const STATES: Option<SessionState>[] = [
   { value: "finished", label: "Finished", icon: Circle },
 ];
 
-const SOURCES: Option<SessionSource>[] = [
+export const SOURCES: Option<SessionSource>[] = [
   { value: "person", label: "A person", icon: User },
   { value: "task", label: "A task", icon: Play },
   { value: "session", label: "Another session", icon: CornerDownRight },

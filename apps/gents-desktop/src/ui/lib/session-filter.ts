@@ -1,6 +1,8 @@
 import type { SessionState } from "./live";
 
 export { stateOf, type SessionState } from "./live";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import { stateOf } from "./live";
 import { storedStrings } from "./storage";
 
 export type SessionSource = "person" | "task" | "session";
@@ -41,3 +43,18 @@ export function restoreSessionFilter(stored: unknown): SessionFilter {
     agents: field("agents"),
   };
 }
+
+export const matchesState = (c: SessionSummary, state: SessionState) =>
+  stateOf(c.turnState) === state;
+
+export const matchesSource = (c: SessionSummary, source: SessionSource) =>
+  source === "task"
+    ? Boolean(c.taskId || c.triggerId)
+    : source === "session"
+      ? Boolean(c.startedBy)
+      : !(c.taskId || c.triggerId || c.startedBy);
+
+export const passes = (c: SessionSummary, f: SessionFilter) =>
+  (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
+  (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
+  (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));

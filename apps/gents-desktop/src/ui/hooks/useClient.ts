@@ -14,6 +14,8 @@ import {
   type NodeView,
 } from "../../hooks/fleetStore";
 import { usePinnedSessions } from "@/preferences";
+import { useListViews } from "../app/listViews";
+import { passes } from "../lib/session-filter";
 
 import { folderOf, recentFolders } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
@@ -129,10 +131,26 @@ export function useMailboxCount() {
     have their own group. */
 export function useRecentSessions(limit: number) {
   const pinned = usePinnedSessions();
+  const filter = useListViews((views) => views.recentFilter);
   return useInScope((ctx) =>
     recentInScope(defaultScope("recents"), ctx, Infinity)
-      .filter((s) => s.archivedAt === null && !pinned.includes(sessionKeyOf(s)))
+      .filter(
+        (s) =>
+          s.archivedAt === null &&
+          !pinned.includes(sessionKeyOf(s)) &&
+          passes(s, filter),
+      )
       .slice(0, limit),
+  );
+}
+
+/** Every session the recent list could show before its own filter, for the
+    filter's choices. */
+export function useRecentCandidates() {
+  return useInScope((ctx) =>
+    recentInScope(defaultScope("recents"), ctx, Infinity).filter(
+      (s) => s.archivedAt === null,
+    ),
   );
 }
 

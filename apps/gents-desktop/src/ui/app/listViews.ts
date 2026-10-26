@@ -11,6 +11,8 @@ import { browserStorage, storedStrings } from "@/lib/storage";
 
 export type ListViews = {
   sessionFilter: SessionFilter;
+  /* the side nav's recent sessions narrow on their own */
+  recentFilter: SessionFilter;
 
   sessionNodes: string[] | null;
   mailboxNodes: string[];
@@ -19,6 +21,7 @@ export type ListViews = {
 
 const initial = (): ListViews => ({
   sessionFilter: emptyFilter,
+  recentFilter: emptyFilter,
   sessionNodes: null,
   mailboxNodes: [],
   mailboxKinds: [],
@@ -31,6 +34,7 @@ export function restoreListViews(stored: unknown): ListViews {
   >;
   return {
     sessionFilter: restoreSessionFilter(saved.sessionFilter),
+    recentFilter: restoreSessionFilter(saved.recentFilter),
     sessionNodes: Array.isArray(saved.sessionNodes)
       ? storedStrings(saved.sessionNodes)
       : null,
@@ -53,6 +57,9 @@ export const listViews = {
     store.setState({ sessionFilter });
   },
 
+  setRecentFilter(recentFilter: SessionFilter) {
+    store.setState({ recentFilter });
+  },
   setSessionNodes(sessionNodes: string[] | null) {
     store.setState({ sessionNodes });
   },

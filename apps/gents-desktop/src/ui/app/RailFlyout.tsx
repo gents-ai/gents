@@ -10,6 +10,9 @@ import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
+import { RecentFilter } from "./RecentFilter";
+import { listViews, useListViews } from "./listViews";
+import { emptyFilter, hasFilter } from "@/lib/session-filter";
 import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
@@ -17,6 +20,7 @@ import {
   useNodeCount,
   useOnline,
   usePinnedSessionList,
+  useRecentCandidates,
   useRecentSessions,
   useSelectedNode,
   useSyncHealth,
@@ -73,6 +77,8 @@ export function NavPanel({
   const mailboxCount = useMailboxCount();
   const pinned = usePinnedSessionList();
   const recent = useRecentSessions(RECENT);
+  const recentCandidates = useRecentCandidates();
+  const recentFiltered = useListViews((views) => hasFilter(views.recentFilter));
   const working = useWorkingNode();
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
@@ -201,17 +207,32 @@ export function NavPanel({
           </ul>
         </>
       )}
-      {recent.length > 0 && (
+      {(recent.length > 0 || recentFiltered) && (
         <>
-          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-            Recent sessions
-          </p>
+          <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
+            <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+              Recent sessions
+            </p>
+            <RecentFilter sessions={recentCandidates} />
+          </div>
           <ScrollArea className="min-h-0">
             <ul className="px-3">
               {recent.map((c) => (
                 <SessionLink key={c.sessionId} session={c} current={currentSession} />
               ))}
             </ul>
+            {recent.length === 0 && (
+              <p className="m-0 px-5 py-1 text-xs text-muted-foreground">
+                No sessions match.{" "}
+                <button
+                  type="button"
+                  className="cursor-pointer underline hover:text-foreground"
+                  onClick={() => listViews.setRecentFilter(emptyFilter)}
+                >
+                  Clear filters
+                </button>
+              </p>
+            )}
           </ScrollArea>
           <a
             href={href({ name: "sessions" })}
