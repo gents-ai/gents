@@ -926,6 +926,24 @@ def controlCasesJson : String :=
     resultReadCases.map renderResultRead ++ resultOfferCases.map renderResultOffer ++
     stepFailureCases.map renderStepFailure)).compress
 
+/-- A newly committed spawn must be visible to every subsequent kill transaction,
+even when recovery originally observed the empty pre-step row. -/
+def commitKillCasesJson : String := Id.run do
+  let initial := pinned [] 0 0
+  let out := effects [spawn "new" targetA]
+  let .ok committed := admitStep context initial out | return "[]"
+  let variants : List (String × (Job × List (SpawnKey × Recovery.KillAction))) := [
+    ("stop", Control.kill committed .stop observation),
+    ("pause", Control.kill committed .pause observation),
+    ("deadline", RecoveryTrace.killAfterCommit context initial out .deadline observation),
+    ("engineChanged", settleStep { context with engineDigest := "replacement" } committed out observation),
+    ("notAvailable", settleStep { context with available := false } committed out observation)]
+  return (toJson (variants.map fun (cause, result) => Json.mkObj [
+    ("cause", toJson cause), ("initial", jobJson initial), ("output", outputJson out),
+    ("committed", jobJson committed), ("row_state", rowStateJson result.1.state),
+    ("kills", toJson (result.2.map fun (entry : SpawnKey × Recovery.KillAction) => Json.mkObj [
+      ("slot", toJson entry.1.slot), ("action", toJson entry.2.toContract)]))])).compress
+
 private def allKinds : List PackKind := [.documents, .assets, .plugins]
 
 private def allRecords : List PluginJob.Record :=
