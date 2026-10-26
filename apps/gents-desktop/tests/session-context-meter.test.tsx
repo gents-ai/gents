@@ -106,7 +106,7 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-footer")).toHaveTextContent("128k window");
   });
 
-  it("shows input as a share of the compaction threshold and omits history estimates", () => {
+  it("shows input as a share of the compaction threshold and omits history estimates", async () => {
     render(
       <SessionContext
         context={context({
@@ -134,6 +134,8 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-ring")).toHaveAttribute("data-share", "0.10");
     fireEvent.click(screen.getByTestId("context-meter"));
     const details = screen.getByTestId("context-details");
+    await waitFor(() => expect(details).toHaveFocus());
+    expect(screen.queryByText(/Latest assembled model input/)).toBeNull();
     expect(screen.getByTestId("context-usage")).toHaveTextContent("78.5k / 786k · 10%");
     expect(screen.getByTestId("last-context-dispatch")).toHaveTextContent(
       "No compaction needed for this model call",
@@ -548,7 +550,7 @@ describe("session context meter (#1618)", () => {
     const bar = screen.getByTestId("context-bar");
     const tick = within(bar).getByTestId("compaction-threshold");
     expect(tick).toHaveAttribute("data-position", "0.8000");
-    expect(tick.getAttribute("style")).toMatch(/calc\(4px \+ 0\.8 \* \(100% - 4px\)\)/);
+    expect(tick.getAttribute("style")).toMatch(/calc\(8px \+ 0\.8 \* \(100% - 8px\)\)/);
     expect(bar.lastElementChild?.previousElementSibling).toHaveClass("flex-1");
   });
 

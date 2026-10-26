@@ -101,7 +101,7 @@ function inputParts(input: LastRequest, details: SessionContextDetails | null) {
   return parts.filter((part) => part.tokens > 0);
 }
 
-const SEGMENT_GAP_PX = 2;
+const SEGMENT_GAP_PX = 4;
 
 function shareLabel(tokens: number, total: number) {
   return formatPercent(total > 0 ? (tokens / total) * 100 : 0);
@@ -142,7 +142,7 @@ function InputBar({
       <div
         role="img"
         aria-label={`Model input by part: ${summary || "none"}. ${window.toLocaleString()}-token context window; compaction threshold at ${threshold.toLocaleString()} tokens`}
-        className="relative flex h-2 gap-0.5"
+        className="relative flex h-3 gap-1"
         data-testid="context-bar"
       >
         {parts.map((part) => (
@@ -177,7 +177,7 @@ function InputBar({
         )}
         {threshold > 0 && (
           <span
-            className="pointer-events-none absolute inset-y-[-3px] w-0 border-l border-dashed border-foreground/70"
+            className="pointer-events-none absolute inset-y-[-4px] w-0 border-l border-dashed border-foreground/70"
             style={{
               left: `calc((100% - ${gaps}px) * ${thresholdShare} + ${gapsBeforeThreshold * SEGMENT_GAP_PX}px)`,
             }}
@@ -468,6 +468,8 @@ export function SessionContext({
       </PopoverTrigger>
       <PopoverContent
         ref={popover.popupRef}
+        /* focus the panel, not its first control: the ⓘ would open its tip */
+        initialFocus={popover.popupRef}
         aria-label="Session context details"
         align="start"
         className="max-h-[min(40rem,80dvh)] w-80 max-w-[calc(100vw-2rem)] gap-2.5 overflow-y-auto p-3"
