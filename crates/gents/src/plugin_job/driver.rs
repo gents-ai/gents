@@ -173,6 +173,9 @@ pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'st
             "Next: wait for a background completion notification, then retry".to_owned(),
         ),
         Refusal::Terminal => ("the job already ended", inspect),
+        Refusal::ResumeUnknown | Refusal::ResumeNotHead => {
+            ("the job's resume named a row that is not the newest of a run", inspect)
+        }
     }
 }
 
@@ -697,7 +700,7 @@ pub(super) async fn step_context_for(
         for spawn in &effects.spawn {
             if let Some(target) = targets
                 .iter()
-                .find(|target| target.agent_id == spawn.target)
+                .find(|target| target.target_id == spawn.target)
             {
                 if !target_hops.iter().any(|(pair, _)| pair == &key(target)) {
                     target_hops.push((key(target), 0));
@@ -729,7 +732,7 @@ pub(super) async fn step_context_for(
             Some(ids) => EndpointScope::<(String, String), ()>::only_units(
                 targets
                     .iter()
-                    .filter(|target| ids.contains(&target.agent_id))
+                    .filter(|target| ids.contains(&target.target_id))
                     .map(key),
             ),
             None => EndpointScope::none(),
@@ -745,6 +748,10 @@ pub(super) async fn step_context_for(
         installed_trusted_sources,
         max_hop: max_request_hop_in_txn(txn, &caller.node_did).await?,
         target_hops,
+        target_ids: targets
+            .iter()
+            .map(|target| (target.target_id.clone(), key(target)))
+            .collect(),
         live_background: 0,
         started_by_job: false,
         cwd_allowed,
@@ -1026,6 +1033,41 @@ impl JobDriver {
             in_flight.remove(row_doc_id);
         }
         Some(outcome)
+    }
+
+    /// Whether a step of the row is running or a hold is on it.
+    pub fn is_stepping(&self, row_doc_id: &str) -> bool {
+        self.in_flight
+            .lock()
+            .expect("in-flight rows lock")
+            .contains_key(row_doc_id)
+    }
+
+    /// Runs `f` while no step of the row runs or can start, or returns `None`
+    /// when one is in flight. A wake during `f` steps the row afterwards.
+    pub async fn hold_steps<T>(
+        &self,
+        row_doc_id: &str,
+        f: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        {
+            let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
+            if in_flight.contains_key(row_doc_id) {
+                return None;
+            }
+            in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+        }
+        let out = f.await;
+        let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
+        if in_flight.get(row_doc_id).is_some_and(|dirty| dirty.0) {
+            in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+            let driver = self.this.upgrade().expect("a driver is held by its Arc");
+            let row_doc_id = row_doc_id.to_owned();
+            tokio::spawn(async move { driver.drive(&row_doc_id).await });
+        } else {
+            in_flight.remove(row_doc_id);
+        }
+        Some(out)
     }
 
     /// Steps the row until no wake or retry is left.
@@ -2142,7 +2184,7 @@ pub(crate) mod tests {
     }
 
     async fn stepper_wat(wat: &str) -> Stepper {
-        let settings = step_settings(&["a", "b"]);
+        let settings = step_settings(&["t-a", "t-b"]);
         let mut job = new_job(Some(&settings), None).await;
         write_inference(&job).await;
         for agent in ["a", "b"] {
@@ -2435,12 +2477,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn narrowed_live_ceiling_is_reread_inside_the_step_transaction() {
         let step = stepper(json!({"effects": {"spawn": [{
-            "slot": "slot-a", "attempt": 0, "target": "a", "prompt": "audit", "title": "Alpha"
+            "slot": "slot-a", "attempt": 0, "target": "t-a", "prompt": "audit", "title": "Alpha"
         }]}}))
         .await;
         let (input, revision) = step.input(&step.row).await;
-        assert_eq!(input.ceiling.targets, ["a", "b"]);
-        write_step_tools(&step.job, Some(&step_settings(&["b"]))).await;
+        assert_eq!(input.ceiling.targets, ["t-a", "t-b"]);
+        write_step_tools(&step.job, Some(&step_settings(&["t-b"]))).await;
         assert_eq!(
             step.step_from(&step.row, input, revision).await,
             StepOutcome::Refused(Refusal::PolicyDenied)

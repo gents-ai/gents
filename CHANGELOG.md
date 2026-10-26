@@ -150,6 +150,34 @@ source consistency checks, not a separate runtime compatibility version.
   dependencies are refused with the command that installs them directly. The
   scenario manifest key `graph_dependency_environment` is now
   `dependency_environment`; the old key is still accepted.
+- A workflow job resume that names no job row now fails with
+  `plugin_job_resume_unknown`, and one that names a row a later resume already
+  continued fails with `plugin_job_resume_not_head` and names the newest row's
+  address as the next call, instead of `plugin_job_policy_denied`. Refusals the
+  job policy makes keep `plugin_job_policy_denied`.
+- A workflow engine's `jobs[]` input lists the session's runs oldest first and
+  carries each row's `adopted_at` and the `resume_of` row it continued, so
+  resuming a run by its handle reaches its newest row.
+- The plugin job recovery sweep no longer fails a just resumed workflow run as
+  `plugin_job_stalled` before its first step runs; a run at rest with nothing
+  live re-drives that step, and only a run that stalled after a step is ended.
+- A plugin job's spawns, its `job.agent_targets` and its
+  `policy.dynamic_targets` now name AgentTargets by their `target_id`, as the
+  protocol and `gents pack wire --targets-from` already did; a workflow whose
+  targets have a `target_id` different from their `agent_id` (such as
+  code_review's) was refused `plugin_job_policy_denied` before any child
+  started.
+- The plugin job recovery sweep no longer fails a healthy workflow run as
+  `plugin_job_stalled` while one of its steps is in flight; it decides a kill
+  on facts re-read while no step of the run can start.
+- A workflow child spawned with a relative `cwd` now starts in that folder
+  under the run's working folder, the path its admission checked, instead of
+  failing `request admission denied: resolve invocation cwd`.
+- `gents pack scenario run` reads timelines and projections as the served
+  home, so `expect.projections` no longer fail with `timeline query omitted
+  required AgentRequest row array` on a node whose access control denies
+  anonymous reads. `gents trace` now says when a read returned no data because
+  the node probably denied it.
 
 ## 0.21.0-rc0 - 2026-10-17
 

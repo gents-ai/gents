@@ -96,6 +96,10 @@ pub struct StepContext {
     pub installed_trusted_sources: Vec<String>,
     pub max_hop: Option<u32>,
     pub target_hops: Vec<((String, String), u32)>,
+    /// The host's resolution of the AgentTarget ids the caller can see to
+    /// Lean's `(target_node_did, agent_id)` targets; the protocol, ceilings and
+    /// `dynamic_targets` name targets by these ids.
+    pub target_ids: Vec<(String, (String, String))>,
     pub live_background: u32,
     pub started_by_job: bool,
     pub cwd_allowed: Vec<String>,
@@ -121,6 +125,8 @@ pub enum Refusal {
     TimedOut,
     StepFailed,
     BackgroundBudgetExceeded,
+    ResumeUnknown,
+    ResumeNotHead,
 }
 
 impl Refusal {
@@ -136,6 +142,8 @@ impl Refusal {
             Self::TimedOut => Some("plugin_job_timed_out"),
             Self::StepFailed => Some("plugin_job_step_failed"),
             Self::BackgroundBudgetExceeded => Some("background_tool_budget_exceeded"),
+            Self::ResumeUnknown => Some("plugin_job_resume_unknown"),
+            Self::ResumeNotHead => Some("plugin_job_resume_not_head"),
         }
     }
 }
@@ -278,7 +286,7 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
         return Err(Refusal::PolicyDenied);
     }
     if !resume_admitted(ctx, out) {
-        return Err(Refusal::PolicyDenied);
+        return Err(resume_refusal(ctx, out));
     }
     let Some(pin) = step_pin(ctx, job, out) else {
         if ctx.policy.dynamic == DynamicMode::Off && runs_dynamic_code(ctx, &job.call) {
@@ -330,7 +338,7 @@ fn empty_ceiling() -> JobCeiling {
     }
 }
 
-/// Lean `Ceiling.meet`; a target list permits the agent ids it lists.
+/// Lean `Ceiling.meet`; a target list permits the AgentTarget ids it lists.
 pub(super) fn meet(a: &JobCeiling, b: &JobCeiling) -> JobCeiling {
     JobCeiling {
         targets: a
@@ -365,22 +373,28 @@ pub(super) fn out_resume(out: &JobStepOutput) -> Option<&JobResume> {
     }
 }
 
-/// The protocol carries a target as its agent id; the first `target_hops`
-/// pair with that id is the target.
-fn resolve_target<'a>(ctx: &'a StepContext, agent_id: &str) -> Option<&'a (String, String)> {
-    ctx.target_hops
+pub(super) fn resolve_target<'a>(
+    ctx: &'a StepContext,
+    target_id: &str,
+) -> Option<&'a (String, String)> {
+    ctx.target_ids
         .iter()
-        .map(|(pair, _)| pair)
-        .find(|pair| pair.1 == agent_id)
+        .find(|(id, _)| id == target_id)
+        .map(|(_, pair)| pair)
+}
+
+/// An id list permits a target when one of its ids resolves to it.
+fn ids_permit(ctx: &StepContext, ids: &[String], pair: &(String, String)) -> bool {
+    ctx.target_ids
+        .iter()
+        .any(|(id, resolved)| resolved == pair && ids.contains(id))
 }
 
 fn effective_targets_permit(ctx: &StepContext, pin: &JobPin, pair: &(String, String)) -> bool {
-    meet(&ctx.live, &pin.ceiling_at_pin)
-        .targets
-        .contains(&pair.1)
+    ids_permit(ctx, &meet(&ctx.live, &pin.ceiling_at_pin).targets, pair)
         && ctx.job_targets.permits(pair)
         && ctx.caller_targets.permits(pair)
-        && (pin.origin != JobOrigin::Dynamic || ctx.policy.dynamic_targets.contains(&pair.1))
+        && (pin.origin != JobOrigin::Dynamic || ids_permit(ctx, &ctx.policy.dynamic_targets, pair))
 }
 
 fn step_pin(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Option<JobPin> {
@@ -458,6 +472,30 @@ fn resume_listed<'a>(
         .iter()
         .find(|(id, _, _)| id == doc_id)
         .map(|(_, head, target)| (*head, target.as_ref()))
+}
+
+/// Lean `resumeRefusal`.
+fn resume_refusal(ctx: &StepContext, out: &JobStepOutput) -> Refusal {
+    let (Some(resume), Some(_)) = (out_resume(out), out_pin(out)) else {
+        return Refusal::PolicyDenied;
+    };
+    match resume_listed(ctx, &resume.row_doc_id) {
+        None | Some((_, None)) => Refusal::ResumeUnknown,
+        Some((head, Some((owner, same_plugin, _, _)))) => {
+            if *same_plugin
+                && !head
+                && ctx.caller_scope.authorizes(
+                    &owner.session_id,
+                    &owner.node_did,
+                    owner.requester_did.as_deref(),
+                )
+            {
+                Refusal::ResumeNotHead
+            } else {
+                Refusal::PolicyDenied
+            }
+        }
+    }
 }
 
 /// Lean `resumeAdmitted`.
@@ -914,6 +952,7 @@ mod tests {
             installed_trusted_sources: vec!["source".to_owned()],
             max_hop: Some(8),
             target_hops: vec![(pair("a"), 0), (pair("b"), 0)],
+            target_ids: vec![("a".to_owned(), pair("a")), ("b".to_owned(), pair("b"))],
             live_background: 0,
             started_by_job: false,
             cwd_allowed: Vec::new(),
@@ -1188,7 +1227,7 @@ mod tests {
         assert_eq!(code(&ctx, &job, &out), DENIED);
 
         let ctx = StepContext {
-            target_hops: vec![(pair("b"), 0)],
+            target_ids: vec![("b".to_owned(), pair("b"))],
             ..base_context()
         };
         assert_eq!(code(&ctx, &job, &out), DENIED);
@@ -1655,9 +1694,11 @@ mod tests {
 
         let (mut ctx, job, out, _, _) = valid_resume();
         ctx.resume_targets.clear();
-        assert_eq!(code(&ctx, &job, &out), DENIED);
+        assert_eq!(code(&ctx, &job, &out), Some("plugin_job_resume_unknown"));
         let (mut ctx, job, out, _, _) = valid_resume();
         ctx.resume_targets[0].1 = false;
+        assert_eq!(code(&ctx, &job, &out), Some("plugin_job_resume_not_head"));
+        ctx.caller_scope.session_id = "other-session".into();
         assert_eq!(code(&ctx, &job, &out), DENIED);
         let (mut ctx, job, out, prior, mut root) = valid_resume();
         root.pin = None;

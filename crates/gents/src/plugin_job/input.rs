@@ -609,10 +609,14 @@ async fn session_jobs(
                 tool_call_id: row.tool_call_id,
                 handle: pin.handle,
                 state,
+                adopted_at: pin.adopted_at,
+                resume_of: pin.resume_of,
             })
         })
         .collect();
-    jobs.sort_by(|left, right| left.row_doc_id.cmp(&right.row_doc_id));
+    jobs.sort_by(|left, right| {
+        (left.adopted_at, &left.row_doc_id).cmp(&(right.adopted_at, &right.row_doc_id))
+    });
     Ok(jobs)
 }
 
@@ -1734,6 +1738,17 @@ pub(crate) mod tests {
         }
 
         pub(crate) async fn write_progress(&self, row: &str, state: JobState, spawned: u32) {
+            self.write_progress_observed(row, state, spawned, 0).await;
+        }
+
+        /// [`Self::write_progress`] with `observed` terminal children observed.
+        pub(crate) async fn write_progress_observed(
+            &self,
+            row: &str,
+            state: JobState,
+            spawned: u32,
+            observed: u32,
+        ) {
             ConfigAccess::transact_local_write(&self.node, None, "test.input.progress", |txn| {
                 Box::pin(async move {
                     let guest = JobProgress {
@@ -1761,7 +1776,7 @@ pub(crate) mod tests {
                             spent: spawned,
                             remaining: 4 - spawned,
                         },
-                        observed_terminal_children: 0,
+                        observed_terminal_children: observed,
                         state,
                         pause_reason: None,
                     };
@@ -1996,11 +2011,58 @@ pub(crate) mod tests {
                 tool_call_id: job.call_ids[row].clone(),
                 handle: format!("handle-{row}"),
                 state,
+                adopted_at: fixture_job_pin().adopted_at,
+                resume_of: None,
             })
             .collect();
         expected.sort_by(|a, b| a.row_doc_id.cmp(&b.row_doc_id));
         assert_eq!(input.jobs, expected);
         assert!(input.jobs.iter().all(|view| view.row_doc_id != unpinned));
+        job.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn jobs_list_oldest_first_with_the_row_each_resumed() {
+        let live = live_settings(JobPolicy::default());
+        let mut job = new_job(Some(&live), None).await;
+        let mut rows = Vec::new();
+        for call in ["call-1", "call-2", "call-3"] {
+            rows.push(job.row("workflow", call, json!({"argv": ["run"]})).await);
+        }
+        rows.sort();
+        // Adopted in the reverse of doc id order; the middle row resumed the oldest.
+        let (newest, middle, oldest) = (&rows[0], &rows[1], &rows[2]);
+        for (row, adopted_at, resume_of) in [
+            (oldest, 1_000, None),
+            (middle, 2_000, Some(oldest.as_str())),
+            (newest, 3_000, None),
+        ] {
+            let pin = JobPin {
+                adopted_at,
+                ..job.pin(row, resume_of)
+            };
+            job.write_pin(row, &pin).await;
+        }
+        let (input, _) = job.later(newest).await.unwrap();
+        let listed: Vec<(&str, u64, Option<&str>)> = input
+            .jobs
+            .iter()
+            .map(|view| {
+                (
+                    view.row_doc_id.as_str(),
+                    view.adopted_at,
+                    view.resume_of.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (oldest.as_str(), 1_000, None),
+                (middle.as_str(), 2_000, Some(oldest.as_str())),
+                (newest.as_str(), 3_000, None),
+            ]
+        );
         job.node.shutdown().await;
     }
 
@@ -2163,6 +2225,8 @@ pub(crate) mod tests {
                 tool_call_id: "c".into(),
                 handle: "h".into(),
                 state: JobState::Running,
+                adopted_at: 1,
+                resume_of: None,
             }],
         };
         let output = JobStepOutput::Result {
