@@ -304,4 +304,31 @@ def startupReadinessCases : List StartupReadinessCase :=
 def startupReadinessCasesJson : String :=
   jsonArray (startupReadinessCases.map startupReadinessCaseJson)
 
+def snapshotDemotionCaseJson (name : String) (unavailable : Finset AgentId)
+    (demotions : List AgentId) : String :=
+  let pre : ResolvedSnapshot :=
+    { defaultAgent := 1, runnable := {1, 2}, unavailable := unavailable,
+      dependenciesSatisfied := {1, 2} }
+  let post := demotions.foldl ResolvedSnapshot.demote pre
+  let ids := fun (values : Finset AgentId) => jsonArray ((values.sort (· ≤ ·)).map toString)
+  "{\"witness\":" ++ jsonString name ++
+    ",\"default_agent\":" ++ toString pre.defaultAgent ++
+    ",\"runnable\":" ++ ids pre.runnable ++
+    ",\"unavailable\":" ++ ids pre.unavailable ++
+    ",\"demotions\":" ++ jsonArray (demotions.map toString) ++
+    ",\"post_runnable\":" ++ ids post.runnable ++
+    ",\"post_unavailable\":" ++ ids post.unavailable ++
+    ",\"post_default_agent\":" ++ toString post.defaultAgent ++
+    ",\"well_formed\":" ++ boolString (decide post.wellFormed) ++ "}"
+
+def snapshotDemotionCasesJson : String :=
+  jsonArray [
+    snapshotDemotionCaseJson "snapshot_demotion.no_failures" {} [],
+    snapshotDemotionCaseJson "snapshot_demotion.other_agent" {} [2],
+    snapshotDemotionCaseJson "snapshot_demotion.default_agent" {} [1],
+    snapshotDemotionCaseJson "snapshot_demotion.all_agents" {} [1, 2],
+    snapshotDemotionCaseJson "snapshot_demotion.repeated_failure" {} [2, 2],
+    snapshotDemotionCaseJson "snapshot_demotion.retains_prior_unavailability" {3} [2]
+  ]
+
 end Conformance.Contracts

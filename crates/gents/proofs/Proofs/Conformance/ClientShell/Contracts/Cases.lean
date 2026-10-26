@@ -171,23 +171,24 @@ def frontendWorkflowFromProjection
     (ctx : SubmitContext)
     (activeRequest : Option RequestId) : FrontendWorkflowContract :=
   let chat := projectChat state store ctx
+  let kind := interruptPhaseName (ClientShell.InterruptControl.phaseOf state.workflow chat.sendDecision)
   match state.workflow with
   | .submitting _ sid =>
-      { kind := "submittingRequest"
+      { kind := kind
       , sessionId := sid
       , requestId := none
       , turnState := none
       , reason := none
       }
   | .awaiting sid req =>
-      { kind := "awaitingObservation"
+      { kind := kind
       , sessionId := some sid
       , requestId := some req
       , turnState := none
       , reason := none
       }
   | .blocked reason =>
-      { kind := "blocked"
+      { kind := kind
       , sessionId := none
       , requestId := none
       , turnState := none
@@ -196,21 +197,21 @@ def frontendWorkflowFromProjection
   | .idle =>
       match chat.sendDecision with
       | .ready =>
-          { kind := "ready"
+          { kind := kind
           , sessionId := none
           , requestId := none
           , turnState := none
           , reason := none
           }
       | .queue turn =>
-          { kind := "turnInProgress"
+          { kind := kind
           , sessionId := state.selection.session
           , requestId := activeRequest
           , turnState := some (clientTurnStateName turn)
           , reason := none
           }
       | .blocked reason =>
-          { kind := "blocked"
+          { kind := kind
           , sessionId := none
           , requestId := none
           , turnState := none

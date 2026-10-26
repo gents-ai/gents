@@ -9,6 +9,7 @@ use crate::lean_vocab_test::{
     lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
     lean_terminal_diagnostic_presentation_cases, lean_terminal_diagnostic_replay_cases,
 };
+use crate::lean_vocab_test::{lean_plugin_reference_cases, lean_snapshot_demotion_cases};
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
@@ -191,7 +192,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 49);
+    assert_eq!(lean_recovery_sweep_cases().len(), 53);
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
@@ -1866,6 +1867,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "codex_shim_binding_cases".to_string(),
             "CodexShimBindingCases".to_string(),
+        ));
+    }
+    if !lean_plugin_reference_cases().is_empty() {
+        emitted.insert((
+            "plugin_reference_cases".to_string(),
+            "PluginReferenceCases".to_string(),
+        ));
+    }
+    if !lean_snapshot_demotion_cases().is_empty() {
+        emitted.insert((
+            "snapshot_demotion_cases".to_string(),
+            "SnapshotDemotionCases".to_string(),
         ));
     }
     if !lean_startup_readiness_cases().is_empty() {

@@ -1254,6 +1254,7 @@ impl PackInstaller {
                 .map(|d| &d.0.archive)
                 .collect::<Vec<_>>(),
             crate::pack::InstalledVia::SelfConfig,
+            self.home.as_deref(),
             &environment,
         )
         .await?;

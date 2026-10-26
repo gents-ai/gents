@@ -1,7 +1,12 @@
+import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import {
   isTerminalTurnState,
   type RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+
+export function interruptVisible(kind: ChatWorkflowState["kind"]): boolean {
+  return kind === "awaitingObservation" || kind === "turnInProgress";
+}
 
 export function interruptTarget({
   trackedRequestId,

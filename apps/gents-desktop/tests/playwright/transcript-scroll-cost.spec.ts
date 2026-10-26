@@ -106,10 +106,21 @@ async function scrollCost(viewport: Locator): Promise<Cost> {
 
 async function loadEveryPage(page: Page) {
   await page.getByTestId("transcript-panel").hover();
-  for (let i = 0; i < 40; i += 1) {
-    await page.mouse.wheel(0, -1500);
-    await page.waitForTimeout(150);
-  }
+  const expected = await page.evaluate(
+    () => window.__GENTS_MOBILE_PERFORMANCE__!.fixture.largeSessionTimelineItems,
+  );
+  await expect
+    .poll(
+      async () => {
+        const loaded = await scroller(page)
+          .locator("[data-transcript-list]")
+          .getAttribute("data-rows");
+        if (Number(loaded) < expected) await page.mouse.wheel(0, -1500);
+        return Number(loaded);
+      },
+      { timeout: 30_000, intervals: [150] },
+    )
+    .toBeGreaterThanOrEqual(expected);
   await page.waitForTimeout(600);
   await expect
     .poll(() =>

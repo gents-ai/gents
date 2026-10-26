@@ -43,8 +43,13 @@ def validGrant (input : Input) : Bool :=
 def effectiveMode (input : Input) : Mode :=
   if input.configuredWorkspace = input.current.workspace then input.mode else .ask
 
+/-- Strict Ask requires a fresh decision for each governed action, including
+routine actions and previously remembered invocations. Automatic review alone
+may reuse routine classification or a revision-bound grant; neither mode can
+exceed the configured ceiling. -/
 def route (input : Input) : Route :=
   if !input.ceilingAllows then .deny
+  else if effectiveMode input = .ask then .ask
   else if !input.crossesBoundary || validGrant input then .allow
   else match effectiveMode input with
     | .ask => .ask
@@ -69,9 +74,14 @@ def reviewedRoute (input : Input) (review : Review) (grant : Grant) : Route :=
 theorem ceiling_is_preserved (input : Input) (h : input.ceilingAllows = false) :
     route input = .deny := by simp [route, h]
 
+theorem strict_ask_requires_a_person (input : Input)
+    (h : input.ceilingAllows = true) (mode : effectiveMode input = .ask) :
+    route input = .ask := by simp [route, h, mode]
+
 theorem routine_actions_do_not_prompt (input : Input)
-    (h : input.ceilingAllows = true) (boundary : input.crossesBoundary = false) :
-    route input = .allow := by simp [route, h, boundary]
+    (h : input.ceilingAllows = true) (mode : effectiveMode input ≠ .ask)
+    (boundary : input.crossesBoundary = false) :
+    route input = .allow := by simp [route, h, mode, boundary]
 
 theorem another_workspace_cannot_inherit_full_access (input : Input)
     (different : input.configuredWorkspace ≠ input.current.workspace) :

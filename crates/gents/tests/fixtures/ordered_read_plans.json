@@ -146,19 +146,6 @@
   },
   {
     "read": {
-      "path": "crates/gents-desktop-bridge/src/snapshot/session/request_context.rs",
-      "collection": "InferenceCall",
-      "arguments": "filter: { request_doc_id: { _in: [$GENTS_request_doc_ids$] }, node_did: { _eq: \"$GENTS_node_did$\" }, call_kind: { _eq: \"inference\" } }, order: { queued_at: DESC }, limit: 10"
-    },
-    "bindings": [
-      {
-        "request_doc_ids": "\"probe\"",
-        "node_did": "probe"
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents-desktop-bridge/src/tauri_commands/operations.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { backend_id: { _eq: \"$GENTS_escaped_id$\" } }, order: { queued_at: DESC }, limit: $GENTS_limit$"
@@ -695,6 +682,27 @@
   {
     "read": {
       "path": "crates/gents/src/toolset/session_history.rs",
+      "collection": "AgentRequest",
+      "arguments": "filter: {$GENTS_filter$}, order: {_docID: ASC}, limit: $GENTS_limit$"
+    },
+    "bindings": [
+      {
+        "filter": "@public-session",
+        "limit": "128"
+      },
+      {
+        "filter": "@public-session-absent",
+        "limit": "128"
+      },
+      {
+        "filter": "purpose: {_eq: \"normal\"}, node_did: {_eq: \"probe\"}, session_id: {_eq: \"probe\"}, requester_did: {_eq: null}, _docID: {_gt: \"0000000000000000000000000000000000000000\"}",
+        "limit": "128"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/toolset/session_history.rs",
       "collection": "AgentSession",
       "arguments": "filter: {node_did: {_eq: \"$GENTS_0$\"}}, order: [{created_at: DESC},{session_id: DESC}], limit: $GENTS_limit$"
     },
@@ -720,16 +728,47 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/discovery.rs",
-      "collection": "AgentMessage",
-      "arguments": "filter: {$GENTS_0$,session_id: {_eq: $GENTS_1$}$GENTS_bounds$},order: {sequence: ASC},limit: $GENTS_2$"
+      "path": "crates/gents/src/toolset/session_history/context_calls.rs",
+      "collection": "InferenceCall",
+      "arguments": "filter: { _and: [ {node_did: {_eq: \"$GENTS_0$\"}}, {call_kind: {_eq: \"inference\"}}, {session_id: {_eq: \"$GENTS_1$\"}} $GENTS_cursor_filter$ ] }, order: [{queued_at: DESC}, {call_seq: DESC}, {call_id: DESC}, {_docID: DESC}], limit: $GENTS_CONTEXT_CALL_LIMIT$"
     },
     "bindings": [
       {
-        "0": "@session",
-        "1": "\"probe\"",
-        "bounds": ", sequence: {_lt: 100}",
-        "2": "100"
+        "0": "probe",
+        "1": "probe",
+        "cursor_filter": "",
+        "CONTEXT_CALL_LIMIT": "10"
+      },
+      {
+        "0": "probe",
+        "1": "probe",
+        "cursor_filter": ", {_or: [{_and: [{_or: [{queued_at: {_lt: \"2026-10-01T00:00:00Z\"}}, {queued_at: {_eq: null}}]}]},{_and: [{queued_at: {_eq: \"2026-10-01T00:00:00Z\"}}, {_or: [{call_seq: {_lt: 1}}, {call_seq: {_eq: null}}]}]},{_and: [{queued_at: {_eq: \"2026-10-01T00:00:00Z\"}}, {call_seq: {_eq: 1}}, {_or: [{call_id: {_lt: \"probe\"}}, {call_id: {_eq: null}}]}]},{_and: [{queued_at: {_eq: \"2026-10-01T00:00:00Z\"}}, {call_seq: {_eq: 1}}, {call_id: {_eq: \"probe\"}}, {_docID: {_lt: \"0000000000000000000000000000000000000000\"}}]}]}",
+        "CONTEXT_CALL_LIMIT": "10"
+      },
+      {
+        "0": "probe",
+        "1": "probe",
+        "cursor_filter": ", {_or: [{_and: [{queued_at: {_eq: null}}, {call_seq: {_eq: null}}, {_or: [{call_id: {_lt: \"probe\"}}, {call_id: {_eq: null}}]}]}, {_and: [{queued_at: {_eq: null}}, {call_seq: {_eq: null}}, {call_id: {_eq: \"probe\"}}, {_docID: {_lt: \"0000000000000000000000000000000000000000\"}}]}]}",
+        "CONTEXT_CALL_LIMIT": "10"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/toolset/session_history/context_calls.rs",
+      "collection": "InferenceCall",
+      "arguments": "filter: {$GENTS_legacy$, request_doc_id: {_in: [$GENTS_ids$]}}, order: [{queued_at: DESC}, {call_seq: DESC}, {call_id: DESC}, {_docID: DESC}], limit: $GENTS_CONTEXT_CALL_LIMIT$"
+    },
+    "bindings": [
+      {
+        "legacy": "node_did: {_eq: \"probe\"}, call_kind: {_eq: \"inference\"}, _or: [{session_id: {_eq: null}}, {session_id: {_eq: \"\"}}]",
+        "ids": "\"probe\"",
+        "CONTEXT_CALL_LIMIT": "10"
+      },
+      {
+        "legacy": "node_did: {_eq: \"probe\"}, call_kind: {_eq: \"inference\"}, _or: [{session_id: {_eq: null}}, {session_id: {_eq: \"\"}}], queued_at: {_ge: \"2026-10-01T00:00:00Z\"}",
+        "ids": "\"probe\", \"other\"",
+        "CONTEXT_CALL_LIMIT": "10"
       }
     ]
   },
@@ -745,6 +784,21 @@
         "1": "\"probe\"",
         "bound": ", sequence: {_gt: 100}",
         "SEARCH_MESSAGE_PAGE": "100"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/toolset/session_history/discovery.rs",
+      "collection": "AgentMessage",
+      "arguments": "filter: {$GENTS_0$,session_id: {_eq: $GENTS_1$}$GENTS_bounds$},order: {sequence: ASC},limit: $GENTS_2$"
+    },
+    "bindings": [
+      {
+        "0": "@session",
+        "1": "\"probe\"",
+        "bounds": ", sequence: {_lt: 100}",
+        "2": "100"
       }
     ]
   },

@@ -60,7 +60,7 @@ impl DefraSessionHook {
             Ok(context) => context,
             Err(error) => {
                 let result = super::helpers::json_string(
-                    json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error}")}),
+                    json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error:#}")}),
                 );
                 return self
                     .complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
@@ -156,7 +156,7 @@ impl DefraSessionHook {
             .await;
             match context {
                 Err(error) => super::helpers::json_string(
-                    json!({"error": format!("Goal caller attribution unavailable: {error}")}),
+                    json!({"error": format!("Goal caller attribution unavailable: {error:#}")}),
                 ),
                 Ok(context) => {
                     let read_only = !context.can_write();
@@ -250,7 +250,7 @@ impl DefraSessionHook {
             Ok(context) => context,
             Err(error) => {
                 let result = super::helpers::json_string(
-                    json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error}")}),
+                    json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error:#}")}),
                 );
                 return self
                     .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
