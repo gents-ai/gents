@@ -40,7 +40,11 @@ pub fn native_binary(name: &str) -> Result<PathBuf> {
 
 impl Attachment {
     pub async fn start(paths: &DesktopPaths) -> Self {
-        let mut child = Command::new(native_binary("gents-client-host").unwrap())
+        Self::start_with_binary(paths, &native_binary("gents-client-host").unwrap()).await
+    }
+
+    pub async fn start_with_binary(paths: &DesktopPaths, binary: &Path) -> Self {
+        let mut child = Command::new(binary)
             .arg("--stdio")
             .arg("--home")
             .arg(paths.root())

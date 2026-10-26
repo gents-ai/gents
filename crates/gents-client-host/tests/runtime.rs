@@ -56,6 +56,9 @@ mod initialization;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
+#[cfg(unix)]
+#[path = "support/retained_schema_upgrade.rs"]
+mod retained_schema_upgrade;
 #[path = "support/runtime_replacement.rs"]
 mod runtime_replacement;
 #[path = "support/speech.rs"]
@@ -550,6 +553,13 @@ async fn editor_observes_related_worker_failure_without_losing_completed_work_or
             .join("\n")
         })?;
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires GENTS_PREVIOUS_CLIENT_HOST with the packaged RC predecessor"]
+async fn retained_client_schema_upgrades_from_a_packaged_predecessor() -> Result<()> {
+    retained_schema_upgrade::exercise().await
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
