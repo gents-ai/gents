@@ -9,13 +9,17 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
+import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import {
   ChevronsDownUp,
   ChevronsUpDown,
   CornerDownRight,
+  Archive,
+  Ellipsis,
   Lock,
   MessageSquare,
+  Pin,
   Play,
   Plus,
   Search,
@@ -72,7 +76,10 @@ import {
 } from "./SessionRowMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { listViews, useListViews } from "@/app/listViews";
+import { useApp } from "@/app/AppContext";
+import { usePinnedSessions } from "@/preferences";
 import { NO_SESSIONS, useFleet } from "../hooks/useFleet";
+import { RenameField } from "./SessionHeader";
 
 /* a session, and after an open group that leaves some out, the way to all
    of them */
@@ -87,15 +94,19 @@ const NONE_FRESH: ReadonlySet<string> = new Set();
 /* where an opened row's status sits: each depth one step in */
 const STEP = 24;
 const titleOf = (session: SessionSummary) => session.title ?? "Untitled";
+const isArchived = (session: SessionSummary) => session.archivedAt !== null;
 
 export function SessionsScreen({
   nodeDid,
   under,
+  archived = false,
   entry,
 }: {
   nodeDid?: string;
   /** the session whose started sessions the list shows */
   under?: string;
+  /** list the archived sessions instead of the rest */
+  archived?: boolean;
   /** the history entry showing the list, which keeps the rows opened on it */
   entry?: object;
 }) {
@@ -126,14 +137,30 @@ export function SessionsScreen({
     shownNodeIds.length !== defaultNodeIds.length ||
     shownNodeIds.some((id) => !defaultNodeIds.includes(id));
   const scope: Scope = { nodes: nodeIds.length ? nodeIds : "all", agents: [] };
-  const inScope = useInScope((ctx) => sessionsInScope(scope, ctx));
+  const scoped = useInScope((ctx) => sessionsInScope(scope, ctx));
+  /* archived sessions leave the list for their own; the runtime still
+     lists them */
+  const inScope = useMemo(
+    () =>
+      archived
+        ? scoped.filter(isArchived)
+        : scoped.some(isArchived)
+          ? scoped.filter((c) => !isArchived(c))
+          : scoped,
+    [scoped, archived],
+  );
   const nodeCounts = useFleet(
     useShallow((s) =>
       Object.fromEntries(
-        s.nodeKeys.map((key) => [key, s.sessionsOf[key]?.length ?? 0]),
+        s.nodeKeys.map((key) => [
+          key,
+          s.sessionsOf[key]?.filter((c) => !isArchived(c)).length ?? 0,
+        ]),
       ),
     ),
   );
+  const pinnedKeys = usePinnedSessions();
+  const pinned = useMemo(() => new Set(pinnedKeys), [pinnedKeys]);
   const parents = useFleet((s) => s.parentOf);
   const workers = useFleet((s) => s.workersOf);
   const parentOf = useCallback(
@@ -169,8 +196,9 @@ export function SessionsScreen({
         under: under ?? null,
         matches: filtering ? (c) => matchesView(c, filter, query) : null,
         isOpen: (key) => opened.keys.has(key),
+        pinned,
       }),
-    [inScope, listedParents, under, filter, query, filtering, opened.keys],
+    [inScope, listedParents, under, filter, query, filtering, opened.keys, pinned],
   );
   const level = trail[trail.length - 1] ?? null;
   const listed = useMemo(
@@ -178,7 +206,8 @@ export function SessionsScreen({
     [inScope],
   );
 
-  const narrowed = filtering || Object.values(nodeCounts).some((count) => count > 0);
+  const narrowed =
+    filtering || (!archived && Object.values(nodeCounts).some((count) => count > 0));
   const pickedNames = nodesPicked
     ? nodes
         .filter((n) => nodeIds.includes(nodeDidOf(n)))
@@ -200,7 +229,18 @@ export function SessionsScreen({
       <div className="@container">
         <div className="mx-auto max-w-page px-6 py-6">
           <div className="flex h-10 items-center gap-2">
-            {trail.length === 0 ? (
+            {archived ? (
+              <h1 className="flex items-center gap-1.5 font-heading text-lg font-medium text-heading">
+                <a
+                  href={href({ name: "sessions" })}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  Sessions
+                </a>
+                <ChevronRight className="size-4 text-muted-foreground" />
+                Archived
+              </h1>
+            ) : trail.length === 0 ? (
               <h1 className="font-heading text-lg font-medium text-heading">
                 Sessions
               </h1>
@@ -236,6 +276,38 @@ export function SessionsScreen({
               >
                 <Search />
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="More session views"
+                      className="shrink-0"
+                    />
+                  }
+                >
+                  <Ellipsis />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      render={
+                        <a
+                          href={href(
+                            archived
+                              ? { name: "sessions" }
+                              : { name: "sessionsArchived" },
+                          )}
+                        />
+                      }
+                    >
+                      <Archive />
+                      {archived ? "View sessions" : "View archived"}
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button
                 variant="brand"
                 size="sm"
@@ -309,6 +381,7 @@ export function SessionsScreen({
           </div>
           <SessionList
             rows={rows}
+            archived={archived}
             level={level}
             narrowed={narrowed}
             scroller={scroller}
@@ -398,6 +471,7 @@ function SessionTrail({ trail }: { trail: readonly SessionSummary[] }) {
 
 function SessionList({
   rows,
+  archived,
   level,
   narrowed,
   scroller,
@@ -407,6 +481,7 @@ function SessionList({
   workers,
 }: {
   rows: Row[];
+  archived: boolean;
   level: SessionSummary | null;
   narrowed: boolean;
   scroller: HTMLElement | null;
@@ -562,17 +637,22 @@ function SessionList({
           />
         );
       })}
+      {empty && archived && !narrowed && (
+        <li className="py-8 text-center text-sm text-muted-foreground">
+          No archived sessions.
+        </li>
+      )}
       {empty && narrowed && (
         <li className="py-8 text-center text-sm text-muted-foreground">
           No sessions match.
         </li>
       )}
-      {empty && !narrowed && level && (
+      {empty && !archived && !narrowed && level && (
         <li className="py-8 text-center text-sm text-muted-foreground">
           No sessions under this one.
         </li>
       )}
-      {empty && !narrowed && !level && (
+      {empty && !archived && !narrowed && !level && (
         <li className="grid min-h-[50vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
           <div className="text-center">
             <MessageSquare className="mx-auto size-6 text-muted-foreground" />
@@ -615,6 +695,9 @@ const SessionRow = memo(function SessionRow({
   workers: readonly SessionSummary[];
 }) {
   const { session, path, depth, started, running, open } = row;
+  const { actions } = useApp();
+  const [renaming, setRenaming] = useState(false);
+  const startRename = useCallback(() => setRenaming(true), []);
   const condensed = depth > 0;
   const count =
     `${started} started session${started === 1 ? "" : "s"}` +
@@ -629,6 +712,7 @@ const SessionRow = memo(function SessionRow({
         row={row}
         starter={starter}
         onToggle={onToggle}
+        onRename={startRename}
         trigger={
           /* the title's link covers the row, so the count can be a link of
              its own; what has its own pointer behaviour sits above it */
@@ -652,7 +736,7 @@ const SessionRow = memo(function SessionRow({
       >
         <SessionStatus turnState={session.turnState} />
         <div className="min-w-0">
-          <p className="flex min-w-0 items-center gap-1.5 text-sm">
+          <div className="flex min-w-0 items-center gap-1.5 text-sm">
             {!parent && session.taskId && (
               <Play
                 className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
@@ -683,20 +767,47 @@ const SessionRow = memo(function SessionRow({
                 <title>{session.unreadableReason}</title>
               </Lock>
             )}
-            <a
-              href={href({
-                name: "session",
-                sessionId: session.sessionId,
-              })}
-              data-testid={`session-${session.sessionId}`}
-              className={cn(
-                "truncate outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring",
-                (condensed || session.unreadableReason) && "text-muted-foreground",
-              )}
-            >
-              {titleOf(session)}
-            </a>
-          </p>
+            {renaming ? (
+              <span className="min-w-0 flex-1">
+                <RenameField
+                  title={titleOf(session)}
+                  onRename={async (title) => {
+                    await actions.renameSession(
+                      session.sessionId,
+                      title,
+                      session.nodeDid,
+                    );
+                    toast("Renamed");
+                  }}
+                  onDone={() => setRenaming(false)}
+                  className="-my-1 h-7 w-full text-sm"
+                />
+              </span>
+            ) : (
+              <a
+                href={href({
+                  name: "session",
+                  sessionId: session.sessionId,
+                })}
+                data-testid={`session-${session.sessionId}`}
+                className={cn(
+                  "truncate outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring",
+                  (condensed || session.unreadableReason) && "text-muted-foreground",
+                )}
+              >
+                {titleOf(session)}
+              </a>
+            )}
+            {row.pinned && !renaming && (
+              <Pin
+                className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
+                role="img"
+                aria-label="Pinned"
+              >
+                <title>Pinned</title>
+              </Pin>
+            )}
+          </div>
           {path && path.length > 0 && (
             <p className="truncate text-xs text-muted-foreground">
               in {path.map(titleOf).join(" › ")}
@@ -732,6 +843,7 @@ const SessionRow = memo(function SessionRow({
         row={row}
         starter={starter}
         onToggle={onToggle}
+        onRename={startRename}
         className="absolute top-1/2 -right-1.5 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100 [@media(hover:none)]:opacity-100"
       />
       {/* its tooltip goes as soon as the pointer leaves the toggle, so it

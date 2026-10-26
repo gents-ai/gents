@@ -32,6 +32,7 @@ import { useParentWork } from "../parentWork";
 import { SessionContext } from "../SessionContextMeter";
 import { StartedSessionsButton } from "../StartedSessionsButton";
 import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
+import { DROPDOWN_MENU, SessionItems, useRenameFromMenu } from "../SessionMenu";
 import { SessionLoading } from "../SessionLoading";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
 import { sentTurnKey } from "../stream-reveal";
@@ -103,6 +104,8 @@ export function OpenSession() {
     listedSession(s, deployment?.nodeDid, session?.sessionId),
   );
   const sessionNode = useFleet((s) => nodeOf(s, session?.nodeDid));
+  const [renaming, setRenaming] = useState(false);
+  const rename = useRenameFromMenu(session ? () => setRenaming(true) : null);
 
   const stoppableRequestId = interruptTarget({
     trackedRequestId: activeRequestId,
@@ -184,6 +187,8 @@ export function OpenSession() {
                           await renameSession(session.sessionId, title);
                           toast("Renamed");
                         }}
+                        editing={renaming && condensed}
+                        onEditingChange={setRenaming}
                       />
                     ) : (
                       <h1 className="font-heading text-sm font-medium text-heading">
@@ -218,7 +223,15 @@ export function OpenSession() {
                   </div>
                 )}
                 <Slot area={SESSION_HEADER_ACTIONS_AREA} />
-                <PanelMenu routeName="session" />
+                <PanelMenu routeName="session" finalFocus={rename.finalFocus}>
+                  {summary && (
+                    <SessionItems
+                      session={summary}
+                      onRename={rename.onRename}
+                      {...DROPDOWN_MENU}
+                    />
+                  )}
+                </PanelMenu>
               </PaneBar>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -230,6 +243,8 @@ export function OpenSession() {
                         await renameSession(session.sessionId, title);
                         toast("Renamed");
                       }}
+                      editing={renaming && !condensed}
+                      onEditingChange={setRenaming}
                     />
                   ) : (
                     <h1 className="font-heading text-lg font-medium text-heading">

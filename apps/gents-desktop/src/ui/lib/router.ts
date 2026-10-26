@@ -15,10 +15,13 @@ export type Route =
   | ShellRoute
   | { name: "plugin"; pluginId: string }
   /* the sessions one session started, a level down the sessions list */
-  | { name: "sessionsUnder"; session: string };
+  | { name: "sessionsUnder"; session: string }
+  /* the sessions archived out of the list */
+  | { name: "sessionsArchived" };
 
 export function pathFor(route: Route): string {
   if (route.name === "plugin") return `/plugins/${encodeURIComponent(route.pluginId)}`;
+  if (route.name === "sessionsArchived") return "/sessions/archived";
   if (route.name === "sessionsUnder") {
     return `/sessions/under/${encodeURIComponent(route.session)}`;
   }
@@ -29,6 +32,9 @@ export function parseRoute(path: string): Route {
   const parts = path.replace(/^#\/?/, "").replace(/^\//, "").split("/").filter(Boolean);
   if (parts[0] === "plugins" && parts[1]) {
     return { name: "plugin", pluginId: decodeURIComponent(parts[1]) };
+  }
+  if (parts[0] === "sessions" && parts[1] === "archived") {
+    return { name: "sessionsArchived" };
   }
   if (parts[0] === "sessions" && parts[1] === "under" && parts[2]) {
     return { name: "sessionsUnder", session: decodeURIComponent(parts[2]) };

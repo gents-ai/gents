@@ -160,6 +160,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
         active={
           route.name === "sessions" ||
           route.name === "sessionsUnder" ||
+          route.name === "sessionsArchived" ||
           (route.name === "session" && route.sessionId !== null)
         }
       >

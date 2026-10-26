@@ -2,7 +2,7 @@ import { useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
 
-import { browserStorage } from "./lib/storage";
+import { browserStorage, storedStrings } from "./lib/storage";
 import { applyTheme, systemTheme, type ThemePreference } from "./theme";
 import { ZOOM_STEPS } from "./lib/zoom";
 
@@ -23,6 +23,8 @@ export type Preferences = {
   zoom: number;
   sentTurn: SentTurnPlacement;
   followUp: FollowUp;
+  /** sessions kept at the head of the sessions list, by session key */
+  pinnedSessions: string[];
 };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
@@ -33,6 +35,7 @@ const initial = (): Preferences => ({
   zoom: 1,
   sentTurn: "anchor",
   followUp: "steer",
+  pinnedSessions: [],
 });
 
 export function restorePreferences(
@@ -61,6 +64,9 @@ export function restorePreferences(
       saved.followUp === "steer" || saved.followUp === "queue"
         ? saved.followUp
         : defaults.followUp,
+    pinnedSessions: Array.isArray(saved.pinnedSessions)
+      ? storedStrings(saved.pinnedSessions)
+      : defaults.pinnedSessions,
   };
 }
 
@@ -89,6 +95,10 @@ export const preferences = {
   },
   setFollowUp(followUp: FollowUp) {
     store.setState({ followUp });
+  },
+  setPinned(sessionKey: string, pinned: boolean) {
+    const rest = store.getState().pinnedSessions.filter((key) => key !== sessionKey);
+    store.setState({ pinnedSessions: pinned ? [...rest, sessionKey] : rest });
   },
 };
 
@@ -120,5 +130,6 @@ export const useNavMode = () => usePreferences((p) => p.nav);
 export const zoomLevel = () => store.getState().zoom;
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
+export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);
 
 export const resetPreferences = () => store.setState(initial(), true);
