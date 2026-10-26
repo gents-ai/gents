@@ -12,10 +12,12 @@ export type DraftAttachment = {
 export type DraftStore = StoreApi<{
   drafts: Record<string, string>;
   attachments: Record<string, DraftAttachment[]>;
+  /** the draft whose composer takes focus once it next accepts input */
+  focus: string | null;
 }>;
 
 export function createDraftStore(): DraftStore {
-  return createStore(() => ({ drafts: {}, attachments: {} }));
+  return createStore(() => ({ drafts: {}, attachments: {}, focus: null }));
 }
 
 export function writeDraft(
@@ -32,6 +34,10 @@ export function writeDraft(
     else delete drafts[key];
     return { drafts };
   });
+}
+
+export function focusDraft(store: DraftStore, key: string | null) {
+  if (store.getState().focus !== key) store.setState({ focus: key });
 }
 
 export function useDraft(
