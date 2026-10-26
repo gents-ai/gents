@@ -11,6 +11,9 @@ use tokio::sync::Semaphore;
 
 pub const PROMPT: &str = "Start the two related-work fixtures.";
 pub const REPLY: &str = "Both related sessions are running.";
+pub const ACTIVITY_PROMPT: &str = "Run the command-output activity profile.";
+pub const ACTIVITY_REPLY: &str = "The twelve command-output fixtures completed.";
+const ACTIVITY_COMMANDS: usize = 12;
 const WORKERS: [(&str, &str); 2] = [
     ("Inspect layout", "RELATED_LAYOUT_WORK"),
     ("Check history", "RELATED_HISTORY_WORK"),
@@ -19,12 +22,14 @@ const WORKERS: [(&str, &str); 2] = [
 pub struct Provider {
     gates: [Arc<Semaphore>; 2],
     fail_history: bool,
+    profile_commands: bool,
 }
 impl Provider {
-    pub fn new(fail_history: bool) -> Self {
+    pub fn new(fail_history: bool, profile_commands: bool) -> Self {
         Self {
             gates: std::array::from_fn(|_| Arc::new(Semaphore::new(0))),
             fail_history,
+            profile_commands,
         }
     }
     pub fn reply(&self, request: &Value) -> Option<ChatAction> {
@@ -43,6 +48,37 @@ impl Provider {
                     }
             })
         };
+        if self.profile_commands && has_user(ACTIVITY_PROMPT) {
+            for index in 0..ACTIVITY_COMMANDS {
+                let call = format!("activity-command-{index}");
+                if !messages
+                    .iter()
+                    .any(|message| message["role"] == "tool" && message["tool_call_id"] == call)
+                {
+                    let payload = "command-output-".repeat(64);
+                    let begin = if index == 0 {
+                        "printf 'ACTIVITY-0:ready\\n'; while [ ! -f activity-profile-continue ]; do sleep 0.05; done; "
+                    } else {
+                        ""
+                    };
+                    let end = if index == 0 {
+                        "; while [ ! -f activity-profile-finish ]; do sleep 0.05; done"
+                    } else {
+                        ""
+                    };
+                    let script = format!("{begin}i=0; while [ \"$i\" -lt 8 ]; do printf 'ACTIVITY-{index}:%s:%s\\n' \"$i\" '{payload}'; sleep 0.1; i=$((i+1)); done{end}");
+                    return Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
+                        &call,
+                        "bash",
+                        &json!({"command":"/bin/sh", "args":["-c", script], "timeout_secs":60})
+                            .to_string(),
+                    )));
+                }
+            }
+            return Some(ChatAction::Sse(fake_llm::completion_text_sse(
+                ACTIVITY_REPLY,
+            )));
+        }
         for (index, (_, prompt)) in WORKERS.iter().enumerate() {
             if has_user(prompt) {
                 if index == 1 && self.fail_history {
@@ -120,6 +156,7 @@ pub async fn verify(
     author: &str,
     root: &Path,
     fail_history: bool,
+    profile_commands: bool,
 ) -> Result<Value> {
     use anyhow::ensure;
     use gents::graphql::escape_graphql_string as escape;
@@ -195,6 +232,56 @@ pub async fn verify(
             "two starts reused one session"
         );
     }
+    let mut activity = Value::Null;
+    if profile_commands {
+        let requests: Vec<_> = rows
+            .iter()
+            .filter(|row| row.content.as_deref() == Some(ACTIVITY_PROMPT))
+            .collect();
+        let [request] = requests.as_slice() else {
+            anyhow::bail!("the command profile must be admitted exactly once");
+        };
+        gents::verify_request_receipt_signature(request)?;
+        ensure!(
+            request.session_id.as_deref() == Some(session)
+                && request.lifecycle_state
+                    == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed),
+            "the command profile did not complete in the parent session"
+        );
+        let document = request
+            .doc_id
+            .as_deref()
+            .context("activity request document")?;
+        let response = access.execute(&format!(
+            "{{ AgentToolCall(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, request_doc_id: {{_eq: \"{}\"}}}}) {{ _docID tool_call_id tool_name lifecycle_state terminal_output }} }}",
+            escape(node), escape(session), escape(document)
+        )).await?;
+        let calls = response["data"]["AgentToolCall"]
+            .as_array()
+            .context("activity tool records")?;
+        ensure!(
+            calls.len() == ACTIVITY_COMMANDS,
+            "the profile must retain all twelve command records"
+        );
+        let mut ids = rapidhash::RapidHashSet::default();
+        for call in calls {
+            let id = call["tool_call_id"]
+                .as_str()
+                .context("activity call identity")?;
+            ensure!(
+                (0..ACTIVITY_COMMANDS).any(|index| id == format!("activity-command-{index}"))
+                    && ids.insert(id),
+                "command profile reused or lost an invocation"
+            );
+            ensure!(
+                call["tool_name"] == "bash"
+                    && call["lifecycle_state"] == "completed"
+                    && !call["terminal_output"].is_null(),
+                "command profile failed to retain completed output: {call}"
+            );
+        }
+        activity = json!({"requestDocument":document,"completedCommands":calls.len(),"terminalOutputsRetained":true});
+    }
     let ui: Value =
         serde_json::from_slice(&std::fs::read(root.join("editor-related-work-ui.json"))?)?;
     ensure!(
@@ -206,7 +293,13 @@ pub async fn verify(
             && (!fail_history || ui["failedWorkerObserved"] == true),
         "installed related-work evidence is incomplete"
     );
+    if profile_commands {
+        ensure!(
+            ui["activityLiveOutputObserved"] == true && ui["activityCommandsCollapsed"] == true,
+            "installed command-output evidence is incomplete"
+        );
+    }
     Ok(
-        json!({"parentRequest":parent.doc_id,"relatedSessions":sessions,"signedAncestryVerified":true,"ui":ui}),
+        json!({"parentRequest":parent.doc_id,"relatedSessions":sessions,"signedAncestryVerified":true,"activity":activity,"ui":ui}),
     )
 }
