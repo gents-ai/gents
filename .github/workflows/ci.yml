@@ -595,7 +595,9 @@ jobs:
           from pathlib import Path
 
           for path in Path('/etc/apt').rglob('*'):
-              if not path.is_file() or path.suffix not in {'.sources', '.list'}:
+              if not path.is_file():
+                  continue
+              if path.suffix not in {'.sources', '.list'} and path.name != 'apt-mirrors.txt':
                   continue
               original = path.read_text(encoding='utf-8')
               updated = original
@@ -606,6 +608,7 @@ jobs:
                   )
               if updated != original:
                   path.write_text(updated, encoding='utf-8')
+                  print(f'Using the Ubuntu archive in {path}')
           PYTHON
 
       - name: Install Playwright browsers
