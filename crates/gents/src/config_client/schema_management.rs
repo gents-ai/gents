@@ -88,7 +88,7 @@ impl ConfigAccess {
     pub async fn set_schema_migration(
         &self,
         config: crate::defra_node::LensConfig,
-    ) -> anyhow::Result<Value> {
+    ) -> Result<Value> {
         config.validate_for_http()?;
         match self {
             Self::Local(local) => Ok(local

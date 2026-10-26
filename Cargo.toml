@@ -97,6 +97,7 @@ dirs = "5"
 events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "42c13e35e814ea7f37d675b9aa74ca45bd825ad3" }
 hostname = "0.4"
 identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "42c13e35e814ea7f37d675b9aa74ca45bd825ad3" }
+lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "42c13e35e814ea7f37d675b9aa74ca45bd825ad3", default-features = false }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"

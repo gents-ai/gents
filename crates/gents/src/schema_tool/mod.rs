@@ -1,7 +1,6 @@
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::llm::tool::{Tool, ToolDefinition};
-use anyhow::{bail, ensure, Context};
 use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -51,6 +50,47 @@ pub(crate) enum SchemaToolError {
     PatchRenamesCollection,
     #[error("patch {key} must address fields within {prefix}; collection renames/copies require a separately reviewed migration")]
     PatchOutsidePrefix { key: &'static str, prefix: String },
+    #[error("target_id is required; use collection list or version list to discover exact names and IDs")]
+    TargetRequired,
+    #[error("options.{key} is required; read help for this command")]
+    OptionRequired { key: String },
+    #[error("options.{key} must be a nonempty string")]
+    OptionNotText { key: String },
+    #[error("unknown schema command; use RESOURCE VERB [ID]. Read [\"help\"] for resources, or RESOURCE VERB --help for parameters")]
+    UnknownCommand,
+    #[error("unknown option {key:?}; accepted options: {allowed:?}")]
+    UnknownOption {
+        key: String,
+        allowed: &'static [&'static str],
+    },
+    #[error("reads do not use preview or digest")]
+    ReadWithPreview,
+    #[error("this command does not accept target_id")]
+    TargetNotAccepted,
+    #[error("collection not found; use collection list")]
+    CollectionNotFound,
+    #[error("preview returns a digest; omit options.digest while previewing")]
+    PreviewWithDigest,
+    #[error(transparent)]
+    Sdl(#[from] SchemaSdlFailure),
+    #[error("SDL must declare at least one collection")]
+    EmptySdl,
+    #[error("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")]
+    PreviewInstall(#[source] crate::config_client::SchemaInstallError),
+    #[error(transparent)]
+    Install(#[from] crate::config_client::SchemaInstallError),
+    #[error("version has no collection name")]
+    VersionWithoutCollection,
+    #[error(transparent)]
+    Lens(#[from] lens::Error),
+    #[error("config.Lenses must contain inline WASM modules")]
+    EmptyLenses,
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    DigestMismatch(#[from] SchemaDigestMismatch),
+    #[error("patch must be an array")]
+    PatchNotArrayValue,
 }
 
 pub const SCHEMA_TOOL_NAME: &str = "schema";
@@ -128,11 +168,11 @@ pub struct SchemaError(String);
 
 #[derive(Debug, thiserror::Error)]
 #[error("missing or stale digest: run the returned preview call, inspect the effect, then use its next_call. options.digest binds the command and observed schema")]
-struct SchemaDigestMismatch;
+pub(crate) struct SchemaDigestMismatch;
 
 #[derive(Debug, thiserror::Error)]
 #[error("SDL definition is invalid")]
-struct SchemaSdlFailure {
+pub(crate) struct SchemaSdlFailure {
     #[source]
     source: query::QueryError,
 }
@@ -147,58 +187,65 @@ impl SchemaTool {
         Self { node }
     }
 
-    async fn execute(&self, command: &SchemaCommand) -> anyhow::Result<Value> {
+    async fn execute(&self, command: &SchemaCommand) -> Result<Value> {
         let args = &command.args;
         let access = ConfigAccess::local(self.node.clone());
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
         let target = || {
-            args.target_id.as_deref().filter(|s| !s.is_empty()).context("target_id is required; use collection list or version list to discover exact names and IDs")
+            args.target_id
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .ok_or(SchemaToolError::TargetRequired)
         };
         let option = |key: &str| {
-            args.options.get(key).context(format!(
-                "options.{key} is required; read help for this command"
-            ))
+            args.options
+                .get(key)
+                .ok_or_else(|| SchemaToolError::OptionRequired {
+                    key: key.to_owned(),
+                })
         };
-        let text = |key: &str| -> anyhow::Result<&str> {
+        let text = |key: &str| -> Result<&str> {
             option(key)?
                 .as_str()
                 .filter(|s| !s.is_empty())
-                .context(format!("options.{key} must be a nonempty string"))
+                .ok_or_else(|| SchemaToolError::OptionNotText {
+                    key: key.to_owned(),
+                })
         };
-        let allowed: &[&str] = match words.as_slice() {
+        let allowed: &'static [&'static str] = match words.as_slice() {
             ["collection", "create"] => &["sdl"],
             ["collection", "update"] => &["patch"],
             ["view", "create"] => &["query", "sdl"],
             ["migration", "set"] => &["config"],
             ["collection", "list" | "get" | "materialize"] | ["version", "list" | "get" | "activate"] => &[],
-            _ => bail!("unknown schema command; use RESOURCE VERB [ID]. Read [\"help\"] for resources, or RESOURCE VERB --help for parameters"),
+            _ => return Err(SchemaToolError::UnknownCommand),
         };
         for key in args.options.keys() {
-            ensure!(
-                allowed.contains(&key.as_str()),
-                "unknown option {key:?}; accepted options: {allowed:?}"
-            );
+            if !allowed.contains(&key.as_str()) {
+                return Err(SchemaToolError::UnknownOption {
+                    key: key.clone(),
+                    allowed,
+                });
+            }
         }
         let read = matches!(words.as_slice(), ["collection" | "version", "list" | "get"]);
-        ensure!(
-            !read || (!command.preview && command.digest.is_none()),
-            "reads do not use preview or digest"
-        );
+        if read && (command.preview || command.digest.is_some()) {
+            return Err(SchemaToolError::ReadWithPreview);
+        }
         let uses_target = !matches!(
             words.as_slice(),
             ["collection", "list" | "create"] | ["view", "create"] | ["migration", "set"]
         );
-        ensure!(
-            uses_target || args.target_id.is_none(),
-            "this command does not accept target_id"
-        );
+        if !uses_target && args.target_id.is_some() {
+            return Err(SchemaToolError::TargetNotAccepted);
+        }
         match words.as_slice() {
             ["collection", "list"] => {
                 return Ok(json!({"collections":access.collection_names().await?}))
             }
             ["collection", "get"] => {
                 return Ok(
-                    json!({"collection":access.collection_version(target()?).await?.context("collection not found; use collection list")?}),
+                    json!({"collection":access.collection_version(target()?).await?.ok_or(SchemaToolError::CollectionNotFound)?}),
                 )
             }
             ["version", "list"] => {
@@ -219,10 +266,9 @@ impl SchemaTool {
             }
             _ => {}
         }
-        ensure!(
-            !(command.preview && command.digest.is_some()),
-            "preview returns a digest; omit options.digest while previewing"
-        );
+        if command.preview && command.digest.is_some() {
+            return Err(SchemaToolError::PreviewWithDigest);
+        }
         let before = match words.as_slice() {
             ["collection", "create"] | ["view", "create"] => {
                 if words[0] == "view" {
@@ -230,10 +276,9 @@ impl SchemaTool {
                 }
                 let definitions =
                     query::parse_sdl(text("sdl")?).map_err(|source| SchemaSdlFailure { source })?;
-                ensure!(
-                    !definitions.is_empty(),
-                    "SDL must declare at least one collection"
-                );
+                if definitions.is_empty() {
+                    return Err(SchemaToolError::EmptySdl);
+                }
                 let mut existing = Map::new();
                 for definition in definitions {
                     ensure_application_collection(&definition.name)?;
@@ -246,7 +291,9 @@ impl SchemaTool {
                     );
                 }
                 if words[0] == "collection" {
-                    crate::config_client::preview_schema_install(&access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
+                    crate::config_client::preview_schema_install(&access, text("sdl")?)
+                        .await
+                        .map_err(SchemaToolError::PreviewInstall)?;
                 }
                 Value::Object(existing)
             }
@@ -256,7 +303,7 @@ impl SchemaTool {
                 let current = access
                     .collection_version(name)
                     .await?
-                    .context("collection not found; use collection list")?;
+                    .ok_or(SchemaToolError::CollectionNotFound)?;
                 if words[1] == "update" {
                     validate_patch(name, option("patch")?)?;
                 }
@@ -266,7 +313,7 @@ impl SchemaTool {
                 let version = find_version(&access, target()?).await?;
                 let name = version["Name"]
                     .as_str()
-                    .context("version has no collection name")?;
+                    .ok_or(SchemaToolError::VersionWithoutCollection)?;
                 ensure_application_collection(name)?;
                 json!({"destination":version,"active":access.collection_version(name).await?})
             }
@@ -274,10 +321,9 @@ impl SchemaTool {
                 let config: crate::defra_node::LensConfig =
                     serde_json::from_value(option("config")?.clone())?;
                 config.validate_for_http()?;
-                ensure!(
-                    !config.lenses.is_empty(),
-                    "config.Lenses must contain inline WASM modules"
-                );
+                if config.lenses.is_empty() {
+                    return Err(SchemaToolError::EmptyLenses);
+                }
                 let source = find_version(&access, &config.source_schema_version_id).await?;
                 let destination =
                     find_version(&access, &config.destination_schema_version_id).await?;
@@ -285,7 +331,7 @@ impl SchemaTool {
                     ensure_application_collection(
                         v["Name"]
                             .as_str()
-                            .context("version has no collection name")?,
+                            .ok_or(SchemaToolError::VersionWithoutCollection)?,
                     )?;
                 }
                 json!({"source":source,"destination":destination})
@@ -325,7 +371,7 @@ impl SchemaTool {
             ["collection", "update"] => {
                 let mut patch = option("patch")?
                     .as_array()
-                    .context("patch must be an array")?
+                    .ok_or(SchemaToolError::PatchNotArrayValue)?
                     .clone();
                 patch.insert(0,json!({"op":"test","path":format!("/{}/VersionID",target()?),"value":before["VersionID"]}));
                 access
@@ -543,18 +589,24 @@ impl SchemaTool {
                 encoded.map_err(|error| SchemaError(error.to_string()))
             }
             Err(error) => {
-                let recovery = if error.is::<SchemaDigestMismatch>() {
-                    json!({"tool":"schema","args":preview_call(args)})
-                } else if let Some(crate::config_client::SchemaInstallError::Mismatch(mismatch)) =
-                    error.downcast_ref::<crate::config_client::SchemaInstallError>()
-                {
-                    json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
-                } else if error.is::<SchemaSdlFailure>() {
-                    sdl_help_call(args, &format!("{}", ErrorChain(error.as_ref())))
-                } else {
-                    help_call(args)
+                let recovery = match &error {
+                    SchemaToolError::DigestMismatch(_) => {
+                        json!({"tool":"schema","args":preview_call(args)})
+                    }
+                    SchemaToolError::PreviewInstall(
+                        crate::config_client::SchemaInstallError::Mismatch(mismatch),
+                    )
+                    | SchemaToolError::Install(
+                        crate::config_client::SchemaInstallError::Mismatch(mismatch),
+                    ) => {
+                        json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
+                    }
+                    SchemaToolError::Sdl(_) => {
+                        sdl_help_call(args, &format!("{}", ErrorChain(&error)))
+                    }
+                    _ => help_call(args),
                 };
-                Err(schema_error(error.as_ref(), recovery))
+                Err(schema_error(&error, recovery))
             }
         }
     }

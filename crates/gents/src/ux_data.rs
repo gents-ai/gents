@@ -13,7 +13,6 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -44,7 +43,38 @@ pub enum UxDataError {
     },
     #[error("surface {surface:?} declares tool {tool:?} twice")]
     DuplicateTool { surface: String, tool: String },
+    #[error(transparent)]
+    Plugin(#[from] crate::ux_plugin::UxPluginError),
+    #[error("ux plugin {ux:?} declares no data surfaces")]
+    NoDataSurfaces { ux: String },
+    #[error(
+        "ux plugin {ux:?} may not call tool {tool:?} of surface {surface:?}: not declared in its \
+         manifest"
+    )]
+    Undeclared {
+        ux: String,
+        tool: String,
+        surface: String,
+    },
+    #[error("surface {surface:?} has no tool {tool:?}")]
+    NoSuchTool { surface: String, tool: String },
+    #[error("tool {tool:?} has runtime-filled fields and is not callable from a page")]
+    RuntimeFilled { tool: String },
+    #[error(transparent)]
+    Query(#[from] crate::defra_query::bounded::DefraBoundQueryError),
+    #[error(transparent)]
+    Write(#[from] crate::defra_write::DefraWriteError),
+    #[error("tool {tool:?} answered something other than JSON")]
+    NonJsonAnswer {
+        tool: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
+
+type Result<T, E = UxDataError> = std::result::Result<T, E>;
 
 impl From<crate::document_config::DocumentConfigError> for UxDataError {
     fn from(error: crate::document_config::DocumentConfigError) -> Self {
@@ -76,10 +106,9 @@ fn kind_of(entry: &SurfaceToolDecl) -> &'static str {
 
 fn listing_with_data(home: &Path, ux: &str) -> Result<UxListing> {
     let listing = crate::ux_plugin::find(home, ux)?;
-    anyhow::ensure!(
-        !listing.data.is_empty(),
-        "ux plugin {ux:?} declares no data surfaces"
-    );
+    if listing.data.is_empty() {
+        return Err(UxDataError::NoDataSurfaces { ux: ux.to_owned() });
+    }
     Ok(listing)
 }
 
@@ -89,7 +118,7 @@ async fn installed_surface(
     access: &ConfigAccess,
     node_did: &str,
     surface: &str,
-) -> std::result::Result<DatastoreToolSurfaceDocument, UxDataError> {
+) -> Result<DatastoreToolSurfaceDocument> {
     let document = list_datastore_tool_surfaces(access, node_did)
         .await?
         .into_iter()
@@ -128,7 +157,7 @@ fn has_runtime_fill(entry: &SurfaceToolDecl) -> bool {
     }
 }
 
-fn args_object(args: Value) -> std::result::Result<Map<String, Value>, UxDataError> {
+fn args_object(args: Value) -> Result<Map<String, Value>> {
     match args {
         Value::Null => Ok(Map::new()),
         Value::Object(map) => Ok(map),
@@ -156,14 +185,13 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
         args,
     } = request;
     let listing = listing_with_data(home, &ux)?;
-    anyhow::ensure!(
-        listing
-            .data
-            .iter()
-            .any(|declared| declared.surface == surface && declared.tools.contains(&tool)),
-        "ux plugin {ux:?} may not call tool {tool:?} of surface {surface:?}: not declared in its \
-         manifest"
-    );
+    if !listing
+        .data
+        .iter()
+        .any(|declared| declared.surface == surface && declared.tools.contains(&tool))
+    {
+        return Err(UxDataError::Undeclared { ux, tool, surface });
+    }
     let document = installed_surface(access, &node_did, &surface).await?;
     let entry = document
         .entries
@@ -171,11 +199,13 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
         .unwrap_or(&[])
         .iter()
         .find(|entry| entry.tool_name() == tool)
-        .ok_or_else(|| anyhow!("surface {surface:?} has no tool {tool:?}"))?;
-    anyhow::ensure!(
-        !has_runtime_fill(entry),
-        "tool {tool:?} has runtime-filled fields and is not callable from a page"
-    );
+        .ok_or_else(|| UxDataError::NoSuchTool {
+            surface: surface.clone(),
+            tool: tool.clone(),
+        })?;
+    if has_runtime_fill(entry) {
+        return Err(UxDataError::RuntimeFilled { tool });
+    }
     let args = args_object(args)?;
     let kind = kind_of(entry);
     let output = match entry {
@@ -190,8 +220,11 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
             Tool::call(&tool, BoundedQueryParams(args)).await?
         }
     };
-    let output: Value = serde_json::from_str(&output)
-        .with_context(|| format!("tool {tool:?} answered something other than JSON"))?;
+    let output: Value =
+        serde_json::from_str(&output).map_err(|source| UxDataError::NonJsonAnswer {
+            tool: tool.clone(),
+            source,
+        })?;
     tracing::info!(ux = %ux, surface = %surface, tool = %tool, kind, "ux data call");
     Ok(json!({ "kind": kind, "output": output }))
 }

@@ -29,6 +29,8 @@ pub enum SkillsError {
     },
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error("skill_id must not be blank")]
     SkillIdBlank,
     #[error("expected a skill directory or a SKILL.md file")]
@@ -110,12 +112,15 @@ pub struct OpenAiTool {
 
 /// Load a single directory containing SKILL.md, or that file directly. The
 /// caller resolves/authorizes each path before reading.
-pub fn load_skill_source(
+pub fn load_skill_source<E>(
     source: &Path,
     skill_id: &str,
     node_did: &str,
-    resolve: impl Fn(&Path) -> anyhow::Result<PathBuf>,
-) -> anyhow::Result<SkillDocument> {
+    resolve: impl Fn(&Path) -> Result<PathBuf, E>,
+) -> Result<SkillDocument, E>
+where
+    E: From<SkillsError>,
+{
     if skill_id.trim().is_empty() {
         return Err(SkillsError::SkillIdBlank.into());
     }
@@ -171,7 +176,8 @@ pub fn load_skill_source(
         .interface
         .as_ref()
         .map(serde_json::to_string)
-        .transpose()?;
+        .transpose()
+        .map_err(SkillsError::from)?;
     Ok(SkillDocument {
         skill_id: skill_id.to_owned(),
         node_did: node_did.to_owned(),
@@ -226,7 +232,9 @@ fn read_source(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
-    fn resolve(path: &Path) -> anyhow::Result<PathBuf> {
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+    fn resolve(path: &Path) -> TestResult<PathBuf> {
         Ok(std::fs::canonicalize(path)?)
     }
 
@@ -315,7 +323,9 @@ mod tests {
         let allowed = root.path().canonicalize().unwrap();
         let result = load_skill_source(root.path(), "review", "did:test", |path| {
             let path = resolve(path)?;
-            anyhow::ensure!(path.starts_with(&allowed), "outside allowed root");
+            if !path.starts_with(&allowed) {
+                return Err("outside allowed root".into());
+            }
             Ok(path)
         });
         assert!(result

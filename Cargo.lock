@@ -4638,6 +4638,7 @@ dependencies = [
  "k256",
  "keyring",
  "kovan-map",
+ "lens",
  "libc",
  "memmap2",
  "minijinja",

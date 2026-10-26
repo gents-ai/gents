@@ -27,7 +27,6 @@ use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -89,6 +88,10 @@ pub enum UxPluginError {
     ProducerOutput(#[source] serde_json::Error),
     #[error("the produced module is {len} bytes; the limit is {limit_mib} MiB")]
     ProducedModuleTooLarge { len: usize, limit_mib: usize },
+    #[error("an afb-produced ux plugin always ships in a pack")]
+    AfbWithoutPack,
+    #[error("ux plugin {id} names no producer")]
+    NoAfbProducer { id: String },
 }
 
 /// Largest module the desktop will evaluate: a plugin is a UI, not a
@@ -396,14 +399,15 @@ pub fn producer_input() -> serde_json::Value {
 /// `.afb`-produced one is run through `run_afb`, which the caller supplies
 /// so this module needs no executor of its own (the desktop bridge and the
 /// CLI each already hold one).
-pub async fn resolve_module<F, Fut>(
+pub async fn resolve_module<F, Fut, E>(
     home: &Path,
     listing: &UxListing,
     run_afb: F,
-) -> anyhow::Result<UxModule>
+) -> Result<UxModule, E>
 where
     F: FnOnce(String, String) -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<serde_json::Value>>,
+    Fut: std::future::Future<Output = Result<serde_json::Value, E>>,
+    E: From<UxPluginError>,
 {
     match listing.producer {
         UxProducer::File => {
@@ -414,17 +418,22 @@ where
             let coordinate = listing
                 .pack
                 .as_deref()
-                .context("an afb-produced ux plugin always ships in a pack")?;
+                .ok_or(UxPluginError::AfbWithoutPack)?;
             let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
-            let record = crate::pack::read_home_install(home, coordinate)?
-                .with_context(|| format!("pack {coordinate} is not installed"))?;
+            let record = crate::pack::read_home_install(home, coordinate)
+                .map_err(UxPluginError::from)?
+                .ok_or_else(|| UxPluginError::PackNotInstalled {
+                    coordinate: coordinate.to_owned(),
+                })?;
             let name = listing.id.rsplit('/').next().unwrap_or(&listing.id);
             let plugin = record
                 .ux
                 .iter()
                 .find(|u| u.name == name)
                 .and_then(|u| u.plugin.clone())
-                .with_context(|| format!("ux plugin {} names no producer", listing.id))?;
+                .ok_or_else(|| UxPluginError::NoAfbProducer {
+                    id: listing.id.clone(),
+                })?;
             let output = run_afb(namespace.to_owned(), plugin).await?;
             Ok(module_from_producer_output(&output)?)
         }

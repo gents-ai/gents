@@ -19,6 +19,8 @@ pub enum ConfigClientError {
     #[error("ConfigAccess::execute requires a GraphQL query document")]
     QueryDocumentRequired,
     #[error(transparent)]
+    LensConfig(#[from] lens::Error),
+    #[error(transparent)]
     TransactionConflict(TransactionConflict),
     /// Displays the whole wrapped chain and also exposes it as the source.
     #[error("{}", ErrorChain(.0.as_ref()))]
