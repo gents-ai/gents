@@ -12,7 +12,7 @@ export type WorkerActions = {
 
 export const WorkerActionsContext = createContext<WorkerActions | null>(null);
 
-function StopButton({ name, onStop }: { name: string; onStop: () => void }) {
+export function StopButton({ name, onStop }: { name: string; onStop: () => void }) {
   return (
     <Hint label={`Stop ${name}`}>
       <Button

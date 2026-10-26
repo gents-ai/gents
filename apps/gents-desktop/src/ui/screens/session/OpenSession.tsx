@@ -31,6 +31,7 @@ import { NodeAgentStack } from "../NodeBehaviorStack";
 import { useParentWork } from "../parentWork";
 import { SessionContext } from "../SessionContextMeter";
 import { StartedSessionsButton } from "../StartedSessionsButton";
+import { BackgroundButton } from "../BackgroundButton";
 import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
 import { SessionLoading } from "../SessionLoading";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
@@ -194,6 +195,12 @@ export function OpenSession() {
                 </div>
                 {session && (
                   <StartedSessionsButton
+                    sessionId={session.sessionId}
+                    className="max-md:hidden"
+                  />
+                )}
+                {session && (
+                  <BackgroundButton
                     sessionId={session.sessionId}
                     className="max-md:hidden"
                   />
