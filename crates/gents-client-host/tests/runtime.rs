@@ -46,6 +46,8 @@ mod editor_related_work;
 mod editor_retry;
 #[path = "support/editor_review.rs"]
 mod editor_review;
+#[path = "support/editor_steering.rs"]
+mod editor_steering;
 #[path = "support/editor_undo.rs"]
 mod editor_undo;
 #[path = "support/editor_workspace.rs"]
@@ -79,6 +81,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorSteering,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorGoalSteering,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorHistory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorGoalRecovery,
@@ -108,10 +112,15 @@ enum Journey {
 }
 
 impl Journey {
+    fn is_steering(self) -> bool {
+        matches!(self, Self::EditorSteering | Self::EditorGoalSteering)
+    }
+
     fn editor_scenario(self) -> Option<&'static str> {
         match self {
             Self::Editor => Some("full"),
             Self::EditorSteering => Some("steering"),
+            Self::EditorGoalSteering => Some("goal-steering"),
             Self::EditorHistory => Some("history"),
             Self::EditorGoalRecovery => Some("goals"),
             Self::EditorGoalRemoval => Some("goal-removal"),
@@ -240,6 +249,20 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
         .await
         .with_context(|| {
             std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        })?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_pending_input_and_continues_the_same_goal() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorGoalSteering)
+        .await
+        .with_context(|| {
+            ["editor.log", "runtime.log", "runtime.err"]
+                .map(|name| std::fs::read_to_string(temp.path().join(name)).unwrap_or_default())
+                .join("\n")
         })?;
     copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
@@ -597,6 +620,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
+    let continuation_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let provider_continuation_gate = continuation_gate.clone();
     let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let goal_provider_gate = editor_goal_gate.clone();
     let goal_provider_hold = root.join("hold-goal-provider");
@@ -711,9 +736,23 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             {
                 return ChatAction::Sse(fake_llm::completion_text_sse(editor_workspace::REPLY));
             }
-            if matches!(journey, Journey::EditorSteering)
-                && request["messages"].to_string().contains(STEERING_INPUT)
+            if matches!(journey, Journey::EditorGoalSteering)
+                && editor_steering::has_completed_reply(request)
             {
+                return ChatAction::GatedSse(
+                    vec![(
+                        Duration::ZERO,
+                        format!(
+                            "data: {}\n\n",
+                            json!({"choices":[{"delta":{"content":"Goal continuation after steering"},"finish_reason":null}],"usage":null})
+                        ),
+                    )],
+                    provider_continuation_gate.clone(),
+                    fake_llm::completion_text_sse(" and finished."),
+                    emitted.clone(),
+                );
+            }
+            if journey.is_steering() && request["messages"].to_string().contains(STEERING_INPUT) {
                 return ChatAction::Sse(fake_llm::completion_text_sse(STEERING_REPLY));
             }
             ChatAction::GatedSse(
@@ -985,9 +1024,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         } else {
             "Return the fixture response.".to_owned()
         };
-    let receipt = if matches!(journey, Journey::Goal | Journey::EditorGoalRecovery) {
+    let receipt = if matches!(
+        journey,
+        Journey::Goal | Journey::EditorGoalRecovery | Journey::EditorGoalSteering
+    ) {
         client.call(id, "desktop_goal_control", json!({"request": {
             "nodeDid":node_did, "agentId":agent_id,
+            "cwd": journey.is_steering().then_some(root),
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
         }})).await
     } else {
@@ -997,7 +1040,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "desktop_chat_send",
                 json!({"request":{
                     "nodeDid":node_did,"agentId":agent_id,"content":content,"delivery":"queue",
-                    "cwd": matches!(journey, Journey::EditorSteering).then_some(root)
+                    "cwd": journey.is_steering().then_some(root)
                 }}),
             )
             .await
@@ -1096,16 +1139,20 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "busy refusal terminated the input: {unchanged}"
         );
     }
-    if matches!(journey, Journey::EditorSteering) {
+    if journey.is_steering() {
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
+        let continuation_path = root.join("finish-goal-steer-provider");
         let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            loop {
-                if completion_path.is_file() {
-                    completion_gate.add_permits(1);
-                    break;
-                }
+            while !completion_path.is_file() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            completion_gate.add_permits(1);
+            if matches!(journey, Journey::EditorGoalSteering) {
+                while !continuation_path.is_file() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                continuation_gate.add_permits(1);
             }
         }));
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
@@ -1118,7 +1165,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &host_binary,
             session,
             provider.endpoint(),
-            "steering",
+            journey.editor_scenario().context("steering scenario")?,
         )
         .await?;
         id += 1;
@@ -1369,7 +1416,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         id += 1;
     }
     gate.add_permits(1);
-    let expected_reply = if matches!(journey, Journey::EditorSteering) {
+    let expected_reply = if journey.is_steering() {
         STEERING_REPLY
     } else {
         "First part and final part."
@@ -1537,25 +1584,29 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         user_rounds
             == if matches!(journey, Journey::EditorGoalRecovery) {
                 7
-            } else if matches!(
-                journey,
-                Journey::EditorSteering | Journey::RuntimeReplacement
-            ) {
+            } else if matches!(journey, Journey::EditorGoalSteering) {
+                3
+            } else if journey.is_steering() || matches!(journey, Journey::RuntimeReplacement) {
                 2
             } else {
                 1
             },
         "unexpected provider round count: {user_rounds}"
     );
-    if matches!(journey, Journey::EditorSteering) {
-        let evidence = verify_editor_steering(
+    if journey.is_steering() {
+        let evidence = editor_steering::verify(
             &access,
             &provider,
-            root,
-            node_did,
-            session,
-            &original_doc_id,
-            &client_did,
+            editor_steering::Context {
+                root,
+                node_did,
+                session,
+                original_doc_id: &original_doc_id,
+                client_did: &client_did,
+                goal_id: matches!(journey, Journey::EditorGoalSteering)
+                    .then(|| receipt["goalId"].as_str())
+                    .flatten(),
+            },
         )
         .await?;
         std::fs::write(
@@ -2617,154 +2668,6 @@ async fn run_editor_journey(
     let status = status.context("editor journey timed out")??;
     ensure!(status.success(), "editor journey exited with {status}");
     Ok(())
-}
-
-async fn verify_editor_steering(
-    access: &gents::ConfigAccess,
-    provider: &FakeLlm,
-    root: &Path,
-    node_did: &str,
-    session: &str,
-    original_doc_id: &str,
-    client_did: &str,
-) -> Result<Value> {
-    use gents_protocol::request_input::QueueDelivery;
-    use gents_protocol::request_lifecycle::RequestLifecycleState;
-
-    let result = access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
-        gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session), gents::SIGNED_REQUEST_FIELDS,
-    )).await?;
-    let rows: Vec<gents_protocol::row::AgentRequestRow> =
-        serde_json::from_value(result["data"]["AgentRequest"].clone())?;
-    ensure!(
-        rows.len() == 3,
-        "steering must retain one active row and two signed versions of the input: {result}"
-    );
-    for row in &rows {
-        gents::verify_request_receipt_signature(row)?;
-        ensure!(
-            row.admission_signer_did.as_deref() == Some(client_did)
-                && row.requester_did.as_deref() == Some(client_did),
-            "steering changed the enrolled author"
-        );
-    }
-    let active = rows
-        .iter()
-        .find(|row| row.doc_id.as_deref() == Some(original_doc_id))
-        .context("original request")?;
-    let input = |delivery| {
-        rows.iter().find(|row| {
-            row.content.as_deref() == Some(STEERING_INPUT)
-                && row
-                    .input
-                    .as_ref()
-                    .and_then(|input| input.queue.as_ref())
-                    .is_some_and(|queue| queue.delivery == delivery)
-        })
-    };
-    let queued = input(QueueDelivery::Queue).context("original queued input")?;
-    let steered = input(QueueDelivery::Steer).context("promoted input")?;
-    let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-steering-ui.json"))?)?;
-    let captured = &queued
-        .input
-        .as_ref()
-        .context("queued input")?
-        .captured_context;
-    ensure!(
-        captured.len() == 1
-            && steered.input.as_ref().map(|input| &input.captured_context) == Some(captured),
-        "Steer changed or dropped the queued capture"
-    );
-    let capture = serde_json::to_value(&captured[0])?;
-    ensure!(
-        capture["content"] == "queued captured unsaved context\n"
-            && capture["uri"] == ui["contextUri"]
-            && capture["kind"] == "selection"
-            && capture["source"] == "editor"
-            && capture["unsaved"] == true
-            && capture["version"].as_u64().is_some_and(|v| v > 1)
-            && capture["range"]["start"] == json!({"line":0,"character":0})
-            && capture["range"]["end"] == json!({"line":1,"character":0}),
-        "Steer did not retain the submitted editor observations"
-    );
-    ensure!(
-        active.lifecycle_state == Some(RequestLifecycleState::Completed)
-            && queued.lifecycle_state == Some(RequestLifecycleState::Superseded)
-            && steered.lifecycle_state == Some(RequestLifecycleState::Superseded)
-            && queued.superseded_by_request_doc_id == steered.doc_id
-            && steered.superseded_by_request_doc_id.as_deref() == Some(original_doc_id),
-        "the pending row must be promoted and consumed by the original physical request: {result}"
-    );
-    let rendered = access.execute(&format!(
-        r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id turn_index }} }}"#,
-        gents::graphql::escape_graphql_string(&active.request_id),
-    )).await?;
-    let rendered = rendered["data"]["RenderedRequest"]
-        .as_array()
-        .context("rendered steering requests")?;
-    ensure!(
-        rendered.len() == 2
-            && rendered
-                .iter()
-                .all(|row| row["request_doc_id"] == original_doc_id)
-            && rendered[0]["turn_index"] != rendered[1]["turn_index"],
-        "steering must continue the original capture exactly once: {rendered:?}"
-    );
-    let requests = provider.captured_chat_requests();
-    let provider_input_occurrences = requests
-        .iter()
-        .map(|body| body["messages"].to_string().matches(STEERING_INPUT).count())
-        .sum::<usize>();
-    let steered_rounds = requests
-        .iter()
-        .filter(|body| body["messages"].to_string().contains(STEERING_INPUT))
-        .collect::<Vec<_>>();
-    ensure!(
-        steered_rounds.len() == 1
-            && steered_rounds[0]["messages"]
-                .to_string()
-                .matches(STEERING_INPUT)
-                .count()
-                == 1,
-        "the provider must receive the promoted input exactly once: {requests:?}"
-    );
-    let capture_count = |body: &Value| {
-        body["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|message| message["role"] == "user")
-            .filter_map(|message| message["content"].as_array())
-            .flatten()
-            .filter_map(|part| part["text"].as_str())
-            .filter_map(|text| {
-                text.strip_prefix(
-                    "Editor context (captured text; URI identifies its editor location):\n",
-                )
-            })
-            .filter_map(|text| serde_json::from_str::<Value>(text).ok())
-            .filter(|value| value == &capture)
-            .count()
-    };
-    let captured_parts = capture_count(steered_rounds[0]);
-    let all_captured_parts = requests.iter().map(capture_count).sum::<usize>();
-    ensure!(
-        captured_parts == 1 && all_captured_parts == 1,
-        "the provider lost, duplicated or received the capture before Steer"
-    );
-    Ok(json!({
-        "nodeDid": node_did, "sessionId": session, "authorDid": client_did,
-        "activeRequestDocId": original_doc_id, "queuedRequestDocId": queued.doc_id,
-        "steeredRequestDocId": steered.doc_id, "activeState": active.lifecycle_state,
-        "queuedState": queued.lifecycle_state, "steeredState": steered.lifecycle_state,
-        "queuedReplacedBy": queued.superseded_by_request_doc_id,
-        "steeredConsumedBy": steered.superseded_by_request_doc_id,
-        "renderedRequests": rendered, "providerInputOccurrences": provider_input_occurrences,
-        "providerRequests": requests.len(),
-        "verifiedSignatures": rows.len(),
-        "context": capture, "providerCaptureOccurrences": all_captured_parts,
-    }))
 }
 
 async fn read_session(
