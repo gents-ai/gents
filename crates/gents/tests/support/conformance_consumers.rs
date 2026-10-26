@@ -203,6 +203,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_budget_recovery_cases_bind_signed_catalog_usage",
         },
         ConformanceConsumer::RustTest {
+            id: "plugin::approval::command_grant_contract_tests::generated_command_answers_preserve_scope_and_one_time_delivery",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/command_grant_contract_tests.rs",
+            module_path: "plugin::approval::command_grant_contract_tests",
+            function: "generated_command_answers_preserve_scope_and_one_time_delivery",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::approval::command_grant_contract_tests::generated_command_revocation_preserves_the_selected_mode",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/command_grant_contract_tests.rs",
+            module_path: "plugin::approval::command_grant_contract_tests",
+            function: "generated_command_revocation_preserves_the_selected_mode",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_policy::workspace_permissions::tests::generated_command_grant_lookups",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/workspace_permissions.rs",
+            module_path: "tool_policy::workspace_permissions::tests",
+            function: "generated_command_grant_lookups",
+        },
+        ConformanceConsumer::RustTest {
             id: "plugin::approval::workspace::tests::generated_workspace_permission_writes_preserve_selected_policy_versions",
             package: "gents",
             source_path: "crates/gents/src/plugin/approval/workspace.rs",
