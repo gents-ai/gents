@@ -14,14 +14,15 @@ import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
 import { Goal } from "../SessionHeader";
-import { SlashSkillMenu } from "../SlashSkillMenu";
-import { useSlashSkills } from "../useSlashSkills";
+import { SlashMenu } from "../SlashMenu";
+import { useSlashMenu } from "../useSlashMenu";
 import {
   ComposerFooter,
   SessionSubmissionStatus,
   presentedComposerSendStatus,
 } from "./composerParts";
 import { ComposerEditContext, lastEditable, useComposerEditing } from "./composerEdit";
+import { GoalChip, goalCommand, goalIsEditable, useGoalMode } from "./goalMode";
 import { useComposerSend } from "./useComposerSend";
 
 export function OpenSessionComposer({
@@ -41,14 +42,14 @@ export function OpenSessionComposer({
   goal: DesktopSessionSnapshot["goal"];
   agentId: string | null;
 }) {
-  const { stores } = useApp();
+  const { stores, actions } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const loadingStatus = useView((view) => view.loadingStatus);
   const sending = stores.chat.use.sending();
   const inFlight = useInterruptVisible();
   const deployment = useSelectedNode();
-  const { draft, setDraft, send, error: sendError } = useComposerSend(agentId);
+  const { draft, setDraft, send, setGoal, error: sendError } = useComposerSend(agentId);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
@@ -59,11 +60,26 @@ export function OpenSessionComposer({
     [editing?.docId, edit.begin],
   );
   const agent = agentOf(deployment, agentId);
-  const slash = useSlashSkills(
+  const sessionId = stores.selection.use.sessionId();
+  const goalMode = useGoalMode({
+    draft,
+    setDraft,
+    onSet: setGoal,
+    onEdit: sessionId
+      ? (objective) =>
+          actions.controlGoal(sessionId, { kind: "edit", objective, tokenBudget: null })
+      : undefined,
+  });
+  const slash = useSlashMenu(
     draft,
     setDraft,
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
+    [goalCommand(goal, inFlight)],
+    () =>
+      goal && goalIsEditable(goal)
+        ? goalMode.edit(goal.objective ?? "")
+        : goalMode.create(),
   );
 
   /* a session that never takes this app's messages says so before anything is typed */
@@ -102,6 +118,8 @@ export function OpenSessionComposer({
         event.preventDefault();
       return;
     }
+    goalMode.onKeyDown(event);
+    if (event.defaultPrevented || goalMode.mode) return;
     if (event.key === "ArrowUp" && draft === "" && !attachments.hasAttachments) {
       const last = lastEditable(queue);
       if (last) {
@@ -115,7 +133,20 @@ export function OpenSessionComposer({
 
   return (
     <div ref={roomRef} className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6">
-      {goal && <Goal goal={goal} />}
+      {goal && (
+        <Goal
+          goal={goal}
+          onEdit={() => {
+            goalMode.edit(goal.objective ?? "");
+            textarea.current?.focus();
+          }}
+          onControl={
+            sessionId
+              ? (action) => void actions.controlGoal(sessionId, action).catch(() => {})
+              : undefined
+          }
+        />
+      )}
       <div
         aria-hidden
         className={cn(
@@ -142,8 +173,20 @@ export function OpenSessionComposer({
         data-testid="composer"
         ref={attachmentRoot}
         {...attachments.dropProps}
-        className={cn("grid rounded-2xl", attachments.over && "ring-2 ring-ring")}
+        className={cn(
+          "relative grid rounded-2xl",
+          attachments.over && "ring-2 ring-ring",
+        )}
       >
+        {!editing && !goalMode.mode && (
+          <SlashMenu
+            open={slash.open}
+            query={slash.query}
+            items={slash.items}
+            active={slash.active}
+            onPick={slash.accept}
+          />
+        )}
         <input
           {...attachments.fileInputProps}
           className="hidden"
@@ -161,7 +204,9 @@ export function OpenSessionComposer({
               editing
                 ? (text) =>
                     void (editing.reached ? edit.sendAsNew(text) : edit.save(text))
-                : send
+                : goalMode.mode
+                  ? (text) => void goalMode.submit(text)
+                  : send
             }
             models={[]}
             onAttach={attachments.pick}
@@ -181,6 +226,11 @@ export function OpenSessionComposer({
                     requestId={editing.requestId}
                   />
                 </>
+              ) : goalMode.mode ? (
+                <GoalChip
+                  editing={goalMode.mode === "edit"}
+                  onCancel={goalMode.leave}
+                />
               ) : (
                 <>
                   <ReplyingTo />
@@ -197,11 +247,6 @@ export function OpenSessionComposer({
                     remove={attachments.remove}
                     error={attachments.error}
                   />
-                  <SlashSkillMenu
-                    items={slash.items}
-                    active={slash.active}
-                    onPick={slash.accept}
-                  />
                 </>
               )
             }
@@ -209,7 +254,15 @@ export function OpenSessionComposer({
             textareaRef={textarea}
             clearable={!editing}
             submitLabel={
-              editing ? (editing.reached ? "Send as a new message" : "Save") : "Send"
+              editing
+                ? editing.reached
+                  ? "Send as a new message"
+                  : "Save"
+                : goalMode.mode === "edit"
+                  ? "Save goal"
+                  : goalMode.mode
+                    ? "Set goal"
+                    : "Send"
             }
             submitIcon={editing && !editing.reached ? <Check /> : undefined}
             sending={editing ? edit.saving : sending || (inFlight && !queueing)}
@@ -217,11 +270,13 @@ export function OpenSessionComposer({
             placeholder={
               editing
                 ? "Edit the message"
-                : inFlight
-                  ? "Ask anything"
-                  : readOnly
-                    ? readOnly
-                    : placeholderFor(status, "Ask anything")
+                : goalMode.mode
+                  ? "Describe the goal"
+                  : inFlight
+                    ? "Ask anything"
+                    : readOnly
+                      ? readOnly
+                      : placeholderFor(status, "Ask anything")
             }
           />
         </div>
