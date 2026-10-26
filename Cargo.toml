@@ -177,6 +177,13 @@ debug = 0
 split-debuginfo = "off"
 incremental = false
 
+[profile.ci-native]
+inherits = "test"
+opt-level = 0
+
+[profile.ci-native.package."*"]
+opt-level = 1
+
 [patch.crates-io]
 kovan = { git = "https://github.com/jackzampolin/kovan", rev = "036173d0ca95a4684a54bee9142c77a51fece032" }
 kovan-map = { git = "https://github.com/jackzampolin/kovan", rev = "036173d0ca95a4684a54bee9142c77a51fece032" }
