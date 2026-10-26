@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
-import { createContextDetailsCache } from "../src/ui/lib/sessionContextDetails";
+import { createContextDetailsCache } from "../src/hooks/sessionContextDetails";
 import { SessionContext } from "../src/ui/screens/SessionContextMeter";
 
 type Context = DesktopSessionSnapshot["context"];

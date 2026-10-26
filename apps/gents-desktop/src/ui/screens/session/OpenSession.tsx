@@ -15,7 +15,6 @@ import {
   useSelectedNodeDid,
   useSessionLoad,
 } from "@/hooks/useClient";
-import { createContextDetailsCache } from "@/lib/sessionContextDetails";
 import { toastFailure } from "@/lib/failure";
 import { isWorkingNode } from "@/lib/nodes";
 import { useScroller } from "@/lib/scroll";
@@ -46,8 +45,7 @@ export function OpenSession() {
   const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
   const {
     stores,
-    api,
-    actions: { interruptRequest, renameSession },
+    actions: { interruptRequest, renameSession, loadSessionContextDetails },
   } = useApp();
   const inFlight = useInterruptVisible();
   const selectedNodeDid = useSelectedNodeDid();
@@ -55,24 +53,17 @@ export function OpenSession() {
   const selectedSessionId = stores.selection.use.sessionId();
   const sessionLoad = useSessionLoad();
   const session = useSelectedSessionFields(selectScreenFacts);
-  const detailsCache = useMemo(
-    () =>
-      createContextDetailsCache(
-        (request) => api.fetchSessionContextDetails?.(request) ?? Promise.resolve(null),
-      ),
-    [api],
-  );
   const loadContextDetails = useCallback(
     (input: NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>) => {
       if (!session?.nodeDid) return Promise.resolve(null);
-      return detailsCache({
+      return loadSessionContextDetails({
         nodeDid: session.nodeDid,
         sessionId: session.sessionId,
         requestId: input.requestId,
         callId: input.callId,
       });
     },
-    [detailsCache, session?.nodeDid, session?.sessionId],
+    [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
   );
   const homeDid = useHomeDid();
   const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
