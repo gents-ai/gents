@@ -352,26 +352,19 @@ mod bound {
         .map_err(|error| format!("{error:#}"))
     }
 
-    fn answer(
+    async fn answer(
         home: &std::path::Path,
         allow: bool,
         always: bool,
-    ) -> tokio::task::JoinHandle<String> {
+    ) -> approval::testing::Operator {
         let answer = match (allow, always) {
             (false, _) => approval::Answer::Deny,
             (true, false) => approval::Answer::Once,
             (true, true) => approval::Answer::AlwaysFolder,
         };
-        let home = home.to_owned();
-        tokio::spawn(async move {
-            loop {
-                if let Some(request) = approval::pending(&home).unwrap().into_iter().next() {
-                    approval::decide(&home, &request.id, answer).unwrap();
-                    return request.prompt();
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-        })
+        approval::testing::Operator::answer(home, answer)
+            .await
+            .unwrap()
     }
 
     struct Fixture {
@@ -641,10 +634,10 @@ mod bound {
                 None,
             )
             .unwrap();
-            let declined = answer(fx.home.path(), false, false);
+            let declined = answer(fx.home.path(), false, false).await;
             let error = in_session(&tool, &target, &other, true).await.unwrap_err();
-            declined.await.unwrap();
             assert!(error.contains("operator declined"), "{error}");
+            declined.await.unwrap();
         })
         .await;
         let ask = workspace::get(fx.home.path(), &key).unwrap().unwrap();
@@ -702,12 +695,12 @@ mod bound {
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
-        let declined = answer(fx.home.path(), false, false);
+        let declined = answer(fx.home.path(), false, false).await;
         let error = workspace::scope(context, in_session(&tool, &target, &work, true))
             .await
             .unwrap_err();
-        declined.await.unwrap();
         assert!(error.contains("operator declined"), "{error}");
+        declined.await.unwrap();
         assert!(allowed::list(fx.home.path()).unwrap().is_empty());
     }
 
@@ -919,7 +912,7 @@ mod bound {
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
-        let asked = answer(fx.home.path(), true, false);
+        let asked = answer(fx.home.path(), true, false).await;
         let output = in_session(&tool, &target, &work, true).await.unwrap();
         assert_eq!(output, r#"{"read":true}"#);
         let prompt = asked.await.unwrap();
@@ -935,7 +928,7 @@ mod bound {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
-        let asked = answer(fx.home.path(), true, true);
+        let asked = answer(fx.home.path(), true, true).await;
         in_session(&tool, &fx.root.join("outside/in.json"), &work, true)
             .await
             .unwrap();
@@ -956,7 +949,7 @@ mod bound {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
-        let asked = answer(fx.home.path(), false, true);
+        let asked = answer(fx.home.path(), false, true).await;
         let error = in_session(&tool, &fx.root.join("outside/in.json"), &work, true)
             .await
             .unwrap_err();
@@ -971,7 +964,7 @@ mod bound {
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
-        let asked = answer(fx.home.path(), true, false);
+        let asked = answer(fx.home.path(), true, false).await;
         let output = in_session(&tool, &target, &work, true).await.unwrap();
         assert_eq!(output, r#"{"read":true}"#);
         let prompt = asked.await.unwrap();
@@ -992,7 +985,7 @@ mod bound {
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
-        let asked = answer(fx.home.path(), false, true);
+        let asked = answer(fx.home.path(), false, true).await;
         let error = in_session(&tool, &target, &work, true).await.unwrap_err();
         let prompt = tokio::time::timeout(std::time::Duration::from_secs(10), asked)
             .await

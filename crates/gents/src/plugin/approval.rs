@@ -1,5 +1,7 @@
 mod question;
 mod queue;
+#[cfg(test)]
+pub(crate) mod testing;
 pub mod workspace;
 pub use question::{CommandApproval, FilesystemApproval, Request};
 use queue::Queue;
