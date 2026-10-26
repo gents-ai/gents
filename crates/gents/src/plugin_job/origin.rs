@@ -279,6 +279,7 @@ impl crate::config_client::TransactionFailure for PluginJobError {
             Self::Materialize(error) => error.config_client_error(),
             Self::Session(error) => error.config_client_error(),
             Self::Transition(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
             _ => None,
         }
     }

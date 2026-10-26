@@ -352,6 +352,7 @@ impl TransactionFailure for EvalError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         match self {
             Self::Access(error) => Some(error),
+            Self::DesiredState(error) => error.config_client_error(),
             _ => None,
         }
     }

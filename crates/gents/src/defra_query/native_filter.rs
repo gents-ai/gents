@@ -59,6 +59,7 @@ impl crate::config_client::TransactionFailure for NativeFilterError {
         match self {
             Self::Access(error) => Some(error),
             Self::Invalid { source, .. } => source.config_client_error(),
+            Self::Protected(error) => error.config_client_error(),
             _ => None,
         }
     }

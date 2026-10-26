@@ -606,6 +606,12 @@ impl NativeCanonicalExecution {
             Ok(crate::lifecycle::RecoveryResult::Lost) => return self.observe(false).await,
             Err(error)
                 if find_source::<crate::lifecycle::RecoverySelectionRejected>(&error).is_some()
+                    || matches!(
+                        find_source::<crate::lifecycle::CanonicalRecoveryError>(&error),
+                        Some(
+                            crate::lifecycle::CanonicalRecoveryError::RecoverySelectionRejected(_)
+                        )
+                    )
                     || crate::session::find_reconstruction_error(&error).is_some() =>
             {
                 return self.observe(false).await;
@@ -1708,7 +1714,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let doc_id = match doc_id {
                         Ok(value) => value,
                         Err(error)
-                            if find_source::<
+                            if crate::streaming::canonical::provider_rejection::<
                                 crate::streaming::canonical::ProviderAppendRejection,
                             >(&error)
                             .is_some()
@@ -1943,6 +1949,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                                 || matches!(
                                     find_source::<crate::lifecycle::TerminalToolsError>(&error),
                                     Some(crate::lifecycle::TerminalToolsError::Accounting(_))
+                                )
+                                || matches!(
+                                    find_source::<crate::lifecycle::LifecycleError>(&error),
+                                    Some(crate::lifecycle::LifecycleError::TerminalTools(
+                                        crate::lifecycle::TerminalToolsError::Accounting(_)
+                                    ))
                                 )
                                 || owner_error_is(
                                     &error,

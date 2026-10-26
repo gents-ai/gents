@@ -444,6 +444,11 @@ impl crate::config_client::TransactionFailure for GraphPipelineError {
             Self::EventSource(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error.as_ref())
             }
+            Self::TriggerEngine(error) => error.config_client_error(),
+            Self::Materializer(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::Interrupt(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -160,6 +160,7 @@ impl TransactionFailure for InputError {
             Self::Records(error) => error.config_client_error(),
             Self::QueryRows(error) => error.config_client_error(),
             Self::Arguments(error) => error.config_client_error(),
+            Self::PluginJob(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -215,6 +215,9 @@ impl crate::config_client::TransactionFailure for CanonicalStreamError {
             Self::GraphqlResponse(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::ConfigClient(error) => Some(error),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::Queue(error) => error.config_client_error(),
             _ => None,
         }
     }

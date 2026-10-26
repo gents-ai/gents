@@ -86,6 +86,10 @@ impl crate::config_client::TransactionFailure for SessionControlError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
         match self {
             Self::Config(error) => Some(error),
+            Self::Interrupt(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::Queue(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
             _ => None,
         }
     }

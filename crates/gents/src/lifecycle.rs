@@ -32,8 +32,9 @@ pub(crate) use execution_lease::{
 };
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
+pub(crate) use terminal_tools::TerminalToolsError;
 #[cfg(test)]
-pub(crate) use terminal_tools::{TerminalToolsError, ToolAccountingRejection};
+pub(crate) use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub(crate) mod materialize;
 mod session_message_presentation;
@@ -674,6 +675,18 @@ impl crate::config_client::TransactionFailure for LifecycleError {
             Self::Durable(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::SessionRowUndecodable(error) => error.config_client_error(),
+            Self::CanonicalRecovery(error) => error.config_client_error(),
+            Self::EventSourceCursor(error) => error.config_client_error(),
+            Self::ExecutionLease(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::TerminalTools(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::GraphPipeline(error) => error.config_client_error(),
+            Self::Queue(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::Watcher(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
             _ => None,
         }
     }

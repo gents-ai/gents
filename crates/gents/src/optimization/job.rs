@@ -245,6 +245,7 @@ impl TransactionFailure for OptimizationError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         match self {
             Self::Config(error) => Some(error),
+            Self::CreateJob(error) => Some(error),
             _ => None,
         }
     }

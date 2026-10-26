@@ -51,6 +51,9 @@ impl crate::config_client::TransactionFailure for ToolCallRecoveryError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
         match self {
             Self::Config(error) => Some(error),
+            Self::Query(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::Transition(error) => error.config_client_error(),
             _ => None,
         }
     }

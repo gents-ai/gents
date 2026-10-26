@@ -196,6 +196,8 @@ impl TransactionFailure for SessionError {
         match self {
             Self::Config(error) => Some(error),
             Self::Graphql(error) => TransactionFailure::config_client_error(error),
+            Self::History(error) => error.config_client_error(),
+            Self::RenderedRequest(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -108,6 +108,12 @@ impl crate::config_client::TransactionFailure for CanonicalRecoveryError {
             Self::Graphql(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::CanonicalStream(error) => error.config_client_error(),
+            Self::DurableTrigger(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::TerminalTools(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
             _ => None,
         }
     }

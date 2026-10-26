@@ -146,6 +146,7 @@ impl TransactionFailure for GraphPackageInstallError {
             Self::GraphPipeline(error) => error.config_client_error(),
             Self::Installation(error) => error.config_client_error(),
             Self::Provenance(error) => error.config_client_error(),
+            Self::Inference(error) => error.config_client_error(),
             _ => None,
         }
     }

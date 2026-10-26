@@ -68,6 +68,7 @@ impl TransactionFailure for EventDeliveryError {
             Self::Config(error) => Some(error),
             Self::Response(error) => TransactionFailure::config_client_error(error),
             Self::Source(error) => TransactionFailure::config_client_error(error.as_ref()),
+            Self::Engine(error) => error.config_client_error(),
             _ => None,
         }
     }

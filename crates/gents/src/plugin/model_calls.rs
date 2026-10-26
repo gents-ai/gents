@@ -80,6 +80,7 @@ impl TransactionFailure for ModelCallError {
         match self {
             Self::Access(error) => Some(error),
             Self::Desired(error) => error.config_client_error(),
+            Self::Auth(error) => error.config_client_error(),
             _ => None,
         }
     }

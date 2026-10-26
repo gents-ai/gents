@@ -191,6 +191,9 @@ impl crate::config_client::TransactionFailure for ToolSurfaceError {
         match self {
             Self::DocumentConfig(error) => error.config_client_error(),
             Self::Access(error) => Some(error),
+            Self::RootAdmission(error) => error.config_client_error(),
+            Self::Mailbox(error) => error.config_client_error(),
+            Self::Build(error) => error.config_client_error(),
             _ => None,
         }
     }

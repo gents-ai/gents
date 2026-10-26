@@ -238,6 +238,7 @@ impl crate::config_client::TransactionFailure for CallbackError {
             | Self::CreateResult(error)
             | Self::PersistIsolatedWorkspace { source: error, .. }
             | Self::PersistWorkspacePlacement { source: error, .. } => Some(error),
+            Self::QueryRecentFailed(error) => Some(error),
             _ => None,
         }
     }

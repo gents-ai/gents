@@ -161,6 +161,7 @@ impl crate::config_client::TransactionFailure for TriggerEngineError {
             Self::Lifecycle(error) => error.config_client_error(),
             Self::Materialize(error) => error.config_client_error(),
             Self::Session(error) => error.config_client_error(),
+            Self::EventSourceCursor(error) => error.config_client_error(),
             _ => None,
         }
     }

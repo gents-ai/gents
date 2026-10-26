@@ -70,6 +70,7 @@ impl crate::config_client::TransactionFailure for RootAdmissionError {
             Self::CandidateToolRoot { source, .. } | Self::AllowedToolRoot { source, .. } => {
                 source.config_client_error()
             }
+            Self::ToolSurface(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -272,6 +272,7 @@ impl crate::config_client::TransactionFailure for ToolCallQueryError {
             Self::Lifecycle(error) => error.config_client_error(),
             Self::SessionOutput(error) => error.config_client_error(),
             Self::BackgroundOutput(error) => error.config_client_error(),
+            Self::PluginPresentation(error) => error.config_client_error(),
             _ => None,
         }
     }

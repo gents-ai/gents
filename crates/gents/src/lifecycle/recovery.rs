@@ -42,6 +42,8 @@ impl crate::config_client::TransactionFailure for RecoveryError {
             Self::Graphql(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::DurableTrigger(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
             _ => None,
         }
     }
@@ -438,6 +440,36 @@ async fn recover_active_requests(
 /// corruption. Only typed contradictory or malformed immutable facts authorize
 /// the model's metadata-only revocation escape.
 fn definitive_output_corruption(error: &(dyn std::error::Error + 'static)) -> bool {
+    use crate::lifecycle::{CanonicalRecoveryError, LifecycleError};
+    if std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
+        let inner: Option<&(dyn std::error::Error + 'static)> =
+            match cause.downcast_ref::<LifecycleError>() {
+                Some(LifecycleError::CanonicalRecovery(error)) => Some(&**error),
+                Some(LifecycleError::SessionOutput(error)) => Some(error),
+                Some(LifecycleError::Session(error)) => Some(&**error),
+                Some(LifecycleError::Reconstruction(error)) => Some(error),
+                _ => match cause.downcast_ref::<CanonicalRecoveryError>() {
+                    Some(CanonicalRecoveryError::RecoveryPlan(error)) => Some(error),
+                    Some(CanonicalRecoveryError::SessionOutput(error)) => Some(error),
+                    Some(CanonicalRecoveryError::CanonicalStream(error)) => Some(error),
+                    Some(CanonicalRecoveryError::Session(error)) => Some(&**error),
+                    Some(CanonicalRecoveryError::Lifecycle(error)) => Some(&**error),
+                    _ => match cause.downcast_ref::<RecoveryError>() {
+                        Some(RecoveryError::Lifecycle(error)) => Some(&**error),
+                        _ => None,
+                    },
+                },
+            };
+        inner.is_some_and(|inner| {
+            definitive_output_corruption_leaf(inner) || definitive_output_corruption(inner)
+        })
+    }) {
+        return true;
+    }
+    definitive_output_corruption_leaf(error)
+}
+
+fn definitive_output_corruption_leaf(error: &(dyn std::error::Error + 'static)) -> bool {
     use gents_protocol::error_chain::find_source;
     use gents_protocol::output::recovery::RecoveryPlanError;
     use gents_protocol::output::ReconstructionError;

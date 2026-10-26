@@ -223,6 +223,13 @@ impl TransactionFailure for InstallationError {
             Self::DesiredState(error) => error.config_client_error(),
             Self::Provenance(error) => error.config_client_error(),
             Self::GraphPipeline(error) => error.config_client_error(),
+            Self::Asset(error) => error.config_client_error(),
+            Self::Inference(error) => error.config_client_error(),
+            Self::GraphPackageInstall(error) => error.config_client_error(),
+            Self::PluginJob(error) => error.config_client_error(),
+            Self::GraphInstallFailed(error) => error.config_client_error(),
+            Self::GraphActivationFailed(error) => error.config_client_error(),
+            Self::DocumentInstallFailed(error) => error.config_client_error(),
             _ => None,
         }
     }

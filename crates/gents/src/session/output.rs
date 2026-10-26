@@ -177,6 +177,14 @@ pub(crate) fn find_reconstruction_error<'a>(
         cause
             .downcast_ref::<gents_protocol::output::ReconstructionError>()
             .or_else(|| {
+                match cause.downcast_ref::<crate::streaming::canonical::CanonicalStreamError>() {
+                    Some(crate::streaming::canonical::CanonicalStreamError::Reconstruction(
+                        error,
+                    )) => Some(error),
+                    _ => None,
+                }
+            })
+            .or_else(|| {
                 cause
                     .downcast_ref::<SessionOutputError>()
                     .and_then(SessionOutputError::reconstruction)

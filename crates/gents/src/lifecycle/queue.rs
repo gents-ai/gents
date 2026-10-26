@@ -378,6 +378,10 @@ impl crate::config_client::TransactionFailure for QueueError {
             Self::Goal(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::Delivery(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -96,6 +96,8 @@ impl crate::config_client::TransactionFailure for InterruptError {
             Self::Graphql(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::Goal(error) => error.config_client_error(),
+            Self::Queue(error) => error.config_client_error(),
             _ => None,
         }
     }

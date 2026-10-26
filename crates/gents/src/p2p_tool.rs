@@ -138,6 +138,8 @@ impl crate::config_client::TransactionFailure for P2pToolError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
         match self {
             Self::ConfigClient(error) => Some(error),
+            Self::OfferTokenSingleUseTwoNodes(error) => error.config_client_error(),
+            Self::P2pReconcile(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -107,6 +107,7 @@ impl crate::config_client::TransactionFailure for EventSourceError {
             Self::Cursor(error) => {
                 crate::config_client::TransactionFailure::config_client_error(error)
             }
+            Self::Engine(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -119,6 +119,8 @@ impl TransactionFailure for EventSourceCursorError {
         match self {
             Self::Access(error) => Some(error),
             Self::DesiredState(error) => error.config_client_error(),
+            Self::Graphql(error) => error.config_client_error(),
+            Self::EventDelivery(error) => error.config_client_error(),
             _ => None,
         }
     }

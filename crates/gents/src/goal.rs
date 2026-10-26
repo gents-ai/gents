@@ -543,6 +543,15 @@ impl crate::config_client::TransactionFailure for GoalError {
             Self::History(error) => error.config_client_error(),
             Self::Queue(error) => error.config_client_error(),
             Self::DecodeGoalRows(error) => error.config_client_error(),
+            Self::BlockedTurn(error) => error.config_client_error(),
+            Self::OAuthCredential(error) => error.config_client_error(),
+            Self::ProfileSwitch(error) => error.config_client_error(),
+            Self::DocumentConfig(error) => error.config_client_error(),
+            Self::GraphPipeline(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
+            Self::WaitObservation(error) => error.config_client_error(),
+            Self::PluginSlots(error) => error.config_client_error(),
             _ => None,
         }
     }

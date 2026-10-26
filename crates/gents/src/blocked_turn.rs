@@ -55,6 +55,9 @@ impl crate::config_client::TransactionFailure for BlockedTurnError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         match self {
             Self::Config(error) => Some(error),
+            Self::Goal(error) => error.config_client_error(),
+            Self::OAuthCredential(error) => error.config_client_error(),
+            Self::DocumentConfig(error) => error.config_client_error(),
             _ => None,
         }
     }

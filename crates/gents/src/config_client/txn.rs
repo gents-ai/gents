@@ -1265,7 +1265,8 @@ impl<'a> ConfigApplyTxn<'a> {
                     assert!(
                         detail.contains(&format!(
                             "injected failure after successful transaction mutation {index}"
-                        )),
+                        )) || detail
+                            .contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
                         "unexpected failure at mutation {index}: {detail}"
                     );
                     assert_eq!(observed, index, "injection must fire exactly once");

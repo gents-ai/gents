@@ -75,6 +75,17 @@ pub enum StreamingError {
     StreamProcessor(#[from] gents_loop::stream_processor::StreamProcessorError),
 }
 
+impl crate::config_client::TransactionFailure for StreamingError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ClosingAuxiliaryAuditOutput(error) => error.config_client_error(),
+            Self::CanonicalStream(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
 impl StreamingError {
     /// The queued input changed before the authored message published.
     pub(crate) fn is_pending_input_changed(&self) -> bool {

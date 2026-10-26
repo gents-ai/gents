@@ -157,6 +157,7 @@ impl crate::config_client::TransactionFailure for AdmissionCause {
             Self::Queue(error) => error.config_client_error(),
             Self::Session(error) => error.config_client_error(),
             Self::Watcher(error) => error.config_client_error(),
+            Self::ReloadPeerRequesterAdmission(error) => error.config_client_error(),
             _ => None,
         }
     }

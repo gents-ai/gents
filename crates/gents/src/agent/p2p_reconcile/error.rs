@@ -615,6 +615,9 @@ impl crate::config_client::TransactionFailure for P2pReconcileError {
             Self::ToolCallQuery(error) => error.config_client_error(),
             Self::Goal(error) => error.config_client_error(),
             Self::Queue(error) => error.config_client_error(),
+            Self::LoadFreshAuthenticatedEnrollmentAuthorityHydration(error) => {
+                error.config_client_error()
+            }
             _ => None,
         }
     }

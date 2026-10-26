@@ -283,6 +283,17 @@ impl crate::config_client::TransactionFailure for HookError {
             Self::ToolCallQuery(error) => error.config_client_error(),
             Self::Transition(error) => error.config_client_error(),
             Self::BackgroundTools(error) => error.config_client_error(),
+            Self::BackgroundToolsError(error) => error.config_client_error(),
+            Self::Interrupt(error) => error.config_client_error(),
+            Self::Queue(error) => error.config_client_error(),
+            Self::AdmissionCause(error) => error.config_client_error(),
+            Self::Delivery(error) => error.config_client_error(),
+            Self::SessionControl(error) => error.config_client_error(),
+            Self::SessionMessage(error) => error.config_client_error(),
+            Self::ToolCallRecovery(error) => error.config_client_error(),
+            Self::DocumentConfig(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::PluginJob(error) => error.config_client_error(),
             _ => None,
         }
     }
