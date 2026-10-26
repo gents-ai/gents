@@ -72,10 +72,10 @@ pub async fn write_manual_agent_request_with_conversation_title(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let content = render_template(prompt_template, &scope).map_err(|e| {
+    let content = render_template(prompt_template, &scope).map_err(|error| {
         LifecycleError::RenderManualTemplateTask {
             task_id: task_id.to_string(),
-            e: e.to_string(),
+            error,
         }
     })?;
 
@@ -101,9 +101,9 @@ pub async fn write_manual_agent_request_with_conversation_title(
         Some(&session_id),
     )
     .await
-    .map_err(|e| LifecycleError::CreateManualAgentRequestTask {
+    .map_err(|error| LifecycleError::CreateManualAgentRequestTask {
         task_id: task_id.to_string(),
-        e: e.to_string(),
+        error: Box::new(error),
     })?;
 
     tracing::info!(

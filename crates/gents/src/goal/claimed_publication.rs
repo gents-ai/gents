@@ -73,7 +73,7 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
                 || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
                 || gate_claimed_goal_continuation(
                     GoalAgentObservation::Unavailable, true, false,
-                    &goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?,
+                    &goal.state().ok_or(GoalError::GoalHasUnknownStatus)?,
                 ) != GoalClaimedDecision::Stop
             {
                 return Ok(false);
@@ -211,7 +211,7 @@ async fn stage_claimed_continuation(
         return Ok(Some(GoalResumeReceipt {
             goal_status: goal
                 .parsed_status()
-                .ok_or(GoalError::GoalHasUnknownStatus2)?,
+                .ok_or(GoalError::GoalHasUnknownStatus)?,
             goal_id: goal.goal_id,
             request_id: child.request_id.clone(),
             doc_id: child
@@ -335,7 +335,7 @@ async fn stage_claimed_continuation(
     Ok(Some(GoalResumeReceipt {
         goal_status: goal
             .parsed_status()
-            .ok_or(GoalError::GoalHasUnknownStatus2)?,
+            .ok_or(GoalError::GoalHasUnknownStatus)?,
         goal_id: goal.goal_id,
         request_id: create.request_id,
         doc_id: child_doc.to_owned(),
@@ -352,7 +352,7 @@ async fn stop_claimed_continuation_in_txn(
     record_failure: bool,
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
-    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?;
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus)?;
     let failure_field = if record_failure {
         format!(r#", last_failure: "{}""#, escape_graphql_string(reason))
     } else {

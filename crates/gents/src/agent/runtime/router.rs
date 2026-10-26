@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::agent::RuntimeSnapshotObserver;
@@ -15,7 +14,7 @@ use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 use super::context::AgentResolution;
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum RouterError {
+pub(in crate::agent) enum RouterError {
     #[error("executor queue for agent {agent_id} closed unexpectedly")]
     ExecutorQueueClosed { agent_id: String },
     #[error("durably acknowledge router generation {generation}")]
@@ -24,7 +23,23 @@ pub(super) enum RouterError {
         #[source]
         source: RuntimeStatusError,
     },
+    #[error(transparent)]
+    Watcher(#[from] crate::watcher::WatcherError),
+    #[error(transparent)]
+    Session(#[from] crate::session::SessionError),
+    #[error(transparent)]
+    Admission(#[from] crate::request_admission::AdmissionCause),
+    #[error(transparent)]
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
 }
+
+impl From<crate::lifecycle::LifecycleError> for RouterError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+type Result<T, E = RouterError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub(in crate::agent) struct RuntimeAdmissionGate {
@@ -494,15 +509,15 @@ pub(super) async fn fail_routed_request(
                     "request admission denied: {}",
                     gents_protocol::error_chain::ErrorChain(&error)
                 );
-                return crate::request_admission::terminalize_pending_request_rejection(
+                crate::request_admission::terminalize_pending_request_rejection(
                     &node,
                     &request.doc_id,
                     node_did,
                     &reason,
                     "terminalize_invalid_execution_origin_before_route_rejection",
                 )
-                .await
-                .map_err(anyhow::Error::from);
+                .await?;
+                return Ok(());
             }
         };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -515,7 +530,8 @@ pub(super) async fn fail_routed_request(
         "",
     );
 
-    Ok(lifecycle.reject_admission(error_message).await?)
+    lifecycle.reject_admission(error_message).await?;
+    Ok(())
 }
 
 pub(in crate::agent) fn default_hostname() -> String {

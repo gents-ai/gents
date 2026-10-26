@@ -266,7 +266,7 @@ async fn moved_profile_retry_rejects_a_disabled_target_account() {
     .await
     .unwrap();
 
-    let error = limited.resume_on(&limited.b).await.unwrap_err().to_string();
+    let error = ErrorChain(&limited.resume_on(&limited.b).await.unwrap_err()).to_string();
     assert!(error.contains("target account"), "{error}");
     assert_eq!(limited.profile_backend().await, limited.b);
     assert_eq!(limited.goal_status().await, "usage_limited");
@@ -300,7 +300,7 @@ async fn moved_profile_retry_rejects_a_removed_target_account() {
         .await
         .unwrap();
 
-    let error = limited.resume_on(&limited.b).await.unwrap_err().to_string();
+    let error = ErrorChain(&limited.resume_on(&limited.b).await.unwrap_err()).to_string();
     assert!(error.contains("target account"), "{error}");
     assert_eq!(limited.profile_backend().await, limited.b);
     assert_eq!(limited.goal_status().await, "usage_limited");

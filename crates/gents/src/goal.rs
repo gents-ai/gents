@@ -317,8 +317,6 @@ pub enum GoalError {
     RequestFields { message: &'static str },
     #[error("Goal tool caller is absent or ambiguous in its owner/session")]
     GoalToolCallerAbsentAmbiguousOwner,
-    #[error("Goal tool caller has no physical request identity")]
-    GoalToolCallerHasNoPhysical2,
     #[error("Goal tool caller query omitted rows")]
     GoalToolCallerQueryOmittedRows,
     #[error("goal control signer differs from its author")]
@@ -333,8 +331,6 @@ pub enum GoalError {
     AmbiguousClaimedContinuationReceipt,
     #[error("claimed continuation receipt conflicts with the observed publication")]
     ClaimedContinuationReceiptConflictsObservedPublication,
-    #[error("goal has an unknown status")]
-    GoalHasUnknownStatus2,
     #[error("claimed stop request query omitted rows")]
     ClaimedStopRequestQueryOmittedRows,
     #[error("claimed parent query omitted rows")]
@@ -381,19 +377,20 @@ pub enum GoalError {
     ResumePredecessorMustUniquelyBelongGoal,
     #[error("ambiguous goal continuation receipt")]
     AmbiguousGoalContinuationReceipt,
-    #[error("switch failed; nothing changed: {detail}")]
-    SwitchFailedNothingChanged { detail: String },
+    #[error("switch failed; nothing changed")]
+    SwitchFailedNothingChanged(#[source] Box<GoalError>),
     #[error(
         "resume failed after the switch committed (profile {profile} is now on {label}); run the \
-                 same command again with the same --from: {detail}"
+                 same command again with the same --from"
     )]
     ResumeFailedAfterSwitchCommittedProfile {
         profile: String,
         label: String,
-        detail: String,
+        #[source]
+        source: Box<GoalError>,
     },
-    #[error("resume failed; run the same command again with the same --from: {detail}")]
-    ResumeFailedRunSameCommandAgain { detail: String },
+    #[error("resume failed; run the same command again with the same --from")]
+    ResumeFailedRunSameCommandAgain(#[source] Box<GoalError>),
     #[error("profile that hit the limit is unavailable")]
     ProfileHitLimitUnavailable,
     #[error("profile that hit the limit is not on target backend {target_backend_id}")]
@@ -421,14 +418,11 @@ pub enum GoalError {
     #[error("continuation receipt lacks document ID")]
     ContinuationReceiptLacksDocumentID,
     #[error(
-        "request {from_request_id} did not stop on a usage limit; move its profile \
+        "request {from_request_id:?} did not stop on a usage limit; move its profile \
                  with `gents config profile set-account <profile>` and resume with \
-                 `gents goal resume-request --from {from_request_id2}`"
+                 `gents goal resume-request --from {from_request_id}`"
     )]
-    RequestDidNotStopUsageLimit {
-        from_request_id: String,
-        from_request_id2: String,
-    },
+    RequestDidNotStopUsageLimit { from_request_id: String },
     #[error(
         "switch failed; nothing changed: the profile that hit the limit is on \
                      neither its account nor the target; move it with `gents config profile \

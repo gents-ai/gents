@@ -514,11 +514,8 @@ impl DefraSessionHook {
             parsed,
         )
         .await?;
-        let result = serde_json::to_value(response).map_err(|error| {
-            HookError::SerializeListBackgroundToolsResponse {
-                error: error.to_string(),
-            }
-        })?;
+        let result = serde_json::to_value(response)
+            .map_err(|error| HookError::SerializeListBackgroundToolsResponse { error })?;
         let result = json_string(result);
         self.complete_control_tool_call(&mut lifecycle, LIST_PROCESSES_TOOL_NAME, result)
             .await
@@ -586,11 +583,8 @@ impl DefraSessionHook {
         .await?
         {
             ReadToolOutputOutcome::Found(response) => {
-                let result = serde_json::to_value(response).map_err(|error| {
-                    HookError::SerializeReadToolOutputResponse {
-                        error: error.to_string(),
-                    }
-                })?;
+                let result = serde_json::to_value(response)
+                    .map_err(|error| HookError::SerializeReadToolOutputResponse { error })?;
                 json_string(result)
             }
             ReadToolOutputOutcome::NotBackgrounded => background_invalid_tool_arguments_payload(

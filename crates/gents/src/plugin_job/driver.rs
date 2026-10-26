@@ -857,7 +857,7 @@ async fn read_lifecycle_state(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Res
         .pointer("/data/AgentToolCall/0/lifecycle_state")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+        .ok_or_else(|| PluginJobError::JobRowDoesNotExist {
             row_doc_id: row_doc_id.to_string(),
         })
 }
@@ -877,7 +877,7 @@ pub(super) async fn load_lifecycle(
         response
             .pointer("/data/AgentToolCall/0")
             .cloned()
-            .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+            .ok_or_else(|| PluginJobError::JobRowDoesNotExist {
                 row_doc_id: row_doc_id.to_string(),
             })?,
     )
@@ -896,7 +896,7 @@ pub(super) async fn load_lifecycle(
         stored.requester_did.as_deref(),
     )
     .await?
-    .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+    .ok_or_else(|| PluginJobError::JobRowDoesNotExist {
         row_doc_id: row_doc_id.to_string(),
     })
 }
@@ -1270,7 +1270,7 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
         stored
             .pointer("/data/AgentToolCall/0")
             .cloned()
-            .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+            .ok_or_else(|| PluginJobError::JobRowDoesNotExist {
                 row_doc_id: row_doc_id.to_string(),
             })?,
     )

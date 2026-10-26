@@ -75,8 +75,8 @@ pub(crate) enum PluginOutputError {
     NotKeyedObject,
     #[error("the plugin returned unknown output {name:?}")]
     UnknownOutput { name: String },
-    #[error("{error}")]
-    Collection { error: String },
+    #[error(transparent)]
+    Collection(#[from] CallbackHandlerError),
     #[error("output {name:?} takes an array of documents")]
     NotArray { name: String },
     #[error("the plugin did not return required output {name:?}")]
@@ -185,11 +185,7 @@ pub(crate) fn output_documents(
     };
     let mut documents = Vec::new();
     for (port, value) in per_port {
-        writable_output_collection(&port.collection).map_err(|error| {
-            PluginOutputError::Collection {
-                error: ErrorChain(&error).to_string(),
-            }
-        })?;
+        writable_output_collection(&port.collection)?;
         let rows: Vec<&Value> = match (&port.cardinality, value) {
             (_, None | Some(Value::Null)) => Vec::new(),
             (PortCardinality::One, Some(value)) => vec![value],
@@ -322,7 +318,11 @@ pub(super) async fn execute(
                 )
                 .map(|documents| (writes, documents))
             }) {
-                Err(reason) => Some(format!("plugin {}: {reason}", call.coordinate)),
+                Err(reason) => Some(format!(
+                    "plugin {}: {}",
+                    call.coordinate,
+                    ErrorChain(&reason)
+                )),
                 Ok((writes, documents)) => {
                     let writes = grant.filter(|_| !writes.is_empty()).map(|g| (g, writes));
                     let mut written = journal.clone();

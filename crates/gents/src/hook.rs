@@ -138,9 +138,9 @@ pub enum HookError {
     #[error("wait_process lifecycle was terminalized before observation completion")]
     WaitProcessLifecycleWasTerminalizedBefore,
     #[error("serialize list_background_tools response: {error}")]
-    SerializeListBackgroundToolsResponse { error: String },
+    SerializeListBackgroundToolsResponse { error: serde_json::Error },
     #[error("serialize read_tool_output response: {error}")]
-    SerializeReadToolOutputResponse { error: String },
+    SerializeReadToolOutputResponse { error: serde_json::Error },
     #[error("background lifetime exceeds the representable range")]
     BackgroundLifetimeExceedsRepresentableRange(#[source] chrono::OutOfRangeError),
     #[error("lost terminal compare requires physical tool identity")]

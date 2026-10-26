@@ -595,7 +595,7 @@ pub enum SessionHistoryError {
     #[error("unsupported sessions action; next call: sessions {{\"action\":\"help\"}}")]
     UnsupportedSessionsActionNextCallSessions,
     #[error("{detail}; next call: sessions {{\"action\":\"help\"}}")]
-    NextCallSessions { detail: String },
+    FailedNextCallHelp { detail: String },
     #[error("session history requires a node DID")]
     SessionHistoryRequiresNodeDID,
     #[error("sessions get requires a running node DID and non-empty session_id")]
@@ -687,7 +687,7 @@ pub enum SessionHistoryError {
     )]
     OutputRequiresCallIdNextCall,
     #[error("{detail}; next call: sessions {transcript_call}")]
-    NextCallSessions2 {
+    ToolCallReadFailed {
         detail: String,
         transcript_call: String,
     },
@@ -703,7 +703,7 @@ pub enum SessionHistoryError {
         transcript_call: String,
     },
     #[error("{reason}; next call: sessions {next}")]
-    NextCallSessions3 { reason: String, next: String },
+    OutputPageRejected { reason: &'static str, next: String },
     #[error("sessions response omitted {collection}")]
     SessionsResponseOmitted { collection: String },
     #[error("sessions requires a valid running DID")]
@@ -881,7 +881,7 @@ impl Tool for SessionHistoryTool {
             if ErrorChain(&error).to_string().contains("next call:") {
                 error
             } else {
-                SessionHistoryError::NextCallSessions {
+                SessionHistoryError::FailedNextCallHelp {
                     detail: ErrorChain(&error).to_string(),
                 }
             }

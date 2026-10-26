@@ -111,8 +111,6 @@ pub enum PluginJobError {
     NodeHopCapQueryReturnedNo,
     #[error("Node.max_request_hop must be a nonnegative u32")]
     NodeMaxRequestHopMustNonnegative,
-    #[error("job row {row_doc_id} does not exist")]
-    JobRowDoesNotExist2 { row_doc_id: String },
     #[error("decoding job row {row_doc_id}")]
     DecodingJobRow {
         row_doc_id: String,
@@ -130,15 +128,15 @@ pub enum PluginJobError {
     #[error(
         "job staging integrity error: retry key {retry_key} does not match the staged request"
     )]
-    JobStagingIntegrityErrorRetryKey { retry_key: String },
+    RetryKeyMismatchesStagedRequest { retry_key: String },
     #[error("job step recovery failed after ambiguous commit: {detail}; original commit error: {detail2}")]
     JobStepRecoveryFailedAfterAmbiguous { detail: String, detail2: String },
     #[error(
         "job staging integrity error: retry key {retry_key} does not match the admitted request"
     )]
-    JobStagingIntegrityErrorRetryKey2 { retry_key: String },
+    RetryKeyMismatchesAdmittedRequest { retry_key: String },
     #[error("job staging integrity error: retry key {retry_key} is not unique")]
-    JobStagingIntegrityErrorRetryKey3 { retry_key: String },
+    RetryKeyNotUnique { retry_key: String },
     #[error("commit acknowledgement lost")]
     CommitAcknowledgementLost,
     #[error("cwd is not utf-8")]

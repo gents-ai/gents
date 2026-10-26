@@ -578,7 +578,7 @@ async fn tool_output(
         requester,
     )
     .await
-    .map_err(|error| SessionHistoryError::NextCallSessions2 {
+    .map_err(|error| SessionHistoryError::ToolCallReadFailed {
         detail: ErrorChain(&error).to_string(),
         transcript_call: transcript_call.to_string(),
     })?;
@@ -619,8 +619,8 @@ async fn tool_output(
                 "offset_bytes is not a UTF-8 boundary within the output"
             }
         };
-        SessionHistoryError::NextCallSessions3 {
-            reason: reason.to_string(),
+        SessionHistoryError::OutputPageRejected {
+            reason,
             next: next.to_string(),
         }
     })?;

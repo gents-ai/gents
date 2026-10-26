@@ -217,7 +217,7 @@ pub(crate) async fn recover_step_commit(
                         None => return Ok(false),
                         Some(existing) if same_fingerprint(&existing, create) => {}
                         Some(_) => {
-                            return Err(PluginJobError::JobStagingIntegrityErrorRetryKey {
+                            return Err(PluginJobError::RetryKeyMismatchesStagedRequest {
                                 retry_key: retry_key.to_string(),
                             })
                         }
@@ -376,7 +376,7 @@ async fn stage_request(
         if same_fingerprint(&existing, &create) {
             return Ok(create);
         }
-        return Err(PluginJobError::JobStagingIntegrityErrorRetryKey2 {
+        return Err(PluginJobError::RetryKeyMismatchesAdmittedRequest {
             retry_key: retry_key.to_string(),
         });
     }
@@ -406,7 +406,7 @@ async fn one_request(
         .cloned()
         .unwrap_or_default();
     if rows.len() > 1 {
-        return Err(PluginJobError::JobStagingIntegrityErrorRetryKey3 {
+        return Err(PluginJobError::RetryKeyNotUnique {
             retry_key: retry_key.to_string(),
         });
     }

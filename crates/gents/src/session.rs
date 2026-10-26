@@ -163,8 +163,6 @@ pub enum SessionError {
     CompactionOriginalTokensMustNonNegative(#[source] std::num::TryFromIntError),
     #[error("compaction compacted_tokens must be a non-negative usize")]
     CompactionCompactedTokensMustNonNegative(#[source] std::num::TryFromIntError),
-    #[error("compaction sequence overflow")]
-    CompactionSequenceOverflow2(#[source] std::num::TryFromIntError),
     #[error(transparent)]
     History(#[from] crate::session::HistoryError),
     #[error(transparent)]

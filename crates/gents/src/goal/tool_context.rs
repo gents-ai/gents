@@ -37,7 +37,7 @@ pub(crate) async fn load_goal_tool_context(
     request_id: &str,
     request_doc_id: Option<&str>,
 ) -> Result<GoalToolContext> {
-    let doc = request_doc_id.ok_or(GoalError::GoalToolCallerHasNoPhysical2)?;
+    let doc = request_doc_id.ok_or(GoalError::GoalToolCallerHasNoPhysical)?;
     crate::ConfigAccess::transact_local_readonly(node, None, "goal.tool_context", |txn| {
         Box::pin(load_goal_tool_context_in_txn(
             txn, owner, session, request_id, doc,

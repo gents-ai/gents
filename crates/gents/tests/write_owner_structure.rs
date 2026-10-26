@@ -1810,7 +1810,6 @@ const ANYHOW_ALLOWLIST: &[&str] = &[
     "crates/gents/src/agent/reconcile/tests.rs",
     "crates/gents/src/agent/runtime/context.rs",
     "crates/gents/src/agent/runtime/control_watcher.rs",
-    "crates/gents/src/agent/runtime/router.rs",
     "crates/gents/src/agent/runtime/startup.rs",
     "crates/gents/src/agent/runtime/tests/startup_recovery.rs",
     "crates/gents/src/agent/supervision.rs",

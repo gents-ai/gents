@@ -71,7 +71,7 @@ pub(crate) enum RuntimeStartupError {
 }
 
 enum BackgroundTaskResult {
-    Router(Result<()>),
+    Router(Result<(), super::router::RouterError>),
     ExecutorStatus(Result<()>),
     Reconcile(Result<()>),
     Control(Result<()>),

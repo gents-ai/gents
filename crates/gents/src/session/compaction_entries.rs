@@ -536,7 +536,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                 dedupe_paths(&mut cumulative_files_modified);
 
                 let sequence = u32::try_from(rows.len() + 1)
-                    .map_err(SessionError::CompactionSequenceOverflow2)?;
+                    .map_err(SessionError::CompactionSequenceOverflow)?;
                 let compaction_key = compaction_key(node_did, session_id, requester_did, sequence);
                 let created_at =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);

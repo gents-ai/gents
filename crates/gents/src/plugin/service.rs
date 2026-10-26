@@ -80,8 +80,11 @@ pub enum ServiceError {
     ExitedDuringStartup,
     #[error("service readiness timed out")]
     ReadinessTimeout(#[source] tokio::time::error::Elapsed),
-    #[error("{error}; service stderr: {stderr}")]
-    ReadinessFailed { error: String, stderr: String },
+    #[error("{}; service stderr: {stderr}", ErrorChain(&**error))]
+    ReadinessFailed {
+        error: Box<ServiceError>,
+        stderr: String,
+    },
 }
 
 type Result<T, E = ServiceError> = std::result::Result<T, E>;
@@ -308,7 +311,7 @@ impl Service {
                 service.terminate().await;
                 let detail = String::from_utf8_lossy(&tail.lock().unwrap()).into_owned();
                 return Err(ServiceError::ReadinessFailed {
-                    error: ErrorChain(&error).to_string(),
+                    error: Box::new(error),
                     stderr: detail,
                 });
             }

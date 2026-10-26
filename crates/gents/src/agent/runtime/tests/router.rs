@@ -371,11 +371,11 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     .await
     .expect_err("router generation persistence failure must stop the router");
     assert!(
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
             .to_string()
             .contains("injected fatal agent readiness write"),
         "unexpected router error: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
     assert!(!gate.is_open().await);
     assert_eq!(

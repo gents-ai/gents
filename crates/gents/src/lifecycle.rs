@@ -553,10 +553,16 @@ pub enum LifecycleError {
     AdmittedRequestLacksSessionID,
     #[error("admitted request lacks document ID")]
     AdmittedRequestLacksDocumentID,
-    #[error("render manual template for task {task_id}: {e}")]
-    RenderManualTemplateTask { task_id: String, e: String },
-    #[error("create manual AgentRequest for task {task_id}: {e}")]
-    CreateManualAgentRequestTask { task_id: String, e: String },
+    #[error("render manual template for task {task_id}: {error}")]
+    RenderManualTemplateTask {
+        task_id: String,
+        error: crate::template::TemplateError,
+    },
+    #[error("create manual AgentRequest for task {task_id}: {error}")]
+    CreateManualAgentRequestTask {
+        task_id: String,
+        error: Box<LifecycleError>,
+    },
     #[error("{message}")]
     RequestFields { message: &'static str },
     #[error(transparent)]

@@ -4,7 +4,6 @@ use crate::identity::NodeIdentity;
 use crate::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
-use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::row::AgentRequestRow;
 
 #[derive(Debug, Clone, Serialize)]
@@ -161,7 +160,7 @@ async fn existing_resume_receipt_in_txn(
     Ok(Some(GoalResumeReceipt {
         goal_status: goal
             .parsed_status()
-            .ok_or(GoalError::GoalHasUnknownStatus2)?,
+            .ok_or(GoalError::GoalHasUnknownStatus)?,
         goal_id: goal.goal_id.clone(),
         request_id: child.request_id.clone(),
         doc_id: child
@@ -215,8 +214,7 @@ pub async fn resume_goal_on_account(
     let limited = blocked_turn_from(&references, &accounts, &request, call.as_ref(), now)
         .filter(|turn| turn.reason == BlockedReason::UsageLimit)
         .ok_or_else(|| GoalError::RequestDidNotStopUsageLimit {
-            from_request_id: format!("{:?}", from_request_id),
-            from_request_id2: from_request_id.to_string(),
+            from_request_id: from_request_id.to_string(),
         })?;
     let switch = match limited.profile {
         Some(profile) => {
@@ -235,9 +233,7 @@ pub async fn resume_goal_on_account(
                 )
             }
             .await
-            .map_err(|error| GoalError::SwitchFailedNothingChanged {
-                detail: ErrorChain(&error).to_string(),
-            })?;
+            .map_err(|error| GoalError::SwitchFailedNothingChanged(Box::new(error)))?;
             Some(receipt)
         }
         // The profile that served the call left the limited account: an
@@ -266,11 +262,9 @@ pub async fn resume_goal_on_account(
         Some(receipt) => GoalError::ResumeFailedAfterSwitchCommittedProfile {
             profile: receipt.profile.to_string(),
             label: receipt.account.label.to_string(),
-            detail: ErrorChain(&error).to_string(),
+            source: Box::new(error),
         },
-        None => GoalError::ResumeFailedRunSameCommandAgain {
-            detail: ErrorChain(&error).to_string(),
-        },
+        None => GoalError::ResumeFailedRunSameCommandAgain(Box::new(error)),
     })?;
     Ok(GoalResumeOnReceipt { switch, resume })
 }
@@ -359,7 +353,7 @@ async fn stage_resume_inner(
     if !goal_session_is_idle(&requests) {
         return Err(GoalError::GoalSessionStillHasUnfinishedRequests);
     }
-    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?;
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus)?;
     let post = state
         .step(GoalAction::Resume)
         .ok_or(GoalError::GoalStatusDoesNotAllowOperator)?;
@@ -483,7 +477,7 @@ pub(super) async fn stage_busy_resume(
     if identity.did() != goal.node_did {
         return Err(GoalError::GoalResumeRequiresNodeSigningIdentity);
     }
-    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus2)?;
+    let state = goal.state().ok_or(GoalError::GoalHasUnknownStatus)?;
     if state.status != GoalStatus::Paused {
         return Err(GoalError::OnlyPausedGoalCanResumeCurrent);
     }

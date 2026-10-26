@@ -26,21 +26,6 @@ use crate::lean_vocab_test::{
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type Result<T, E = BoxError> = std::result::Result<T, E>;
 
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
-struct ContextError {
-    message: String,
-    #[source]
-    source: BoxError,
-}
-
-fn context(message: impl Into<String>, source: impl Into<BoxError>) -> BoxError {
-    Box::new(ContextError {
-        message: message.into(),
-        source: source.into(),
-    })
-}
-
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +50,20 @@ enum NativeFixtureError {
     SequenceOverflow,
     #[error("native sequence exceeds u32")]
     SequenceOutOfRange(#[source] std::num::TryFromIntError),
+    #[error("native terminal recovery owner failed")]
+    TerminalRecoveryOwner(#[source] crate::lifecycle::CanonicalRecoveryError),
+    #[error("native fixture identity directory")]
+    IdentityDirectory(#[source] std::io::Error),
+    #[error("same-task guarded append failed unexpectedly")]
+    GuardedAppend(#[source] crate::streaming::canonical::CanonicalStreamError),
+    #[error("native tool dispatch owner failed")]
+    ToolDispatchOwner(#[source] crate::tool_call_lifecycle::TransitionError),
+    #[error("native CloseAuxiliary owner failed")]
+    CloseAuxiliaryOwner(#[source] crate::streaming::canonical::CanonicalStreamError),
+    #[error("native ClosePartial owner failed")]
+    ClosePartialOwner(#[source] crate::streaming::canonical::CanonicalStreamError),
+    #[error("native provider publication owner failed")]
+    ProviderPublicationOwner(#[source] crate::streaming::canonical::CanonicalStreamError),
 }
 
 fn fixture_time(value: u64) -> Result<DateTime<Utc>, NativeFixtureError> {
@@ -616,7 +615,7 @@ impl NativeCanonicalExecution {
             {
                 return self.observe(false).await;
             }
-            Err(error) => return Err(context("native terminal recovery owner failed", error)),
+            Err(error) => return Err(NativeFixtureError::TerminalRecoveryOwner(error).into()),
             Ok(crate::lifecycle::RecoveryResult::Won { .. }) => {}
         }
         let segments = self.node.execute(&format!(
@@ -1416,8 +1415,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 title_binding.map_or(seed.request_id, |binding| binding.logical_request)
             );
             let initial_session_id = format!("lean-session-{}", seed.session_id);
-            let key_dir = tempfile::tempdir()
-                .map_err(|source| context("native fixture identity directory", source))?;
+            let key_dir = tempfile::tempdir().map_err(NativeFixtureError::IdentityDirectory)?;
             let identity: Arc<dyn NodeIdentity> = Arc::new(crate::KeyIdentity::load_or_create(
                 key_dir.path().join("agent.key"),
                 None,
@@ -1814,10 +1812,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         {
                             native.observe(false).await
                         }
-                        Err(error) => Err(context(
-                            "same-task guarded append failed unexpectedly",
-                            error,
-                        )),
+                        Err(error) => Err(NativeFixtureError::GuardedAppend(error).into()),
                         Ok(()) => Err("same-task guarded append bypassed mutation gate".into()),
                     }
                 }
@@ -1893,7 +1888,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Err(error) if error.dispatch_rejection().is_some() => {
                             native.observe(false).await
                         }
-                        Err(error) => Err(context("native tool dispatch owner failed", error)),
+                        Err(error) => Err(NativeFixtureError::ToolDispatchOwner(error).into()),
                     }
                 }
                 LeanCanonicalExecutionOperation::TerminalizeCompleted {
@@ -2170,7 +2165,7 @@ impl NativeCanonicalExecution {
             {
                 return self.observe(false).await;
             }
-            Err(error) => return Err(context("native CloseAuxiliary owner failed", error)),
+            Err(error) => return Err(NativeFixtureError::CloseAuxiliaryOwner(error).into()),
         }
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
         let response = crate::config_client::ConfigAccess::local(self.node.clone())
@@ -2279,7 +2274,7 @@ impl NativeCanonicalExecution {
             {
                 return self.observe(false).await;
             }
-            Err(error) => return Err(context("native ClosePartial owner failed", error)),
+            Err(error) => return Err(NativeFixtureError::ClosePartialOwner(error).into()),
         };
 
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
@@ -2467,13 +2462,7 @@ impl NativeCanonicalExecution {
             {
                 return self.observe(false).await;
             }
-            Err(error) => {
-                let detail = format!(
-                    "native provider publication owner failed: {}",
-                    ErrorChain(&error)
-                );
-                return Err(context(detail, error));
-            }
+            Err(error) => return Err(NativeFixtureError::ProviderPublicationOwner(error).into()),
         };
         let (stored_header, stored_native) = crate::session::load_canonical_message_from_node(
             &self.node,
