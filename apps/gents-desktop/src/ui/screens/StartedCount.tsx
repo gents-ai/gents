@@ -3,12 +3,14 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { href } from "@/lib/router";
 import { sessionKeyOf } from "../../hooks/fleetStore";
+import { workersOf } from "../hooks/useFleet";
+import { useWorkerAgents, WorkerAgents } from "./WorkerAgents";
 
 const TRIGGER =
   "relative z-10 -mx-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground tabular-nums hover:bg-foreground/6 hover:text-foreground aria-expanded:text-foreground";
 
-/** How many sessions `session` started, with a dot while any of them, or
-    anything they started, is working. A link to that level of the list, or,
+/** How many sessions `session` started, after their agents, with a dot
+    while any of them, or anything they started, is working. A link to that level of the list, or,
     given `onToggle`, a disclosure for showing them in place. */
 export function StartedCount({
   session,
@@ -23,6 +25,7 @@ export function StartedCount({
   open?: boolean;
   onToggle?: () => void;
 }) {
+  const agents = useWorkerAgents((state) => workersOf(state, session));
   if (started === 0) return null;
   const count =
     `${started} started session${started === 1 ? "" : "s"}` +
@@ -49,10 +52,14 @@ export function StartedCount({
           )
         }
       >
-        <SquareStack className="size-3.5" />
+        {agents.length > 0 ? (
+          <WorkerAgents names={agents} />
+        ) : (
+          <SquareStack className="size-3.5" />
+        )}
         {started}
         {running > 0 && (
-          <span className="absolute top-0.5 left-4 size-1.5 rounded-full bg-brand" />
+          <span className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-brand" />
         )}
       </TooltipTrigger>
       <TooltipContent side="top" className="pointer-events-none">

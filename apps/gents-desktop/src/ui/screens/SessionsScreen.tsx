@@ -72,7 +72,7 @@ import {
 } from "./SessionRowMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { listViews, useListViews } from "@/app/listViews";
-import { NO_SESSIONS, useFleet } from "../hooks/useFleet";
+import { useFleet } from "../hooks/useFleet";
 
 /* a session, and after an open group that leaves some out, the way to all
    of them */
@@ -135,7 +135,6 @@ export function SessionsScreen({
     ),
   );
   const parents = useFleet((s) => s.parentOf);
-  const workers = useFleet((s) => s.workersOf);
   const parentOf = useCallback(
     (c: SessionSummary): SessionSummary | null => parents[sessionKeyOf(c)] ?? null,
     [parents],
@@ -315,7 +314,6 @@ export function SessionsScreen({
             parentOf={parentOf}
             listed={listed}
             onToggle={opened.toggle}
-            workers={workers}
           />
         </div>
       </div>
@@ -404,7 +402,6 @@ function SessionList({
   parentOf,
   listed,
   onToggle,
-  workers,
 }: {
   rows: Row[];
   level: SessionSummary | null;
@@ -414,7 +411,6 @@ function SessionList({
   listed: ReadonlyMap<string, SessionSummary>;
   /** with the rows a close takes along: everything opened under it */
   onToggle: (key: string, under: readonly string[]) => void;
-  workers: Readonly<Record<string, readonly SessionSummary[]>>;
 }) {
   const items = useMemo(() => {
     const out: Item[] = [];
@@ -558,7 +554,6 @@ function SessionList({
             }
             flash={flash === row.session.sessionId}
             enter={entering.get(sessionKeyOf(row.session)) ?? null}
-            workers={workers[sessionKeyOf(row.session)] ?? NO_SESSIONS}
           />
         );
       })}
@@ -601,7 +596,6 @@ const SessionRow = memo(function SessionRow({
   onToggle,
   flash,
   enter,
-  workers,
   attributes = {},
 }: {
   attributes?: ComponentProps<"li">;
@@ -612,7 +606,6 @@ const SessionRow = memo(function SessionRow({
   flash: boolean;
   /** its place in a group just opened, for a short staggered entrance */
   enter: number | null;
-  workers: readonly SessionSummary[];
 }) {
   const { session, path, depth, started, running, open } = row;
   const condensed = depth > 0;
@@ -704,17 +697,16 @@ const SessionRow = memo(function SessionRow({
           )}
         </div>
         {/* a column of its own, so counts line up down the list */}
-        <span className="flex w-9 justify-end">
+        <span className="flex w-16 justify-end">
           <StartedCount session={session} started={started} running={running} />
         </span>
-        {/* a slot that fits a resting stack of three, so the counts before it
+        {/* a slot that fits the agent and its node, so the counts before it
             line up down the list */}
-        <span className="relative z-10 flex min-w-18 justify-end">
+        <span className="relative z-10 flex min-w-12 justify-end">
           <NodeAgentStack
             nodeDid={nodeOfSession(session)}
             agentId={session.agentId}
             size={condensed ? "sm" : "md"}
-            workers={condensed ? NO_SESSIONS : workers}
           />
         </span>
         <span
