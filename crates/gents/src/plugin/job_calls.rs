@@ -7,7 +7,6 @@ use rapidhash::RapidHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::Result;
 use gents_protocol::job::{
     ChildOutputRequest, ChildOutputResponse, ChildOutputSlice, JobCall, JobChildState,
     JobChildView, JobPin, JobProgress, JobResultRequest, JobResultResponse, JobState, RoundResult,
@@ -21,9 +20,11 @@ use crate::background_tools::{
     ProcessControlScope, ReadToolOutputOutcome,
 };
 use crate::config_client::ConfigAccess;
+use crate::config_client::ConfigClientError;
 use crate::defra_node::EmbeddedNode;
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::plugin_job::input::derive_children;
+use crate::plugin_job::input::InputError;
 use crate::tool_call_lifecycle::{CausedRequestTerminal, ToolCallState};
 
 const MAX_REQUESTS_PER_ROUND: usize = 16;
@@ -194,16 +195,27 @@ pub enum JobCallError {
     OtherPlugin { row_doc_id: String },
     #[error("not_terminal: job row {row_doc_id} is still running; call `status` on it and read its result once it is terminal")]
     NotTerminal { row_doc_id: String },
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Input(#[from] InputError),
+    #[error(transparent)]
+    Terminals(#[from] crate::background_tools::QueryRowsError),
+    #[error(transparent)]
+    ToolOutput(#[from] crate::background_tools::BackgroundToolsError),
 }
 
-fn answer<T>(outcome: Result<T>) -> Value
+type Result<T, E = JobCallError> = std::result::Result<T, E>;
+
+fn answer<T, E>(outcome: Result<T, E>) -> Value
 where
     T: Serialize,
+    E: std::error::Error,
 {
     let round = match outcome {
         Ok(result) => RoundResult::Result { result },
         Err(error) => RoundResult::Error {
-            error: format!("{}", ErrorChain(error.as_ref())),
+            error: format!("{}", ErrorChain(&error)),
         },
     };
     serde_json::to_value(round).expect("a round result has a JSON encoding")
@@ -283,8 +295,7 @@ async fn child_output_slots(
             return Err(JobCallError::NoOutput {
                 slot: slot.clone(),
                 state: view.state,
-            }
-            .into());
+            });
         };
         let (text, truncated) = page(output, request.offset, cap);
         slots.insert(
@@ -373,18 +384,16 @@ pub async fn result(
         .is_some_and(|pin| pin.plugin_ref == coordinate);
     if !result_read(&caller.scope, &owner, same_plugin, terminal) {
         if !result_read(&caller.scope, &owner, true, true) {
-            return Err(outside().into());
+            return Err(outside());
         }
         if !same_plugin {
             return Err(JobCallError::OtherPlugin {
                 row_doc_id: row_doc_id.to_owned(),
-            }
-            .into());
+            });
         }
         return Err(JobCallError::NotTerminal {
             row_doc_id: row_doc_id.to_owned(),
-        }
-        .into());
+        });
     }
     let limit = usize::try_from(request.limit)
         .unwrap_or(usize::MAX)
@@ -399,7 +408,7 @@ pub async fn result(
     )
     .await?
     else {
-        return Err(outside().into());
+        return Err(outside());
     };
     Ok(JobResultResponse {
         row_doc_id: row_doc_id.to_owned(),

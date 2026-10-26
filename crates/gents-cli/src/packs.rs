@@ -237,7 +237,7 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
 
 /// Every UX plugin on disk under `home` (dev folder and installed packs).
 pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents::ux_plugin::UxListing>> {
-    gents::ux_plugin::list(home)
+    Ok(gents::ux_plugin::list(home)?)
 }
 
 /// The module for the UX plugin `id`, produced from its file or by running

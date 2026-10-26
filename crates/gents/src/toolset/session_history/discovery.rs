@@ -3,7 +3,7 @@ use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{clamp_limit, SessionHistoryParams, SessionHistoryTool};
+use super::{clamp_limit, SessionHistoryError, SessionHistoryParams, SessionHistoryTool};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
@@ -36,7 +36,7 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
     })
 }
 
-fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
+fn missing_search_query(args: &SessionHistoryParams) -> SessionHistoryError {
     let mut next = json!({"action":"search","query":"<text to find>"});
     if let Some(filter) = &args.filter {
         let mut filter = serde_json::to_value(filter).expect("session filter serializes");
@@ -56,7 +56,7 @@ fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
     if let Some(limit) = args.limit {
         next["limit"] = json!(limit);
     }
-    anyhow::anyhow!("search requires query; filter.text matches only titles and IDs; next call: sessions {next}")
+    SessionHistoryError::MissingSearchQuery { next }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

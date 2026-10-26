@@ -124,6 +124,9 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::background_tools::QueryRowsError>(cause))
         .or_else(|| wrapped::<crate::run_timeline_fetch::RunTimelineError>(cause))
         .or_else(|| wrapped::<crate::lifecycle::MaterializeError>(cause))
+        .or_else(|| wrapped::<crate::plugin::model_calls::ModelCallError>(cause))
+        .or_else(|| wrapped::<crate::plugin::data::DataQueryError>(cause))
+        .or_else(|| wrapped::<crate::plugin_job::input::InputError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

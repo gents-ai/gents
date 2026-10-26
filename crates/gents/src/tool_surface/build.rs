@@ -26,6 +26,8 @@ pub enum BuildError {
     RootAdmission(#[from] RootAdmissionError),
     #[error(transparent)]
     ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Registry(#[from] crate::registry::RegistryError),
     #[error("resolving agent {agent_name} file tool root {}", selection_root.display())]
     AgentFileToolRoot {
         agent_name: String,
@@ -41,6 +43,8 @@ impl crate::config_client::TransactionFailure for BuildError {
             Self::ConfigClient(error) => Some(error),
             Self::RootAdmission(error) => error.config_client_error(),
             Self::AgentFileToolRoot { source, .. } => source.config_client_error(),
+            Self::Registry(crate::registry::RegistryError::Query(error)) => Some(error),
+            Self::Registry(_) => None,
             Self::ToolSurface(_) => None,
         }
     }
@@ -411,7 +415,7 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
 pub(super) async fn enabled_mcp_service_ids(
     node: &EmbeddedNode,
     node_did: &str,
-) -> anyhow::Result<Vec<String>> {
+) -> Result<Vec<String>> {
     Ok(crate::registry::configured_mcp_services(node, node_did)
         .await?
         .into_iter()
@@ -423,7 +427,7 @@ pub(super) async fn enabled_mcp_service_ids(
 pub(crate) async fn measured_available_mcp_service_ids(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-) -> anyhow::Result<Vec<String>> {
+) -> Result<Vec<String>> {
     let services = crate::registry::configured_mcp_services(node, node_did).await?;
     if services.is_empty() {
         return Ok(Vec::new());
@@ -442,12 +446,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
     let hostname = hostname::get()
         .ok()
         .and_then(|value| value.into_string().ok());
-    Ok(project_measured_mcp_services(
-        node_did,
-        &services,
-        &response,
-        hostname.as_deref(),
-    )?)
+    project_measured_mcp_services(node_did, &services, &response, hostname.as_deref())
 }
 
 /// A remote server's loopback endpoint is never inferred from the CLI host.

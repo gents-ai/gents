@@ -176,6 +176,42 @@ pub enum GoalError {
     AssignmentRequestDiffersFromItsPhysicalOwner,
     #[error("assignment request logical identity differs from its physical observation")]
     AssignmentRequestLogicalIdentityDiffersFromIts,
+    #[error("illegal durable Goal transition {from} -> {to}")]
+    IllegalDurableTransition { from: String, to: String },
+    #[error("goal creation key resolved to multiple claims")]
+    GoalCreationKeyMultipleClaims,
+    #[error("goal-backed request requires a stable retry_key")]
+    GoalBackedRequestRequiresRetryKey,
+    #[error("AgentRequest retry key is not unique")]
+    AgentRequestRetryKeyNotUnique,
+    #[error("decoding AgentRequest fingerprint")]
+    DecodeAgentRequestFingerprint(#[source] serde_json::Error),
+    #[error("AgentRequest retry key conflicts with a different immutable request")]
+    AgentRequestRetryKeyConflicts,
+    #[error("AgentRequest matched by retry key has no document ID")]
+    AgentRequestMatchedByRetryKeyHasNoDocumentId,
+    #[error("decoding committed goal-backed request Goal rows")]
+    DecodeCommittedGoalBackedRequestGoalRows(#[source] serde_json::Error),
+    #[error("goal-backed request exists without its durable goal")]
+    GoalBackedRequestExistsWithoutDurableGoal,
+    #[error("goal-backed request creation key is not unique")]
+    GoalBackedRequestCreationKeyNotUnique,
+    #[error("goal-backed request exists without its durable goal claim")]
+    GoalBackedRequestExistsWithoutDurableGoalClaim,
+    #[error("goal-backed request conflicts with its durable goal claim")]
+    GoalBackedRequestConflictsWithItsDurableGoalClaim,
+    #[error("Goal opening disappeared during publication")]
+    GoalOpeningDisappearedDuringPublication,
+    #[error("Goal opening identity changed during publication")]
+    GoalOpeningIdentityChangedDuringPublication,
+    #[error("Goal first request conflicts with its assignment binding")]
+    GoalFirstRequestConflictsWithItsAssignmentBinding,
+    #[error("Goal first request binding changed during publication")]
+    GoalFirstRequestBindingChangedDuringPublication,
+    #[error("Task Goal assignment changed before publication or claim")]
+    TaskGoalAssignmentChangedBeforePublicationOrClaim,
+    #[error("decoding Goal rows")]
+    DecodeGoalRows(#[source] crate::graphql::GraphqlResponseError),
 }
 
 impl From<crate::watcher::WatcherError> for GoalError {
@@ -205,6 +241,7 @@ impl crate::config_client::TransactionFailure for GoalError {
             Self::Graphql(error) => error.config_client_error(),
             Self::History(error) => error.config_client_error(),
             Self::Queue(error) => error.config_client_error(),
+            Self::DecodeGoalRows(error) => error.config_client_error(),
             _ => None,
         }
     }
@@ -747,17 +784,19 @@ fn operator_action_for_status(current: GoalStatus, target: GoalStatus) -> Option
     })
 }
 
-pub fn apply_operator_status_transition(state: GoalState, target: GoalStatus) -> Result<GoalState> {
+pub fn apply_operator_status_transition(
+    state: GoalState,
+    target: GoalStatus,
+) -> Result<GoalState, GoalError> {
     let Some(action) = operator_action_for_status(state.status, target) else {
         return Ok(state);
     };
-    state.step(action).with_context(|| {
-        format!(
-            "illegal durable Goal transition {} -> {}",
-            state.status.as_str(),
-            target.as_str()
-        )
-    })
+    state
+        .step(action)
+        .ok_or_else(|| GoalError::IllegalDurableTransition {
+            from: state.status.as_str().to_owned(),
+            to: target.as_str().to_owned(),
+        })
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1007,7 +1046,7 @@ pub(crate) async fn load_goal_creation_claim_fingerprint(
     node: &EmbeddedNode,
     node_did: &str,
     session_id: &str,
-) -> Result<Option<GoalCreationFingerprint>> {
+) -> Result<Option<GoalCreationFingerprint>, GoalError> {
     let query = goal_creation_claim_query(node_did, session_id);
     let response = graphql_with_transaction_retry(node, &query, "load goal creation claim").await?;
     goal_creation_claim_fingerprint(&response)
@@ -1017,7 +1056,7 @@ pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<Option<GoalCreationFingerprint>> {
+) -> Result<Option<GoalCreationFingerprint>, GoalError> {
     let response = txn
         .execute_local_response(&goal_creation_claim_query(node_did, session_id))
         .await?;
@@ -1035,7 +1074,7 @@ fn goal_creation_claim_query(node_did: &str, session_id: &str) -> String {
 
 fn goal_creation_claim_fingerprint(
     response: &defra_node::QueryResponse,
-) -> Result<Option<GoalCreationFingerprint>> {
+) -> Result<Option<GoalCreationFingerprint>, GoalError> {
     #[derive(Deserialize)]
     struct ClaimRow {
         node_did: String,
@@ -1044,10 +1083,9 @@ fn goal_creation_claim_fingerprint(
         token_budget: Option<i64>,
     }
     let claims: Vec<ClaimRow> = rows(response, "GoalCreationClaim")?;
-    anyhow::ensure!(
-        claims.len() <= 1,
-        "goal creation key resolved to multiple claims"
-    );
+    if claims.len() > 1 {
+        return Err(GoalError::GoalCreationKeyMultipleClaims);
+    }
     Ok(claims
         .into_iter()
         .next()
@@ -1511,7 +1549,7 @@ async fn create_goal_for_session_inner(
                     && existing.token_budget == token_budget
                     && load_goal_creation_claim_fingerprint(node, node_did, session_id)
                         .await
-                        .map_err(CreateGoalForSessionError::Storage)?
+                        .map_err(|error| CreateGoalForSessionError::Storage(error.into()))?
                         == Some(requested_fingerprint.clone())
                 {
                     return Ok(CreateGoalForSessionOutcome::Idempotent(existing));
@@ -1717,13 +1755,13 @@ fn authorize_goal_submission_commit(
 
 fn resolve_ambiguous_goal_submission_commit(
     commit_error: anyhow::Error,
-    recovery: Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>>,
+    recovery: Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>, GoalError>,
 ) -> Result<GoalBackedRequestDisposition> {
     match recovery {
         Ok(Some(_)) => Ok(GoalBackedRequestDisposition::Idempotent),
         Ok(None) => Err(commit_error),
         Err(recovery_error) => Err(anyhow::anyhow!(
-            "goal-backed request recovery failed after ambiguous commit: {}; original commit error: {}", ErrorChain(recovery_error.as_ref()), ErrorChain(commit_error.as_ref())
+            "goal-backed request recovery failed after ambiguous commit: {}; original commit error: {}", ErrorChain(&recovery_error), ErrorChain(commit_error.as_ref())
         )),
     }
 }
@@ -1913,11 +1951,11 @@ fn goal_backed_request_recovery_query(
     node_did: &str,
     session_id: &str,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<String> {
+) -> Result<String, GoalError> {
     let retry_key = request
         .retry_key
         .as_deref()
-        .context("goal-backed request requires a stable retry_key")?;
+        .ok_or(GoalError::GoalBackedRequestRequiresRetryKey)?;
     Ok(format!(
         r#"{{
             AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -1933,21 +1971,22 @@ fn goal_backed_request_recovery_query(
 fn decode_agent_request_by_retry_key(
     rows: &[serde_json::Value],
     expected: &GoalBackedRequestFingerprint,
-) -> Result<Option<String>> {
-    anyhow::ensure!(rows.len() <= 1, "AgentRequest retry key is not unique");
+) -> Result<Option<String>, GoalError> {
+    if rows.len() > 1 {
+        return Err(GoalError::AgentRequestRetryKeyNotUnique);
+    }
     let Some(row) = rows.first() else {
         return Ok(None);
     };
     let persisted: GoalBackedRequestFingerprint =
-        serde_json::from_value(row.clone()).context("decoding AgentRequest fingerprint")?;
-    anyhow::ensure!(
-        persisted == *expected,
-        "AgentRequest retry key conflicts with a different immutable request"
-    );
+        serde_json::from_value(row.clone()).map_err(GoalError::DecodeAgentRequestFingerprint)?;
+    if persisted != *expected {
+        return Err(GoalError::AgentRequestRetryKeyConflicts);
+    }
     row.get("_docID")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
-        .context("AgentRequest matched by retry key has no document ID")
+        .ok_or(GoalError::AgentRequestMatchedByRetryKeyHasNoDocumentId)
         .map(Some)
 }
 
@@ -1955,7 +1994,7 @@ pub(crate) async fn load_agent_request_by_retry_key(
     node: &EmbeddedNode,
     retry_key: &str,
     expected: &GoalBackedRequestFingerprint,
-) -> Result<Option<String>> {
+) -> Result<Option<String>, GoalError> {
     let query = format!(
         r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{
             _docID {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
@@ -1973,7 +2012,7 @@ fn verify_goal_creation_claim_cross_check(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
-) -> Result<()> {
+) -> Result<(), GoalError> {
     let expected_claim = GoalCreationFingerprint {
         owner: node_did.to_string(),
         session: session_id.to_string(),
@@ -1986,23 +2025,22 @@ fn verify_goal_creation_claim_cross_check(
             .cloned()
             .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
     )
-    .context("decoding committed goal-backed request Goal rows")?;
+    .map_err(GoalError::DecodeCommittedGoalBackedRequestGoalRows)?;
     sort_goals_canonical(&mut goals);
     let goal = goals
         .first()
-        .context("goal-backed request exists without its durable goal")?;
+        .ok_or(GoalError::GoalBackedRequestExistsWithoutDurableGoal)?;
     let claims = response
         .pointer("/data/GoalCreationClaim")
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    anyhow::ensure!(
-        claims.len() <= 1,
-        "goal-backed request creation key is not unique"
-    );
+    if claims.len() > 1 {
+        return Err(GoalError::GoalBackedRequestCreationKeyNotUnique);
+    }
     let claim = claims
         .first()
-        .context("goal-backed request exists without its durable goal claim")?;
+        .ok_or(GoalError::GoalBackedRequestExistsWithoutDurableGoalClaim)?;
     let claim_goal_id = claim
         .get("goal_id")
         .and_then(serde_json::Value::as_str)
@@ -2028,15 +2066,15 @@ fn verify_goal_creation_claim_cross_check(
             .and_then(serde_json::Value::as_i64)
             .map(i128::from),
     };
-    anyhow::ensure!(
-        goal.node_did == node_did
-            && goal.session_id == session_id
-            && goal.objective.trim() == expected_claim.objective
-            && goal.token_budget == token_budget
-            && claim_goal_id == goal.goal_id
-            && claim == expected_claim,
-        "goal-backed request conflicts with its durable goal claim"
-    );
+    if !(goal.node_did == node_did
+        && goal.session_id == session_id
+        && goal.objective.trim() == expected_claim.objective
+        && goal.token_budget == token_budget
+        && claim_goal_id == goal.goal_id
+        && claim == expected_claim)
+    {
+        return Err(GoalError::GoalBackedRequestConflictsWithItsDurableGoalClaim);
+    }
     Ok(())
 }
 
@@ -2047,7 +2085,7 @@ fn decode_goal_backed_request_recovery(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>, GoalError> {
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
@@ -2078,7 +2116,7 @@ async fn load_goal_backed_request_by_retry_key_from_access(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>, GoalError> {
     let query = goal_backed_request_recovery_query(node_did, session_id, request)?;
     let response = access.execute(&query).await?;
     decode_goal_backed_request_recovery(
@@ -2105,11 +2143,11 @@ async fn load_goal_backed_request_by_retry_key(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>, GoalError> {
     let retry_key = request
         .retry_key
         .as_deref()
-        .context("goal-backed request requires a stable retry_key")?;
+        .ok_or(GoalError::GoalBackedRequestRequiresRetryKey)?;
     let expected = GoalBackedRequestFingerprint::from_create(request)?;
     let Some(doc_id) = load_agent_request_by_retry_key(node, retry_key, &expected).await? else {
         return Ok(None);
@@ -2327,9 +2365,12 @@ pub(crate) fn sort_goals_canonical(goals: &mut [GoalDocument]) {
     });
 }
 
-async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDocument>> {
+async fn decode_goal_rows(
+    node: &EmbeddedNode,
+    query: &str,
+) -> Result<Vec<GoalDocument>, GoalError> {
     let response = graphql_with_transaction_retry(node, query, "Goal query").await?;
-    rows(&response, "Goal").context("decoding Goal rows")
+    rows(&response, "Goal").map_err(GoalError::DecodeGoalRows)
 }
 
 pub async fn set_goal(

@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use super::provenance::ProvenanceError;
@@ -24,6 +23,15 @@ pub enum InferenceError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Provenance(#[from] ProvenanceError),
+    #[error(transparent)]
+    Pack(#[from] crate::pack::PackError),
+    #[error("profile {profile_id:?} cannot serve plugin slot {slot:?}")]
+    PluginSlot {
+        profile_id: String,
+        slot: String,
+        #[source]
+        source: Box<crate::plugin::model_calls::ModelCallError>,
+    },
     #[error("pack owner DID must not be blank")]
     NodeDidBlank,
     #[error("pack {pack} has no inference slot {slot:?}")]
@@ -82,6 +90,7 @@ impl TransactionFailure for InferenceError {
             Self::ConfigClient(error) => Some(error),
             Self::DocumentConfig(error) => error.config_client_error(),
             Self::Provenance(error) => error.config_client_error(),
+            Self::PluginSlot { source, .. } => source.config_client_error(),
             _ => None,
         }
     }
@@ -114,10 +123,10 @@ pub async fn inspect_pack_inference_bindings(
     manifest: &PackManifest,
     node_did: &str,
     requested: &PackInferenceBindings,
-) -> anyhow::Result<PackInferenceBindingPreview> {
+) -> Result<PackInferenceBindingPreview> {
     super::validate_pack_manifest(manifest)?;
     if node_did.trim().is_empty() {
-        return Err(InferenceError::NodeDidBlank.into());
+        return Err(InferenceError::NodeDidBlank);
     }
 
     let options = inference_profile_options(access, node_did).await?;
@@ -132,8 +141,7 @@ pub async fn inspect_pack_inference_bindings(
             return Err(InferenceError::UnknownSlot {
                 pack: manifest.name.clone(),
                 slot: slot.clone(),
-            }
-            .into());
+            });
         }
     }
     for (slot, profile_id) in requested {
@@ -154,8 +162,7 @@ pub async fn inspect_pack_inference_bindings(
                     .as_deref()
                     .unwrap_or("unknown reason")
                     .to_owned(),
-            }
-            .into());
+            });
         }
     }
 
@@ -240,7 +247,7 @@ pub async fn preview_pack_inference_bindings(
     manifest: &PackManifest,
     node_did: &str,
     requested: &PackInferenceBindings,
-) -> anyhow::Result<PackInferenceBindingPreview> {
+) -> Result<PackInferenceBindingPreview> {
     let mut preview =
         inspect_pack_inference_bindings(access, manifest, node_did, requested).await?;
     use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
@@ -258,8 +265,10 @@ pub async fn preview_pack_inference_bindings(
                     profile_id: profile_id.clone(),
                 })
                 .await
-                .with_context(|| {
-                    format!("profile {profile_id:?} cannot serve plugin slot {slot:?}")
+                .map_err(|source| InferenceError::PluginSlot {
+                    profile_id: profile_id.clone(),
+                    slot: slot.clone(),
+                    source: Box::new(source),
                 })?;
         }
     }
@@ -280,8 +289,7 @@ pub async fn preview_pack_inference_bindings(
         return Err(InferenceError::NoUsableProfile {
             pack: manifest.name.clone(),
             node_did: node_did.to_owned(),
-        }
-        .into());
+        });
     }
     if requested.is_empty() && required.len() == 1 && usable.len() == 1 {
         let slot = required[0].name.clone();
@@ -298,8 +306,7 @@ pub async fn preview_pack_inference_bindings(
         return Err(InferenceError::MissingBindings {
             pack: manifest.name.clone(),
             missing: missing.join(", "),
-        }
-        .into());
+        });
     }
     Ok(preview)
 }

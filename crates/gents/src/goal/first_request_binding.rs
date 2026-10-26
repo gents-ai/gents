@@ -95,27 +95,26 @@ pub(crate) async fn bind_goal_first_request_in_txn(
     goal: &GoalDocument,
     request_doc_id: &str,
     reference: Option<&GoalAssignmentInput>,
-) -> Result<()> {
+) -> Result<(), GoalError> {
     let observed = load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id)
         .await?
-        .context("Goal opening disappeared during publication")?;
-    anyhow::ensure!(
-        observed.doc_id == goal.doc_id && observed.goal_id == goal.goal_id,
-        "Goal opening identity changed during publication"
-    );
+        .ok_or(GoalError::GoalOpeningDisappearedDuringPublication)?;
+    if !(observed.doc_id == goal.doc_id && observed.goal_id == goal.goal_id) {
+        return Err(GoalError::GoalOpeningIdentityChangedDuringPublication);
+    }
     let goal = &observed;
-    anyhow::ensure!(
-        !goal.goal_id.is_empty()
-            && !request_doc_id.is_empty()
-            && reference.is_none_or(|reference| {
-                reference.goal_id == goal.goal_id && reference.root_request_doc_id.is_none()
-            })
-            && goal
-                .assignment_root_request_doc_id
-                .as_deref()
-                .is_none_or(|root| root == request_doc_id),
-        "Goal first request conflicts with its assignment binding"
-    );
+    if !(!goal.goal_id.is_empty()
+        && !request_doc_id.is_empty()
+        && reference.is_none_or(|reference| {
+            reference.goal_id == goal.goal_id && reference.root_request_doc_id.is_none()
+        })
+        && goal
+            .assignment_root_request_doc_id
+            .as_deref()
+            .is_none_or(|root| root == request_doc_id))
+    {
+        return Err(GoalError::GoalFirstRequestConflictsWithItsAssignmentBinding);
+    }
     if goal.assignment_root_request_doc_id.is_some() {
         return Ok(());
     }
@@ -128,12 +127,12 @@ pub(crate) async fn bind_goal_first_request_in_txn(
             escape_graphql_string(request_doc_id),
         ))
         .await?;
-    anyhow::ensure!(
-        response["data"]["update_Goal"]
-            .as_array()
-            .is_some_and(|rows| rows.len() == 1),
-        "Goal first request binding changed during publication"
-    );
+    if !(response["data"]["update_Goal"]
+        .as_array()
+        .is_some_and(|rows| rows.len() == 1))
+    {
+        return Err(GoalError::GoalFirstRequestBindingChangedDuringPublication);
+    }
     Ok(())
 }
 
@@ -149,20 +148,20 @@ pub(crate) async fn validate_task_goal_identity_in_txn(
     session_id: &str,
     goal_id: &str,
     reference: Option<&GoalAssignmentInput>,
-) -> Result<()> {
+) -> Result<(), GoalError> {
     let current = load_canonical_goal_in_txn(txn, node_did, session_id).await?;
-    anyhow::ensure!(
-        goal_id
-            == task_assignment_goal_id(
-                current.as_ref().map(|goal| goal.goal_id.as_str()),
-                node_did,
-                session_id
-            )
-            && reference
-                .is_none_or(|reference| reference.goal_id == goal_id
-                    && reference.root_request_doc_id.is_none()),
-        "Task Goal assignment changed before publication or claim"
-    );
+    if !(goal_id
+        == task_assignment_goal_id(
+            current.as_ref().map(|goal| goal.goal_id.as_str()),
+            node_did,
+            session_id,
+        )
+        && reference.is_none_or(|reference| {
+            reference.goal_id == goal_id && reference.root_request_doc_id.is_none()
+        }))
+    {
+        return Err(GoalError::TaskGoalAssignmentChangedBeforePublicationOrClaim);
+    }
     Ok(())
 }
 

@@ -63,12 +63,12 @@ fn malformed(message: impl std::fmt::Display) -> JobReadError {
     }
 }
 
-fn unavailable(error: anyhow::Error) -> JobReadError {
+fn unavailable<E>(error: E) -> JobReadError
+where
+    E: std::error::Error,
+{
     JobReadError::Unavailable {
-        message: format!(
-            "{}; retry when the node answers",
-            ErrorChain(error.as_ref())
-        ),
+        message: format!("{}; retry when the node answers", ErrorChain(&error)),
     }
 }
 
@@ -202,7 +202,7 @@ pub async fn load_job_view(
             "{{ AgentToolCall(filter: {{ {filter} }}) {{ {FIELDS} }} }}"
         ))
         .await
-        .map_err(|error| unavailable(error.into()))?;
+        .map_err(unavailable)?;
     let Some(row) = response
         .pointer("/data/AgentToolCall/0")
         .filter(|row| !row.is_null())
@@ -290,7 +290,7 @@ pub async fn list_jobs(
             clauses.join(", ")
         ))
         .await
-        .map_err(|error| unavailable(error.into()))?;
+        .map_err(unavailable)?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
@@ -373,7 +373,7 @@ async fn outcome_of(
         owner.requester_did.as_deref(),
     )
     .await
-    .map_err(|error| unavailable(error.into()))?;
+    .map_err(unavailable)?;
     let CanonicalToolOutputObservation::Closed(text) = observed else {
         return Ok(None);
     };

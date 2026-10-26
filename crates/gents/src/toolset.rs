@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::Result;
 use rapidhash::RapidHashMap;
 
 mod args;
@@ -280,14 +279,14 @@ impl ToolSet {
             .any(|tool| tool.tool_name() == name && tool.backgroundable())
     }
 
-    pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>> {
+    pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>, ContextError> {
         self.build_native_tools_with_writethrough(None)
     }
 
     pub fn build_native_tools_with_writethrough(
         &self,
         writethrough: Option<lsp::LspWritethrough>,
-    ) -> Result<Vec<Box<dyn ToolDyn>>> {
+    ) -> Result<Vec<Box<dyn ToolDyn>>, ContextError> {
         let read_context = match &self.read_root {
             Some(root) => ToolContext::new(root.clone(), read_root_requires_create(&self.tools))?,
             None => ToolContext::from_default_read_root()?,
@@ -666,7 +665,7 @@ impl ToolSetBuilder {
     }
 }
 
-pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
+pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>, ContextError> {
     ToolSet::builder()
         .list_files()
         .read_file()

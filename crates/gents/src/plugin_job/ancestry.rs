@@ -3,12 +3,25 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
 use gents_protocol::job::JobPin;
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError};
 use crate::graphql::graphql_string_list_literal;
+
+#[derive(Debug, thiserror::Error)]
+pub enum AncestryError {
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error("{collection} ancestry query omitted rows")]
+    RowsOmitted { collection: String },
+    #[error("decoding job_pin")]
+    DecodeJobPin(#[source] serde_json::Error),
+    #[error("AgentToolCall ancestry row omitted session_id")]
+    SessionMissing,
+}
+
+type Result<T, E = AncestryError> = std::result::Result<T, E>;
 
 #[cfg(test)]
 tokio::task_local! {
@@ -44,13 +57,14 @@ pub async fn started_by_job(
         let mut started = false;
         for row in read(access, &document, "AgentToolCall").await? {
             if let Some(pin) = row.get("job_pin").filter(|value| !value.is_null()) {
-                serde_json::from_value::<JobPin>(pin.clone()).context("decoding job_pin")?;
+                serde_json::from_value::<JobPin>(pin.clone())
+                    .map_err(AncestryError::DecodeJobPin)?;
                 started = true;
             } else {
                 let session = row
                     .get("session_id")
                     .and_then(Value::as_str)
-                    .context("AgentToolCall ancestry row omitted session_id")?;
+                    .ok_or(AncestryError::SessionMissing)?;
                 parents.push(session.to_owned());
             }
         }
@@ -74,7 +88,9 @@ async fn read(access: &ConfigAccess, document: &str, collection: &str) -> Result
         .pointer(&format!("/data/{collection}"))
         .and_then(Value::as_array)
         .cloned()
-        .with_context(|| format!("{collection} ancestry query omitted rows"))
+        .ok_or_else(|| AncestryError::RowsOmitted {
+            collection: collection.to_owned(),
+        })
 }
 
 async fn cross_session_calls(access: &ConfigAccess, sessions: &[String]) -> Result<Vec<String>> {
@@ -124,7 +140,7 @@ mod tests {
                 let response = txn
                     .execute_with_variables(&query, &json!({ "input": value }))
                     .await?;
-                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
             })
         })
         .await
@@ -191,7 +207,7 @@ mod tests {
         access: &ConfigAccess,
         session_id: &str,
         hop: u32,
-    ) -> (anyhow::Result<bool>, usize) {
+    ) -> (Result<bool, super::AncestryError>, usize) {
         let queries = Arc::new(AtomicUsize::new(0));
         let output = ANCESTRY_QUERIES
             .scope(queries.clone(), started_by_job(access, session_id, hop))

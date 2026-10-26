@@ -578,6 +578,13 @@ struct ProfileDetailRow {
     context_window: Option<i64>,
 }
 
+/// Messages are model-facing: each names the next call, so keep them stable.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SessionHistoryError {
+    #[error("search requires query; filter.text matches only titles and IDs; next call: sessions {next}")]
+    MissingSearchQuery { next: Value },
+}
+
 #[derive(Debug)]
 pub struct SessionHistoryToolError(anyhow::Error);
 

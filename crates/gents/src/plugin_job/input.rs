@@ -7,7 +7,7 @@ use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context as _;
 use gents_protocol::job::{
     JobCaller, JobCeilingView, JobChildState, JobChildView, JobPin, JobProgress, JobRef,
     JobRootCall, JobRowView, JobStepInput, JobUsage, JobVerifiedScript, PluginJobSettings,
@@ -16,8 +16,10 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::background_tools::caused_request_terminals_in_txn;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
+use crate::background_tools::{caused_request_terminals_in_txn, QueryRowsError};
+use crate::config_client::{
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, ConfigRead, TransactionFailure,
+};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::plugin::job_calls::job_state;
 use crate::plugin::mounts::resolve as resolve_mounts;
@@ -29,12 +31,15 @@ use crate::plugin_job::driver::JobRuntime;
 use crate::plugin_job::effects::scratch_name;
 use crate::plugin_job::keys::decode_job_retry_key;
 use crate::plugin_job::origin::{classify, script_index, Origin};
-use crate::plugin_job::records::{read_pin, read_progress, read_step_state};
+use crate::plugin_job::records::{read_pin, read_progress, read_step_state, JobRecordsError};
 use crate::plugin_job::settings::effective_ceiling;
 use crate::plugin_job::JobBinding;
-use crate::provider_usage::{sum_charged_from_persisted_parts, sum_persisted_usage_columns};
+use crate::provider_usage::{
+    sum_charged_from_persisted_parts, sum_persisted_usage_columns, ProviderUsageError,
+};
 use crate::request_admission::load_request_context;
 use crate::request_binding::load_agent_request_by_doc_id;
+use crate::tool_call_lifecycle::query::ToolCallQueryError;
 use crate::tool_call_lifecycle::{load_tool_call_arguments, CausedRequestTerminal, ToolCallState};
 use crate::watcher::AgentRequest;
 use crate::workspace::request_workspace_cwd;
@@ -77,6 +82,68 @@ struct Attempt {
     usage_only: Vec<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum InputError {
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Records(#[from] JobRecordsError),
+    #[error(transparent)]
+    QueryRows(#[from] QueryRowsError),
+    #[error(transparent)]
+    Arguments(#[from] ToolCallQueryError),
+    #[error(transparent)]
+    Usage(#[from] ProviderUsageError),
+    #[error("{collection} child query omitted rows")]
+    RowsOmitted { collection: String },
+    #[error("decoding {collection} child rows")]
+    DecodeRows {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("spawn request omitted session_id")]
+    SpawnSessionMissing,
+    #[error("two spawn requests share a session")]
+    DuplicateSpawnSession,
+    #[error("duplicate slot attempt")]
+    DuplicateSlotAttempt,
+    #[error("spawn session missing its attempt")]
+    SessionAttemptMissing,
+    #[error("child request omitted _docID")]
+    ChildDocIdMissing,
+    #[error("attempt has no spawn request")]
+    NoSpawnRequest,
+    #[error("attempt lost its latest request")]
+    LatestRequestLost,
+    #[error("spawn request omitted node_did")]
+    SpawnNodeDidMissing,
+    #[error("spawn request omitted agent_id")]
+    SpawnAgentIdMissing,
+    #[error("job row {row_doc_id} does not exist")]
+    JobRowMissing { row_doc_id: String },
+    #[error("decoding the accepted arguments of job row {row_doc_id}")]
+    DecodeArguments {
+        row_doc_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+impl TransactionFailure for InputError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Records(error) => error.config_client_error(),
+            Self::QueryRows(error) => error.config_client_error(),
+            Self::Arguments(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = InputError> = std::result::Result<T, E>;
+
 pub async fn derive_children(
     access: &ConfigAccess,
     chain_rows: &[String],
@@ -114,9 +181,9 @@ pub async fn derive_children_in_txn(
         let session = row
             .session_id
             .clone()
-            .context("spawn request omitted session_id")?;
+            .ok_or(InputError::SpawnSessionMissing)?;
         if sessions.insert(session, (slot.clone(), attempt)).is_some() {
-            anyhow::bail!("two spawn requests share a session");
+            return Err(InputError::DuplicateSpawnSession);
         }
         if attempts
             .insert(
@@ -131,7 +198,7 @@ pub async fn derive_children_in_txn(
             )
             .is_some()
         {
-            anyhow::bail!("duplicate slot attempt");
+            return Err(InputError::DuplicateSlotAttempt);
         }
     }
     if attempts.is_empty() {
@@ -147,7 +214,7 @@ pub async fn derive_children_in_txn(
         };
         let attempt = attempts
             .get_mut(&(slot.clone(), *attempt))
-            .context("spawn session missing its attempt")?;
+            .ok_or(InputError::SessionAttemptMissing)?;
         if row.request_id == attempt.spawn.request_id {
             continue;
         }
@@ -167,7 +234,7 @@ pub async fn derive_children_in_txn(
             latest(attempt)?
                 .doc_id
                 .clone()
-                .context("child request omitted _docID")?,
+                .ok_or(InputError::ChildDocIdMissing)?,
         );
     }
     let usage = usage_by_request(txn, &request_ids).await?;
@@ -185,7 +252,7 @@ fn latest(attempt: &Attempt) -> Result<&Stored> {
             (left.created_at.as_deref(), left.request_id.as_str())
                 .cmp(&(right.created_at.as_deref(), right.request_id.as_str()))
         })
-        .context("attempt has no spawn request")
+        .ok_or(InputError::NoSpawnRequest)
 }
 
 /// Prompt and completion token counts of each request's inference calls.
@@ -205,7 +272,7 @@ fn pair(
     let latest = rows
         .iter()
         .find(|row| row.request_id == latest_id)
-        .context("attempt lost its latest request")?;
+        .ok_or(InputError::LatestRequestLost)?;
     let terminal = latest.doc_id.as_ref().and_then(|doc| terminals.get(doc));
     let state = child_state(terminal);
     let parts = rows
@@ -232,11 +299,11 @@ fn pair(
                 spawn
                     .node_did
                     .clone()
-                    .context("spawn request omitted node_did")?,
+                    .ok_or(InputError::SpawnNodeDidMissing)?,
                 spawn
                     .agent_id
                     .clone()
-                    .context("spawn request omitted agent_id")?,
+                    .ok_or(InputError::SpawnAgentIdMissing)?,
             ),
             state,
             messages: message_count,
@@ -354,8 +421,13 @@ where
     let rows = response
         .pointer(&format!("/data/{collection}"))
         .cloned()
-        .with_context(|| format!("{collection} child query omitted rows"))?;
-    serde_json::from_value(rows).with_context(|| format!("decoding {collection} child rows"))
+        .ok_or_else(|| InputError::RowsOmitted {
+            collection: collection.to_owned(),
+        })?;
+    serde_json::from_value(rows).map_err(|source| InputError::DecodeRows {
+        collection: collection.to_owned(),
+        source,
+    })
 }
 
 /// Which step of a job an input is built for.
@@ -405,7 +477,9 @@ async fn read_call(access: &ConfigAccess, row_doc_id: &str) -> Result<(CallRow, 
         .await?
         .into_iter()
         .next()
-        .with_context(|| format!("job row {row_doc_id} does not exist"))?;
+        .ok_or_else(|| InputError::JobRowMissing {
+            row_doc_id: row_doc_id.to_owned(),
+        })?;
     let text = load_tool_call_arguments(
         access,
         &row.doc_id,
@@ -414,8 +488,10 @@ async fn read_call(access: &ConfigAccess, row_doc_id: &str) -> Result<(CallRow, 
         row.requester_did.as_deref(),
     )
     .await?;
-    let args = serde_json::from_str(&text)
-        .with_context(|| format!("decoding the accepted arguments of job row {row_doc_id}"))?;
+    let args = serde_json::from_str(&text).map_err(|source| InputError::DecodeArguments {
+        row_doc_id: row_doc_id.to_owned(),
+        source,
+    })?;
     Ok((row, args))
 }
 
@@ -425,7 +501,7 @@ pub(super) async fn live_job_settings(
     runtime: &JobRuntime,
     caller: &AgentRequest,
     coordinate: &str,
-) -> Result<Option<PluginJobSettings>> {
+) -> anyhow::Result<Option<PluginJobSettings>> {
     let (_, tools, _) = load_request_context(&runtime.node, &caller.node_did, &caller.agent_id)
         .await
         .context("reading the caller's tools")?;
@@ -533,7 +609,7 @@ pub async fn build_step_input(
     runtime: &JobRuntime,
     row_doc_id: &str,
     step: StepKind<'_>,
-) -> Result<(JobStepInput, u64)> {
+) -> anyhow::Result<(JobStepInput, u64)> {
     let (row, call) = read_call(access, row_doc_id).await?;
     let caller = load_agent_request_by_doc_id(&runtime.node, &row.request_doc_id)
         .await?
@@ -712,7 +788,7 @@ pub(crate) mod tests {
                 let response = txn
                     .execute_with_variables(&query, &json!({ "input": value }))
                     .await?;
-                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
             })
         })
         .await
@@ -733,7 +809,7 @@ pub(crate) mod tests {
                     crate::graphql::escape_graphql_string(state)
                 ))
                 .await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         })
         .await
@@ -807,11 +883,12 @@ pub(crate) mod tests {
         chain: &[String],
         cap: u64,
     ) -> (
-        anyhow::Result<
+        std::result::Result<
             Vec<(
                 crate::plugin_job::admit::StepChild,
                 gents_protocol::job::JobChildView,
             )>,
+            super::InputError,
         >,
         usize,
     ) {

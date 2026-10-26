@@ -1,5 +1,3 @@
-use anyhow::Result;
-use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::job::{
     DataCall, DataOp, DataQuery, DataQueryResponse, DataWrite, PluginDataDeclaration, RoundResult,
     CALLER_NODE_DID_FILTER,
@@ -13,6 +11,11 @@ pub use gents_protocol::job::OnConflict;
 pub use gents_protocol::job::StampedField as Stamp;
 
 use crate::application_write::Observation;
+use crate::config_client::{ConfigClientError, TransactionFailure};
+use crate::defra_query::{DefraQueryFailure, NativeFilterError};
+use gents_protocol::error_chain::ErrorChain;
+
+type Result<T, E = DataQueryError> = std::result::Result<T, E>;
 
 const MAX_WRITES: usize = 100;
 
@@ -348,6 +351,22 @@ pub enum DataQueryError {
         "limit {limit} is out of bounds; ask for 1 to {MAX_QUERY_LIMIT} rows and page with offset"
     )]
     LimitOutOfBounds { limit: u32 },
+    #[error(transparent)]
+    Build(#[from] DefraQueryFailure),
+    #[error(transparent)]
+    Filter(#[from] NativeFilterError),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+}
+
+impl TransactionFailure for DataQueryError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Filter(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 /// Queries one round may carry.
 const MAX_QUERIES_PER_ROUND: usize = 16;
@@ -404,7 +423,10 @@ pub struct DataCaller {
 }
 
 impl DataCaller {
-    pub fn new(node: Arc<crate::defra_node::EmbeddedNode>, node_did: &str) -> Result<Self> {
+    pub fn new(
+        node: Arc<crate::defra_node::EmbeddedNode>,
+        node_did: &str,
+    ) -> std::result::Result<Self, ::identity::Error> {
         Ok(Self {
             node,
             actor: ::identity::Did::new(node_did.to_owned())?,
@@ -484,7 +506,7 @@ impl Session {
                     result: DataQueryResponse { rows },
                 },
                 Err(error) => RoundResult::Error {
-                    error: format!("{}", ErrorChain(error.as_ref())),
+                    error: format!("{}", ErrorChain(&error)),
                 },
             };
             results.insert(
@@ -511,13 +533,12 @@ impl Session {
             if !in_own_sdl || runtime_or_protected {
                 return Err(DataQueryError::OutsideGrant {
                     collection: collection.to_owned(),
-                }
-                .into());
+                });
             }
             if !query_granted {
-                return Err(DataQueryError::QueryNotDeclared.into());
+                return Err(DataQueryError::QueryNotDeclared);
             }
-            return Err(DataQueryError::LimitOutOfBounds { limit: query.limit }.into());
+            return Err(DataQueryError::LimitOutOfBounds { limit: query.limit });
         }
         let mut filter = Value::Object(query.filter.clone());
         substitute_json(&mut filter, &self.caller.node_did);
@@ -542,7 +563,7 @@ impl Session {
                 let (filter, text) = (&filter, &text);
                 Box::pin(async move {
                     crate::defra_query::validate_filter(txn, collection, filter).await?;
-                    Ok::<_, anyhow::Error>(txn.execute(text).await?)
+                    Ok::<_, DataQueryError>(txn.execute(text).await?)
                 })
             },
         )

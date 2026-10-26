@@ -2,14 +2,15 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::Semaphore;
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{
+    ConfigAccess, ConfigClientError, DesiredStateError, TransactionFailure,
+};
 use crate::document_config::{InferenceBackend, InferenceProfile};
 use crate::openai_wire::OpenAiWireApi;
 use crate::Collection;
@@ -62,15 +63,32 @@ pub enum ModelCallError {
     NoRequests { profile: String },
     #[error("building the model client")]
     BuildClient(#[source] reqwest::Error),
+    #[error("the inference profile {profile:?} no longer exists")]
+    ProfileMissing { profile: String },
+    #[error("the backend of profile {profile:?} no longer exists")]
+    BackendMissing { profile: String },
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Desired(#[from] DesiredStateError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+impl TransactionFailure for ModelCallError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Desired(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
 }
 
 type Result<T, E = ModelCallError> = std::result::Result<T, E>;
 
 pub trait ModelResolver: Send + Sync {
-    fn resolve<'a>(
-        &'a self,
-        binding: &'a ModelBinding,
-    ) -> BoxFuture<'a, anyhow::Result<ModelEndpoint>>;
+    fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>>;
 }
 
 pub struct AccessModels<A>(pub A);
@@ -79,10 +97,7 @@ impl<A> ModelResolver for AccessModels<A>
 where
     A: std::borrow::Borrow<ConfigAccess> + Send + Sync,
 {
-    fn resolve<'a>(
-        &'a self,
-        binding: &'a ModelBinding,
-    ) -> BoxFuture<'a, anyhow::Result<ModelEndpoint>> {
+    fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
         Box::pin(async move {
             let owner = binding.node_did.as_str();
             let profile_id = binding.profile_id.as_str();
@@ -101,8 +116,10 @@ where
                             .await?
                             .map(|(_, value)| serde_json::from_value(value))
                             .transpose()?
-                            .with_context(|| {
-                                format!("the inference profile {profile_id:?} no longer exists")
+                            .ok_or_else(|| {
+                                ModelCallError::ProfileMissing {
+                                    profile: profile_id.to_owned(),
+                                }
                             })?;
                         let backend: InferenceBackend =
                             crate::config_client::read_desired_state_record_in_txn(
@@ -114,14 +131,16 @@ where
                             .await?
                             .map(|(_, value)| serde_json::from_value(value))
                             .transpose()?
-                            .with_context(|| {
-                                format!("the backend of profile {profile_id:?} no longer exists")
+                            .ok_or_else(|| {
+                                ModelCallError::BackendMissing {
+                                    profile: profile_id.to_owned(),
+                                }
                             })?;
-                        Ok::<_, anyhow::Error>((profile, backend))
+                        Ok::<_, ModelCallError>((profile, backend))
                     })
                 })
                 .await?;
-            Ok(endpoint_for(&profile, &backend)?)
+            endpoint_for(&profile, &backend)
         })
     }
 }

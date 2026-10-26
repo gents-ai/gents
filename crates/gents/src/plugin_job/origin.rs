@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-use anyhow::Result;
 use gents_protocol::job::{JobOrigin, JobPin, JobPolicy, PROJECT_MOUNT_CLASS};
 
 use crate::pack::home_install::recorded_provenance;
@@ -125,7 +124,7 @@ pub fn script_index(
     plugin: &InstalledPlugin,
     policy: Option<&JobPolicy>,
     cwd: Option<&Path>,
-) -> Result<ScriptIndex> {
+) -> anyhow::Result<ScriptIndex> {
     let mut files = Vec::new();
     for mount in crate::plugin::mounts::resolve(home, plugin, policy, cwd)? {
         for (sha, path) in mount_files(&mount.pack, &mount.digest, &mount.path)? {

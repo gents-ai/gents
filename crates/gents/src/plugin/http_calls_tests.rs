@@ -665,7 +665,13 @@ impl crate::plugin::model_calls::ModelResolver for Endpoint {
     fn resolve<'a>(
         &'a self,
         _: &'a crate::plugin::model_calls::ModelBinding,
-    ) -> BoxFuture<'a, anyhow::Result<crate::plugin::model_calls::ModelEndpoint>> {
+    ) -> BoxFuture<
+        'a,
+        Result<
+            crate::plugin::model_calls::ModelEndpoint,
+            crate::plugin::model_calls::ModelCallError,
+        >,
+    > {
         Box::pin(async {
             Ok(crate::plugin::model_calls::ModelEndpoint {
                 url: "http://127.0.0.1:9/v1/chat/completions".into(),

@@ -284,7 +284,7 @@ pub fn canonicalize_tools_root(
     tools: &mut crate::document_config::Tools,
     policy: &WorkspaceRootPolicy,
     stored_root: Option<&str>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let selection = crate::tool_surface::ResolvedToolSelection::from_document(tools)?;
     let requires_root = selection.requires_filesystem_root();
     let authored_root = tools
@@ -779,7 +779,7 @@ mod tests {
                 .to_string()
                 .contains("is not admitted by published WorkspaceRoot policy"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
     }
 

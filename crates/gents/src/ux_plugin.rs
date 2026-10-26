@@ -27,7 +27,7 @@ use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -65,6 +65,26 @@ pub enum UxPluginError {
         #[source]
         source: std::string::FromUtf8Error,
     },
+    #[error("reading {}", path.display())]
+    ReadDevRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    HomeInstall(#[from] crate::pack::home_install::HomeInstallError),
+    #[error(transparent)]
+    PluginStore(#[from] crate::plugin::store::PluginStoreError),
+    #[error("pack {coordinate} did not install the plugin {plugin:?}")]
+    PluginNotInstalled { coordinate: String, plugin: String },
+    #[error("ux plugin {id} names neither entry nor plugin")]
+    NoProducer { id: String },
+    #[error("no ux plugin {id:?} under {}", home.display())]
+    NotFound { id: String, home: PathBuf },
+    #[error("pack assets dir")]
+    PackAssetsDir,
+    #[error("pack {coordinate} is not installed")]
+    PackNotInstalled { coordinate: String },
     #[error("a ux producer must print one JSON object {{\"module\": \"<esm>\", \"css\": \"<optional>\"}}")]
     ProducerOutput(#[source] serde_json::Error),
     #[error("the produced module is {len} bytes; the limit is {limit_mib} MiB")]
@@ -154,12 +174,15 @@ fn is_dev_id(name: &str) -> bool {
 /// sorted by id. A folder without `plugin.js` is not an error (an unrelated
 /// directory); an unreadable pack record is skipped with a warning rather
 /// than failing the whole list, so one bad install cannot hide the rest.
-pub fn list(home: &Path) -> Result<Vec<UxListing>> {
+pub fn list(home: &Path) -> Result<Vec<UxListing>, UxPluginError> {
     let mut out = Vec::new();
     let root = dev_root(home);
     if root.is_dir() {
         let mut dirs: Vec<_> = std::fs::read_dir(&root)
-            .with_context(|| format!("reading {}", root.display()))?
+            .map_err(|source| UxPluginError::ReadDevRoot {
+                path: root.clone(),
+                source,
+            })?
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.path().is_dir())
             .collect();
@@ -196,7 +219,7 @@ pub fn list(home: &Path) -> Result<Vec<UxListing>> {
                 Err(error) => tracing::warn!(
                     pack = %record.coordinate,
                     plugin = %ux.name,
-                    error = %ErrorChain(error.as_ref()),
+                    error = %ErrorChain(&error),
                     "ux plugin skipped"
                 ),
             }
@@ -205,7 +228,11 @@ pub fn list(home: &Path) -> Result<Vec<UxListing>> {
     Ok(out)
 }
 
-fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Result<UxListing> {
+fn pack_listing(
+    home: &Path,
+    record: &HomePackInstall,
+    ux: &PackUxPlugin,
+) -> Result<UxListing, UxPluginError> {
     let id = format!("{}/{}", record.coordinate, ux.name);
     let (producer, file) = match (&ux.entry, &ux.plugin) {
         (Some(entry), _) => (UxProducer::File, home.join(&record.assets).join(entry)),
@@ -214,11 +241,9 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
                 .plugins
                 .iter()
                 .find(|p| &p.name == plugin)
-                .with_context(|| {
-                    format!(
-                        "pack {} did not install the plugin {plugin:?}",
-                        record.coordinate
-                    )
+                .ok_or_else(|| UxPluginError::PluginNotInstalled {
+                    coordinate: record.coordinate.clone(),
+                    plugin: plugin.clone(),
                 })?;
             let digest_hex = installed
                 .digest
@@ -229,7 +254,7 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
                 crate::plugin::store::artifact_path(home, digest_hex)?,
             )
         }
-        (None, None) => anyhow::bail!("ux plugin {id} names neither entry nor plugin"),
+        (None, None) => return Err(UxPluginError::NoProducer { id }),
     };
     Ok(UxListing {
         id,
@@ -245,11 +270,14 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
 }
 
 /// The listing for `id`, or an error naming what is missing.
-pub fn find(home: &Path, id: &str) -> Result<UxListing> {
+pub fn find(home: &Path, id: &str) -> Result<UxListing, UxPluginError> {
     list(home)?
         .into_iter()
         .find(|l| l.id == id)
-        .with_context(|| format!("no ux plugin {id:?} under {}", home.display()))
+        .ok_or_else(|| UxPluginError::NotFound {
+            id: id.to_owned(),
+            home: home.to_owned(),
+        })
 }
 
 fn read_bounded(path: &Path, what: &str) -> std::result::Result<String, UxPluginError> {
@@ -279,7 +307,11 @@ fn digest_of(source: &str) -> String {
 
 /// Reads a file-produced module: the entry, and the css beside it when
 /// the listing (dev) or the manifest (pack) names one.
-fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -> Result<UxModule> {
+fn file_module(
+    home: &Path,
+    listing: &UxListing,
+    css: Option<&str>,
+) -> Result<UxModule, UxPluginError> {
     let entry = PathBuf::from(&listing.file);
     let source = read_bounded(&entry, "ux plugin entry")?;
     let css_path = match (listing.door, css) {
@@ -293,7 +325,7 @@ fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -> Result<Ux
                     .pack
                     .as_deref()
                     .and_then(|coordinate| pack_assets_dir(home, coordinate).ok())
-                    .context("pack assets dir")?,
+                    .ok_or(UxPluginError::PackAssetsDir)?,
             )
             .join(css),
         ),
@@ -309,19 +341,25 @@ fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -> Result<Ux
     })
 }
 
-fn pack_assets_dir(home: &Path, coordinate: &str) -> Result<PathBuf> {
-    let record = crate::pack::read_home_install(home, coordinate)?
-        .with_context(|| format!("pack {coordinate} is not installed"))?;
+fn pack_assets_dir(home: &Path, coordinate: &str) -> Result<PathBuf, UxPluginError> {
+    let record = crate::pack::read_home_install(home, coordinate)?.ok_or_else(|| {
+        UxPluginError::PackNotInstalled {
+            coordinate: coordinate.to_owned(),
+        }
+    })?;
     Ok(PathBuf::from(record.assets))
 }
 
 /// The css path a pack's manifest declared for `listing`, if any.
-fn declared_css(home: &Path, listing: &UxListing) -> Result<Option<String>> {
+fn declared_css(home: &Path, listing: &UxListing) -> Result<Option<String>, UxPluginError> {
     let Some(coordinate) = listing.pack.as_deref() else {
         return Ok(None);
     };
-    let record = crate::pack::read_home_install(home, coordinate)?
-        .with_context(|| format!("pack {coordinate} is not installed"))?;
+    let record = crate::pack::read_home_install(home, coordinate)?.ok_or_else(|| {
+        UxPluginError::PackNotInstalled {
+            coordinate: coordinate.to_owned(),
+        }
+    })?;
     let name = listing.id.rsplit('/').next().unwrap_or(&listing.id);
     Ok(record
         .ux
@@ -362,15 +400,15 @@ pub async fn resolve_module<F, Fut>(
     home: &Path,
     listing: &UxListing,
     run_afb: F,
-) -> Result<UxModule>
+) -> anyhow::Result<UxModule>
 where
     F: FnOnce(String, String) -> Fut,
-    Fut: std::future::Future<Output = Result<serde_json::Value>>,
+    Fut: std::future::Future<Output = anyhow::Result<serde_json::Value>>,
 {
     match listing.producer {
         UxProducer::File => {
             let css = declared_css(home, listing)?;
-            file_module(home, listing, css.as_deref())
+            Ok(file_module(home, listing, css.as_deref())?)
         }
         UxProducer::Afb => {
             let coordinate = listing
