@@ -364,7 +364,13 @@ pub fn tool_call_sse_with_id(tool_call_id: &str, tool_name: &str, arguments: &st
             "delta": { "content": null, "tool_calls": [] },
             "finish_reason": "tool_calls"
         }],
-        "usage": { "prompt_tokens": 16, "completion_tokens": 4, "total_tokens": 20 }
+        "usage": {
+            "prompt_tokens": 16,
+            "completion_tokens": 4,
+            "total_tokens": 20,
+            "prompt_tokens_details": { "cached_tokens": 0 },
+            "completion_tokens_details": { "reasoning_tokens": 0 }
+        }
     });
     format!(
         "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
@@ -384,7 +390,13 @@ pub fn completion_text_sse(text: &str) -> String {
             "delta": { "content": null, "tool_calls": [] },
             "finish_reason": "stop"
         }],
-        "usage": { "prompt_tokens": 24, "completion_tokens": 6, "total_tokens": 30 }
+        "usage": {
+            "prompt_tokens": 24,
+            "completion_tokens": 6,
+            "total_tokens": 30,
+            "prompt_tokens_details": { "cached_tokens": 0 },
+            "completion_tokens_details": { "reasoning_tokens": 0 }
+        }
     });
     format!(
         "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
