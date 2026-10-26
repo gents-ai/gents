@@ -462,6 +462,9 @@ fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
     ToolFailureClass::from_persisted(raw)
 }
 
+/// External premise: trace export reads a request's persisted
+/// `failure_reason`, the only durable record of why it failed; the
+/// AgentRequest schema carries no failure class.
 fn classify_request_failure_text(text: Option<&str>) -> Option<ToolFailureClass> {
     let lower = text?.trim().to_ascii_lowercase();
     if lower.is_empty() {

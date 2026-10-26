@@ -1049,7 +1049,7 @@ mod tests {
     }
 
     enum ScriptedProjection {
-        Projection(EnrollmentProjection),
+        Projection(Box<EnrollmentProjection>),
         Error(&'static str),
     }
 
@@ -1067,7 +1067,7 @@ mod tests {
                 .pop_front()
                 .expect("scripted projection step")
             {
-                ScriptedProjection::Projection(projection) => Ok(projection),
+                ScriptedProjection::Projection(projection) => Ok(*projection),
                 ScriptedProjection::Error(message) => anyhow::bail!(message),
             }
         }
@@ -1156,8 +1156,8 @@ mod tests {
         let member = active.request.candidate_did.clone();
         let script = ScriptedProjectionReader {
             steps: Mutex::new(VecDeque::from([
-                ScriptedProjection::Projection(projection_with_active(active.clone())),
-                ScriptedProjection::Projection(projection_with_revoked(&active)),
+                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_revoked(&active))),
                 ScriptedProjection::Error("authority unavailable during network replay"),
             ])),
         };
@@ -1208,12 +1208,12 @@ mod tests {
             .push(active_enrollment(2, "2099-01-01T00:00:00Z"));
         let script = ScriptedProjectionReader {
             steps: Mutex::new(VecDeque::from([
-                ScriptedProjection::Projection(projection_with_active(active.clone())),
-                ScriptedProjection::Projection(projection_with_active(active.clone())),
-                ScriptedProjection::Projection(projection_with_active(peer)),
-                ScriptedProjection::Projection(projection_with_revoked(&active)),
-                ScriptedProjection::Projection(EnrollmentProjection::default()),
-                ScriptedProjection::Projection(ambiguous),
+                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(peer))),
+                ScriptedProjection::Projection(Box::new(projection_with_revoked(&active))),
+                ScriptedProjection::Projection(Box::default()),
+                ScriptedProjection::Projection(Box::new(ambiguous)),
                 ScriptedProjection::Error("unavailable enrollment projection"),
             ])),
         };
@@ -1440,13 +1440,21 @@ mod tests {
 
         let script = ScriptedProjectionReader {
             steps: Mutex::new(VecDeque::from([
-                ScriptedProjection::Projection(projection_with_active(generation_one.clone())),
-                ScriptedProjection::Projection(projection_with_revoked(&generation_one)),
-                ScriptedProjection::Projection(projection_with_active(expired.clone())),
-                ScriptedProjection::Projection(projection_with_active(expired)),
-                ScriptedProjection::Projection(projection_with_active(generation_one.clone())),
-                ScriptedProjection::Projection(projection_with_active(generation_two.clone())),
-                ScriptedProjection::Projection(projection_with_active(generation_two.clone())),
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_one.clone(),
+                ))),
+                ScriptedProjection::Projection(Box::new(projection_with_revoked(&generation_one))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(expired.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(expired))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_one.clone(),
+                ))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_two.clone(),
+                ))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_two.clone(),
+                ))),
                 ScriptedProjection::Error("injected enrollment projection read failure"),
             ])),
         };

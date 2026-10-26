@@ -101,7 +101,35 @@ pub struct EnrollmentProjection {
     pub next_authorization_sequences: BTreeMap<(String, String), u64>,
     pub scoped_conflicts: BTreeMap<(String, String), String>,
     pub request_conflicts: BTreeMap<String, String>,
+    pub reused_challenge_requests: BTreeSet<String>,
     pub conflict: Option<String>,
+}
+
+/// An operator decision the projection refuses before writing it.
+#[derive(Debug, thiserror::Error)]
+pub enum EnrollmentDecisionRefusal {
+    #[error("enrollment request {request_id} is conflicted: {reason}")]
+    Conflicted {
+        request_id: String,
+        reason: String,
+        reused_challenge: bool,
+    },
+    #[error("no fresh pending enrollment request {request_id}")]
+    NotPending { request_id: String },
+}
+
+impl EnrollmentDecisionRefusal {
+    pub fn code(&self) -> gents_protocol::enrollment::EnrollmentDecisionRefusalCode {
+        use gents_protocol::enrollment::EnrollmentDecisionRefusalCode as Code;
+        match self {
+            Self::Conflicted {
+                reused_challenge: true,
+                ..
+            } => Code::ChallengeReused,
+            Self::Conflicted { .. } => Code::Conflicted,
+            Self::NotPending { .. } => Code::NotPending,
+        }
+    }
 }
 
 impl EnrollmentProjection {
@@ -113,14 +141,23 @@ impl EnrollmentProjection {
         }
     }
 
-    fn pending_for_decision(&self, request_id: &str) -> Result<&PendingEnrollment> {
+    fn pending_for_decision(
+        &self,
+        request_id: &str,
+    ) -> Result<&PendingEnrollment, EnrollmentDecisionRefusal> {
         if let Some(reason) = self.request_conflicts.get(request_id) {
-            anyhow::bail!("enrollment request {request_id} is conflicted: {reason}");
+            return Err(EnrollmentDecisionRefusal::Conflicted {
+                request_id: request_id.to_string(),
+                reason: reason.clone(),
+                reused_challenge: self.reused_challenge_requests.contains(request_id),
+            });
         }
         self.pending
             .iter()
             .find(|pending| pending.request.request_id == request_id)
-            .with_context(|| format!("no fresh pending enrollment request {request_id}"))
+            .ok_or_else(|| EnrollmentDecisionRefusal::NotPending {
+                request_id: request_id.to_string(),
+            })
     }
 }
 
@@ -918,7 +955,9 @@ impl GraphqlEnrollmentStore {
                 .or_default()
                 .insert(request.record.request_id.clone());
         }
+        let mut reused_challenge_requests = BTreeSet::new();
         for request_ids in challenge_requests.values().filter(|ids| ids.len() > 1) {
+            reused_challenge_requests.extend(request_ids.iter().cloned());
             for request_id in request_ids {
                 add_request_conflict(
                     &mut request_conflicts,
@@ -1479,6 +1518,7 @@ impl GraphqlEnrollmentStore {
             .sort_by(|a, b| a.request.request_id.cmp(&b.request.request_id));
         projection.scoped_conflicts = finish_conflicts(scoped_conflicts);
         projection.request_conflicts = finish_conflicts(request_conflicts);
+        projection.reused_challenge_requests = reused_challenge_requests;
         Ok(projection)
     }
 

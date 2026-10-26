@@ -77,10 +77,7 @@ pub async fn materialize_collections(
 }
 
 fn is_unique_index_violation(error: &defra_node::Error) -> bool {
-    std::iter::successors(Some(error as &dyn std::error::Error), |cause| {
-        cause.source()
-    })
-    .any(|cause| cause.to_string().contains("violates unique index"))
+    matches!(error, defra_node::Error::Db(error) if error.is_unique_constraint_violation())
 }
 
 /// Bare `[A-Za-z0-9_]` check for GraphQL identifier positions.

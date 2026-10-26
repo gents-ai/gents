@@ -109,9 +109,14 @@ pub(super) fn receipt_write_backoff(retry_index: u32) -> Duration {
 
 pub(super) fn is_retryable_ambiguous_write(error: &(dyn std::error::Error + 'static)) -> bool {
     !crate::graphql::is_storage_full(error)
-        && gents_protocol::graphql::graphql_error_is_retryable(error)
+        && (gents_protocol::graphql::graphql_error_is_retryable(error)
+            || access_error_in(error).is_some_and(|error| {
+                error.transaction_conflict().is_some() || error.is_retryable_database_conflict()
+            }))
 }
 
+/// External premise: DefraDB's HTTP commit handler answers a store conflict
+/// with `409 Conflict` and says so only in its body text.
 pub(super) fn is_transaction_conflict_text(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     text.contains("transaction conflict") && (text.contains("retry") || text.contains("try again"))

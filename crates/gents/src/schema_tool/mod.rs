@@ -562,6 +562,11 @@ fn help_call(args: &SchemaParams) -> Value {
     json!({"tool":"schema","args":{"argv":argv}})
 }
 
+/// The help page that explains an SDL rejection.
+///
+/// External premise: DefraDB's SDL parser and schema validators report what
+/// they rejected only as message text (`no type found`, `relation`,
+/// directive names), so the page is chosen from that text.
 fn sdl_help_call(args: &SchemaParams, error: &str) -> Value {
     let error = error.to_ascii_lowercase();
     let path = if error.contains("no type found")

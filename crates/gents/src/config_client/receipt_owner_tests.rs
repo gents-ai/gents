@@ -18,8 +18,8 @@ enum ReceiptProbeError {
     Status(#[source] reqwest::Error),
     #[error("decoding stable-id receipt")]
     Decode(#[source] reqwest::Error),
-    #[error("graphql returned errors: {errors}")]
-    GraphqlErrors { errors: Value },
+    #[error("stable-id receipt query")]
+    GraphqlErrors(#[source] gents_protocol::database_error::GraphqlFailure),
 }
 
 #[derive(Clone, Copy)]
@@ -110,9 +110,9 @@ async fn receipt_once(endpoint: &str) -> Result<bool, ReceiptProbeError> {
         .await
         .map_err(ReceiptProbeError::Decode)?;
     if let Some(errors) = response.get("errors") {
-        return Err(ReceiptProbeError::GraphqlErrors {
-            errors: errors.clone(),
-        });
+        return Err(ReceiptProbeError::GraphqlErrors(
+            gents_protocol::database_error::GraphqlFailure::new("receipt", errors.clone()),
+        ));
     }
     Ok(response
         .pointer("/data/ReceiptFact")

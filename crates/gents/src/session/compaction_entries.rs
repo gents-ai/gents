@@ -5,6 +5,14 @@ use anyhow::Context;
 use rapidhash::RapidHashSet;
 use std::collections::BTreeSet;
 
+/// Another writer appended a compaction generation since this one was read;
+/// the caller rebuilds from the winner.
+#[derive(Debug, thiserror::Error)]
+#[error("stale compaction generation for session {session_id}")]
+pub(crate) struct StaleCompactionGeneration {
+    session_id: String,
+}
+
 #[derive(Serialize)]
 struct FilePathDelta<'a> {
     version: u32,
@@ -503,10 +511,12 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                         return Ok(entry);
                     }
                 }
-                anyhow::ensure!(
-                    actual_generation == expected_generation,
-                    "stale compaction generation for session {session_id}"
-                );
+                if actual_generation != expected_generation {
+                    return Err(StaleCompactionGeneration {
+                        session_id: session_id.to_string(),
+                    }
+                    .into());
+                }
                 if let Some(cursor) = compacted_through_sequence {
                     let prior_cursor = rows
                         .iter()

@@ -1530,6 +1530,12 @@ pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) 
     format!("{} account \"{label}\" is {state}.", product.name)
 }
 
+/// The account state an `account_unusable_message` rendering reports.
+///
+/// External premise: a blocked turn is read back from the persisted
+/// AgentToolCall `failure_reason`, the only durable record of the failure;
+/// the schema carries no account-state field, so the state is recovered from
+/// that rendering.
 pub fn account_failure_state(text: &str) -> Option<&'static str> {
     const STATES: [&str; 5] = [
         "signed out (expired or revoked)",

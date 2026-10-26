@@ -373,6 +373,19 @@ pub enum EnrollmentDecisionKind {
     Denied,
 }
 
+/// Why the runtime refused an operator's enrollment decision, as the
+/// decision endpoint reports it beside the error text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentDecisionRefusalCode {
+    /// The request is not (yet) a fresh pending request in this projection.
+    NotPending,
+    /// Two requests used one offer's challenge; both are refused.
+    ChallengeReused,
+    /// The request conflicts with other enrollment rows.
+    Conflicted,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnrollmentOperatorAction {

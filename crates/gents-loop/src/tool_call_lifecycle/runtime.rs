@@ -94,6 +94,15 @@ impl ToolOutcome {
         }
     }
 
+    /// A failure the host itself declares, which no tool classified.
+    pub fn tool_returned_error(text: &str) -> Self {
+        Self::Failed {
+            class: FailureClass::ToolReturnedError,
+            denial: None,
+            text: text.to_string(),
+        }
+    }
+
     pub fn model_facing_text(&self) -> &str {
         match self {
             Self::Completed(text) | Self::Failed { text, .. } => text,
@@ -102,7 +111,13 @@ impl ToolOutcome {
     }
 }
 
-pub fn classify_error_text(err: &str) -> FailureClass {
+/// The failure class of a tool error known only by its rendering.
+///
+/// External premise: Rig's `ToolSetError::ToolCallError` erases a tool's error
+/// to `Box<dyn Error>`, and MCP servers (through rmcp), plugins and host tools
+/// that do not report a class reach the loop only as that text. Tools that
+/// know their class return `ToolError::ReportedFailure` instead.
+fn classify_error_text(err: &str) -> FailureClass {
     if err.contains("timeout") || err.contains("deadline") {
         FailureClass::External
     } else if err.contains("invalid argument") || err.contains("parse") {

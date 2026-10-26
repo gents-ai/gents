@@ -69,6 +69,11 @@ pub enum NativeServicePlatform {
     Linux,
 }
 
+/// This host has no native service manager Gents can install into.
+#[derive(Debug, thiserror::Error)]
+#[error("native Gents services are supported only on macOS and Linux")]
+pub struct UnsupportedNativeServicePlatform;
+
 impl NativeServicePlatform {
     pub fn current() -> Result<Self> {
         if cfg!(target_os = "macos") {
@@ -76,7 +81,7 @@ impl NativeServicePlatform {
         } else if cfg!(target_os = "linux") {
             Ok(Self::Linux)
         } else {
-            bail!("native Gents services are supported only on macOS and Linux")
+            Err(UnsupportedNativeServicePlatform.into())
         }
     }
 }
@@ -1436,6 +1441,9 @@ fn launchd_is_disabled(output: &str) -> Result<bool> {
     Ok(false)
 }
 
+/// External premise: `launchctl print` reports an unloaded service only as
+/// `Could not find service` on its output, with a status shared by other
+/// failures.
 fn ensure_launchd_print_result(output: &CommandOutput) -> Result<()> {
     if output.success
         || output.stderr.contains("Could not find service")

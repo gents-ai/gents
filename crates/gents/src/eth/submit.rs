@@ -524,7 +524,10 @@ where
     let gas_limit = parse_hex_u64(estimate).context("decoding gas estimate")?;
     if let Some(cap) = request.caps.max_gas {
         if gas_limit > cap {
-            bail!("estimated gas {gas_limit} exceeds max_gas {cap}");
+            return Err(super::EthRefusal::Policy(format!(
+                "estimated gas {gas_limit} exceeds max_gas {cap}"
+            ))
+            .into());
         }
     }
 
@@ -545,7 +548,10 @@ where
         .ok_or_else(|| anyhow!("max fee per gas overflow"))?;
     if let Some(cap) = request.caps.max_fee_per_gas {
         if max_fee > cap {
-            bail!("max fee per gas {max_fee} exceeds cap {cap}");
+            return Err(super::EthRefusal::Policy(format!(
+                "max fee per gas {max_fee} exceeds cap {cap}"
+            ))
+            .into());
         }
     }
     Ok((gas_limit, max_fee, tip.min(max_fee)))
@@ -808,10 +814,6 @@ fn decode_hex(value: &str) -> Result<Vec<u8>> {
                 .map_err(|error| anyhow!("invalid hex: {error}"))
         })
         .collect()
-}
-
-pub(crate) fn is_gas_or_fee_cap_error(message: &str) -> bool {
-    message.contains("exceeds max_gas") || message.contains("exceeds cap")
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

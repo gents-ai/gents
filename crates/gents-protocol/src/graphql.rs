@@ -572,6 +572,9 @@ pub fn graphql_rows_from_response(response: &Value, collection_name: &str) -> Ve
         .unwrap_or_default()
 }
 
+/// External premise: DefraDB reports an unknown collection only in its
+/// GraphQL error message.
+///
 /// Returns true only when GraphQL reports that the collection's root field is
 /// absent. A missing column on an existing collection must remain an error;
 /// treating every `Cannot query field` mentioning the collection type as a
@@ -863,12 +866,9 @@ fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<se
     Ok(value)
 }
 
-/// Whether GraphQL/DefraDB error text describes a retryable store conflict.
-pub fn retryable_graphql_error_text(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("transaction conflict") || message.contains("please retry")
-}
-
+/// External premise: reqwest exposes timeouts, connect and request failures as
+/// kinds, but a connection the peer drops mid-exchange (hyper's closed,
+/// reset, broken-pipe and early-EOF failures) surfaces only in its message.
 #[cfg(feature = "native")]
 fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
     if error.is_timeout() || error.is_connect() || error.is_request() {
@@ -892,8 +892,8 @@ pub fn graphql_error_is_retryable(error: &(dyn std::error::Error + 'static)) -> 
         return false;
     }
     graphql_transport_error_in_chain(error)
-        || std::iter::successors(Some(error), |&cause| cause.source())
-            .any(|cause| retryable_graphql_error_text(&cause.to_string()))
+        || crate::error_chain::find_source::<crate::database_error::GraphqlFailure>(error)
+            .is_some_and(crate::database_error::GraphqlFailure::is_retryable_conflict)
 }
 
 /// Whether an error's `source()` chain wraps a retryable GraphQL transport failure.
@@ -1173,30 +1173,35 @@ mod tx_tests {
     }
 
     #[test]
-    fn retryable_graphql_error_text_matches_store_conflict_variants() {
-        assert!(retryable_graphql_error_text("Transaction conflict"));
-        assert!(retryable_graphql_error_text(
-            "wrapped backend: PLEASE RETRY the TRANSACTION CONFLICT"
-        ));
-        assert!(retryable_graphql_error_text("please retry"));
-        assert!(!retryable_graphql_error_text(
-            "validation error: unknown collection"
-        ));
-    }
-
-    #[test]
-    fn retryable_graphql_error_walks_wrapped_cause_chain_case_insensitively() {
-        #[derive(Debug, thiserror::Error)]
-        #[error("TRANSACTION CONFLICT")]
-        struct Conflict;
-        #[derive(Debug, thiserror::Error)]
-        #[error("request submit failed")]
-        struct Submit(#[source] Conflict);
+    fn retryable_graphql_conflicts_are_the_responses_defradb_reports() {
         #[derive(Debug, thiserror::Error)]
         #[error("outer shim context")]
-        struct Outer(#[source] Submit);
-        let error = Outer(Submit(Conflict));
-        assert!(graphql_error_is_retryable(&error));
-        assert!(!graphql_transport_error_in_chain(&error));
+        struct Outer(#[source] crate::database_error::GraphqlFailure);
+        let failure = |message: &str| {
+            Outer(crate::database_error::GraphqlFailure::new(
+                "test",
+                serde_json::json!([{ "message": message }]),
+            ))
+        };
+        for message in [
+            "Transaction conflict",
+            "wrapped backend: PLEASE RETRY the TRANSACTION CONFLICT",
+            "please retry",
+        ] {
+            let error = failure(message);
+            assert!(graphql_error_is_retryable(&error), "{message}");
+            assert!(!graphql_transport_error_in_chain(&error));
+        }
+        assert!(!graphql_error_is_retryable(&failure(
+            "validation error: unknown collection"
+        )));
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("TRANSACTION CONFLICT")]
+        struct Rendered;
+        assert!(
+            !graphql_error_is_retryable(&Rendered),
+            "an error that only renders conflict text is not a DefraDB response"
+        );
     }
 }

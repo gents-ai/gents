@@ -209,6 +209,8 @@ pub(crate) fn action_plan_canonical_json(plan: &ActionPlan) -> Result<String, St
     canonical_json_string(&value)
 }
 
+/// External premise: `serde_json::Error` says an enum tag was unknown only in
+/// its `unknown variant` message.
 pub(crate) fn parse_action_plan_json(raw: &str) -> Result<ActionPlan, String> {
     let value: Value =
         serde_json::from_str(raw).map_err(|error| format!("ActionPlan is not JSON: {error}"))?;

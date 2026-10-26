@@ -88,6 +88,10 @@ impl AgentReadinessUnavailableReason {
 
 pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to this runtime";
 
+/// External premise: a client sees why the runtime rejected a request only in
+/// the AgentRequest's replicated `failure_reason`; the schema carries no
+/// rejection kind, so the readiness messages the runtime writes are matched
+/// exactly.
 pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
     failure_reason == BEHAVIOR_NOT_ASSIGNED_MESSAGE
         || AgentReadinessUnavailableReason::ALL

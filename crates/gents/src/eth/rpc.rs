@@ -152,7 +152,10 @@ where
         let method = normalize_method(method);
         reject_forbidden(&method)?;
         if !self.allowed_methods.contains(&method) {
-            bail!("eth method {method} is not in the configured query_methods ∩ builtin ceiling");
+            return Err(super::EthRefusal::Policy(format!(
+                "eth method {method} is not in the configured query_methods ∩ builtin ceiling"
+            ))
+            .into());
         }
         let params = default_block_if_needed(&method, params)?;
         if method == "eth_getLogs" {
@@ -291,7 +294,7 @@ fn decode_rpc_result(response: Value) -> Result<Value> {
             .to_string();
         let code = error.get("code").cloned().unwrap_or(Value::Null);
         if is_pruned_history_message(&message) {
-            bail!("eth pruned-history error (not retried): {message}");
+            return Err(super::EthRefusal::PrunedHistory(message).into());
         }
         if let Some(reason) = revert_reason_from_error(error) {
             bail!("eth call reverted: {reason}");
@@ -336,6 +339,9 @@ pub fn decode_revert_data(hex: &str) -> Option<String> {
     String::from_utf8(slice.to_vec()).ok()
 }
 
+/// External premise: JSON-RPC nodes (geth, erigon, nethermind and hosted
+/// providers) report missing historical state with no standard error code,
+/// only in their `error.message` wording.
 pub fn is_pruned_history_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("metadata is not found")
@@ -382,7 +388,11 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
     };
     let topics_ok = filter.get("topics").is_some_and(topic_filter_constrains);
     if !address_ok && !topics_ok {
-        bail!("eth_getLogs requires address and/or topics; unfiltered log queries are rejected");
+        return Err(super::EthRefusal::Policy(
+            "eth_getLogs requires address and/or topics; unfiltered log queries are rejected"
+                .to_string(),
+        )
+        .into());
     }
 
     if let Some(block_hash) = filter.get("blockHash") {
@@ -407,10 +417,11 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
             }
             let distance = to_num - from_num;
             if distance >= ETH_GET_LOGS_MAX_RANGE {
-                bail!(
+                return Err(super::EthRefusal::Policy(format!(
                     "eth_getLogs range {} exceeds max {ETH_GET_LOGS_MAX_RANGE} blocks",
                     distance.saturating_add(1)
-                );
+                ))
+                .into());
             }
         }
         (from_tag, to_tag) if from_tag == to_tag => {}

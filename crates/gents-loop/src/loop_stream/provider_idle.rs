@@ -4,7 +4,7 @@ use std::time::Duration;
 use rig::agent::StreamingError;
 use rig::completion::CompletionError;
 
-use crate::error::InferenceError;
+use crate::error::{ClassifiedFailure, InferenceError, ProviderReport};
 use crate::provider_activity::{ActivityPhase, ProviderActivity};
 
 #[derive(Debug)]
@@ -33,22 +33,18 @@ pub(super) enum ProviderAttemptFailure {
 }
 
 impl ProviderAttemptFailure {
-    pub(super) fn classify(self) -> (InferenceError, String) {
+    pub(super) fn classify(self) -> ClassifiedFailure {
         match self {
             Self::Completion(error) => {
-                let error = StreamingError::Completion(error);
-                (
-                    crate::rig_compat::classify_completion_error(&error),
-                    crate::provider_limit::strip_provider_limit_marker(&error.to_string())
-                        .to_string(),
-                )
+                crate::rig_compat::classify_completion_error(&StreamingError::Completion(error))
             }
-            Self::Stalled(stall) => (
-                InferenceError::Timeout {
+            Self::Stalled(stall) => ClassifiedFailure {
+                error: InferenceError::Timeout {
                     timeout: stall.idle,
                 },
-                stall.reason(),
-            ),
+                report: ProviderReport::default(),
+                text: stall.reason(),
+            },
         }
     }
 }

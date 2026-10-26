@@ -337,6 +337,13 @@ async fn apply_steps(
     Ok(())
 }
 
+/// External premise: DefraDB's schema definition validators report a
+/// duplicate collection only as a message string (`collection already exists.
+/// Name: ...`) in the validation failure `add_schema` returns.
+fn collection_already_exists(error: &defra_node::Error) -> bool {
+    error.to_string().contains("already exists")
+}
+
 async fn apply_add_collection(
     node: &EmbeddedNode,
     id: &str,
@@ -347,7 +354,7 @@ async fn apply_add_collection(
 ) -> Result<()> {
     match node.add_schema(sdl).await {
         Ok(()) => report.steps_applied += 1,
-        Err(error) if error.to_string().contains("already exists") => {
+        Err(error) if collection_already_exists(&error) => {
             report.steps_already_current += 1;
         }
         Err(error) => {

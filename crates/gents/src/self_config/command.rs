@@ -1788,7 +1788,7 @@ impl ConfigCommandTool {
             .map(|(field, _)| field.clone());
         let collection = request.target.collection_name();
         self.patch_outcome(core, verb, request).await.map_err(|error| {
-            match stringified.filter(|_| format!("{error:#}").contains("invalid type: string")) {
+            match stringified.filter(|_| serde_found_string(&error)) {
                 Some(field) => anyhow!(
                     "{collection} field {field:?} holds a JSON string; send a native JSON object or array in set, not a string. ({error:#})"
                 ),
@@ -2916,4 +2916,10 @@ pub(super) fn agent_params(
         enable_graph_tools: None,
         network_mode: None,
     })
+}
+
+/// External premise: serde reports a JSON string decoded where a map or
+/// sequence was expected only in its `invalid type: string` message.
+fn serde_found_string(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("invalid type: string")
 }

@@ -45,8 +45,10 @@ impl crate::error::LoopStreamError {
     /// The provider message that ended the loop because the aggregate token
     /// budget was spent.
     pub fn aggregate_token_budget_exhaustion(&self) -> Option<&str> {
-        self.provider_message()
-            .filter(|reason| reason.starts_with(AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX))
+        match self.loop_verdict()? {
+            (crate::error::LoopVerdict::AggregateTokenBudgetExhausted, message) => Some(message),
+            _ => None,
+        }
     }
 }
 
@@ -171,7 +173,7 @@ pub(super) fn clamp_request_aggregate_token_budget(
     request: &mut CompletionRequest,
     budget: Option<&AggregateTokenBudget>,
     estimated_input_tokens: usize,
-) -> Result<(), StreamingError> {
+) -> Result<(), crate::error::LoopStreamError> {
     let Some(budget) = budget else {
         return Ok(());
     };
@@ -180,7 +182,8 @@ pub(super) fn clamp_request_aggregate_token_budget(
     let configured_max = request.max_tokens.unwrap_or(u64::MAX);
     let effective_max = ledger.effective_output_tokens(input_tokens, configured_max);
     if !ledger.can_dispatch(input_tokens, configured_max) {
-        return Err(StreamingError::Completion(CompletionError::ProviderError(
+        return Err(crate::rig_compat::loop_verdict_error(
+            crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
             format!(
                 "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit={}, used={}, \
                  estimated_input_tokens={input_tokens}, remaining={}",
@@ -188,7 +191,7 @@ pub(super) fn clamp_request_aggregate_token_budget(
                 ledger.used,
                 ledger.remaining(),
             ),
-        )));
+        ));
     }
     if effective_max < configured_max {
         tracing::debug!(
@@ -218,7 +221,10 @@ mod tests {
         let loop_error = |message: &str| {
             LoopStreamError::new(
                 LoopFailureCause::Completion {
-                    failure: CompletionFailure::Provider(message.to_string()),
+                    failure: CompletionFailure::Loop {
+                        verdict: crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                        message: message.to_string(),
+                    },
                     reason: String::new(),
                 },
                 std::io::Error::other("provider"),
@@ -256,7 +262,13 @@ mod tests {
             );
         }
         let other = TurnCompactionError::Compaction(CompactionError::BuildSummaryRequest(
-            loop_error("provider returned 500"),
+            LoopStreamError::new(
+                LoopFailureCause::Completion {
+                    failure: CompletionFailure::Provider(reason.clone()),
+                    reason: String::new(),
+                },
+                std::io::Error::other("provider"),
+            ),
         ));
         assert_eq!(other.aggregate_token_budget_exhaustion(), None);
         assert_eq!(aggregate_token_budget_exhaustion_message(&other), None);

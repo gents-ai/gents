@@ -454,11 +454,12 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
     loop_config.turn_compactor = Some(Arc::new(move |_request| {
         Box::pin(async move {
             Err(crate::compaction::CompactionError::GuidedBudgetExhausted(
-                gents_loop::loop_stream::OneShotError::LoopStream(rig_compat::loop_stream_error(
-                    StreamingError::Completion(CompletionError::ProviderError(format!(
+                gents_loop::loop_stream::OneShotError::LoopStream(rig_compat::loop_verdict_error(
+                    crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                    format!(
                         "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit=10000, used=9000, \
                      estimated_input_tokens=2000, remaining=1000"
-                    ))),
+                    ),
                 )),
             )
             .into())

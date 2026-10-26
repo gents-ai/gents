@@ -826,11 +826,25 @@ mod tests {
             stream_failure(crate::rig_compat::loop_stream_error(stream_error()), None),
             OneShotError::ProviderFailure(_)
         ));
-        let no_visible = StreamingError::Completion(CompletionError::ProviderError(format!(
+        let no_visible = crate::rig_compat::loop_verdict_error(
+            crate::error::LoopVerdict::NoVisibleOutput,
+            format!(
+                "{}transport retry budget exhausted after 0 attempt(s)",
+                super::super::NO_VISIBLE_OUTPUT_PREFIX
+            ),
+        );
+        let no_visible = stream_failure(no_visible, None);
+        let text_only = StreamingError::Completion(CompletionError::ProviderError(format!(
             "{}transport retry budget exhausted after 0 attempt(s)",
             super::super::NO_VISIBLE_OUTPUT_PREFIX
         )));
-        let no_visible = stream_failure(crate::rig_compat::loop_stream_error(no_visible), None);
+        assert!(
+            !matches!(
+                stream_failure(crate::rig_compat::loop_stream_error(text_only), None),
+                OneShotError::NoVisibleOutput(_)
+            ),
+            "provider text that reads like the verdict is not the loop's verdict"
+        );
         assert!(matches!(no_visible, OneShotError::NoVisibleOutput(_)));
         assert!(!matches!(no_visible, OneShotError::ProviderFailure(_)));
         assert!(matches!(
@@ -910,16 +924,14 @@ mod tests {
                     .await
                 }
                 CleanupCase::NoVisibleOutput => {
-                    let no_visible =
-                        StreamingError::Completion(CompletionError::ProviderError(format!(
+                    let no_visible = crate::rig_compat::loop_verdict_error(
+                        crate::error::LoopVerdict::NoVisibleOutput,
+                        format!(
                             "{}transport retry budget exhausted after 0 attempt(s)",
                             super::super::NO_VISIBLE_OUTPUT_PREFIX
-                        )));
-                    close_received_auxiliary_after_error(stream_failure(
-                        crate::rig_compat::loop_stream_error(no_visible),
-                        None,
-                    ))
-                    .await
+                        ),
+                    );
+                    close_received_auxiliary_after_error(stream_failure(no_visible, None)).await
                 }
                 CleanupCase::IdentityError => {
                     let identity_error =

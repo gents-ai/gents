@@ -179,7 +179,7 @@ impl DefraSessionHook {
                         if let Err(error) = lifecycle.clear_background_request(None).await {
                             tracing::warn!(%error, "could not clear cancelled background request");
                         }
-                        let outcome = execution.await.unwrap_or_else(|_| crate::tool_call_lifecycle::ToolOutcome::from_tool_call_error("native command panicked"));
+                        let outcome = execution.await.unwrap_or_else(|_| crate::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked"));
                         if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
                         hook.background_executions.release_process_record(lifecycle.tool_call_id(), &doc).await;
                         drop(reservation);
@@ -192,7 +192,7 @@ impl DefraSessionHook {
                                 hook.background_executions.clone(), reservation, outcome,
                             ).await;
                         } else {
-                            let outcome = outcome.unwrap_or_else(|_| crate::tool_call_lifecycle::ToolOutcome::from_tool_call_error("native command panicked"));
+                            let outcome = outcome.unwrap_or_else(|_| crate::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked"));
                             if let Some(answer) = answer.take() {
                                 let _ = answer.send(ForegroundResult::Settled(outcome));
                             }
@@ -216,7 +216,7 @@ impl DefraSessionHook {
         }));
         result.await.unwrap_or_else(|_| {
             ForegroundResult::Settled(
-                crate::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
+                crate::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                     "native execution owner stopped",
                 ),
             )

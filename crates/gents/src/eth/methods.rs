@@ -75,7 +75,10 @@ pub fn reject_forbidden(method: &str) -> Result<()> {
         || method.starts_with("eth_send")
         || method.starts_with("eth_sign")
     {
-        bail!("query method {method} is not a read-only JSON-RPC method");
+        return Err(super::EthRefusal::Policy(format!(
+            "query method {method} is not a read-only JSON-RPC method"
+        ))
+        .into());
     }
     Ok(())
 }

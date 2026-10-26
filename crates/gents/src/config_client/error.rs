@@ -361,6 +361,24 @@ impl ConfigClientError {
         }
     }
 
+    /// DefraDB answered the operation with a store conflict its GraphQL
+    /// errors call retryable.
+    pub(crate) fn is_retryable_database_conflict(&self) -> bool {
+        match self {
+            Self::Database(failure)
+            | Self::Response(crate::graphql::GraphqlResponseError::Database(failure)) => {
+                failure.is_retryable_conflict()
+            }
+            Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
+                gents_protocol::database_error::reports_retryable_conflict(&error.message)
+            }),
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error))
+            | Self::StorageFailure(error)
+            | Self::HttpQuery { source: error, .. } => error.is_retryable_database_conflict(),
+            _ => false,
+        }
+    }
+
     /// The database processed the operation and answered with GraphQL errors,
     /// as opposed to a transport, storage or local failure.
     pub fn is_graphql_rejection(&self) -> bool {

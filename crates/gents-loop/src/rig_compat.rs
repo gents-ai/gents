@@ -1,5 +1,6 @@
 use crate::error::{
-    classify_loop_failure, CompletionFailure, InferenceError, LoopFailureCause, LoopStreamError,
+    classify_loop_failure, ClassifiedFailure, CompletionFailure, LoopFailureCause, LoopStreamError,
+    LoopVerdict,
 };
 use crate::tool::ToolDefinition;
 use crate::ToolChoice;
@@ -554,7 +555,15 @@ pub fn loop_failure_cause(error: &rig::agent::StreamingError) -> LoopFailureCaus
     match error {
         rig::agent::StreamingError::Completion(completion) => LoopFailureCause::Completion {
             failure: match completion {
-                CompletionError::HttpError(_) => CompletionFailure::Http,
+                CompletionError::HttpError(error) => CompletionFailure::Http {
+                    status: match error {
+                        rig::http_client::Error::InvalidStatusCode(status)
+                        | rig::http_client::Error::InvalidStatusCodeWithMessage(status, _) => {
+                            Some(status.as_u16())
+                        }
+                        _ => None,
+                    },
+                },
                 CompletionError::ProviderError(message) => {
                     CompletionFailure::Provider(message.clone())
                 }
@@ -577,8 +586,27 @@ pub fn loop_stream_error(error: rig::agent::StreamingError) -> LoopStreamError {
     LoopStreamError::new(loop_failure_cause(&error), error)
 }
 
-pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
+pub fn classify_completion_error(error: &rig::agent::StreamingError) -> ClassifiedFailure {
     classify_loop_failure(&loop_failure_cause(error), &error.to_string())
+}
+
+impl From<rig::agent::StreamingError> for LoopStreamError {
+    fn from(error: rig::agent::StreamingError) -> Self {
+        loop_stream_error(error)
+    }
+}
+
+/// The owned loop's verdict, rendered as the provider error text it has always
+/// carried so its display and diagnostics are unchanged.
+pub fn loop_verdict_error(verdict: LoopVerdict, message: String) -> LoopStreamError {
+    let completion = rig::completion::CompletionError::ProviderError(message.clone());
+    LoopStreamError::new(
+        LoopFailureCause::Completion {
+            failure: CompletionFailure::Loop { verdict, message },
+            reason: completion.to_string(),
+        },
+        rig::agent::StreamingError::Completion(completion),
+    )
 }
 
 #[cfg(test)]

@@ -1104,15 +1104,6 @@ async fn sweep_open_mailbox_items_with_clock(
         };
         let satisfying = match satisfying {
             Ok(found) => found,
-            Err(error)
-                if error
-                    .to_string()
-                    .contains("unsupported mailbox expected_collection") =>
-            {
-                report.skipped_unsupported += 1;
-                tracing::warn!(item_id = %item.doc_id, %error, "leaving unsupported mailbox item open");
-                continue;
-            }
             Err(error) => {
                 report.skipped_errors += 1;
                 tracing::warn!(item_id = %item.doc_id, %error, "mailbox item close check failed; leaving item open");

@@ -971,10 +971,17 @@ where
     }
 }
 
-fn is_guided_output_failure(error: &(dyn std::error::Error + 'static)) -> bool {
-    let diagnostic = ErrorChain(error).to_string();
-    diagnostic.contains("structured-output validation failed")
-        || diagnostic.contains("completion produced no visible output")
+fn is_guided_output_failure(error: &crate::loop_stream::OneShotError) -> bool {
+    matches!(
+        error
+            .loop_stream_error()
+            .and_then(crate::error::LoopStreamError::loop_verdict),
+        Some((
+            crate::error::LoopVerdict::StructuredOutputInvalid
+                | crate::error::LoopVerdict::NoVisibleOutput,
+            _
+        ))
+    )
 }
 
 fn deadline_elapsed(

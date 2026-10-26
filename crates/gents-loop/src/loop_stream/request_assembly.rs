@@ -1215,7 +1215,7 @@ pub(super) fn prepare_dispatch_attempt(
     assembled_request: &CompletionRequest,
     config: &LoopConfig,
     aggregate_token_budget: Option<&AggregateTokenBudget>,
-) -> Result<PreparedDispatch, StreamingError> {
+) -> Result<PreparedDispatch, crate::error::LoopStreamError> {
     let mut request = assembled_request.clone();
     let input_tokens =
         completion_request_input_tokens(&request, config.provider_input_counter.as_ref())?;
@@ -1437,7 +1437,7 @@ pub(super) async fn build_budgeted_request<M>(
     turn_index: usize,
     reduction_chain_keys: &mut Vec<String>,
     active_reduction_keys: &mut Vec<String>,
-) -> Result<(CompletionRequest, TurnContextDecision), StreamingError>
+) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
 where
     M: CompletionModel,
 {
@@ -1492,7 +1492,8 @@ where
                     | crate::compaction::CompactionError::ReplayEvidence(_)
             )
         ) {
-            return StreamingError::Completion(CompletionError::RequestError(Box::new(error)));
+            return StreamingError::Completion(CompletionError::RequestError(Box::new(error)))
+                .into();
         }
         error.aggregate_token_budget_exhaustion().map_or_else(
             || {
@@ -1500,8 +1501,14 @@ where
                     "per-turn provider-input compaction failed: {}",
                     ErrorChain(&error)
                 )))
+                .into()
             },
-            |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),
+            |reason| {
+                crate::rig_compat::loop_verdict_error(
+                    crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                    reason,
+                )
+            },
         )
     })?;
     let (mut compacted, reduction_key, reason) = match outcome {
@@ -1519,9 +1526,12 @@ where
             ContextCompactionReason::Compacted,
         ),
         TurnCompactionOutcome::CannotFit => {
-            return Err(StreamingError::Completion(CompletionError::RequestError(
-                Box::new(crate::compaction::ReductionError::CannotFit),
-            )));
+            return Err(
+                StreamingError::Completion(CompletionError::RequestError(Box::new(
+                    crate::compaction::ReductionError::CannotFit,
+                )))
+                .into(),
+            );
         }
     };
     let compacted_prompt = compacted.pop().ok_or_else(|| {
@@ -1578,9 +1588,12 @@ where
             effective_input_budget,
             "provider input remains over threshold after reduction"
         );
-        return Err(StreamingError::Completion(CompletionError::RequestError(
-            Box::new(crate::compaction::ReductionError::CannotFit),
-        )));
+        return Err(
+            StreamingError::Completion(CompletionError::RequestError(Box::new(
+                crate::compaction::ReductionError::CannotFit,
+            )))
+            .into(),
+        );
     }
 
     Ok((

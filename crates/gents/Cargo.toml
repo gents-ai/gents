@@ -147,7 +147,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-proc-macro2 = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 oxc_allocator = "=0.127.0"
 oxc_ast = "=0.127.0"
 oxc_ast_visit = "=0.127.0"

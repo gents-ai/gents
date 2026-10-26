@@ -32,22 +32,42 @@ pub struct GraphqlFailure {
     operation: String,
     errors: Value,
     storage_full: Option<StorageFull>,
+    retryable_conflict: bool,
 }
 
 impl GraphqlFailure {
     pub fn new(operation: impl Into<String>, errors: Value) -> Self {
-        let full = errors.as_array().is_some_and(|errors| {
-            errors.iter().any(|error| {
-                StorageFull::from_code(error.pointer("/extensions/code").and_then(Value::as_str))
-                    .is_some()
-            })
+        let errors_list = errors.as_array().map(Vec::as_slice).unwrap_or_default();
+        let full = errors_list.iter().any(|error| {
+            StorageFull::from_code(error.pointer("/extensions/code").and_then(Value::as_str))
+                .is_some()
+        });
+        let retryable_conflict = errors_list.iter().any(|error| {
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .is_some_and(reports_retryable_conflict)
         });
         Self {
             operation: operation.into(),
             errors,
             storage_full: full.then_some(StorageFull),
+            retryable_conflict,
         }
     }
+
+    /// Whether DefraDB reported a store conflict the caller may retry.
+    pub fn is_retryable_conflict(&self) -> bool {
+        self.retryable_conflict
+    }
+}
+
+/// External premise: DefraDB's GraphQL responses report a retryable store
+/// conflict only in an error's `message` (`transaction conflict`, `please
+/// retry`); it carries no `extensions.code` for it.
+pub fn reports_retryable_conflict(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("transaction conflict") || message.contains("please retry")
 }
 
 impl fmt::Display for GraphqlFailure {

@@ -752,5 +752,8 @@ where
 }
 
 fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
-    format!("{error:#}").contains("stale compaction generation")
+    gents_protocol::error_chain::find_source::<crate::session::StaleCompactionGeneration>(
+        error.as_ref(),
+    )
+    .is_some()
 }
