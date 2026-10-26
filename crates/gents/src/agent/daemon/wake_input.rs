@@ -70,17 +70,16 @@ pub(super) async fn load(
     ConfigAccess::transact_local_readonly(node, None, "request.wake_input", |txn| {
         let scope = scope.clone();
         Box::pin(async move {
-            let assignments = crate::goal::load_request_assignments_in_txn(txn, &request.node_did, &request.session_id).await?;
-            let validate_wake = |doc: &str| -> Result<()> {
-                let row = assignments.request(doc)?;
+            let mut assignments = crate::goal::load_request_assignment_scopes(txn, &request.node_did, &request.session_id).await?;
+            let validate_wake = |row: &gents_protocol::row::AgentRequestRow| -> Result<()> {
                 anyhow::ensure!(row.input.as_ref().is_some_and(crate::lifecycle::is_background_completion_request), "notification receipt does not belong to a background wake");
                 crate::request_admission::verify_runtime_local_control_receipt(row, &request.node_did,
                     row.caused_by_parent_request_id.as_deref().context("background wake receipt has no signed parent")?,
                     request.requester_did.as_deref().unwrap_or(&request.node_did))?;
-                assignments.scope(doc)?;
                 Ok(())
             };
-            validate_wake(&request.doc_id)?;
+            validate_wake(assignments.request(&request.doc_id)?)?;
+            assignments.scope(&request.doc_id).await?;
             let doc = escape_graphql_string(&request.doc_id);
             let response = txn.execute(&format!(r#"{{
                 current: AgentRequest(filter: {{{scope}, _docID: {{_eq: "{doc}"}}, background_completion_input_through_sequence: {{_eq: {cutoff}}}}}, limit: 1) {{background_completion_notification_keys_json}}
@@ -93,7 +92,9 @@ pub(super) async fn load(
             for receipt in rows(&response, "acknowledged")? {
                 let keys = receipt_keys(receipt)?;
                 if !keys.iter().any(|key| claimed.contains(key)) { continue; }
-                validate_wake(receipt["_docID"].as_str().context("completed wake receipt has no physical request")?)?;
+                let receipt_doc = receipt["_docID"].as_str().context("completed wake receipt has no physical request")?;
+                validate_wake(assignments.request(receipt_doc)?)?;
+                assignments.scope(receipt_doc).await?;
                 let through = receipt["background_completion_input_through_sequence"].as_u64().context("completed wake receipt lacks its revision cutoff")?;
                 for key in keys {
                     acknowledged.entry(key).and_modify(|prior| *prior = (*prior).max(through)).or_insert(through);

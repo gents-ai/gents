@@ -18,6 +18,7 @@ const defaults: Preferences = {
   nav: "hover",
   zoom: 1,
   sentTurn: "follow",
+  followUp: "steer",
 };
 
 describe("preferences read back from storage", () => {
@@ -29,11 +30,14 @@ describe("preferences read back from storage", () => {
       nav: "collapsed",
       zoom: 1,
       sentTurn: "follow",
+      followUp: "steer",
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",
     );
     expect(restorePreferences({ sentTurn: "top" }, defaults).sentTurn).toBe("follow");
+    expect(restorePreferences({ followUp: "queue" }, defaults).followUp).toBe("queue");
+    expect(restorePreferences({ followUp: "later" }, defaults).followUp).toBe("steer");
   });
 
   it("keeps a zoom only when it is one of the steps", () => {

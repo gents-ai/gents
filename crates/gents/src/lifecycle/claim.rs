@@ -127,13 +127,13 @@ where
                     return Ok(None);
                 }
                 let snapshot = if capture_background_snapshot {
-                    let assignments = crate::goal::load_request_assignments_in_txn(
+                    let mut assignments = crate::goal::load_request_assignment_scopes(
                         txn,
                         &request.node_did,
                         session_id,
                     )
                     .await?;
-                    let assignment = assignments.scope(&request.doc_id)?;
+                    let assignment = assignments.scope(&request.doc_id).await?;
                     let response = txn.execute_local_response(snapshot_query).await?;
                     let through_sequence = response
                         .data
@@ -165,36 +165,27 @@ where
                             "failed wake receipt has no available revision cutoff");
                         (retained, cutoff)
                     } else { (Vec::new(), None) };
-                    let notification_keys = response
-                        .data
-                        .as_ref()
+                    let mut notification_keys = Vec::new();
+                    for row in response.data.as_ref()
                         .and_then(|data| data.get("notifications"))
                         .and_then(serde_json::Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter(|row| {
-                            row.get("sequence")
-                                .and_then(serde_json::Value::as_u64)
-                                .zip(through_sequence.map(u64::from))
-                                .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
-                        })
-                        .try_fold(Vec::new(), |mut keys, row| -> Result<_> {
-                            let source = row
-                                .get("request_doc_id")
-                                .and_then(serde_json::Value::as_str)
-                                .context(
-                                    "background notification has no physical request binding",
-                                )?;
-                            let key = row.get("message_key").and_then(serde_json::Value::as_str)
-                                .context("background notification has no key")?;
-                            let retained = retained_keys.iter().any(|prior| prior == key)
-                                && row.get("sequence").and_then(serde_json::Value::as_u64)
-                                    .zip(retained_cutoff).is_some_and(|(sequence,cutoff)| sequence <= cutoff);
-                            if assignments.scope(source)? == assignment || retained {
-                                keys.push(key.to_string());
-                            }
-                            Ok(keys)
-                        })?;
+                        .into_iter().flatten()
+                    {
+                        if !row.get("sequence").and_then(serde_json::Value::as_u64)
+                            .zip(through_sequence.map(u64::from))
+                            .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
+                        { continue; }
+                        let source = row.get("request_doc_id").and_then(serde_json::Value::as_str)
+                            .context("background notification has no physical request binding")?;
+                        let key = row.get("message_key").and_then(serde_json::Value::as_str)
+                            .context("background notification has no key")?;
+                        let retained = retained_keys.iter().any(|prior| prior == key)
+                            && row.get("sequence").and_then(serde_json::Value::as_u64)
+                                .zip(retained_cutoff).is_some_and(|(sequence,cutoff)| sequence <= cutoff);
+                        if assignments.scope(source).await? == assignment || retained {
+                            notification_keys.push(key.to_string());
+                        }
+                    }
                     anyhow::ensure!(retained_keys.iter().all(|key| notification_keys.contains(key)),
                         "failed wake retained notifications are missing from the current snapshot");
                     BackgroundCompletionClaimSnapshot {

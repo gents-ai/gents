@@ -170,6 +170,10 @@ pub(crate) fn runtime_contract_router(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
             post(crate::http::runtime_control::runtime_control_handler),
         )
+        .route(
+            gents_protocol::job::JOB_CONTROL_PATH,
+            post(crate::http::job_control::job_control_handler),
+        )
         .route("/activation", get(activation_handler))
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
@@ -905,6 +909,76 @@ mod tests {
             replicated_schema: Default::default(),
             serve_lifecycle: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn job_control_authenticates_the_owning_operator_before_runtime_access() {
+        use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+        use gents_protocol::job::{JobControlKind, OperatorJobControlRequest, JOB_CONTROL_PATH};
+        let temp = tempfile::tempdir().unwrap();
+        let owner_paths = DesktopPaths::from_root(temp.path().join("owner"));
+        owner_paths.ensure_root_dirs().await.unwrap();
+        let owner = PrincipalIdentity::load_or_create(&owner_paths)
+            .await
+            .unwrap();
+        let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
+        foreign_paths.ensure_root_dirs().await.unwrap();
+        let foreign = PrincipalIdentity::load_or_create(&foreign_paths)
+            .await
+            .unwrap();
+        let mut state = state();
+        state.node_did = owner.did().to_owned();
+        let app = Router::new()
+            .route(
+                JOB_CONTROL_PATH,
+                post(crate::http::job_control::job_control_handler),
+            )
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let client = reqwest::Client::new();
+        let url = format!("http://{address}{JOB_CONTROL_PATH}");
+        let graphql = format!("http://{address}/api/v0/graphql");
+        let command = OperatorJobControlRequest {
+            node_did: owner.did().into(),
+            tool_call_doc_id: "physical-job".into(),
+            action: JobControlKind::Stop,
+        };
+        let response = client.post(&url).json(&command).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
+        let response = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&command)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let endpoint = GraphqlEndpoint::as_principal(&graphql, owner.did());
+        let mut other = command.clone();
+        other.node_did = foreign.did().into();
+        let response = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&other)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&command)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        drop(server);
     }
 
     #[tokio::test]

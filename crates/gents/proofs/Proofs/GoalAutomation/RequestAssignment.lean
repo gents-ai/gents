@@ -184,6 +184,47 @@ def queueScope (assignments : List Assignment) (e : Entry) : Option QueueScope :
       | .unknown => .unresolved e.doc
       | .assigned goal root => .referenced goal root)
 
+/-- A verified signed reference is association, not a claim about the retained
+Goal document. It identifies the same work when history is unavailable or a
+retained opening belongs to another assignment. Untagged requests retain the
+historical ancestry owner. -/
+def preferSignedQueueScope (assignments : List Assignment)
+    (signed historical : Option Entry) : Option QueueScope :=
+  let direct := signed.bind fun entry =>
+    if entry.reference.isSome then queueScope assignments entry else none
+  direct.orElse fun _ => historical.bind (queueScope assignments)
+
+def scopedEntry (owner session doc : Nat) (entries : List Entry) : Option Entry :=
+  match entries.filter (fun entry => entry.owner == owner && entry.session == session && entry.doc == doc) with
+  | [entry] => some entry
+  | _ => none
+
+/-- Compose the executable ancestry owners. Signed ancestry authenticates every
+continuation edge; retained openings are consulted only when it supplies no
+signed association. -/
+def queueScopeWithAncestry (owner session : Nat)
+    (rows : List RequestAncestry.AssignmentRow) (entries : List Entry)
+    (assignments : List Assignment) (doc : Nat) : Option QueueScope :=
+  let signed := (RequestAncestry.signedEntry owner session (rows.map (·.request)) none doc).bind
+    (fun entry => scopedEntry owner session entry entries)
+  let historical := (RequestAncestry.assignmentEntry owner session rows none doc).bind
+    (fun entry => scopedEntry owner session entry entries)
+  preferSignedQueueScope assignments signed historical
+
+theorem authenticated_reference_does_not_depend_on_history
+    (assignments : List Assignment) (entry : Entry) (reference : Reference)
+    (historical : Option Entry) (valid : entry.signatureValid = true)
+    (tagged : entry.reference = some reference) :
+    preferSignedQueueScope assignments (some entry) historical =
+      some (.referenced reference.goal (reference.root.getD entry.doc)) := by
+  simp [preferSignedQueueScope, queueScope, valid, tagged]
+
+theorem untagged_entry_retains_historical_scope (assignments : List Assignment)
+    (entry : Entry) (historical : Option Entry) (untagged : entry.reference = none) :
+    preferSignedQueueScope assignments (some entry) historical =
+      historical.bind (queueScope assignments) := by
+  simp [preferSignedQueueScope, untagged]
+
 theorem unbound_queue_scope_is_not_unassigned (assignments : List Assignment) (entry : Entry)
     (valid : entry.signatureValid = true) (untagged : entry.reference = none)
     (unknown : observe assignments entry = .unknown) :

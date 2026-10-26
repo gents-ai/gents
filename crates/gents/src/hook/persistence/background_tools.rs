@@ -744,10 +744,12 @@ impl DefraSessionHook {
                 .await;
         }
         if lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::PluginJob {
-            let result = match crate::plugin_job::control::control(
+            let result = match crate::plugin_job::control::control_by_doc_id(
                 &crate::config_client::ConfigAccess::local(self.node.clone()),
                 &caller,
-                background_tool_call_id,
+                lifecycle
+                    .doc_id()
+                    .context("job cancellation lacks physical identity")?,
                 gents_protocol::job::JobControlKind::Stop,
             )
             .await
@@ -787,7 +789,12 @@ impl DefraSessionHook {
             .unwrap_or("explicit_cancel");
         if !self
             .background_executions
-            .contains(background_tool_call_id)
+            .contains(
+                background_tool_call_id,
+                lifecycle
+                    .doc_id()
+                    .context("background cancellation lacks physical identity")?,
+            )
             .await
         {
             let mut lifecycle = lifecycle;

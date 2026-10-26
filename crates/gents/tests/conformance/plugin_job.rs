@@ -10,7 +10,7 @@
 //! Wherever `gents_protocol::job` has the type, the translation builds that
 //! type. Lean models only the presence or count of a rider, so a protocol field
 //! the model does not carry (a prompt, a title, a write's body) is left empty.
-//! A target's wire spelling is its agent id, as in Lean's `targetId`.
+//! Composed wire traces carry the actual resolution table and raw ceilings.
 use crate::lean_vocab_test::{
     lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases,
     lean_plugin_job_authority_cases, lean_plugin_job_control_cases, lean_plugin_job_key_cases,
@@ -75,35 +75,6 @@ fn wire_id(t: &LeanPluginJobTarget) -> String {
     format!("{}@{}", t.agent, t.node)
 }
 
-/// The host's resolution table over every target a step case names.
-fn resolution(
-    c: &LeanPluginJobContext,
-    job: &LeanPluginJobRow,
-    output: &LeanPluginJobOutput,
-) -> Vec<(String, (String, String))> {
-    let mut named: Vec<&LeanPluginJobTarget> = c.target_hops.iter().map(|h| &h.target).collect();
-    for scope in [
-        &c.caller_targets,
-        &c.job_targets,
-        &c.live.targets,
-        &c.policy.dynamic_targets,
-    ] {
-        named.extend(&scope.targets);
-    }
-    named.extend(job.children.iter().map(|child| &child.target));
-    if let Some(pin) = &job.pin {
-        named.extend(&pin.ceiling_at_pin.targets.targets);
-    }
-    if let LeanPluginJobOutput::Effects { spawns, .. } = output {
-        named.extend(spawns.iter().map(|spawn| &spawn.target));
-    }
-    let mut table: Vec<(String, (String, String))> =
-        named.into_iter().map(|t| (wire_id(t), target(t))).collect();
-    table.sort();
-    table.dedup();
-    table
-}
-
 fn scope(s: &LeanPluginJobScope) -> EndpointScope<(String, String), ()> {
     match s.kind.as_str() {
         "none" => EndpointScope::None,
@@ -113,18 +84,9 @@ fn scope(s: &LeanPluginJobScope) -> EndpointScope<(String, String), ()> {
     }
 }
 
-/// The wire spelling of a scope: the permitted AgentTarget ids. `all` has none.
-fn scope_ids(s: &LeanPluginJobScope) -> Vec<String> {
-    match s.kind.as_str() {
-        "none" => Vec::new(),
-        "only" => s.targets.iter().map(wire_id).collect(),
-        other => panic!("Lean endpoint scope {other} has no wire spelling"),
-    }
-}
-
 fn ceiling(c: &LeanPluginJobCeiling) -> JobCeiling {
     JobCeiling {
-        targets: scope_ids(&c.targets),
+        targets: c.targets.clone(),
         max_live: c.max_live,
         max_spawns: c.max_spawns,
         max_messages_per_slot: c.max_messages_per_slot,
@@ -389,7 +351,7 @@ fn output(o: &LeanPluginJobOutput) -> JobStepOutput {
 fn job_policy(p: &LeanPluginJobPolicy) -> JobPolicy {
     JobPolicy {
         dynamic: spelled(&p.mode),
-        dynamic_targets: scope_ids(&p.dynamic_targets),
+        dynamic_targets: p.dynamic_targets.clone(),
         trusted_packs: p.trusted_packs.clone(),
         project_roots: p.project_roots.clone(),
     }
@@ -401,8 +363,8 @@ fn target_ids(targets: &[LeanPluginJobTarget]) -> Vec<String> {
 
 fn context(
     c: &LeanPluginJobContext,
-    job: &LeanPluginJobRow,
-    out: &LeanPluginJobOutput,
+    _job: &LeanPluginJobRow,
+    _out: &LeanPluginJobOutput,
 ) -> StepContext {
     StepContext {
         live: ceiling(&c.live),
@@ -419,7 +381,11 @@ fn context(
             .iter()
             .map(|h| (target(&h.target), h.hop))
             .collect(),
-        target_ids: resolution(c, job, out),
+        target_ids: c
+            .bindings
+            .iter()
+            .map(|binding| (binding.wire.clone(), target(&binding.target)))
+            .collect(),
         live_background: c.live_background,
         started_by_job: c.started_by_job,
         cwd_allowed: c.cwd_allowed.clone(),
@@ -494,15 +460,31 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        29,
-        "Lean supplies sixteen admission regressions and thirteen source-boundary cases"
+        221,
+        "Lean supplies 29 admission regressions and 192 interrupted wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {
         assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
         let expected = &case.expected;
+        let expected_job = expected.job.as_ref().map(row);
         let context = context(&case.context, &case.job, &case.output);
         let job = row(&case.job);
+        let mut output = output(&case.output);
+        if let Some(trace) = &case.wire_trace {
+            let JobStepOutput::Effects { effects } = &mut output else {
+                panic!("{}: wire trace requires spawn effects", case.name);
+            };
+            assert_eq!(
+                effects.spawn.len(),
+                trace.spawn_wires.len(),
+                "{}",
+                case.name
+            );
+            for (spawn, wire) in effects.spawn.iter_mut().zip(&trace.spawn_wires) {
+                spawn.target.clone_from(wire);
+            }
+        }
         let expected_state: JobState = spelled(&expected.row_state);
         let mut expected_kills: Vec<&str> = expected
             .kill
@@ -510,19 +492,20 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
             .map(|kill| kill.retry_key.as_str())
             .collect();
         expected_kills.sort_unstable();
-        match gents::plugin_job::admit::admit_step(&context, &job, &output(&case.output)) {
+        let settled = match gents::plugin_job::admit::admit_step(&context, &job, &output) {
             Ok(admitted) => {
                 assert!(expected.admitted, "{}: admitted a refused step", case.name);
                 assert!(!expected.dynamic_code_disabled, "{}", case.name);
                 assert_eq!(expected.code, None, "{}", case.name);
                 assert_eq!(
                     Some(&admitted),
-                    expected.job.as_ref().map(row).as_ref(),
+                    expected_job.as_ref(),
                     "{}: admitted row",
                     case.name
                 );
                 assert_eq!(admitted.state, expected_state, "{}", case.name);
                 assert!(expected_kills.is_empty(), "{}: kill", case.name);
+                admitted
             }
             Err(refusal) => {
                 assert!(
@@ -552,7 +535,54 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                 let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
                 kills.sort_unstable();
                 assert_eq!(kills, expected_kills, "{}: killed children", case.name);
+                refusal.closed_row().clone()
             }
+        };
+        if let Some(trace) = &case.wire_trace {
+            let durable = match trace.interruption.as_str() {
+                "before_kill" if !expected.admitted => &job,
+                "before_kill" | "after_kill" => &settled,
+                other => panic!("unknown interruption {other}"),
+            };
+            let facts = gents::plugin_job::recovery::facts_from_durable_read(
+                durable,
+                durable.state == JobState::Running,
+                durable.pin.as_ref().expect("wire trace has a durable pin"),
+                gents::plugin_job::recovery::DurableRead {
+                    session_stopped: trace.read.session_stopped,
+                    now_millis: trace.read.now_millis,
+                    available: if trace.read.available {
+                        Ok(())
+                    } else {
+                        Err(admit::Refusal::NotAvailable)
+                    },
+                    progress_revision: trace.read.progress_revision,
+                    in_flight: trace.read.step_in_flight,
+                },
+            );
+            let before = crate::lean_vocab_test::LeanPluginJobRecoveryRow {
+                running: facts.running,
+                terminal_children: facts.terminal_children,
+                observed: facts.observed,
+                live: facts.live,
+                session_stopped: facts.session_stopped,
+                deadline_expired: facts.deadline_expired,
+                available: facts.available.is_ok(),
+                stepped: facts.stepped,
+                step_in_flight: facts.in_flight,
+                step_new: facts.step_new,
+            };
+            assert_eq!(
+                before, trace.before,
+                "{}: settlement-to-recovery projection",
+                case.name
+            );
+            let (_, after) = super::recovery_sweeps::tick_row(before);
+            assert_eq!(
+                after, trace.after,
+                "{}: recovery of the actual settled row",
+                case.name
+            );
         }
     }
 }
@@ -1110,7 +1140,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
             } => {
                 *kinds.entry("policy_valid").or_default() += 1;
                 assert_eq!(
-                    policy_valid(&target_ids(agent_targets), &job_policy(policy)),
+                    policy_valid(agent_targets, &job_policy(policy)),
                     expected.valid,
                     "{name}: valid"
                 );

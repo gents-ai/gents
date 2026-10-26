@@ -536,6 +536,7 @@ mod tests {
 
     fn tool(name: &str, args: &str, result: &str, state: &str) -> ToolCallView {
         ToolCallView {
+            node_did: None,
             request_turn: None,
             background_available: None,
             tool_call_doc_id: None,

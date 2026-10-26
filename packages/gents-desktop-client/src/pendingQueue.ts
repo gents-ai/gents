@@ -1,4 +1,5 @@
 import type {
+  PendingMessageSteerRequest,
   PendingQueueEditRequest,
   PendingQueueEntryView,
   PendingTurnView,
@@ -43,7 +44,9 @@ export function moveRun(
   const group = queue[from].editGroup;
   if (group == null) return null;
   const run = queue.slice(Math.min(from, to), Math.max(from, to) + 1);
-  return run.every((item) => item.editable && item.editGroup === group) ? run : null;
+  return run.every((item) => item.editable && item.editGroup === group)
+    ? run
+    : null;
 }
 
 export function separatedBySettings(
@@ -106,5 +109,37 @@ export function removeEdit(
     expectedRequestDocIds: fence(queue),
     selectedRequestDocIds: [entry.requestDocId],
     messages: [],
+  };
+}
+
+export type QueueSteer = Omit<
+  PendingMessageSteerRequest,
+  "nodeDid" | "sessionId"
+>;
+
+/** What steering `queue[index]` takes with it: every message queued before
+    it, all steerable and run with its settings, or nothing; the runtime's
+    steer refuses anything else. */
+export function steerRun(
+  queue: readonly PendingQueueEntryView[],
+  index: number,
+): PendingQueueEntryView[] | null {
+  const target = queue[index];
+  if (!target?.steerable) return null;
+  const run = queue.slice(0, index + 1);
+  return run.every(
+    (item) => item.steerable && item.editGroup === target.editGroup,
+  )
+    ? run
+    : null;
+}
+
+export function steerEdit(
+  queue: readonly PendingQueueEntryView[],
+  entry: PendingQueueEntryView,
+): QueueSteer {
+  return {
+    expectedRequestDocIds: fence(queue),
+    requestDocId: entry.requestDocId,
   };
 }

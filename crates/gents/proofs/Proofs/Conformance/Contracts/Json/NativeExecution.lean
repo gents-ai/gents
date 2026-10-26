@@ -424,7 +424,24 @@ def terminalRecoveryCases : List Case :=
   , mkCase "terminal_recovery_rejects_invalid_selection"
       (world 5) [.recoverTerminal 2 10 8 .failed (.message 999) []]
   , mkCase "recovery_orders_numeric_scope_turn_and_attempt"
-      (world 5) numericRecoveryInputs ]
+      (world 5) numericRecoveryInputs
+  , mkCase "cancelled_committed_prefix_survives_recovery_replay"
+      (world 5) [.appendRaw 1 5 (raw 100 0 0 5),
+        .recoverTerminal 2 10 8 .interrupted (.message 200) recoveryItems,
+        .appendRaw 1 11 lateStaleFlush,
+        .recoverTerminal 2 11 8 .interrupted (.message 200) recoveryItems]
+  , mkCase "cancelled_published_partial_survives_recovery"
+      (world 5) [.appendRaw 1 5 (raw 100 0 0 5),
+        .closePartial 5 7 livePartialItem,
+        .recoverTerminal 2 10 8 .interrupted (.message 200) []]
+  , mkCase "cancelled_headerless_recovery_rejects_late_output"
+      (world 5) [.recoverTerminal 2 10 8 .interrupted .noMessage [],
+        .appendRaw 1 11 lateStaleFlush] ]
+
+example : (terminalRecoveryCases.drop 5).map
+    (fun value => value.expected.map (List.map (·.accepted))) =
+    [some [true, true, false, true], some [true, true, true],
+      some [true, false]] := by native_decide
 
 /-- One native transaction covers the tool close and its paired result header.
 The separate close/deliver steps remain executable model witnesses, not claims

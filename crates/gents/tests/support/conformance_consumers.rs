@@ -56,6 +56,48 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot",
+            package: "gents",
+            source_path: "crates/gents/src/plugin_job/control.rs",
+            module_path: "plugin_job::control::tests",
+            function: "kill_reads_children_that_committed_after_the_recovery_snapshot",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin_job::operator_control_conformance::generated_operator_controls_stay_on_the_owning_runtime",
+            package: "gents",
+            source_path: "crates/gents/src/plugin_job/operator_control_conformance.rs",
+            module_path: "plugin_job::operator_control_conformance",
+            function: "generated_operator_controls_stay_on_the_owning_runtime",
+        },
+        ConformanceConsumer::RustTest {
+            id: "hook::tests::generated_background_process_identity_cases_cancel_only_the_physical_invocation",
+            package: "gents",
+            source_path: "crates/gents/src/hook/tests.rs",
+            module_path: "hook::tests",
+            function: "generated_background_process_identity_cases_cancel_only_the_physical_invocation",
+        },
+        ConformanceConsumer::RustTest {
+            id: "hook::persistence::background_control::observation::tests::generated_observation_cases_preserve_deadlines_and_closed_feed_recovery",
+            package: "gents",
+            source_path: "crates/gents/src/hook/persistence/background_control/observation_tests.rs",
+            module_path: "hook::persistence::background_control::observation::tests",
+            function: "generated_observation_cases_preserve_deadlines_and_closed_feed_recovery",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin_job::admit::tests::generated_wire_targets_preserve_endpoint_and_permission_identity",
+            package: "gents",
+            source_path: "crates/gents/src/plugin_job/admit.rs",
+            module_path: "plugin_job::admit::tests",
+            function: "generated_wire_targets_preserve_endpoint_and_permission_identity",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::request_assignment::scope_tests::generated_ancestry_scope_cases_use_the_lean_composition",
+            package: "gents",
+            source_path: "crates/gents/src/goal/request_assignment/scope_tests.rs",
+            module_path: "goal::request_assignment::scope_tests",
+            function: "generated_ancestry_scope_cases_use_the_lean_composition",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",
             package: "gents-protocol",
             source_path: "crates/gents-protocol/src/database_error.rs",
@@ -1230,6 +1272,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/goal/observation/contract_tests.rs",
             module_path: "goal::observation::contract_tests",
             function: "generated_goal_observations_drive_signature_and_scope_validation",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::observation::contract_tests::generated_goal_rescans_recover_lost_notifications",
+            package: "gents",
+            source_path: "crates/gents/src/goal/observation/contract_tests.rs",
+            module_path: "goal::observation::contract_tests",
+            function: "generated_goal_rescans_recover_lost_notifications",
         },
         ConformanceConsumer::RustTest {
             id: "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants",

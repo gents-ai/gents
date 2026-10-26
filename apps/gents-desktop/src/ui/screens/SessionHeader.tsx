@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { ChevronDown, Pencil, Play, Target, Timer, Zap } from "lucide-react";
-import type { GoalView } from "@source-inc/gents-desktop-client";
+import { ChevronDown, Pause, Pencil, Play, Target, Timer, X, Zap } from "lucide-react";
+import type { GoalControlAction, GoalView } from "@source-inc/gents-desktop-client";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
@@ -145,8 +145,28 @@ export function Title({
   );
 }
 
-export function Goal({ goal }: { goal: GoalView }) {
+/** The controls the runtime's goal transitions allow from each status; it
+    refuses any other with a reason. */
+const GOAL_CONTROLS: Record<string, readonly ("pause" | "resume" | "edit" | "stop")[]> =
+  {
+    active: ["pause", "edit", "stop"],
+    budget_limited: ["pause", "stop"],
+    paused: ["resume", "edit", "stop"],
+    blocked: ["resume", "stop"],
+    usage_limited: ["resume", "stop"],
+  };
+
+export function Goal({
+  goal,
+  onEdit,
+  onControl,
+}: {
+  goal: GoalView;
+  onEdit?: () => void;
+  onControl?: (action: Exclude<GoalControlAction, { kind: "create" | "edit" }>) => void;
+}) {
   const [open, setOpen] = useState(false);
+  const controls = onControl ? (GOAL_CONTROLS[goal.status ?? ""] ?? []) : [];
   const used = goal.tokenBudget ? goal.tokensUsed / goal.tokenBudget : null;
   const blocked = goal.status === "blocked";
   /* A budget-limited stop also completes wrap-up; runtime status records
@@ -171,13 +191,15 @@ export function Goal({ goal }: { goal: GoalView }) {
     .filter(Boolean)
     .join(" ");
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mb-2">
-      <div
-        className={cn(
-          "flex items-center gap-2 rounded-xl border border-border bg-raised px-3 py-2 text-sm",
-          blocked && "border-destructive/30",
-        )}
-      >
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={cn(
+        "mb-2 rounded-xl border border-border bg-raised text-sm",
+        blocked && "border-destructive/30",
+      )}
+    >
+      <div className="flex items-center gap-2 px-3 py-2">
         <Target
           className={cn("size-4 shrink-0", blocked ? "text-destructive" : "text-ink")}
         />
@@ -197,17 +219,77 @@ export function Goal({ goal }: { goal: GoalView }) {
             {duration(goal.activeTimeSeconds * 1000)}
           </span>
         )}
+        {controls.length > 0 && (
+          <span
+            className={cn(
+              "flex shrink-0 items-center",
+              goal.activeTimeSeconds > 0 ? "" : "ml-auto",
+            )}
+          >
+            {controls.includes("pause") && (
+              <Hint label="Pause goal">
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Pause goal"
+                  onClick={() => onControl?.({ kind: "pause" })}
+                >
+                  <Pause />
+                </Button>
+              </Hint>
+            )}
+            {controls.includes("resume") && (
+              <Hint label="Resume goal">
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Resume goal"
+                  onClick={() => onControl?.({ kind: "resume" })}
+                >
+                  <Play />
+                </Button>
+              </Hint>
+            )}
+            {controls.includes("edit") && onEdit && (
+              <Hint label="Edit goal">
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Edit goal"
+                  onClick={onEdit}
+                >
+                  <Pencil />
+                </Button>
+              </Hint>
+            )}
+            {controls.includes("stop") && (
+              <Hint label="Remove goal">
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Remove goal"
+                  onClick={() => onControl?.({ kind: "stop" })}
+                >
+                  <X />
+                </Button>
+              </Hint>
+            )}
+          </span>
+        )}
         <CollapsibleTrigger
           render={<Button variant="quiet" size="icon-xs" />}
           aria-label={open ? "Hide goal detail" : "Show goal detail"}
-          className={cn("shrink-0", goal.activeTimeSeconds > 0 ? "" : "ml-auto")}
+          className={cn(
+            "shrink-0",
+            goal.activeTimeSeconds > 0 || controls.length > 0 ? "" : "ml-auto",
+          )}
         >
           <ChevronDown
             className={cn("size-3.5 transition-transform", open && "rotate-180")}
           />
         </CollapsibleTrigger>
       </div>
-      <CollapsibleContent className="px-3 pt-2">
+      <CollapsibleContent className="max-h-48 overflow-y-auto border-t border-border/60 px-3 py-2">
         {used !== null && (
           <div className="grid gap-1">
             <div className="flex items-baseline justify-between text-xs text-muted-foreground">

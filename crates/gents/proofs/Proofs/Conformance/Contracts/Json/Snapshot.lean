@@ -93,6 +93,7 @@ import Proofs.Conformance.GoalRequestAncestry
 import Proofs.Conformance.GoalQueueAssignment
 import Proofs.Conformance.GoalFirstRequestBinding
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.NativeRefinement
 import Proofs.Conformance.GoalRequestAssignment
 import Proofs.Conformance.GoalDeliveryInput
 import Proofs.Conformance.GoalToolContext
@@ -167,12 +168,24 @@ def snapshotJson : String :=
       ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
     ++ "\"goal_tool_context_cases\":"
       ++ Conformance.GoalToolContextContracts.casesJson ++ ","
+    ++ "\"goal_request_scope_cases\":"
+      ++ Conformance.GoalRequestAncestryContracts.scopeCasesJson ++ ","
     ++ "\"goal_request_ancestry_cases\":"
       ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
     ++ "\"goal_queue_assignment_cases\":"
       ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
+    ++ "\"durable_observation_cases\":"
+      ++ Conformance.NativeRefinement.observationCasesJson ++ ","
+    ++ "\"plugin_job_commit_kill_cases\":"
+      ++ Conformance.PluginJob.commitKillCasesJson ++ ","
+    ++ "\"operator_job_control_cases\":"
+      ++ Conformance.NativeRefinement.operatorControlCasesJson ++ ","
+    ++ "\"background_process_identity_cases\":"
+      ++ Conformance.NativeRefinement.processIdentityCasesJson ++ ","
+    ++ "\"plugin_target_resolution_cases\":"
+      ++ Conformance.NativeRefinement.targetCasesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
     ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
