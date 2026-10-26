@@ -36,49 +36,56 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     }
 
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
-    let report =
-        gents::pack::remove_pack(&access, &owner, &coordinate, args.drift.policy()).await?;
-    if documents_record {
-        // Before the archive scan below, which counts every file record.
-        gents::pack::forget_home_install(&home, &coordinate)?;
-    }
+    let result = async {
+        let report =
+            gents::pack::remove_pack(&access, &owner, &coordinate, args.drift.policy()).await?;
+        if documents_record {
+            // Before the archive scan below, which counts every file record.
+            gents::pack::forget_home_install(&home, &coordinate)?;
+        }
 
-    let mut plugin_digests = BTreeSet::new();
-    let pack_plugin_records = release_plugin_records(
-        &home,
-        &report.pack,
-        &report.documents.plugins,
-        &mut plugin_digests,
-    )?;
-    let mut dependency_plugin_records = Vec::with_capacity(report.dependencies.len());
-    for dependency in &report.dependencies {
-        dependency_plugin_records.push(release_plugin_records(
+        let mut plugin_digests = BTreeSet::new();
+        let pack_plugin_records = release_plugin_records(
             &home,
-            &dependency.pack,
-            &dependency.documents.plugins,
+            &report.pack,
+            &report.documents.plugins,
             &mut plugin_digests,
-        )?);
-    }
-    let plugin_bytes = plugin_release_result(&home, &plugin_digests)?;
+        )?;
+        let mut dependency_plugin_records = Vec::with_capacity(report.dependencies.len());
+        for dependency in &report.dependencies {
+            dependency_plugin_records.push(release_plugin_records(
+                &home,
+                &dependency.pack,
+                &dependency.documents.plugins,
+                &mut plugin_digests,
+            )?);
+        }
+        let plugin_bytes = plugin_release_result(&home, &plugin_digests)?;
 
-    let mut archive_digests: BTreeSet<String> = report.digests.iter().cloned().collect();
-    for dependency in &report.dependencies {
-        archive_digests.extend(dependency.digests.iter().cloned());
-    }
-    let archives = if args.scope.graphql.is_none() {
-        release_archives(&home, Some(&access), &archive_digests).await?
-    } else {
-        Vec::new()
-    };
+        let mut archive_digests: BTreeSet<String> = report.digests.iter().cloned().collect();
+        for dependency in &report.dependencies {
+            archive_digests.extend(dependency.digests.iter().cloned());
+        }
+        let archives = if args.scope.graphql.is_none() {
+            release_archives(&home, Some(&access), &archive_digests).await?
+        } else {
+            Vec::new()
+        };
 
-    let removed = augment_report(
-        &report,
-        &pack_plugin_records,
-        &dependency_plugin_records,
-        &plugin_bytes,
-        &archives,
-    )?;
-    crate::print_json(&json!({ "pack": coordinate, "owner": owner, "removed": removed }))
+        let removed = augment_report(
+            &report,
+            &pack_plugin_records,
+            &dependency_plugin_records,
+            &plugin_bytes,
+            &archives,
+        )?;
+        Ok::<_, anyhow::Error>(json!({ "pack": coordinate, "owner": owner, "removed": removed }))
+    }
+    .await;
+    if let Some(node) = access.local_node() {
+        node.shutdown().await;
+    }
+    crate::print_json(&result?)
 }
 
 fn augment_report(
