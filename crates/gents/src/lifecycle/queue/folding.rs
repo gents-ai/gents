@@ -176,7 +176,7 @@ pub(crate) async fn select_fold_in_claim_txn(
     head: &AgentRequest,
     admitted: &[String],
     claimed_at: &str,
-) -> anyhow::Result<Vec<FoldedInput>> {
+) -> Result<Vec<FoldedInput>> {
     if admitted.is_empty() || !heads_user_turn(head) {
         return Ok(Vec::new());
     }
@@ -232,7 +232,7 @@ pub(crate) async fn consume_folded_in_txn(
     consumption: &FoldedConsumption,
     published_at: &str,
     expected: &gents_protocol::message::Message,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let rows = super::intake::pending_rows_in_txn(
         txn,
         &consumption.head.node_did,
@@ -252,7 +252,7 @@ pub(crate) async fn consume_folded_in_txn(
     }
     let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
     if order.len() != ids.len() {
-        return Err(QueueError::PendingInputArrivalIncomplete.into());
+        return Err(QueueError::PendingInputArrivalIncomplete);
     }
     let first_id = if consumption.selected_at_claim {
         order
@@ -264,7 +264,7 @@ pub(crate) async fn consume_folded_in_txn(
     };
     let first = first_id.and_then(|id| rows.iter().find(|row| row.doc_id.as_ref() == Some(id)));
     let Some(row) = first else {
-        return Err(QueueError::from(PendingInputChanged).into());
+        return Err(QueueError::from(PendingInputChanged));
     };
     let selected = if consumption.selected_at_claim {
         folds_into(&consumption.head, row, chrono::Utc::now())
@@ -280,7 +280,7 @@ pub(crate) async fn consume_folded_in_txn(
                 .unwrap_or(&RequestInput::default())
                 .authored_message(row.content.as_deref().unwrap_or_default())?
     {
-        return Err(QueueError::from(PendingInputChanged).into());
+        return Err(QueueError::from(PendingInputChanged));
     }
     let doc_id = escape_graphql_string(&consumption.folded_request_doc_id);
     let mutation = format!(
@@ -308,10 +308,10 @@ pub(crate) async fn consume_folded_in_txn(
         .as_array()
         .ok_or(QueueError::FoldedPublicationOmittedRows)?;
     if updated.is_empty() {
-        return Err(QueueError::from(PendingInputChanged).into());
+        return Err(QueueError::from(PendingInputChanged));
     }
     if updated.len() != 1 {
-        return Err(QueueError::FoldedPublicationChangedRows.into());
+        return Err(QueueError::FoldedPublicationChangedRows);
     }
     let request_id = updated[0]["request_id"]
         .as_str()

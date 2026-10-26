@@ -6,23 +6,18 @@ pub(super) async fn load_timeline_session(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> anyhow::Result<Option<TimelineSessionRow>> {
+) -> Result<Option<TimelineSessionRow>> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let fields = crate::session::AGENT_SESSION_FIELDS;
     let query = format!("{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ {fields} }} }}");
     let rows = load_rows::<serde_json::Value>(access, "AgentSession", &query).await?;
-    Ok(decode_timeline_session_rows(
-        rows,
-        node_did,
-        session_id,
-        requester_did,
-    )?)
+    decode_timeline_session_rows(rows, node_did, session_id, requester_did)
 }
 
 pub(super) async fn load_timeline_sessions(
     access: &ConfigAccess,
     scopes: &[(String, String, Option<String>)],
-) -> anyhow::Result<Vec<TimelineSessionRow>> {
+) -> Result<Vec<TimelineSessionRow>> {
     const BATCH_SIZE: usize = 64;
     let fields = crate::session::AGENT_SESSION_FIELDS;
     let mut sessions = Vec::new();
@@ -41,22 +36,23 @@ pub(super) async fn load_timeline_sessions(
             .collect::<Vec<_>>()
             .join("\n");
         let response = access.execute(&format!("{{ {selections} }}")).await?;
-        anyhow::ensure!(
-            response.get("errors").is_none_or(
-                |errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
-            ),
-            "timeline AgentSession query failed: {}",
-            response["errors"]
-        );
+        if !response
+            .get("errors")
+            .is_none_or(|errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty))
+        {
+            return Err(RunTimelineError::SessionsQueryFailed {
+                errors: response["errors"].clone(),
+            });
+        }
         let data = response
             .get("data")
-            .context("timeline AgentSession query omitted data")?;
+            .ok_or(RunTimelineError::SessionsDataOmitted)?;
         for (index, (node_did, session_id, requester_did)) in batch.iter().enumerate() {
             let alias = format!("s{index}");
             let rows = data
                 .get(alias.as_str())
                 .and_then(serde_json::Value::as_array)
-                .with_context(|| format!("timeline query omitted AgentSession scope s{index}"))?
+                .ok_or(RunTimelineError::SessionScopeOmitted { index })?
                 .clone();
             if let Some(session) =
                 decode_timeline_session_rows(rows, node_did, session_id, requester_did.as_deref())?

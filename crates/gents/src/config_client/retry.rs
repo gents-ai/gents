@@ -119,6 +119,11 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::tool_surface::ToolSurfaceError>(cause))
         .or_else(|| wrapped::<super::tools::ToolsWriteError>(cause))
         .or_else(|| wrapped::<crate::tool_call_lifecycle::TransitionError>(cause))
+        .or_else(|| wrapped::<crate::blocked_turn::BlockedTurnError>(cause))
+        .or_else(|| wrapped::<crate::background_tools::BackgroundToolsError>(cause))
+        .or_else(|| wrapped::<crate::background_tools::QueryRowsError>(cause))
+        .or_else(|| wrapped::<crate::run_timeline_fetch::RunTimelineError>(cause))
+        .or_else(|| wrapped::<crate::lifecycle::MaterializeError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

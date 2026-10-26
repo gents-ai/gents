@@ -373,7 +373,7 @@ async fn outcome_of(
         owner.requester_did.as_deref(),
     )
     .await
-    .map_err(unavailable)?;
+    .map_err(|error| unavailable(error.into()))?;
     let CanonicalToolOutputObservation::Closed(text) = observed else {
         return Ok(None);
     };

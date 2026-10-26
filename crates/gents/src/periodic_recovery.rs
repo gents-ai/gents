@@ -255,13 +255,14 @@ fn recover_task_hook_records<'a>(
     background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
-        crate::task_hooks::recover_task_hook_records(
-            node,
-            node_did,
-            background_executions.task_hook_records(),
-        )
-        .await
-        .map(PeriodicRecoverySweepOutcome::TaskHookRecords)
+        Ok(PeriodicRecoverySweepOutcome::TaskHookRecords(
+            crate::task_hooks::recover_task_hook_records(
+                node,
+                node_did,
+                background_executions.task_hook_records(),
+            )
+            .await?,
+        ))
     })
 }
 

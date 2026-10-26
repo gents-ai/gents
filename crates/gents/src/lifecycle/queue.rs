@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;

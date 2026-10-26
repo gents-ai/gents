@@ -38,7 +38,8 @@ pub async fn run_startup_recovery_with_executions(
         node_did,
         executions.task_hook_records(),
     )
-    .await;
+    .await
+    .map_err(anyhow::Error::from);
     StartupRecoveryOutcome {
         tool_calls,
         requests,

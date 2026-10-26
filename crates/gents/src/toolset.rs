@@ -11,6 +11,7 @@ mod cli_tool;
 mod context_budget;
 pub mod edit_match;
 mod file_tools;
+pub use file_tools::change_capture::ChangeCaptureError;
 pub(crate) use file_tools::change_capture::FileChanges;
 mod goal;
 pub(crate) mod lsp;

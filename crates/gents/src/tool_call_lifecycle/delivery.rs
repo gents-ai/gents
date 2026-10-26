@@ -358,6 +358,7 @@ impl DeliveryError {
             Self::SessionOutput(error) => error.reconstruction(),
             Self::Lifecycle(error) => error.reconstruction(),
             Self::Transition(error) => error.reconstruction(),
+            Self::Query(error) => error.reconstruction(),
             _ => None,
         }
     }

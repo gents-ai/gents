@@ -8,6 +8,29 @@ pub struct EnqueuedAgentRequest {
     pub session_id: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MaterializeError {
+    #[error(transparent)]
+    Lifecycle(#[from] LifecycleError),
+    #[error(transparent)]
+    Signing(#[from] crate::request_admission::AgentRequestSigningError),
+    #[error("session-message lineage requires the full calling request and tool call edge")]
+    SessionMessageLineage,
+    #[error("load the caller's registered identity to sign its session message")]
+    SessionMessageSigner(#[source] crate::identity::IdentityError),
+}
+
+impl crate::config_client::TransactionFailure for MaterializeError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Lifecycle(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type MaterializeResult<T> = std::result::Result<T, MaterializeError>;
+
 fn validate_trigger_lineage(
     trigger_lineage: &TriggerLineage,
     trigger_doc_id: Option<&str>,
@@ -194,7 +217,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     retry_key: Option<&str>,
     requester_did: Option<&str>,
     trigger_doc_id: Option<&str>,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+) -> MaterializeResult<gents_protocol::request_admission::AgentRequestCreate> {
     let spec = pending_agent_request_spec(
         node_did,
         agent_id,
@@ -473,7 +496,7 @@ pub(crate) fn build_request(
 pub(crate) async fn sign_request(
     create: &mut gents_protocol::request_admission::AgentRequestCreate,
     signer: RequestSigner<'_>,
-) -> Result<()> {
+) -> MaterializeResult<()> {
     match signer {
         RequestSigner::RegisteredTarget => {
             crate::sign_agent_request_create_as_registered_target(create).await?;
@@ -488,7 +511,7 @@ pub(crate) async fn sign_request(
 pub async fn build_signed_request(
     spec: RequestSpec,
     signer: RequestSigner<'_>,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+) -> MaterializeResult<gents_protocol::request_admission::AgentRequestCreate> {
     let mut create = build_request(spec);
     sign_request(&mut create, signer).await?;
     Ok(create)
@@ -613,7 +636,7 @@ pub(crate) async fn build_session_message_request(
     hop: u32,
     queue: Option<gents_protocol::request_input::RequestQueue>,
     cwd: Option<String>,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+) -> MaterializeResult<gents_protocol::request_admission::AgentRequestCreate> {
     build_session_message_request_with_input(
         cause,
         target,
@@ -644,15 +667,15 @@ pub(crate) async fn build_session_message_request_with_input(
     retry_key: Option<String>,
     hop: u32,
     mut input: gents_protocol::request_input::RequestInput,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+) -> MaterializeResult<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    anyhow::ensure!(
-        !cause.caller_request_id.trim().is_empty()
-            && !cause.caller_request_doc_id.trim().is_empty()
-            && !cause.tool_call_id.trim().is_empty()
-            && !cause.tool_call_doc_id.trim().is_empty(),
-        "session-message lineage requires the full calling request and tool call edge"
-    );
+    if cause.caller_request_id.trim().is_empty()
+        || cause.caller_request_doc_id.trim().is_empty()
+        || cause.tool_call_id.trim().is_empty()
+        || cause.tool_call_doc_id.trim().is_empty()
+    {
+        return Err(MaterializeError::SessionMessageLineage);
+    }
     let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
     let admission = if target.node_did == cause.caller_node_did {
         AgentRequestAdmissionRecord::local_self(&cause.caller_node_did)
@@ -702,7 +725,7 @@ pub(crate) async fn build_session_message_request_with_input(
         cause.caller_node_did.clone(),
         None,
     )
-    .context("load the caller's registered identity to sign its session message")?;
+    .map_err(MaterializeError::SessionMessageSigner)?;
     build_signed_request(spec, RequestSigner::Identity(&signer)).await
 }
 

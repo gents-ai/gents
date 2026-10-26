@@ -1,7 +1,6 @@
 use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -328,6 +327,45 @@ pub(crate) struct ManagedTaskHookExec {
     )>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TaskHookError {
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Projection(#[from] crate::config_client::DesiredStateError),
+    #[error("automated trigger lineage has no trigger_id")]
+    TriggerIdMissing,
+    #[error("Task {task_id} this request was fired from no longer exists; refusing to run it without its hooks")]
+    TaskMissing { task_id: String },
+    #[error("Task {task_id} this request was fired from is disabled; refusing to run it")]
+    TaskDisabled { task_id: String },
+    #[error("Task {task_id} hooks are not admissible")]
+    TaskNotAdmissible {
+        task_id: String,
+        #[source]
+        source: Box<crate::document_config::DocumentConfigError>,
+    },
+    #[error("request {request_id:?} has multiple Task fire receipts")]
+    MultipleFireReceipts { request_id: String },
+    #[error("ambiguous Trigger {trigger_id:?} for {node_did:?}")]
+    AmbiguousTrigger {
+        trigger_id: String,
+        node_did: String,
+    },
+    #[error("ambiguous Task {task_id:?} for {node_did:?}")]
+    AmbiguousTask { task_id: String, node_did: String },
+    #[error("Task row has no canonical configuration")]
+    CanonicalConfigMissing,
+    #[error("decoding Task {task_id:?}")]
+    DecodeTask {
+        task_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
 impl ManagedTaskHookExec {
     pub(crate) fn new(cwd: PathBuf, cancellation: TaskHookCancellation) -> Self {
         Self {
@@ -493,14 +531,14 @@ impl TaskHookExec for ManagedTaskHookExec {
 pub(crate) async fn resolve_request_task_hooks(
     node: &EmbeddedNode,
     request: &AgentRequest,
-) -> Result<(Vec<TaskHook>, bool)> {
+) -> Result<(Vec<TaskHook>, bool), TaskHookError> {
     let task_id = match load_fire_task_id(node, &request.node_did, &request.request_id).await? {
         Some(task_id) => Some(task_id),
         None if request.has_automated_trigger_lineage() => {
             let trigger_id = request
                 .caused_by_trigger_id
                 .as_deref()
-                .context("automated trigger lineage has no trigger_id")?;
+                .ok_or(TaskHookError::TriggerIdMissing)?;
             load_trigger_task_id(node, &request.node_did, trigger_id).await?
         }
         None => None,
@@ -510,15 +548,17 @@ pub(crate) async fn resolve_request_task_hooks(
     };
     let task = load_task(node, &request.node_did, &task_id)
         .await?
-        .with_context(|| {
-            format!("Task {task_id} this request was fired from no longer exists; refusing to run it without its hooks")
+        .ok_or_else(|| TaskHookError::TaskMissing {
+            task_id: task_id.clone(),
         })?;
-    anyhow::ensure!(
-        task.enabled,
-        "Task {task_id} this request was fired from is disabled; refusing to run it"
-    );
+    if !task.enabled {
+        return Err(TaskHookError::TaskDisabled { task_id });
+    }
     task.validate()
-        .with_context(|| format!("Task {task_id} hooks are not admissible"))?;
+        .map_err(|source| TaskHookError::TaskNotAdmissible {
+            task_id: task_id.clone(),
+            source: Box::new(source),
+        })?;
     Ok((task.hooks, true))
 }
 
@@ -537,7 +577,7 @@ async fn load_fire_task_id(
     node: &EmbeddedNode,
     node_did: &str,
     request_id: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<String>, TaskHookError> {
     let response = graphql_with_transaction_retry(
         node,
         &format!(
@@ -549,10 +589,11 @@ async fn load_fire_task_id(
     )
     .await?;
     let rows: Vec<TaskIdRow> = crate::graphql::rows(&response, "TriggerFire")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "request {request_id:?} has multiple Task fire receipts"
-    );
+    if rows.len() > 1 {
+        return Err(TaskHookError::MultipleFireReceipts {
+            request_id: request_id.to_owned(),
+        });
+    }
     Ok(nonempty_task_id(
         rows.into_iter().next().and_then(|row| row.task_id),
     ))
@@ -562,7 +603,7 @@ async fn load_trigger_task_id(
     node: &EmbeddedNode,
     node_did: &str,
     trigger_id: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<String>, TaskHookError> {
     let response = graphql_with_transaction_retry(
         node,
         &format!(
@@ -574,16 +615,22 @@ async fn load_trigger_task_id(
     )
     .await?;
     let rows: Vec<TaskIdRow> = crate::graphql::rows(&response, "Trigger")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "ambiguous Trigger {trigger_id:?} for {node_did:?}"
-    );
+    if rows.len() > 1 {
+        return Err(TaskHookError::AmbiguousTrigger {
+            trigger_id: trigger_id.to_owned(),
+            node_did: node_did.to_owned(),
+        });
+    }
     Ok(nonempty_task_id(
         rows.into_iter().next().and_then(|row| row.task_id),
     ))
 }
 
-async fn load_task(node: &EmbeddedNode, node_did: &str, task_id: &str) -> Result<Option<Task>> {
+async fn load_task(
+    node: &EmbeddedNode,
+    node_did: &str,
+    task_id: &str,
+) -> Result<Option<Task>, TaskHookError> {
     let (fields, _) = config_projection(Collection::Task, None)?;
     let response = graphql_with_transaction_retry(
         node,
@@ -597,16 +644,21 @@ async fn load_task(node: &EmbeddedNode, node_did: &str, task_id: &str) -> Result
     )
     .await?;
     let rows: Vec<serde_json::Value> = crate::graphql::rows(&response, "Task")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "ambiguous Task {task_id:?} for {node_did:?}"
-    );
+    if rows.len() > 1 {
+        return Err(TaskHookError::AmbiguousTask {
+            task_id: task_id.to_owned(),
+            node_did: node_did.to_owned(),
+        });
+    }
     let Some(row) = rows.into_iter().next() else {
         return Ok(None);
     };
     let (_, canonical) = config_projection(Collection::Task, Some(&row))?;
-    let canonical = canonical.context("Task row has no canonical configuration")?;
+    let canonical = canonical.ok_or(TaskHookError::CanonicalConfigMissing)?;
     serde_json::from_value(canonical)
-        .with_context(|| format!("decoding Task {task_id:?}"))
         .map(Some)
+        .map_err(|source| TaskHookError::DecodeTask {
+            task_id: task_id.to_owned(),
+            source,
+        })
 }

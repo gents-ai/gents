@@ -255,7 +255,7 @@ where
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
                 return Ok(None)
             }
-            Err(error) if crate::lifecycle::is_claim_admission_error(&error) => {
+            Err(error) if crate::lifecycle::is_claim_admission_error(error.as_ref()) => {
                 lifecycle.reject_admission(&error.to_string()).await?;
                 return Ok(None);
             }

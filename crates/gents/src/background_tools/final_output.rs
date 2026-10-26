@@ -1,7 +1,6 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::{
     MessagePublication, MessageRole, ReconstructionError, TerminalOutput,
@@ -47,7 +46,7 @@ pub(crate) async fn load_caused_request_terminals(
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum QueryRowsError {
+pub enum QueryRowsError {
     #[error("caused terminal {collection} query omitted rows")]
     Omitted { collection: String },
     #[error("decoding caused terminal {collection}")]
@@ -56,7 +55,50 @@ pub(crate) enum QueryRowsError {
         #[source]
         source: serde_json::Error,
     },
+    #[error(transparent)]
+    Execute(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Render(#[from] crate::background_tools::BackgroundToolsError),
+    #[error("caused request missing _docID")]
+    RequestMissingDocId,
+    #[error("caused request missing lifecycle_state")]
+    RequestMissingLifecycle,
+    #[error("caused request missing node_did")]
+    RequestMissingNodeDid,
+    #[error("caused request missing session_id")]
+    RequestMissingSession,
+    #[error("caused terminal header omitted _docID")]
+    HeaderMissingDocId,
+    #[error("ambiguous physical caused terminal header")]
+    AmbiguousHeader,
+    #[error(transparent)]
+    Message(crate::session::SessionOutputError),
+    #[error("selected caused terminal header is not an owned assistant publication")]
+    HeaderNotOwnedAssistant,
 }
+
+impl crate::config_client::TransactionFailure for QueryRowsError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Execute(error) => Some(error),
+            Self::Render(error) => error.config_client_error(),
+            Self::Message(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl QueryRowsError {
+    pub(crate) fn reconstruction(&self) -> Option<&ReconstructionError> {
+        match self {
+            Self::Message(error) => error.reconstruction(),
+            Self::Render(error) => error.reconstruction(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = QueryRowsError> = std::result::Result<T, E>;
 
 fn query_rows<T>(response: &serde_json::Value, collection: &str) -> Result<Vec<T>, QueryRowsError>
 where
@@ -96,10 +138,10 @@ pub(crate) async fn caused_request_terminals_in_txn(
         let doc_id = row
             .doc_id
             .as_deref()
-            .context("caused request missing _docID")?;
+            .ok_or(QueryRowsError::RequestMissingDocId)?;
         let state = row
             .lifecycle_state
-            .context("caused request missing lifecycle_state")?;
+            .ok_or(QueryRowsError::RequestMissingLifecycle)?;
         let terminal = match state {
             RequestLifecycleState::Failed => CausedRequestTerminal::Failed {
                 reason: row
@@ -142,7 +184,7 @@ pub(crate) async fn caused_request_terminals_in_txn(
         let id = fact
             .get("_docID")
             .and_then(serde_json::Value::as_str)
-            .context("caused terminal header omitted _docID")?;
+            .ok_or(QueryRowsError::HeaderMissingDocId)?;
         *headers.entry(id.to_owned()).or_default() += 1;
     }
     let mut readers: BTreeMap<(&str, Option<&str>), TxnCanonicalReader<'_, '_>> = BTreeMap::new();
@@ -150,16 +192,16 @@ pub(crate) async fn caused_request_terminals_in_txn(
         match headers.get(message_doc_id) {
             None => continue,
             Some(1) => {}
-            Some(_) => anyhow::bail!("ambiguous physical caused terminal header"),
+            Some(_) => return Err(QueryRowsError::AmbiguousHeader),
         }
         let node_did = row
             .node_did
             .as_deref()
-            .context("caused request missing node_did")?;
+            .ok_or(QueryRowsError::RequestMissingNodeDid)?;
         let session_id = row
             .session_id
             .as_deref()
-            .context("caused request missing session_id")?;
+            .ok_or(QueryRowsError::RequestMissingSession)?;
         let requester_did = row.requester_did.as_deref();
         let reader = readers
             .entry((node_did, requester_did))
@@ -173,19 +215,19 @@ pub(crate) async fn caused_request_terminals_in_txn(
             {
                 continue
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(QueryRowsError::Message(error)),
         };
-        anyhow::ensure!(
-            header.request_doc_id.as_deref() == Some(doc_id)
-                && header.session_id == session_id
-                && header.role == MessageRole::Assistant
-                && matches!(
-                    header.publication,
-                    MessagePublication::RequestExecution { .. }
-                        | MessagePublication::RequestRecovery { .. }
-                ),
-            "selected caused terminal header is not an owned assistant publication"
-        );
+        if !(header.request_doc_id.as_deref() == Some(doc_id)
+            && header.session_id == session_id
+            && header.role == MessageRole::Assistant
+            && matches!(
+                header.publication,
+                MessagePublication::RequestExecution { .. }
+                    | MessagePublication::RequestRecovery { .. }
+            ))
+        {
+            return Err(QueryRowsError::HeaderNotOwnedAssistant);
+        }
         terminals.insert(
             doc_id.to_owned(),
             CausedRequestTerminal::Completed {

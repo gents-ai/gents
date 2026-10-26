@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
@@ -6,7 +6,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
 use crate::document_config::{ConfigReferences, InferenceBackend};
 use crate::graphql::escape_graphql_string;
 use crate::oauth_credential::{
@@ -15,6 +15,31 @@ use crate::oauth_credential::{
 };
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use crate::Collection;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BlockedTurnError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error("request {request_id:?} not found")]
+    RequestNotFound { request_id: String },
+    #[error("AgentRequest query omitted rows")]
+    RequestRowsOmitted,
+    #[error("decoding AgentRequest rows")]
+    DecodeRequestRows(#[source] serde_json::Error),
+    #[error("InferenceCall query omitted rows")]
+    InferenceCallRowsOmitted,
+    #[error("decode failed InferenceCall")]
+    DecodeFailedCall(#[source] serde_json::Error),
+}
+
+impl crate::config_client::TransactionFailure for BlockedTurnError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct FailedCall {
@@ -215,7 +240,9 @@ pub(crate) async fn stopped_request(
                     .await?
                     .into_iter()
                     .next()
-                    .with_context(|| format!("request {request_id:?} not found"))?;
+                    .ok_or_else(|| BlockedTurnError::RequestNotFound {
+                        request_id: request_id.to_owned(),
+                    })?;
                 stopped_in_txn(txn, node_did, request).await
             })
         })
@@ -271,7 +298,7 @@ async fn requests_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     filter: &str,
-) -> Result<Vec<AgentRequestRow>> {
+) -> Result<Vec<AgentRequestRow>, BlockedTurnError> {
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(
@@ -285,9 +312,9 @@ async fn requests_in_txn(
         response
             .pointer("/data/AgentRequest")
             .cloned()
-            .context("AgentRequest query omitted rows")?,
+            .ok_or(BlockedTurnError::RequestRowsOmitted)?,
     )
-    .context("decoding AgentRequest rows")
+    .map_err(BlockedTurnError::DecodeRequestRows)
 }
 
 async fn stopped_in_txn(
@@ -305,7 +332,7 @@ async fn stopped_in_txn(
 pub(crate) async fn last_failed_call_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request_id: &str,
-) -> Result<Option<FailedCall>> {
+) -> Result<Option<FailedCall>, BlockedTurnError> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -320,9 +347,9 @@ pub(crate) async fn last_failed_call_in_txn(
     let rows = response
         .pointer("/data/InferenceCall")
         .and_then(serde_json::Value::as_array)
-        .context("InferenceCall query omitted rows")?;
+        .ok_or(BlockedTurnError::InferenceCallRowsOmitted)?;
     rows.first()
-        .map(|row| serde_json::from_value(row.clone()).context("decode failed InferenceCall"))
+        .map(|row| serde_json::from_value(row.clone()).map_err(BlockedTurnError::DecodeFailedCall))
         .transpose()
 }
 

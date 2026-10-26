@@ -291,6 +291,7 @@ impl ToolCallLifecycleError {
             Self::Reconstruction(error) => Some(error),
             Self::SessionOutput(error) => error.reconstruction(),
             Self::Delivery(error) => error.reconstruction(),
+            Self::Query(error) => error.reconstruction(),
             _ => None,
         }
     }

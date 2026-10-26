@@ -195,25 +195,38 @@ pub(crate) async fn verify_fresh_local_self_request(
     row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AgentRequestSigningError {
+    #[error(transparent)]
+    Admission(#[from] gents_protocol::request_admission::RequestAdmissionError),
+    #[error("request admission signer does not match authoring identity")]
+    SignerMismatch,
+    #[error("sign AgentRequest admission")]
+    Sign(#[source] crate::identity::IdentityError),
+    #[error("{reason}")]
+    BranchFields { reason: &'static str },
+    #[error("load registered target runtime identity for AgentRequest authoring")]
+    RegisteredIdentity(#[source] crate::identity::IdentityError),
+}
+
 pub async fn sign_agent_request_create(
     identity: &dyn NodeIdentity,
     request: &mut gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<()> {
+) -> Result<(), AgentRequestSigningError> {
     validate_signing_fields(&request.signing_fields())?;
     request.admission.validate_canonical_fields()?;
-    anyhow::ensure!(
-        request.admission.signer_did == identity.did(),
-        "request admission signer does not match authoring identity"
-    );
+    if request.admission.signer_did != identity.did() {
+        return Err(AgentRequestSigningError::SignerMismatch);
+    }
     request.admission.signature.clear();
     request.admission.signature = identity
         .sign(&request.signing_payload())
         .await
-        .context("sign AgentRequest admission")?;
+        .map_err(AgentRequestSigningError::Sign)?;
     request
         .admission
         .validate_branch_fields()
-        .map_err(anyhow::Error::msg)
+        .map_err(|reason| AgentRequestSigningError::BranchFields { reason })
 }
 
 pub(crate) async fn terminalize_pending_request_rejection(
@@ -313,10 +326,10 @@ pub(crate) async fn terminalize_pending_request_rejection(
 
 pub async fn sign_agent_request_create_as_registered_target(
     request: &mut gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<()> {
+) -> Result<(), AgentRequestSigningError> {
     let identity =
         crate::identity::RegisteredIdentity::from_registered_did(request.node_did.clone(), None)
-            .context("load registered target runtime identity for AgentRequest authoring")?;
+            .map_err(AgentRequestSigningError::RegisteredIdentity)?;
     sign_agent_request_create(&identity, request).await
 }
 

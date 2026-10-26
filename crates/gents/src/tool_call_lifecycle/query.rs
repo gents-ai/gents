@@ -99,6 +99,169 @@ pub enum ToolCallQueryError {
     SessionOutput(#[from] crate::session::SessionOutputError),
     #[error(transparent)]
     Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    BackgroundOutput(#[from] crate::background_tools::BackgroundToolsError),
+    #[error(transparent)]
+    FileChanges(#[from] crate::toolset::ChangeCaptureError),
+    #[error("file changes crossed the selected request scope")]
+    FileChangesRequestScope,
+    #[error("file changes have an invalid tool lifecycle state")]
+    FileChangesLifecycleState,
+    #[error("file change lookup omitted observations")]
+    FileChangesOmitted,
+    #[error("file changes have ambiguous observations")]
+    FileChangesAmbiguous,
+    #[error("file changes crossed their physical tool scope")]
+    FileChangesToolScope,
+    #[error("file image observation has no physical identity")]
+    FileChangesMissingDocId,
+    #[error(transparent)]
+    PluginPresentation(Box<crate::tool_call_lifecycle::delivery::DeliveryError>),
+    #[error("plugin terminal output must select stream zero")]
+    PluginTerminalStreamNotZero,
+    #[error("plugin terminal output selects a non-tool-output stream")]
+    PluginTerminalNotToolOutput,
+    #[error("AgentToolCall tool_call_doc_id={tool_call_doc_id} has invalid lifecycle state {lifecycle_state}")]
+    InvalidLifecycleState {
+        tool_call_doc_id: String,
+        lifecycle_state: String,
+    },
+    #[error("plugin effect must not publish a transcript invocation reply")]
+    PluginEffectPublishedReply,
+    #[error("plugin effect lacks request identity")]
+    PluginEffectMissingRequest,
+    #[error("nonterminal plugin effect carries terminal output")]
+    PluginEffectNonterminalOutput,
+    #[error("terminal plugin effect is missing its canonical presentation")]
+    PluginEffectMissingPresentation,
+    #[error("AgentToolCall tool_call_doc_id={tool_call_doc_id} carries no request document")]
+    ToolCallLacksRequestDocument { tool_call_doc_id: String },
+    #[error("AgentToolCall tool_call_doc_id={tool_call_doc_id} carries no request document; a tool delivery cannot be bound to it")]
+    DeliveryLacksRequestDocument { tool_call_doc_id: String },
+    #[error("ambiguous invocation reply header for tool_call_doc_id={tool_call_doc_id}: {replies} eligible replies in session_id={session_id}")]
+    AmbiguousInvocationReply {
+        tool_call_doc_id: String,
+        replies: usize,
+        session_id: String,
+    },
+    #[error("a ToolDelivery publication exists for tool_call_doc_id={tool_call_doc_id} but carries no native tool-result invocation reply")]
+    DeliveryWithoutReply { tool_call_doc_id: String },
+    #[error("tool invocation reply conflicts with its accepted native binding")]
+    ReplyConflictsBinding,
+    #[error("invocation reply for tool_call_doc_id={tool_call_doc_id} crossed the requested agent/session/requester scope")]
+    ReplyCrossedScope { tool_call_doc_id: String },
+    #[error("invocation reply for tool_call_doc_id={tool_call_doc_id} is bound to request {bound:?} but the call expects request {expected}")]
+    ReplyRequestMismatch {
+        tool_call_doc_id: String,
+        bound: Option<String>,
+        expected: String,
+    },
+    #[error("invocation reply for tool_call_doc_id={tool_call_doc_id} carries no blocks")]
+    ReplyNoBlocks { tool_call_doc_id: String },
+    #[error("invocation reply for tool_call_doc_id={tool_call_doc_id} carries no native ToolResult block")]
+    ReplyNoToolResultBlock { tool_call_doc_id: String },
+    #[error("invocation reply for tool_call_doc_id={tool_call_doc_id} names native id {block_id} but the call is {native_call_id}")]
+    ReplyNativeIdMismatch {
+        tool_call_doc_id: String,
+        block_id: String,
+        native_call_id: String,
+    },
+    #[error(
+        "invocation reply for tool_call_doc_id={tool_call_doc_id} references another output source"
+    )]
+    ReplyOtherOutputSource { tool_call_doc_id: String },
+    #[error("no invocation reply delivered for tool_call_doc_id={tool_call_doc_id}; the tool result has not been delivered")]
+    NoInvocationReply { tool_call_doc_id: String },
+    #[error("spawned process must not fabricate a native ToolResult delivery")]
+    SpawnedFabricatedResult,
+    #[error("spawned process is missing request document identity")]
+    SpawnedMissingRequestDocument,
+    #[error("plugin effect presentation has incoherent direct-parent provenance")]
+    PluginEffectParentIncoherent,
+    #[error("spawned tool presentation has incoherent accepted-parent provenance")]
+    SpawnedPresentationIncoherent,
+    #[error("tool call lacks a unique coordinator admission header")]
+    AdmissionHeaderNotUnique,
+    #[error("admission header does not uniquely bind the physical tool")]
+    AdmissionNotUniqueBinding,
+    #[error("accepted tool publication is not an assistant message")]
+    AcceptedNotAssistant,
+    #[error("accepted native message does not uniquely bind tool arguments")]
+    AcceptedArgumentsNotUnique,
+    #[error("plugin effect requires a complete parent admission")]
+    PluginParentNotComplete,
+    #[error("plugin effect arguments query omitted segments")]
+    PluginArgumentsOmitted,
+    #[error("decoding accepted spawn_process arguments")]
+    SpawnArgumentsDecode(#[source] serde_json::Error),
+    #[error("spawned tool name differs from accepted spawn_process input")]
+    SpawnedToolNameMismatch,
+    #[error("serializing accepted spawned-tool arguments")]
+    SerializeSpawnedArguments(#[source] serde_json::Error),
+    #[error("serializing accepted native tool arguments")]
+    SerializeNativeArguments(#[source] serde_json::Error),
+    #[error("loading scoped canonical headers for session_id={session_id}: {response}")]
+    HeadersQueryFailed {
+        session_id: String,
+        response: serde_json::Value,
+    },
+    #[error("canonical header query omitted AgentMessage rows")]
+    HeaderRowsOmitted,
+    #[error("loading AgentToolCall tool_call_doc_id={tool_call_doc_id}: {response}")]
+    IdentityQueryFailed {
+        tool_call_doc_id: String,
+        response: serde_json::Value,
+    },
+    #[error("AgentToolCall query omitted readable rows: {error}")]
+    IdentityRowsUnreadable { error: serde_json::Error },
+    #[error("ambiguous AgentToolCall document tool_call_doc_id={tool_call_doc_id}")]
+    IdentityAmbiguous { tool_call_doc_id: String },
+    #[error("no AgentToolCall document tool_call_doc_id={tool_call_doc_id} within agent/requester/session scope (session_id={session_id})")]
+    IdentityMissing {
+        tool_call_doc_id: String,
+        session_id: String,
+    },
+    #[error("AgentToolCall {tool_call_doc_id} belongs to session {row_session_id}")]
+    IdentityWrongSession {
+        tool_call_doc_id: String,
+        row_session_id: String,
+    },
+    #[error("AgentToolCall {tool_call_doc_id} is missing its native tool_call_id")]
+    IdentityMissingNativeId { tool_call_doc_id: String },
+    #[error("tool result delivery is not a user message")]
+    ResultNotUserMessage,
+    #[error("tool result delivery contains non-tool-result content")]
+    ResultNonToolResultContent,
+    #[error("cannot narrow a media tool result to text")]
+    ResultMediaNotText,
+    #[error("tool result delivery for {doc_id} is not a user message")]
+    ResultDeliveryNotUser { doc_id: String },
+    #[error("tool result delivery for {doc_id} is not a single tool result")]
+    ResultDeliveryNotSingle { doc_id: String },
+    #[error("tool result for tool_call_doc_id={doc_id} names native id {actual} but the call is {expected}")]
+    ResultNativeIdMismatch {
+        doc_id: String,
+        actual: String,
+        expected: String,
+    },
+    #[error("tool result for tool_call_doc_id={doc_id} carries call_id {actual:?} but the delivery header bound {expected:?}")]
+    ResultCallIdMismatch {
+        doc_id: String,
+        actual: Option<String>,
+        expected: Option<String>,
+    },
+}
+
+impl ToolCallQueryError {
+    pub(crate) fn reconstruction(&self) -> Option<&gents_protocol::output::ReconstructionError> {
+        match self {
+            Self::Lifecycle(error) => error.reconstruction(),
+            Self::SessionOutput(error) => error.reconstruction(),
+            Self::BackgroundOutput(error) => error.reconstruction(),
+            Self::PluginPresentation(error) => error.reconstruction(),
+            _ => None,
+        }
+    }
 }
 
 impl crate::config_client::TransactionFailure for ToolCallQueryError {
@@ -108,6 +271,7 @@ impl crate::config_client::TransactionFailure for ToolCallQueryError {
             Self::Graphql(error) => error.config_client_error(),
             Self::Lifecycle(error) => error.config_client_error(),
             Self::SessionOutput(error) => error.config_client_error(),
+            Self::BackgroundOutput(error) => error.config_client_error(),
             _ => None,
         }
     }

@@ -2564,7 +2564,7 @@ mod tests {
                         .await
                         .map(|value| format!("{value:?}"))
                         .unwrap_or_else(|error| {
-                            format!("presentation error: {}", ErrorChain(error.as_ref()))
+                            format!("presentation error: {}", ErrorChain(&error))
                         })
                     } else {
                         "parent request scope unavailable".into()

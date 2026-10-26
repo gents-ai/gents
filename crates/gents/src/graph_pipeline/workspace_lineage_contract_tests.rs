@@ -403,7 +403,7 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
                 (populated == 0 && candidate.workspace_seal_hash.is_none()) || populated == 3;
             let signed = crate::sign_agent_request_create(&fx.identity, &mut candidate).await;
             if structurally_complete {
-                signed.unwrap_or_else(|error| panic!("{name}: {}", ErrorChain(error.as_ref())));
+                signed.unwrap_or_else(|error| panic!("{name}: {}", ErrorChain(&error)));
                 let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
                 assert!(
                     workspace_lineage::fence_root_workspace_in_txn(&txn, &candidate)

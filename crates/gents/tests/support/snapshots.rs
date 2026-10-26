@@ -450,21 +450,21 @@ impl ToolCallSnapshot {
             self.requester_did.as_deref(),
         )
         .await?;
-        gents::tool_call_lifecycle::render_tool_result(&message)
+        Ok(gents::tool_call_lifecycle::render_tool_result(&message)?)
     }
 
     pub async fn try_load_arguments(
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        gents::tool_call_lifecycle::load_tool_call_arguments(
+        Ok(gents::tool_call_lifecycle::load_tool_call_arguments(
             &gents::config_client::ConfigAccess::local(node),
             &self.doc_id,
             &self.node_did,
             &self.session_id,
             self.requester_did.as_deref(),
         )
-        .await
+        .await?)
     }
 }
 

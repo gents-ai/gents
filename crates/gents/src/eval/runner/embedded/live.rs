@@ -189,7 +189,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
     )
     .await
     .map_err(|error| {
-        tracing::debug!(error = %ErrorChain(error.as_ref()), "eval last tool presentation was not read");
+        tracing::debug!(error = %ErrorChain(&error), "eval last tool presentation was not read");
     })
     .ok()
     .and_then(|read| read.result);

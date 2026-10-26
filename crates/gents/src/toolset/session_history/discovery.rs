@@ -584,7 +584,7 @@ async fn tool_output(
     .map_err(|error| {
         anyhow::anyhow!(
             "{}; next call: sessions {transcript_call}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         )
     })?;
     let mut next = json!({"action":"output","session_id":session_id});

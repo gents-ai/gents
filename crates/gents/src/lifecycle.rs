@@ -61,8 +61,9 @@ pub use materialize::{
     activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, next_request_hop, request_hop_within_bound, task_fire_key,
-    write_task_delivery, write_task_delivery_local, EnqueuedAgentRequest, ParentLink,
-    RequestHopCause, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,
+    write_task_delivery, write_task_delivery_local, EnqueuedAgentRequest, MaterializeError,
+    ParentLink, RequestHopCause, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
+    TaskDeliveryAdmission,
 };
 pub(crate) use materialize::{
     build_session_message_request,
@@ -464,8 +465,8 @@ pub(crate) enum ClaimAdmissionError {
     },
 }
 
-pub(crate) fn is_claim_admission_error(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<ClaimAdmissionError>().is_some()
+pub(crate) fn is_claim_admission_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    gents_protocol::error_chain::find_source::<ClaimAdmissionError>(error).is_some()
 }
 
 pub use gents_loop::execution_origin::ExecutionOrigin;

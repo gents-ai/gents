@@ -30,34 +30,38 @@ pub(super) async fn resolve_timeline_messages_for_session(
                     r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
                 );
                 let response = txn.execute(&query).await?;
-                anyhow::ensure!(
-                    response.get("errors").is_none_or(|errors| {
-                        errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
-                    }),
-                    "timeline AgentMessage query failed: {}",
-                    response["errors"]
-                );
+                if !response.get("errors").is_none_or(|errors| {
+                    errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
+                }) {
+                    return Err(RunTimelineError::MessagesQueryFailed {
+                        errors: response["errors"].clone(),
+                    });
+                }
                 let raw_headers = response
                     .get("data")
                     .and_then(|data| data.get("AgentMessage"))
                     .and_then(serde_json::Value::as_array)
-                    .context("timeline query omitted required AgentMessage row array")?;
-                anyhow::ensure!(
-                    raw_headers.iter().all(serde_json::Value::is_object),
-                    "timeline AgentMessage query returned a non-document row"
-                );
+                    .ok_or_else(|| RunTimelineError::RequiredRowsOmitted {
+                        collection: "AgentMessage".to_owned(),
+                    })?;
+                if !raw_headers.iter().all(serde_json::Value::is_object) {
+                    return Err(RunTimelineError::NonDocumentRows {
+                        collection: "AgentMessage".to_owned(),
+                    });
+                }
                 let mut headers = raw_headers
                     .iter()
                     .map(decode_transcript_message_row)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
                 for header in &headers {
-                    anyhow::ensure!(
-                        header.message.session_id == session_id
-                            && header.message.node_did == node_did
-                            && header.message.requester_did.as_deref() == requester_did.as_deref(),
-                        "canonical AgentMessage {} crossed the requested session scope",
-                        header.doc_id
-                    );
+                    if !(header.message.session_id == session_id
+                        && header.message.node_did == node_did
+                        && header.message.requester_did.as_deref() == requester_did.as_deref())
+                    {
+                        return Err(RunTimelineError::HeaderCrossedScope {
+                            doc_id: header.doc_id.clone(),
+                        });
+                    }
                 }
                 headers.sort_by_key(|header| header.message.sequence);
                 let header_order = headers
@@ -92,13 +96,15 @@ pub(super) async fn resolve_timeline_messages_for_session(
                         let (canonical_header, message) = reader
                             .load_message(&physical_id)
                             .await
-                            .with_context(|| {
-                                format!("resolving canonical AgentMessage {physical_id} for timeline")
+                            .map_err(|source| RunTimelineError::ResolveMessage {
+                                doc_id: physical_id.clone(),
+                                source,
                             })?;
-                        anyhow::ensure!(
-                            canonical_header == header.message,
-                            "canonical AgentMessage {physical_id} changed during timeline reconstruction"
-                        );
+                        if canonical_header != header.message {
+                            return Err(RunTimelineError::HeaderChanged {
+                                doc_id: physical_id,
+                            });
+                        }
                         resolved.insert(
                             physical_id.clone(),
                             TimelineMessageRow::from_canonical(
@@ -112,9 +118,11 @@ pub(super) async fn resolve_timeline_messages_for_session(
                 }
                 let mut rows = Vec::with_capacity(resolved.len());
                 for header_doc_id in header_order {
-                    let row = resolved.remove(&header_doc_id).with_context(|| {
-                        format!("canonical AgentMessage {header_doc_id} was not resolved")
-                    })?;
+                    let row = resolved
+                        .remove(&header_doc_id)
+                        .ok_or_else(|| RunTimelineError::HeaderUnresolved {
+                            doc_id: header_doc_id.clone(),
+                        })?;
                     rows.push(row);
                 }
                 Ok(rows)
@@ -161,15 +169,18 @@ async fn resolve_timeline_messages(
         let (header, message) =
             load_canonical_message(access, &header_doc_id, node_did, requester_did)
                 .await
-                .with_context(|| {
-                    format!("resolving canonical AgentMessage {header_doc_id} for timeline")
+                .map_err(|source| RunTimelineError::ResolveMessage {
+                    doc_id: header_doc_id.clone(),
+                    source,
                 })?;
-        anyhow::ensure!(
-            header.session_id == session_id
-                && header.node_did == node_did
-                && header.requester_did.as_deref() == requester_did,
-            "canonical AgentMessage {header_doc_id} crossed the requested session scope"
-        );
+        if !(header.session_id == session_id
+            && header.node_did == node_did
+            && header.requester_did.as_deref() == requester_did)
+        {
+            return Err(RunTimelineError::HeaderCrossedScope {
+                doc_id: header_doc_id,
+            });
+        }
         rows.push(TimelineMessageRow::from_canonical(
             header_doc_id,
             header,
@@ -205,7 +216,7 @@ async fn load_message_header_ids(
                 .and_then(serde_json::Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .map(str::to_owned)
-                .context("AgentMessage row omitted _docID")
+                .ok_or(RunTimelineError::MessageMissingDocId)
         })
         .collect::<Result<Vec<_>>>()
 }
@@ -309,11 +320,11 @@ pub(super) async fn resolve_timeline_tool_observations(
             let tool_doc_id = row
                 .doc_id
                 .as_deref()
-                .context("spawned timeline tool lacks physical identity")?;
+                .ok_or(RunTimelineError::SpawnedToolMissingDocId)?;
             let request_doc_id = row
                 .request_doc_id
                 .as_deref()
-                .context("spawned timeline tool lacks request binding")?;
+                .ok_or(RunTimelineError::SpawnedToolMissingRequest)?;
             row.result = Some(
                 load_spawned_tool_output(
                     access,
@@ -361,10 +372,9 @@ async fn load_spawned_tool_output(
         .iter()
         .filter(|row| row.segment.close.is_some())
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        closes.len() == 1,
-        "spawned timeline tool output lacks one exact closure"
-    );
+    if closes.len() != 1 {
+        return Err(RunTimelineError::SpawnedOutputClosure);
+    }
     let observed = rows
         .iter()
         .map(|row| ObservedSegment {
@@ -381,11 +391,10 @@ async fn load_spawned_tool_output(
             stream: 0,
         },
     )
-    .map_err(anyhow::Error::from)?;
-    anyhow::ensure!(
-        matches!(stream.declaration.payload, StreamPayload::ToolOutput),
-        "spawned timeline source is not tool output"
-    );
+    .map_err(RunTimelineError::SpawnedOutputReconstruction)?;
+    if !matches!(stream.declaration.payload, StreamPayload::ToolOutput) {
+        return Err(RunTimelineError::SpawnedNotToolOutput);
+    }
     Ok(stream.text)
 }
 
@@ -410,16 +419,16 @@ pub(super) fn resolve_tool_payloads(
         .lifecycle_state
         .as_deref()
         .filter(|state| !state.trim().is_empty())
-        .context("timeline AgentToolCall omits authoritative lifecycle_state")?;
+        .ok_or(RunTimelineError::ToolLifecycleMissing)?;
     row.status = lifecycle_state.to_owned();
     let tool_doc = row
         .doc_id
         .as_deref()
-        .context("timeline tool lacks physical identity")?;
+        .ok_or(RunTimelineError::ToolMissingDocId)?;
     let request_doc = row
         .request_doc_id
         .as_deref()
-        .context("timeline tool lacks physical request binding")?;
+        .ok_or(RunTimelineError::ToolMissingRequest)?;
     let accepted_call_id;
     {
         let binding_doc = spawned_by_tool_call_doc_id.as_deref().unwrap_or(tool_doc);
@@ -453,32 +462,31 @@ pub(super) fn resolve_tool_payloads(
                     continue;
                 }
                 let Message::Assistant { content, .. } = &message.message else {
-                    anyhow::bail!("accepted tool header reconstructed as a non-assistant message")
+                    return Err(RunTimelineError::HeaderNotAssistant);
                 };
                 let Some(AssistantContent::ToolCall(native)) = content.get(index) else {
-                    anyhow::bail!("accepted physical tool does not match its native block position")
+                    return Err(RunTimelineError::NativeBlockMismatch);
                 };
-                anyhow::ensure!(
-                    native.id == *id && native.call_id == *call_id && native.function.name == *name,
-                    "accepted tool native identity disagrees with its header"
-                );
+                if !(native.id == *id
+                    && native.call_id == *call_id
+                    && native.function.name == *name)
+                {
+                    return Err(RunTimelineError::NativeIdentityMismatch);
+                }
                 if spawned_by_tool_call_doc_id.is_some() {
-                    anyhow::ensure!(
-                        name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
-                        "spawned tool parent is not an accepted spawn_process invocation"
-                    );
+                    if name != crate::toolset::SPAWN_PROCESS_TOOL_NAME {
+                        return Err(RunTimelineError::SpawnParentNotSpawn);
+                    }
                     let input: crate::background_tools::BackgroundToolArgs =
                         serde_json::from_value(native.function.arguments.clone())?;
-                    anyhow::ensure!(
-                        input.tool_name == row.tool_name,
-                        "spawned tool name differs from parent input"
-                    );
+                    if input.tool_name != row.tool_name {
+                        return Err(RunTimelineError::SpawnedToolNameMismatch);
+                    }
                     bindings.push((serde_json::to_string(&input.args)?, None));
                 } else {
-                    anyhow::ensure!(
-                        id == &row.tool_call_id && name == &row.tool_name,
-                        "timeline tool row disagrees with accepted native identity"
-                    );
+                    if !(id == &row.tool_call_id && name == &row.tool_name) {
+                        return Err(RunTimelineError::ToolRowIdentityMismatch);
+                    }
                     bindings.push((
                         serde_json::to_string(&native.function.arguments)?,
                         call_id.clone(),
@@ -486,10 +494,9 @@ pub(super) fn resolve_tool_payloads(
                 }
             }
         }
-        anyhow::ensure!(
-            bindings.len() == 1,
-            "timeline tool lacks one exact accepted physical binding"
-        );
+        if bindings.len() != 1 {
+            return Err(RunTimelineError::ToolBindingNotExact);
+        }
         let (arguments, call_id) = bindings.pop().expect("one binding");
         row.args = arguments;
         accepted_call_id = call_id;
@@ -532,10 +539,9 @@ pub(super) fn resolve_tool_payloads(
             )?);
         }
     }
-    anyhow::ensure!(
-        deliveries.len() <= 1,
-        "timeline tool has conflicting canonical deliveries"
-    );
+    if deliveries.len() > 1 {
+        return Err(RunTimelineError::ToolDeliveriesConflict);
+    }
     row.result = deliveries.pop();
     Ok(row)
 }
@@ -591,12 +597,13 @@ pub(super) async fn load_timeline_inference_calls_for_requests(
             load_rows::<TimelineInferenceCallRow>(access, "InferenceCall", &query).await?;
         let requested = batch.iter().cloned().collect::<BTreeSet<_>>();
         for row in &batch_rows {
-            anyhow::ensure!(
-                row.request_doc_id
-                    .as_ref()
-                    .is_some_and(|request_doc_id| requested.contains(request_doc_id)),
-                "timeline InferenceCall returned a row outside its request batch"
-            );
+            if !row
+                .request_doc_id
+                .as_ref()
+                .is_some_and(|request_doc_id| requested.contains(request_doc_id))
+            {
+                return Err(RunTimelineError::InferenceBatchOutside);
+            }
         }
         rows.extend(batch_rows);
     }
@@ -606,11 +613,10 @@ pub(super) async fn load_timeline_inference_calls_for_requests(
         let request_doc_id = row
             .request_doc_id
             .as_deref()
-            .context("timeline InferenceCall omitted request_doc_id")?;
-        anyhow::ensure!(
-            requested.contains(request_doc_id),
-            "timeline InferenceCall returned an unrequested request document"
-        );
+            .ok_or(RunTimelineError::InferenceMissingRequest)?;
+        if !requested.contains(request_doc_id) {
+            return Err(RunTimelineError::InferenceUnrequested);
+        }
         by_request
             .entry(request_doc_id.to_owned())
             .or_default()
@@ -767,21 +773,20 @@ pub(super) async fn load_timeline_provider_context_reductions_for_requests(
         )
         .await?;
         let requested = batch.iter().cloned().collect::<BTreeSet<_>>();
-        anyhow::ensure!(
-            batch_rows
-                .iter()
-                .all(|row| requested.contains(&row.request_doc_id)),
-            "timeline ProviderContextReduction returned a row outside its request batch"
-        );
+        if !batch_rows
+            .iter()
+            .all(|row| requested.contains(&row.request_doc_id))
+        {
+            return Err(RunTimelineError::ReductionBatchOutside);
+        }
         rows.extend(batch_rows);
     }
     let requested = request_doc_ids.iter().cloned().collect::<BTreeSet<_>>();
     let mut by_request = BTreeMap::<String, Vec<TimelineProviderContextReductionRow>>::new();
     for row in rows {
-        anyhow::ensure!(
-            requested.contains(&row.request_doc_id),
-            "timeline ProviderContextReduction returned an unrequested request document"
-        );
+        if !requested.contains(&row.request_doc_id) {
+            return Err(RunTimelineError::ReductionUnrequested);
+        }
         by_request
             .entry(row.request_doc_id.clone())
             .or_default()

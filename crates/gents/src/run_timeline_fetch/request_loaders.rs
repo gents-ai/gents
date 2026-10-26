@@ -55,11 +55,14 @@ pub(super) async fn load_timeline_request_by_id(
     );
     let mut rows = load_request_rows(access, &query).await?;
     match rows.len() {
-        0 => Err(anyhow::anyhow!("request {request_id} not found")),
+        0 => Err(RunTimelineError::RequestNotFound {
+            request_id: request_id.to_owned(),
+        }),
         1 => Ok(rows.remove(0)),
-        count => anyhow::bail!(
-            "request_id {request_id} is ambiguous across {count} AgentRequest documents"
-        ),
+        count => Err(RunTimelineError::RequestAmbiguous {
+            request_id: request_id.to_owned(),
+            count,
+        }),
     }
 }
 

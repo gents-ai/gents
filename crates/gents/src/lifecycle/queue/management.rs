@@ -3,6 +3,7 @@ use super::*;
 use crate::config_client::ConfigAccess;
 use crate::identity::NodeIdentity;
 use crate::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, WorkspaceLineage};
+use anyhow::Context;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -40,7 +41,7 @@ pub async fn pending_user_queue(
     node_did: &str,
     session_id: &str,
     requester_did: &str,
-) -> anyhow::Result<PendingQueueSnapshot> {
+) -> Result<PendingQueueSnapshot> {
     Ok(
         pending_user_queue_projection(access, node_did, session_id, requester_did, &[])
             .await?

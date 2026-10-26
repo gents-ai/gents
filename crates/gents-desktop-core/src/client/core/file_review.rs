@@ -52,7 +52,7 @@ impl ClientCore {
             .as_deref()
             .context("request lacks physical identity")?;
         if let Some(graphql) = self.operator_observation_graphql(node_did) {
-            return gents::tool_call_lifecycle::load_tool_call_file_changes(
+            return Ok(gents::tool_call_lifecycle::load_tool_call_file_changes(
                 &ConfigAccess::Graphql(graphql),
                 tool_call_doc_id,
                 request_doc_id,
@@ -60,7 +60,7 @@ impl ClientCore {
                 session_id,
                 row.requester_did.as_deref(),
             )
-            .await;
+            .await?);
         }
         let requester_did = row
             .requester_did

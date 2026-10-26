@@ -7,14 +7,14 @@ pub async fn background_tool(
     core: &ClientCore,
     request: DesktopBackgroundToolRequest,
 ) -> Result<bool> {
-    gents::background_tools::request_foreground_backgrounding(
+    Ok(gents::background_tools::request_foreground_backgrounding(
         &core.operator_access(&request.node_did)?,
         &request.node_did,
         &request.session_id,
         &request.request_id,
         &request.tool_call_id,
     )
-    .await
+    .await?)
 }
 
 #[cfg(test)]

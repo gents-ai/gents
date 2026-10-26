@@ -111,7 +111,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     let request = signed_reply(&node, &identity, &item, "approved-request").await;
     let forged = persisted_reply(&node, &identity, &item, "forged-request", true).await;
     assert!(crate::lifecycle::is_claim_admission_error(
-        &claim(&node, &forged, false).await.unwrap_err()
+        claim(&node, &forged, false).await.unwrap_err().as_ref()
     ));
     assert_eq!(stored_lifecycle(&node, &forged).await, "pending");
     assert!(claim(&node, &request, true).await.is_err());
@@ -136,7 +136,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     claim(&node, &request, false).await.unwrap();
     let replay = signed_reply(&node, &identity, &item, "replayed-request").await;
     let error = claim(&node, &replay, false).await.unwrap_err();
-    assert!(crate::lifecycle::is_claim_admission_error(&error));
+    assert!(crate::lifecycle::is_claim_admission_error(error.as_ref()));
     assert_eq!(stored_lifecycle(&node, &replay).await, "pending");
     let stored = load_mailbox_item(&node, &item.doc_id)
         .await
@@ -158,7 +158,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
         .await
         .unwrap();
     assert!(crate::lifecycle::is_claim_admission_error(
-        &claim(&node, &denied, false).await.unwrap_err()
+        claim(&node, &denied, false).await.unwrap_err().as_ref()
     ));
     assert_eq!(
         load_mailbox_item(&node, &declined.doc_id)

@@ -761,7 +761,8 @@ where
             }
             Err(error) => {
                 record_current_claim_outcome("error");
-                let deterministic_rejection = crate::lifecycle::is_claim_admission_error(&error);
+                let deterministic_rejection =
+                    crate::lifecycle::is_claim_admission_error(error.as_ref());
                 record_current_request_outcome(if deterministic_rejection {
                     "admission_rejected"
                 } else {

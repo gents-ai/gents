@@ -1,7 +1,6 @@
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
-use anyhow::{anyhow, Context, Result};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSource, PresentedPayload,
     StreamPayload, ToolResultPart, TranscriptMessage,
@@ -9,7 +8,9 @@ use gents_protocol::output::{
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::ToolCallState;
+use super::{ToolCallQueryError, ToolCallState};
+
+type Result<T, E = ToolCallQueryError> = std::result::Result<T, E>;
 
 #[derive(Clone, Copy)]
 enum ReadSource<'a, 'txn> {
@@ -36,10 +37,9 @@ impl ReadSource<'_, '_> {
         let expected_source = OutputSource::ToolCall {
             tool_call_doc_id: tool_call_doc_id.to_owned(),
         };
-        anyhow::ensure!(
-            payload.output.stream == 0,
-            "plugin terminal output must select stream zero"
-        );
+        if payload.output.stream != 0 {
+            return Err(ToolCallQueryError::PluginTerminalStreamNotZero);
+        }
         match self {
             Self::Access(access) => Ok(crate::session::load_canonical_payload_with_access(
                 access,
@@ -156,12 +156,11 @@ pub async fn load_tool_file_change_observation(
         requester_did,
     )
     .await?;
-    anyhow::ensure!(
-        call.request_doc_id.as_deref() == Some(request_doc_id),
-        "file changes crossed the selected request scope"
-    );
+    if call.request_doc_id.as_deref() != Some(request_doc_id) {
+        return Err(ToolCallQueryError::FileChangesRequestScope);
+    }
     let state = ToolCallState::from_persisted(&call.lifecycle_state)
-        .context("file changes have an invalid tool lifecycle state")?;
+        .ok_or(ToolCallQueryError::FileChangesLifecycleState)?;
     if !state.is_terminal() {
         return Ok(ToolFileChangeRead::Pending);
     }
@@ -178,23 +177,25 @@ pub async fn load_tool_file_change_observation(
     )).await?;
     let rows = response["data"]["ToolFileChange"]
         .as_array()
-        .context("file change lookup omitted observations")?;
+        .ok_or(ToolCallQueryError::FileChangesOmitted)?;
     if rows.is_empty() {
         return Ok(ToolFileChangeRead::Missing);
     }
-    anyhow::ensure!(rows.len() == 1, "file changes have ambiguous observations");
+    if rows.len() != 1 {
+        return Err(ToolCallQueryError::FileChangesAmbiguous);
+    }
     let row = &rows[0];
-    anyhow::ensure!(
-        row["request_doc_id"].as_str() == Some(request_doc_id)
-            && row["node_did"].as_str() == Some(node_did)
-            && row["session_id"].as_str() == Some(session_id)
-            && row["requester_did"].as_str() == requester_did,
-        "file changes crossed their physical tool scope"
-    );
+    if !(row["request_doc_id"].as_str() == Some(request_doc_id)
+        && row["node_did"].as_str() == Some(node_did)
+        && row["session_id"].as_str() == Some(session_id)
+        && row["requester_did"].as_str() == requester_did)
+    {
+        return Err(ToolCallQueryError::FileChangesToolScope);
+    }
     let document_id = row["_docID"]
         .as_str()
         .filter(|id| !id.is_empty())
-        .context("file image observation has no physical identity")?
+        .ok_or(ToolCallQueryError::FileChangesMissingDocId)?
         .to_owned();
     let changes =
         crate::toolset::FileChanges::decode(tool_call_doc_id, row["file_changes"].clone())?;
@@ -220,10 +221,8 @@ pub async fn load_tool_call_result(
     )
     .await?
     .result
-    .ok_or_else(|| {
-        anyhow!(
-            "no invocation reply delivered for tool_call_doc_id={tool_call_doc_id}; the tool result has not been delivered"
-        )
+    .ok_or_else(|| ToolCallQueryError::NoInvocationReply {
+        tool_call_doc_id: tool_call_doc_id.to_owned(),
     })
 }
 
@@ -296,25 +295,28 @@ async fn load_tool_call_read_source(
     .await?;
     let lifecycle_state =
         ToolCallState::from_persisted(&call.lifecycle_state).ok_or_else(|| {
-            anyhow!(
-                "AgentToolCall tool_call_doc_id={tool_call_doc_id} has invalid lifecycle state {}",
-                call.lifecycle_state
-            )
+            ToolCallQueryError::InvalidLifecycleState {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+                lifecycle_state: call.lifecycle_state.clone(),
+            }
         })?;
     if call.plugin_parent_tool_call_doc_id.is_some() {
-        anyhow::ensure!(headers.iter().all(|row| !matches!(
-            &row.message.publication,
-            MessagePublication::ToolDelivery { tool_call_doc_id: named } if named == tool_call_doc_id
-        )), "plugin effect must not publish a transcript invocation reply");
+        if headers.iter().any(|row| {
+            matches!(
+                &row.message.publication,
+                MessagePublication::ToolDelivery { tool_call_doc_id: named } if named == tool_call_doc_id
+            )
+        }) {
+            return Err(ToolCallQueryError::PluginEffectPublishedReply);
+        }
         let request_doc_id = call
             .request_doc_id
             .clone()
-            .context("plugin effect lacks request identity")?;
+            .ok_or(ToolCallQueryError::PluginEffectMissingRequest)?;
         let (result, raw_result) = if let Some(payload) = &call.terminal_output {
-            anyhow::ensure!(
-                lifecycle_state.is_terminal(),
-                "nonterminal plugin effect carries terminal output"
-            );
+            if !lifecycle_state.is_terminal() {
+                return Err(ToolCallQueryError::PluginEffectNonterminalOutput);
+            }
             let output = source
                 .canonical_payload(
                     &request_doc_id,
@@ -324,12 +326,12 @@ async fn load_tool_call_read_source(
                     tool_call_doc_id,
                 )
                 .await?;
-            anyhow::ensure!(
-                matches!(output.declaration.payload, StreamPayload::ToolOutput),
-                "plugin terminal output selects a non-tool-output stream"
-            );
+            if !matches!(output.declaration.payload, StreamPayload::ToolOutput) {
+                return Err(ToolCallQueryError::PluginTerminalNotToolOutput);
+            }
             let presented =
-                super::super::delivery::render_presentation(&output.text, &payload.presentation)?;
+                super::super::delivery::render_presentation(&output.text, &payload.presentation)
+                    .map_err(|error| ToolCallQueryError::PluginPresentation(Box::new(error)))?;
             (
                 Some(Message::User {
                     content: vec![UserContent::tool_result(
@@ -340,11 +342,11 @@ async fn load_tool_call_read_source(
                 Some(output.text),
             )
         } else {
-            anyhow::ensure!(
-                !lifecycle_state.is_terminal()
-                    || (lifecycle_state == ToolCallState::Cancelled && call.started_at.is_none()),
-                "terminal plugin effect is missing its canonical presentation"
-            );
+            if lifecycle_state.is_terminal()
+                && !(lifecycle_state == ToolCallState::Cancelled && call.started_at.is_none())
+            {
+                return Err(ToolCallQueryError::PluginEffectMissingPresentation);
+            }
             (None, None)
         };
         return Ok(CanonicalToolCallRead {
@@ -357,12 +359,11 @@ async fn load_tool_call_read_source(
         });
     }
     let native_call_id = call.tool_call_id;
-    let expected_request_doc_id = call.request_doc_id.ok_or_else(|| {
-        anyhow!(
-            "AgentToolCall tool_call_doc_id={tool_call_doc_id} carries no request \
-             document; a tool delivery cannot be bound to it"
-        )
-    })?;
+    let expected_request_doc_id =
+        call.request_doc_id
+            .ok_or_else(|| ToolCallQueryError::DeliveryLacksRequestDocument {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+            })?;
 
     let delivery_rows: Vec<&crate::session::canonical_rows::TranscriptMessageRow> = headers
         .iter()
@@ -379,17 +380,19 @@ async fn load_tool_call_read_source(
         .copied()
         .filter(|row| is_invocation_reply(&row.message, tool_call_doc_id))
         .collect();
-    anyhow::ensure!(
-        replies.len() <= 1,
-        "ambiguous invocation reply header for tool_call_doc_id={tool_call_doc_id}: \
-         {} eligible replies in session_id={session_id}",
-        replies.len()
-    );
+    if replies.len() > 1 {
+        return Err(ToolCallQueryError::AmbiguousInvocationReply {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            replies: replies.len(),
+            session_id: session_id.to_owned(),
+        });
+    }
     let Some(row) = replies.into_iter().next() else {
-        anyhow::ensure!(
-            delivery_rows.is_empty(),
-            "a ToolDelivery publication exists for tool_call_doc_id={tool_call_doc_id} but carries no native tool-result invocation reply"
-        );
+        if !delivery_rows.is_empty() {
+            return Err(ToolCallQueryError::DeliveryWithoutReply {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+            });
+        }
         return Ok(CanonicalToolCallRead {
             request_doc_id: expected_request_doc_id,
             tool_name: call.tool_name,
@@ -400,54 +403,56 @@ async fn load_tool_call_read_source(
         });
     };
     let header = &row.message;
-    anyhow::ensure!(
-        crate::lifecycle::is_exact_invocation_reply(
-            header,
-            &expected_request_doc_id,
-            session_id,
-            tool_call_doc_id,
-            &native_call_id,
-            &accepted_call_id,
-        ),
-        "tool invocation reply conflicts with its accepted native binding"
-    );
+    if !crate::lifecycle::is_exact_invocation_reply(
+        header,
+        &expected_request_doc_id,
+        session_id,
+        tool_call_doc_id,
+        &native_call_id,
+        &accepted_call_id,
+    ) {
+        return Err(ToolCallQueryError::ReplyConflictsBinding);
+    }
 
-    anyhow::ensure!(
-        header.node_did == node_did
-            && header.session_id == session_id
-            && header.requester_did.as_deref() == requester_did,
-        "invocation reply for tool_call_doc_id={tool_call_doc_id} crossed the \
-         requested agent/session/requester scope"
-    );
-    anyhow::ensure!(
-        header.request_doc_id.as_deref() == Some(expected_request_doc_id.as_str()),
-        "invocation reply for tool_call_doc_id={tool_call_doc_id} is bound to \
-         request {:?} but the call expects request {expected_request_doc_id}",
-        header.request_doc_id
-    );
+    if !(header.node_did == node_did
+        && header.session_id == session_id
+        && header.requester_did.as_deref() == requester_did)
+    {
+        return Err(ToolCallQueryError::ReplyCrossedScope {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+        });
+    }
+    if header.request_doc_id.as_deref() != Some(expected_request_doc_id.as_str()) {
+        return Err(ToolCallQueryError::ReplyRequestMismatch {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            bound: header.request_doc_id.clone(),
+            expected: expected_request_doc_id.clone(),
+        });
+    }
 
     let MessageBlock::ToolResult {
         id: block_id,
         call_id: block_call_id,
         parts,
         ..
-    } = header.blocks.first().ok_or_else(|| {
-        anyhow!(
-            "invocation reply for tool_call_doc_id={tool_call_doc_id} carries no \
-                 blocks"
-        )
-    })?
+    } = header
+        .blocks
+        .first()
+        .ok_or_else(|| ToolCallQueryError::ReplyNoBlocks {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+        })?
     else {
-        anyhow::bail!(
-            "invocation reply for tool_call_doc_id={tool_call_doc_id} carries no \
-             native ToolResult block"
-        );
+        return Err(ToolCallQueryError::ReplyNoToolResultBlock {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+        });
     };
-    anyhow::ensure!(
-        block_id == &native_call_id,
-        "invocation reply for tool_call_doc_id={tool_call_doc_id} names native id \
-         {block_id} but the call is {native_call_id}"
-    );
+    if block_id != &native_call_id {
+        return Err(ToolCallQueryError::ReplyNativeIdMismatch {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            block_id: block_id.clone(),
+            native_call_id: native_call_id.clone(),
+        });
+    }
 
     let (_header, message) = source
         .canonical_message(&row.doc_id, node_did, requester_did)
@@ -472,10 +477,11 @@ async fn load_tool_call_read_source(
             },
         )
         .await?;
-        anyhow::ensure!(
-            matches!(stream.declaration.payload, StreamPayload::ToolOutput),
-            "invocation reply for tool_call_doc_id={tool_call_doc_id} references another output source"
-        );
+        if !matches!(stream.declaration.payload, StreamPayload::ToolOutput) {
+            return Err(ToolCallQueryError::ReplyOtherOutputSource {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+            });
+        }
         Some(stream.text)
     } else {
         None
@@ -523,14 +529,13 @@ pub async fn load_tool_call_presentation(
     )
     .await?;
     if call.spawned_by_tool_call_doc_id.is_some() || call.plugin_parent_tool_call_doc_id.is_some() {
-        anyhow::ensure!(
-            call.plugin_parent_tool_call_doc_id.is_some() || result.is_none(),
-            "spawned process must not fabricate a native ToolResult delivery"
-        );
+        if call.plugin_parent_tool_call_doc_id.is_none() && result.is_some() {
+            return Err(ToolCallQueryError::SpawnedFabricatedResult);
+        }
         let request_doc_id = call
             .request_doc_id
             .as_deref()
-            .context("spawned process is missing request document identity")?;
+            .ok_or(ToolCallQueryError::SpawnedMissingRequestDocument)?;
         let output = crate::background_tools::observe_canonical_tool_output_with_access(
             access,
             tool_call_doc_id,
@@ -614,34 +619,36 @@ async fn load_accepted_tool_call(
             requester_did,
         )
         .await?;
-        anyhow::ensure!(
-            call.await_mode.as_deref() == Some("foreground")
-                && call.tool_call_key.as_deref() == Some(call.tool_call_id.as_str())
-                && call.request_doc_id == parent.request_doc_id
-                && call.message_sequence == parent.message_sequence
-                && parent.spawned_by_tool_call_doc_id.is_none()
-                && parent.plugin_parent_tool_call_doc_id.is_none()
-                && parent.plugin_effect_ordinal.is_none(),
-            "plugin effect presentation has incoherent direct-parent provenance"
-        );
+        if !(call.await_mode.as_deref() == Some("foreground")
+            && call.tool_call_key.as_deref() == Some(call.tool_call_id.as_str())
+            && call.request_doc_id == parent.request_doc_id
+            && call.message_sequence == parent.message_sequence
+            && parent.spawned_by_tool_call_doc_id.is_none()
+            && parent.plugin_parent_tool_call_doc_id.is_none()
+            && parent.plugin_effect_ordinal.is_none())
+        {
+            return Err(ToolCallQueryError::PluginEffectParentIncoherent);
+        }
         Some(parent)
     } else if let Some(parent_doc_id) = call.spawned_by_tool_call_doc_id.as_deref() {
         let parent =
             load_tool_call_identity(source, parent_doc_id, node_did, session_id, requester_did)
                 .await?;
-        anyhow::ensure!(
-            call.request_doc_id == parent.request_doc_id
-                && call.message_sequence == parent.message_sequence
-                && parent.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
-            "spawned tool presentation has incoherent accepted-parent provenance"
-        );
+        if !(call.request_doc_id == parent.request_doc_id
+            && call.message_sequence == parent.message_sequence
+            && parent.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME)
+        {
+            return Err(ToolCallQueryError::SpawnedPresentationIncoherent);
+        }
         Some(parent)
     } else {
         None
     };
     let admission = parent.as_ref().unwrap_or(&call);
     let expected_request_doc_id = call.request_doc_id.as_deref().ok_or_else(|| {
-        anyhow!("AgentToolCall tool_call_doc_id={tool_call_doc_id} carries no request document")
+        ToolCallQueryError::ToolCallLacksRequestDocument {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+        }
     })?;
     let headers = scoped_canonical_headers(source, node_did, session_id, requester_did).await?;
     let accepted = headers
@@ -656,10 +663,9 @@ async fn load_accepted_tool_call(
                 )
         })
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        accepted.len() == 1,
-        "tool call lacks a unique coordinator admission header"
-    );
+    if accepted.len() != 1 {
+        return Err(ToolCallQueryError::AdmissionHeaderNotUnique);
+    }
     let (_, accepted_message) = source
         .canonical_message(&accepted[0].doc_id, node_did, requester_did)
         .await?;
@@ -683,13 +689,12 @@ async fn load_accepted_tool_call(
             _ => None,
         })
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        bindings.len() == 1,
-        "admission header does not uniquely bind the physical tool"
-    );
+    if bindings.len() != 1 {
+        return Err(ToolCallQueryError::AdmissionNotUniqueBinding);
+    }
     let mut call_id = bindings.into_iter().next().expect("one binding checked");
     let Message::Assistant { content, .. } = accepted_message else {
-        anyhow::bail!("accepted tool publication is not an assistant message");
+        return Err(ToolCallQueryError::AcceptedNotAssistant);
     };
     let arguments = content
         .iter()
@@ -703,15 +708,13 @@ async fn load_accepted_tool_call(
             _ => None,
         })
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        arguments.len() == 1,
-        "accepted native message does not uniquely bind tool arguments"
-    );
+    if arguments.len() != 1 {
+        return Err(ToolCallQueryError::AcceptedArgumentsNotUnique);
+    }
     let arguments = if call.plugin_parent_tool_call_doc_id.is_some() {
-        anyhow::ensure!(
-            accepted[0].message.outcome == OutputOutcome::Complete,
-            "plugin effect requires a complete parent admission"
-        );
+        if accepted[0].message.outcome != OutputOutcome::Complete {
+            return Err(ToolCallQueryError::PluginParentNotComplete);
+        }
         let generation = match &accepted[0].message.publication {
             MessagePublication::RequestExecution {
                 execution_generation,
@@ -727,7 +730,7 @@ async fn load_accepted_tool_call(
             .await?;
         let rows = response["data"]["AgentOutputSegment"]
             .as_array()
-            .context("plugin effect arguments query omitted segments")?;
+            .ok_or(ToolCallQueryError::PluginArgumentsOmitted)?;
         let (_, arguments) = super::super::plugin_effect::arguments_from_rows(
             rows,
             node_did,
@@ -743,14 +746,13 @@ async fn load_accepted_tool_call(
     } else if call.spawned_by_tool_call_doc_id.is_some() {
         let input: crate::background_tools::BackgroundToolArgs =
             serde_json::from_value(arguments[0].clone())
-                .context("decoding accepted spawn_process arguments")?;
-        anyhow::ensure!(
-            input.tool_name == call.tool_name,
-            "spawned tool name differs from accepted spawn_process input"
-        );
-        serde_json::to_string(&input.args).context("serializing accepted spawned-tool arguments")?
+                .map_err(ToolCallQueryError::SpawnArgumentsDecode)?;
+        if input.tool_name != call.tool_name {
+            return Err(ToolCallQueryError::SpawnedToolNameMismatch);
+        }
+        serde_json::to_string(&input.args).map_err(ToolCallQueryError::SerializeSpawnedArguments)?
     } else {
-        serde_json::to_string(arguments[0]).context("serializing accepted native tool arguments")?
+        serde_json::to_string(arguments[0]).map_err(ToolCallQueryError::SerializeNativeArguments)?
     };
     if call.spawned_by_tool_call_doc_id.is_some() || call.plugin_parent_tool_call_doc_id.is_some() {
         call_id = None;
@@ -792,18 +794,21 @@ async fn scoped_canonical_headers(
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
     {
-        anyhow::bail!("loading scoped canonical headers for session_id={session_id}: {resp}");
+        return Err(ToolCallQueryError::HeadersQueryFailed {
+            session_id: session_id.to_owned(),
+            response: resp,
+        });
     }
     let rows: Vec<serde_json::Value> = resp
         .get("data")
         .and_then(|data| data.get("AgentMessage"))
         .and_then(serde_json::Value::as_array)
         .cloned()
-        .context("canonical header query omitted AgentMessage rows")?;
+        .ok_or(ToolCallQueryError::HeaderRowsOmitted)?;
     Ok(rows
         .iter()
         .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<_, _>>()?)
+        .collect::<std::result::Result<_, _>>()?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -859,7 +864,10 @@ async fn load_tool_call_identity(
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
     {
-        anyhow::bail!("loading AgentToolCall tool_call_doc_id={tool_call_doc_id}: {resp}");
+        return Err(ToolCallQueryError::IdentityQueryFailed {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            response: resp,
+        });
     }
     let rows: Vec<ToolCallIdentityRow> = serde_json::from_value(
         resp.get("data")
@@ -867,44 +875,49 @@ async fn load_tool_call_identity(
             .cloned()
             .unwrap_or_default(),
     )
-    .map_err(|error| anyhow!("AgentToolCall query omitted readable rows: {error}"))?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "ambiguous AgentToolCall document tool_call_doc_id={tool_call_doc_id}"
-    );
-    let row = rows.into_iter().next().ok_or_else(|| {
-        anyhow!(
-            "no AgentToolCall document tool_call_doc_id={tool_call_doc_id} within \
-             agent/requester/session scope (session_id={session_id})"
-        )
-    })?;
-    anyhow::ensure!(
-        row.doc_id == tool_call_doc_id
-            && row.node_did == node_did
-            && row.requester_did.as_deref() == requester_did
-            && row.session_id == session_id,
-        "AgentToolCall {tool_call_doc_id} belongs to session {}",
-        row.session_id
-    );
-    anyhow::ensure!(
-        !row.tool_call_id.trim().is_empty(),
-        "AgentToolCall {tool_call_doc_id} is missing its native tool_call_id"
-    );
+    .map_err(|error| ToolCallQueryError::IdentityRowsUnreadable { error })?;
+    if rows.len() > 1 {
+        return Err(ToolCallQueryError::IdentityAmbiguous {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+        });
+    }
+    let row = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ToolCallQueryError::IdentityMissing {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            session_id: session_id.to_owned(),
+        })?;
+    if !(row.doc_id == tool_call_doc_id
+        && row.node_did == node_did
+        && row.requester_did.as_deref() == requester_did
+        && row.session_id == session_id)
+    {
+        return Err(ToolCallQueryError::IdentityWrongSession {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            row_session_id: row.session_id,
+        });
+    }
+    if row.tool_call_id.trim().is_empty() {
+        return Err(ToolCallQueryError::IdentityMissingNativeId {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+        });
+    }
     Ok(row)
 }
 
 pub fn render_tool_result(message: &Message) -> Result<String> {
     let Message::User { content } = message else {
-        anyhow::bail!("tool result delivery is not a user message");
+        return Err(ToolCallQueryError::ResultNotUserMessage);
     };
     let mut texts = Vec::new();
     for item in content {
         let UserContent::ToolResult(tool_result) = item else {
-            anyhow::bail!("tool result delivery contains non-tool-result content");
+            return Err(ToolCallQueryError::ResultNonToolResultContent);
         };
         for part in &tool_result.content {
             let ToolResultContent::Text(text) = part else {
-                anyhow::bail!("cannot narrow a media tool result to text");
+                return Err(ToolCallQueryError::ResultMediaNotText);
             };
             texts.push(text.text.as_str());
         }
@@ -919,21 +932,29 @@ fn verify_exact_call_identity(
     doc_id: &str,
 ) -> Result<()> {
     let Message::User { content } = result else {
-        anyhow::bail!("tool result delivery for {doc_id} is not a user message");
+        return Err(ToolCallQueryError::ResultDeliveryNotUser {
+            doc_id: doc_id.to_owned(),
+        });
     };
     let [UserContent::ToolResult(tool_result)] = content.as_slice() else {
-        anyhow::bail!("tool result delivery for {doc_id} is not a single tool result");
+        return Err(ToolCallQueryError::ResultDeliveryNotSingle {
+            doc_id: doc_id.to_owned(),
+        });
     };
-    anyhow::ensure!(
-        tool_result.id == native_call_id,
-        "tool result for tool_call_doc_id={doc_id} names native id {} but the call is {native_call_id}",
-        tool_result.id
-    );
-    anyhow::ensure!(
-        tool_result.call_id.as_deref() == expected_call_id,
-        "tool result for tool_call_doc_id={doc_id} carries call_id {:?} but the delivery header bound {expected_call_id:?}",
-        tool_result.call_id
-    );
+    if tool_result.id != native_call_id {
+        return Err(ToolCallQueryError::ResultNativeIdMismatch {
+            doc_id: doc_id.to_owned(),
+            actual: tool_result.id.clone(),
+            expected: native_call_id.to_owned(),
+        });
+    }
+    if tool_result.call_id.as_deref() != expected_call_id {
+        return Err(ToolCallQueryError::ResultCallIdMismatch {
+            doc_id: doc_id.to_owned(),
+            actual: tool_result.call_id.clone(),
+            expected: expected_call_id.map(str::to_owned),
+        });
+    }
     Ok(())
 }
 
@@ -1155,7 +1176,7 @@ mod tests {
                 txn.execute_with_variables(&format!(
                     r#"mutation($output: JSON) {{ update_AgentToolCall(docID: "{doc}", input: {{ terminal_output: $output }}) {{ _docID }} }}"#
                 ), &serde_json::json!({"output": foreign})).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         }).await.unwrap();
         assert!(
@@ -1260,7 +1281,7 @@ mod tests {
                 .to_string()
                 .contains("invalid plugin effect provenance"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         drop(request_owner);
         node.shutdown().await;
@@ -1335,7 +1356,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("ambiguous invocation reply"));
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         })
         .await
@@ -1379,7 +1400,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("carries no native tool-result"));
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             })
         })
         .await

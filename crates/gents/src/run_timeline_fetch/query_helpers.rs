@@ -5,7 +5,7 @@ pub(super) async fn load_rows<T>(
     access: &ConfigAccess,
     collection: &str,
     query: &str,
-) -> anyhow::Result<Vec<T>>
+) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
 {
@@ -13,20 +13,27 @@ where
         .await?
         .into_iter()
         .map(serde_json::from_value)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("decoding {collection} rows"))
+        .collect::<std::result::Result<Vec<T>, _>>()
+        .map_err(|source| RunTimelineError::RowsDecode {
+            collection: collection.to_owned(),
+            source,
+        })
 }
 
 pub(super) async fn required_rows(
     access: &ConfigAccess,
     collection_name: &str,
     query: &str,
-) -> anyhow::Result<Vec<Value>> {
-    let response = access
-        .execute(query)
-        .await
-        .with_context(|| format!("reading required timeline collection {collection_name}"))?;
-    Ok(decode_required_rows(&response, collection_name)?)
+) -> Result<Vec<Value>> {
+    let response =
+        access
+            .execute(query)
+            .await
+            .map_err(|source| RunTimelineError::RequiredRowsRead {
+                collection: collection_name.to_owned(),
+                source,
+            })?;
+    decode_required_rows(&response, collection_name)
 }
 
 fn decode_required_rows(response: &Value, collection: &str) -> Result<Vec<Value>> {

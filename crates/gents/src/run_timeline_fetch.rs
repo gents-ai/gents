@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -16,6 +15,8 @@ use crate::run_timeline_fetch::event_loaders::resolve_timeline_messages_for_sess
 use gents_protocol::graphql::graphql_rows_from_response;
 
 mod error;
+use error::Result;
+pub use error::RunTimelineError;
 
 const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
 
@@ -83,15 +84,14 @@ pub(crate) async fn load_accepted_tool_calls(
         let sequence = observation
             .row
             .message_sequence
-            .context("accepted tool lacks its accepted message sequence")?;
+            .ok_or(RunTimelineError::AcceptedToolMissingSequence)?;
         let messages = messages_by_sequence
             .get(&sequence)
-            .context("accepted tool sequence has no canonical messages")?;
+            .ok_or(RunTimelineError::AcceptedSequenceMessagesMissing)?;
         let call = event_loaders::resolve_tool_payloads(observation, messages)?;
-        anyhow::ensure!(
-            call.session_id == session_id,
-            "accepted tool call crossed the requested session scope"
-        );
+        if call.session_id != session_id {
+            return Err(RunTimelineError::AcceptedCrossedScope);
+        }
         calls.push(call);
     }
     Ok(calls)
@@ -161,9 +161,9 @@ async fn name_serving_accounts(
     let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
     let backends = access
         .transact_readonly("timeline.serving_accounts", |txn| {
-            Box::pin(async move {
-                crate::config_client::list_inference_backends_in_txn(txn, node_did).await
-            })
+            Box::pin(crate::config_client::list_inference_backends_in_txn(
+                txn, node_did,
+            ))
         })
         .await?;
     for event in events {
@@ -238,7 +238,7 @@ pub async fn load_run_activity_rows(
                 .node_did
                 .as_deref()
                 .filter(|owner| !owner.trim().is_empty())
-                .context("activity request has no session owner")?;
+                .ok_or(RunTimelineError::ActivityMissingOwner)?;
             session_scopes.insert((
                 owner.to_owned(),
                 session_id.to_owned(),
@@ -287,12 +287,12 @@ pub async fn load_run_activity_rows(
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<TimelineInferenceCallRow>, _>>()
-        .context("decoding live InferenceCall activity")?;
+        .map_err(RunTimelineError::LiveInferenceDecode)?;
     let mut tool_calls = graphql_rows_from_response(&response, "AgentToolCall")
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<TimelineToolCallRow>, _>>()
-        .context("decoding live AgentToolCall activity")?;
+        .map_err(RunTimelineError::LiveToolDecode)?;
     let truncated = session_scopes.len() > MAX_RUN_ACTIVITY_ROWS
         || sessions.len() > MAX_RUN_ACTIVITY_ROWS
         || inference_calls.len() > MAX_RUN_ACTIVITY_ROWS
@@ -322,7 +322,7 @@ pub async fn load_run_timeline_rows(
                 request
                     .node_did
                     .as_deref()
-                    .context("timeline root request has no session owner")?,
+                    .ok_or(RunTimelineError::RootMissingSessionOwner)?,
                 session_id,
                 request.requester_did.as_deref(),
             )
@@ -335,18 +335,17 @@ pub async fn load_run_timeline_rows(
     let request_doc_id = request
         .doc_id
         .as_deref()
-        .context("timeline root AgentRequest has no _docID")?;
+        .ok_or(RunTimelineError::RootMissingDocId)?;
     for child in load_timeline_child_requests(access, request_doc_id).await? {
         if child.caused_by_parent_request_doc_id.as_deref() != Some(request_doc_id) {
             continue;
         }
         if child.caused_by_parent_request_id.as_deref() != Some(request.request_id.as_str()) {
-            anyhow::bail!(
-                "child AgentRequest {} physical parent is {}, but logical parent is {:?}",
-                child.request_id,
-                request_doc_id,
-                child.caused_by_parent_request_id
-            );
+            return Err(RunTimelineError::ChildParentMismatch {
+                child: child.request_id,
+                physical_parent: request_doc_id.to_owned(),
+                logical_parent: child.caused_by_parent_request_id,
+            });
         }
         merge_timeline_request(&mut requests, child)?;
     }
@@ -364,7 +363,7 @@ pub async fn load_run_timeline_rows(
                 .node_did
                 .as_deref()
                 .filter(|owner| !owner.trim().is_empty())
-                .context("timeline session request has no owner")?;
+                .ok_or(RunTimelineError::SessionRequestMissingOwner)?;
             session_scopes.insert((
                 owner.to_owned(),
                 session_id.to_owned(),
@@ -411,7 +410,7 @@ pub async fn load_run_timeline_rows(
                 request
                     .node_did
                     .as_deref()
-                    .context("timeline root request has no goal owner")?,
+                    .ok_or(RunTimelineError::RootMissingGoalOwner)?,
                 session_id,
             )
             .await?
@@ -558,7 +557,7 @@ pub async fn load_run_timeline_rows(
                 .node_did
                 .as_deref()
                 .filter(|owner| !owner.trim().is_empty())
-                .context("timeline root request has no session owner")?;
+                .ok_or(RunTimelineError::RootMissingSessionOwner)?;
             load_timeline_session(access, owner, session_id, request.requester_did.as_deref())
                 .await?
         }

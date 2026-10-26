@@ -1360,7 +1360,7 @@ async fn cycle_failure_diagnostics(
                 .and_then(|message| gents::tool_call_lifecycle::render_tool_result(&message));
                 tool_results.push(json!({
                     "tool": tool,
-                    "result": result.unwrap_or_else(|error| format!("<unavailable: {}>", ErrorChain(error.as_ref())) )
+                    "result": result.unwrap_or_else(|error| format!("<unavailable: {}>", ErrorChain(&error)) )
                 }));
             }
         }

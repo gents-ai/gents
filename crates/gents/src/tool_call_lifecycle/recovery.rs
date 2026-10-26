@@ -26,6 +26,12 @@ pub(crate) enum ToolCallRecoveryError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("recovery row omitted node_did")]
+    RowMissingNodeDid,
+    #[error("recovery physical tool row disappeared")]
+    PhysicalRowDisappeared,
+    #[error(transparent)]
+    Query(#[from] super::query::ToolCallQueryError),
 }
 
 impl crate::config_client::TransactionFailure for ToolCallRecoveryError {
@@ -1178,11 +1184,11 @@ async fn lookup_parent_request(
 async fn load_recovery_lifecycle(
     node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
-) -> Result<ToolCallLifecycle> {
+) -> Result<ToolCallLifecycle, ToolCallRecoveryError> {
     let node_did = row
         .node_did
         .as_deref()
-        .context("recovery row omitted node_did")?;
+        .ok_or(ToolCallRecoveryError::RowMissingNodeDid)?;
     ToolCallLifecycle::load_by_doc_id(
         node.clone(),
         &row.doc_id,
@@ -1191,7 +1197,7 @@ async fn load_recovery_lifecycle(
         row.requester_did.as_deref(),
     )
     .await?
-    .context("recovery physical tool row disappeared")
+    .ok_or(ToolCallRecoveryError::PhysicalRowDisappeared)
 }
 
 async fn recover_tool_call_row(

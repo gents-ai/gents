@@ -51,7 +51,7 @@ async fn signed_request(
     fire: &TriggerFire,
     input: RequestInput,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
-    gents::build_signed_request(
+    Ok(gents::build_signed_request(
         gents::RequestSpec {
             input,
             retry_key: Some(fire.fire_key.clone()),
@@ -78,7 +78,7 @@ async fn signed_request(
         },
         gents::RequestSigner::Identity(signer),
     )
-    .await
+    .await?)
 }
 
 #[tokio::test]

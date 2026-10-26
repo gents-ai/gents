@@ -202,6 +202,26 @@ pub(crate) fn find_reconstruction_error<'a>(
                     .downcast_ref::<crate::tool_call_lifecycle::TransitionError>()
                     .and_then(crate::tool_call_lifecycle::TransitionError::reconstruction)
             })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::tool_call_lifecycle::query::ToolCallQueryError>()
+                    .and_then(crate::tool_call_lifecycle::query::ToolCallQueryError::reconstruction)
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::background_tools::BackgroundToolsError>()
+                    .and_then(crate::background_tools::BackgroundToolsError::reconstruction)
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::background_tools::QueryRowsError>()
+                    .and_then(crate::background_tools::QueryRowsError::reconstruction)
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::run_timeline_fetch::RunTimelineError>()
+                    .and_then(crate::run_timeline_fetch::RunTimelineError::reconstruction)
+            })
     })
 }
 

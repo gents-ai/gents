@@ -312,7 +312,7 @@ async fn seed_canonical_tool_transcript(
     .map_err(|error| {
         format!(
             "seeded tool call does not reconstruct through its canonical admission: {}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         )
     })?;
     assert!(

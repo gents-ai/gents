@@ -3,7 +3,6 @@ pub(crate) mod r4c_args;
 pub mod status_projection;
 
 use crate::llm::message::{AssistantContent, Message, Text};
-use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
@@ -303,13 +302,13 @@ pub(crate) async fn read_tool_output_slice(
         &row.doc_id,
         row.request_doc_id
             .as_deref()
-            .context("tool output row lacks request binding")?,
+            .ok_or(BackgroundToolsError::ToolRowLacksRequest)?,
         row.session_id
             .as_deref()
-            .context("tool output row lacks session binding")?,
+            .ok_or(BackgroundToolsError::ToolRowLacksSession)?,
         row.node_did
             .as_deref()
-            .context("tool output row lacks agent binding")?,
+            .ok_or(BackgroundToolsError::ToolRowLacksAgent)?,
         row.requester_did.as_deref(),
     )
     .await?;
@@ -349,7 +348,7 @@ pub(crate) async fn canonical_tool_output(
         .as_ref()
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
-        .context("canonical tool output query omitted segments")?;
+        .ok_or(BackgroundToolsError::CanonicalSegmentsOmitted)?;
     let rows =
         decode_scoped_request_output_segments(values, node_did, Some(session_id), requester_did)?;
     Ok(canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)?.into_text())
@@ -383,7 +382,7 @@ pub(crate) async fn observe_canonical_tool_output_with_access(
     let values = response
         .pointer("/data/AgentOutputSegment")
         .and_then(serde_json::Value::as_array)
-        .context("canonical tool output query omitted segments")?;
+        .ok_or(BackgroundToolsError::CanonicalSegmentsOmitted)?;
     let rows =
         decode_scoped_request_output_segments(values, node_did, Some(session_id), requester_did)?;
     canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)
@@ -421,26 +420,26 @@ pub(crate) fn canonical_tool_output_from_rows(
             request_doc_id,
             &source,
             &writer,
-        )?;
+        )
+        .map_err(BackgroundToolsError::Reconstruction)?;
         if extent.streams.is_empty() {
             return Ok(CanonicalToolOutputObservation::Open(String::new()));
         }
-        anyhow::ensure!(
-            extent.streams.len() == 1
-                && matches!(
-                    extent.streams[0].declaration.payload,
-                    gents_protocol::output::StreamPayload::ToolOutput
-                ),
-            "open tool output source does not have one ToolOutput stream"
-        );
+        if !(extent.streams.len() == 1
+            && matches!(
+                extent.streams[0].declaration.payload,
+                gents_protocol::output::StreamPayload::ToolOutput
+            ))
+        {
+            return Err(BackgroundToolsError::OpenStreamNotToolOutput);
+        }
         return Ok(CanonicalToolOutputObservation::Open(
             extent.streams[0].text.clone(),
         ));
     }
-    anyhow::ensure!(
-        close.len() == 1,
-        "tool output is unresolved or has conflicting closures"
-    );
+    if close.len() != 1 {
+        return Err(BackgroundToolsError::ToolOutputUnresolved);
+    }
     let stream = reconstruct_stream(
         &observations,
         &[],
@@ -450,14 +449,13 @@ pub(crate) fn canonical_tool_output_from_rows(
             stream: 0,
         },
     )
-    .map_err(anyhow::Error::from)?;
-    anyhow::ensure!(
-        matches!(
-            stream.declaration.payload,
-            gents_protocol::output::StreamPayload::ToolOutput
-        ),
-        "tool output source stream is not a ToolOutput stream"
-    );
+    .map_err(BackgroundToolsError::Reconstruction)?;
+    if !matches!(
+        stream.declaration.payload,
+        gents_protocol::output::StreamPayload::ToolOutput
+    ) {
+        return Err(BackgroundToolsError::ClosedStreamNotToolOutput);
+    }
     Ok(CanonicalToolOutputObservation::Closed(stream.text))
 }
 
@@ -528,17 +526,78 @@ fn list_projection_matches(filter: ListStatusFilter, projection: &WaitStatusProj
 }
 
 pub use final_output::load_caused_request_terminal;
-pub(crate) use final_output::{caused_request_terminals_in_txn, load_caused_request_terminals};
+pub(crate) use final_output::{
+    caused_request_terminals_in_txn, load_caused_request_terminals, QueryRowsError,
+};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum BackgroundToolsError {
+pub enum BackgroundToolsError {
     #[error("{collection} field missing from query response")]
     RowsMissing { collection: String },
     #[error("parse {collection}: expected an array")]
     RowsNotArray { collection: String },
     #[error("materialized child response is not an assistant message")]
     NotAssistantMessage,
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    Hook(#[from] crate::hook::HookError),
+    #[error(transparent)]
+    Reconstruction(gents_protocol::output::ReconstructionError),
+    #[error("tool output row lacks request binding")]
+    ToolRowLacksRequest,
+    #[error("tool output row lacks session binding")]
+    ToolRowLacksSession,
+    #[error("tool output row lacks agent binding")]
+    ToolRowLacksAgent,
+    #[error("canonical tool output query omitted segments")]
+    CanonicalSegmentsOmitted,
+    #[error("open tool output source does not have one ToolOutput stream")]
+    OpenStreamNotToolOutput,
+    #[error("tool output is unresolved or has conflicting closures")]
+    ToolOutputUnresolved,
+    #[error("tool output source stream is not a ToolOutput stream")]
+    ClosedStreamNotToolOutput,
+    #[error("background request lookup omitted tool rows")]
+    BackgroundLookupOmitted,
+    #[error("background request requires one exact tool invocation")]
+    BackgroundNotExact,
+    #[error("only a direct native Bash command can be backgrounded")]
+    BackgroundNotBash,
+    #[error("background process limit reached; wait for a background process to finish")]
+    BackgroundLimitReached,
+    #[error("background request missing request document identity")]
+    BackgroundMissingRequestDocument,
+    #[error("tool missing physical identity")]
+    BackgroundMissingPhysicalId,
+    #[error("tool missing start time")]
+    BackgroundMissingStart,
+    #[error("tool missing deadline")]
+    BackgroundMissingDeadline,
 }
+
+impl crate::config_client::TransactionFailure for BackgroundToolsError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Hook(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl BackgroundToolsError {
+    pub(crate) fn reconstruction(&self) -> Option<&gents_protocol::output::ReconstructionError> {
+        match self {
+            Self::Reconstruction(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = BackgroundToolsError> = std::result::Result<T, E>;
 
 fn render_assistant_message_text(message: &Message) -> Result<String, BackgroundToolsError> {
     let Message::Assistant { content, .. } = message else {
@@ -639,19 +698,18 @@ pub async fn request_foreground_backgrounding(
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(serde_json::Value::as_array)
-        .context("background request lookup omitted tool rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "background request requires one exact tool invocation"
-    );
+        .ok_or(BackgroundToolsError::BackgroundLookupOmitted)?;
+    if rows.len() != 1 {
+        return Err(BackgroundToolsError::BackgroundNotExact);
+    }
     let row = &rows[0];
-    anyhow::ensure!(
-        row["tool_name"]
-            .as_str()
-            .is_some_and(crate::toolset::is_bash_tool_name)
-            && row["plugin_parent_tool_call_doc_id"].is_null(),
-        "only a direct native Bash command can be backgrounded"
-    );
+    if !(row["tool_name"]
+        .as_str()
+        .is_some_and(crate::toolset::is_bash_tool_name)
+        && row["plugin_parent_tool_call_doc_id"].is_null())
+    {
+        return Err(BackgroundToolsError::BackgroundNotBash);
+    }
     if row["lifecycle_state"].as_str() != Some("running") {
         return Ok(false);
     }
@@ -659,31 +717,28 @@ pub async fn request_foreground_backgrounding(
     {
         return Ok(true);
     }
-    anyhow::ensure!(
-        crate::hook::persistence::count_live_backgrounded_rows_in(
-            access,
-            row["request_doc_id"]
-                .as_str()
-                .context("background request missing request document identity")?,
-        )
-        .await?
-            < crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
-        "background process limit reached; wait for a background process to finish"
-    );
+    let request_doc_id = row["request_doc_id"]
+        .as_str()
+        .ok_or(BackgroundToolsError::BackgroundMissingRequestDocument)?;
+    if crate::hook::persistence::count_live_backgrounded_rows_in(access, request_doc_id).await?
+        >= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT
+    {
+        return Err(BackgroundToolsError::BackgroundLimitReached);
+    }
     let doc = escape_graphql_string(
         row["_docID"]
             .as_str()
-            .context("tool missing physical identity")?,
+            .ok_or(BackgroundToolsError::BackgroundMissingPhysicalId)?,
     );
     let started = escape_graphql_string(
         row["started_at"]
             .as_str()
-            .context("tool missing start time")?,
+            .ok_or(BackgroundToolsError::BackgroundMissingStart)?,
     );
     let deadline = escape_graphql_string(
         row["deadline_at"]
             .as_str()
-            .context("tool missing deadline")?,
+            .ok_or(BackgroundToolsError::BackgroundMissingDeadline)?,
     );
     let now = escape_graphql_string(&Utc::now().to_rfc3339());
     let result = access.write("tool.request_background", &format!(r#"mutation {{ update_AgentToolCall(

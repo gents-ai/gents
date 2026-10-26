@@ -3,7 +3,6 @@ use rapidhash::RapidHashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
@@ -261,7 +260,18 @@ impl TaskHookRecordHandle {
     }
 }
 
-async fn request_resolved(node: &EmbeddedNode, request_doc_id: &str) -> Result<bool> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TaskHookRecordError {
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+}
+
+async fn request_resolved(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> Result<bool, TaskHookRecordError> {
     #[derive(Deserialize)]
     struct Row {
         lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
@@ -350,7 +360,7 @@ pub(crate) async fn recover_task_hook_records(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     store: &TaskHookRecordStore,
-) -> Result<usize> {
+) -> Result<usize, TaskHookRecordError> {
     let mut started = 0;
     if store.shutdown.is_cancelled() {
         return Ok(started);
