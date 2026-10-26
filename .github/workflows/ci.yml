@@ -588,6 +588,11 @@ jobs:
       - name: Build desktop packages
         run: npm run build:packages
 
+      - name: Use the Ubuntu archive for browser system dependencies
+        if: matrix.suite == 'browser'
+        run: |
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+
       - name: Install Playwright browsers
         if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
